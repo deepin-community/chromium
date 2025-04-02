@@ -3,10 +3,11 @@
 // found in the LICENSE file.
 
 #include "ui/wm/core/transient_window_manager.h"
-#include "base/memory/raw_ptr.h"
 
+#include <array>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
 #include "ui/aura/client/window_parenting_client.h"
 #include "ui/aura/test/aura_test_base.h"
 #include "ui/aura/test/test_windows.h"
@@ -101,6 +102,25 @@ class TransientWindowManagerTest : public aura::test::AuraTestBase {
     return window;
   }
 };
+
+// Tests that creating a transient tree with a cycle in it will crash on a
+// CHECK. See a crash that can happen if we allow cycles http://b/286947509.
+TEST_F(TransientWindowManagerTest, TransientCycle) {
+  std::unique_ptr<Window> w1(CreateTestWindowWithId(0, root_window()));
+  std::unique_ptr<Window> w2(CreateTestWindowWithId(1, root_window()));
+  std::unique_ptr<Window> w3(CreateTestWindowWithId(2, root_window()));
+
+  // Creating a cylce in the hierarchy will cause a crash.
+  //
+  // w1 <-- w2 <-- w3
+  //  |             ^
+  //  |             |
+  //  +-------------+
+  //
+  wm::AddTransientChild(w1.get(), w2.get());
+  wm::AddTransientChild(w2.get(), w3.get());
+  EXPECT_DEATH(wm::AddTransientChild(w3.get(), w1.get()), "");
+}
 
 // Various assertions for transient children.
 TEST_F(TransientWindowManagerTest, TransientChildren) {
@@ -353,7 +373,7 @@ TEST_F(TransientWindowManagerTest, CrashOnVisibilityChange) {
 // Tests that windows are restacked properly after a call to AddTransientChild()
 // or RemoveTransientChild().
 TEST_F(TransientWindowManagerTest, RestackUponAddOrRemoveTransientChild) {
-  std::unique_ptr<Window> windows[4];
+  std::array<std::unique_ptr<Window>, 4> windows;
   for (int i = 0; i < 4; i++)
     windows[i].reset(CreateTestWindowWithId(i, root_window()));
   EXPECT_EQ("0 1 2 3", ChildWindowIDsAsString(root_window()));

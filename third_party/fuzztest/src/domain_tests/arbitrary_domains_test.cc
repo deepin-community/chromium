@@ -48,6 +48,9 @@
 namespace fuzztest {
 namespace {
 
+using ::fuzztest::domain_implementor::DomainBase;
+using ::fuzztest::domain_implementor::MutationMetadata;
+using ::fuzztest::internal::IRObject;
 using ::testing::Contains;
 using ::testing::Each;
 using ::testing::Ge;
@@ -65,9 +68,9 @@ TEST(BoolTest, Arbitrary) {
 
   Value b(domain, bitgen);
   bool copy = b.user_value;
-  b.Mutate(domain, bitgen, false);
+  b.Mutate(domain, bitgen, {}, false);
   EXPECT_NE(b.user_value, copy);
-  b.Mutate(domain, bitgen, false);
+  b.Mutate(domain, bitgen, {}, false);
   EXPECT_EQ(b.user_value, copy);
 }
 
@@ -184,7 +187,7 @@ TYPED_TEST(MonostateTypeTest, Arbitrary) {
   auto v = domain.Init(bitgen);
   // Mutate "works". That is, it returns.
   // We don't expect it to do anything else since the value can't be changed.
-  domain.Mutate(v, bitgen, false);
+  domain.Mutate(v, bitgen, {}, false);
 }
 
 struct BinaryTree {
@@ -205,15 +208,15 @@ TEST(UserDefinedAggregate, NestedArbitrary) {
   Set<int> s;
   while (s.size() < 10) {
     s.insert(v.user_value.count_nodes());
-    v.Mutate(domain, bitgen, false);
+    v.Mutate(domain, bitgen, {}, false);
   }
 }
 
 struct StatefulIncrementDomain
-    : public internal::DomainBase<StatefulIncrementDomain, int,
-                                  // Just to make sure we don't mix value_type
-                                  // with corpus_type
-                                  std::tuple<int>> {
+    : public DomainBase<StatefulIncrementDomain, int,
+                        // Just to make sure we don't mix value_type with
+                        // corpus_type
+                        std::tuple<int>> {
   corpus_type Init(absl::BitGenRef prng) {
     // Minimal code to exercise prng.
     corpus_type result = {absl::Uniform<value_type>(prng, i, i + 1)};
@@ -221,7 +224,8 @@ struct StatefulIncrementDomain
     return result;
   }
 
-  void Mutate(corpus_type& val, absl::BitGenRef prng, bool only_shrink) {
+  void Mutate(corpus_type& val, absl::BitGenRef prng,
+              const MutationMetadata& metadata, bool only_shrink) {
     std::get<0>(val) += absl::Uniform<value_type>(prng, 5, 6) +
                         static_cast<value_type>(only_shrink);
   }
@@ -231,12 +235,12 @@ struct StatefulIncrementDomain
     return std::tuple{v};
   }
 
-  std::optional<corpus_type> ParseCorpus(const internal::IRObject& obj) const {
+  std::optional<corpus_type> ParseCorpus(const IRObject& obj) const {
     return obj.ToCorpus<corpus_type>();
   }
 
-  internal::IRObject SerializeCorpus(const corpus_type& v) const {
-    return internal::IRObject::FromCorpus(v);
+  IRObject SerializeCorpus(const corpus_type& v) const {
+    return IRObject::FromCorpus(v);
   }
 
   absl::Status ValidateCorpusValue(const corpus_type&) const {
@@ -277,9 +281,9 @@ TEST(Domain, BasicVerify) {
 
   Value i(domain, bitgen);
   Value j = i;
-  i.Mutate(domain, bitgen, false);
+  i.Mutate(domain, bitgen, {}, false);
   EXPECT_THAT(i.user_value, j.user_value + 5);
-  i.Mutate(domain, bitgen, true);
+  i.Mutate(domain, bitgen, {}, true);
   EXPECT_THAT(i.user_value, j.user_value + 11);
 }
 

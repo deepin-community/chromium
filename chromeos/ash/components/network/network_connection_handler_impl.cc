@@ -4,6 +4,7 @@
 
 #include "chromeos/ash/components/network/network_connection_handler_impl.h"
 
+#include <algorithm>
 #include <memory>
 #include <ostream>
 
@@ -15,7 +16,6 @@
 #include "base/json/json_reader.h"
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -23,6 +23,7 @@
 #include "chromeos/ash/components/dbus/shill/shill_manager_client.h"
 #include "chromeos/ash/components/dbus/shill/shill_service_client.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
+#include "chromeos/ash/components/network/auto_connect_handler.h"
 #include "chromeos/ash/components/network/cellular_connection_handler.h"
 #include "chromeos/ash/components/network/cellular_utils.h"
 #include "chromeos/ash/components/network/client_cert_resolver.h"
@@ -112,7 +113,6 @@ bool IsCertificateConfigured(const client_cert::ConfigType cert_config_type,
     }
   }
   NOTREACHED();
-  return false;
 }
 
 std::string VPNCheckCredentials(const std::string& service_path,
@@ -163,11 +163,16 @@ bool ShouldUseSharedProfileByDefault(const NetworkState* network) {
     // details.
     return false;
   }
-  if (network && network->type() == shill::kTypeWifi && !network->IsSecure()) {
-    // Insecure networks are persisted in the shared profile by default
-    return true;
+  // Cellular networks and insecure Wi-Fi networks are persisted in the shared
+  // profile by default.
+  if (network) {
+    if (network->type() == shill::kTypeCellular) {
+      return true;
+    }
+    if (network->type() == shill::kTypeWifi) {
+      return !network->IsSecure();
+    }
   }
-
   // Use the user profile if available.
   return false;
 }
@@ -286,6 +291,16 @@ void NetworkConnectionHandlerImpl::OnCertificatesLoaded() {
     ConnectToQueuedNetwork();
 }
 
+void NetworkConnectionHandlerImpl::OnAutoConnectedInitiated(
+    int auto_connect_reasons) {
+  const int kManagedNetworkReasonsBitmask =
+      AutoConnectHandler::AUTO_CONNECT_REASON_POLICY_APPLIED |
+      AutoConnectHandler::AUTO_CONNECT_REASON_CERTIFICATE_RESOLVED;
+  if (auto_connect_reasons & kManagedNetworkReasonsBitmask) {
+    has_policy_auto_connect_ = true;
+  }
+}
+
 void NetworkConnectionHandlerImpl::ConnectToNetwork(
     const std::string& service_path,
     base::OnceClosure success_callback,
@@ -397,8 +412,7 @@ void NetworkConnectionHandlerImpl::ConnectToNetwork(
           // If device is carrier locked, it could be unlocked only by the
           // carrier, so notification to the user is different from the case
           // where where SIM is locked using PIN/PUK code.
-          if (features::IsCellularCarrierLockEnabled() &&
-              cellular_device->IsSimCarrierLocked()) {
+          if (cellular_device->IsSimCarrierLocked()) {
             InvokeConnectErrorCallback(service_path, std::move(error_callback),
                                        kErrorSimCarrierLocked);
             return;
@@ -591,7 +605,7 @@ NetworkConnectionHandlerImpl::GetPendingRequest(
 }
 
 bool NetworkConnectionHandlerImpl::HasPendingCellularRequest() const {
-  return base::ranges::any_of(
+  return std::ranges::any_of(
       pending_requests_,
       [&](const std::pair<const std::string, std::unique_ptr<ConnectRequest>>&
               pair) {
@@ -712,10 +726,13 @@ void NetworkConnectionHandlerImpl::VerifyConfiguredAndConnect(
   ::onc::ONCSource onc_source = ::onc::ONC_SOURCE_NONE;
   const base::Value::Dict* policy = nullptr;
   if (guid && profile) {
+    // Fetch network policy with PolicyType::kOriginal to be able to process a
+    // client certificate pattern (which would be replaced with a certificate
+    // reference in PolicyType::kWithRuntimeValues).
     policy = managed_configuration_handler_->FindPolicyByGuidAndProfile(
         *guid, *profile,
-        ManagedNetworkConfigurationHandler::PolicyType::kWithRuntimeValues,
-        &onc_source, /*out_userhash=*/nullptr);
+        ManagedNetworkConfigurationHandler::PolicyType::kOriginal, &onc_source,
+        /*out_userhash=*/nullptr);
   }
   // Check if network is blocked by policy.
   if (*type == shill::kTypeWifi &&
@@ -1084,6 +1101,13 @@ void NetworkConnectionHandlerImpl::CheckPendingRequest(
     return;
   }
   if (NetworkState::StateIsConnected(connection_state)) {
+    if (network->type() == shill::kTypeWifi) {
+      base::Value::Dict config_properties;
+      config_properties.Set(shill::kGuidProperty, network->guid());
+      configuration_handler_->SetShillProperties(
+          service_path, config_properties, base::DoNothing(),
+          network_handler::ErrorCallback());
+    }
     if (!request->profile_path.empty()) {
       // If a profile path was specified, set it on a successful connection.
       configuration_handler_->SetNetworkProfile(
@@ -1103,9 +1127,15 @@ void NetworkConnectionHandlerImpl::CheckPendingRequest(
 
   // Network is neither connecting or connected; an error occurred.
   std::string error_name;  // 'Canceled' or 'Failed'
-  if (connection_state == shill::kStateIdle && pending_requests_.size() > 1) {
-    // Another connect request canceled this one.
+  if (connection_state == shill::kStateIdle &&
+      (pending_requests_.size() > 1 || has_policy_auto_connect_)) {
+    // Another connect request or policy connection canceled this one.
     error_name = kErrorConnectCanceled;
+    if (has_policy_auto_connect_) {
+      NET_LOG(EVENT) << "Connection request of " << NetworkPathId(service_path)
+                     << " got cancelled by policy auto-connect";
+      has_policy_auto_connect_ = false;
+    }
   } else {
     error_name = kErrorConnectFailed;
     if (connection_state != shill::kStateFailure)

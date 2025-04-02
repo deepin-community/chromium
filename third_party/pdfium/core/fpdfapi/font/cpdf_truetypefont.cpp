@@ -101,7 +101,7 @@ void CPDF_TrueTypeFont::LoadGlyphMap() {
           !name) {
         continue;
       }
-      if (strcmp(name, ".notdef") == 0) {
+      if (UNSAFE_TODO(strcmp(name, ".notdef")) == 0) {
         m_GlyphIndex[charcode] = face->GetCharIndex(32);
         continue;
       }
@@ -240,7 +240,7 @@ void CPDF_TrueTypeFont::SetGlyphIndicesFromFirstChar() {
   if (start_char < 0 || start_char > 255)
     return;
 
-  auto* it = std::begin(m_GlyphIndex);
+  auto it = std::begin(m_GlyphIndex);
   std::fill(it, it + start_char, 0);
   uint16_t glyph = 3;
   for (int charcode = start_char; charcode < 256; charcode++, glyph++)

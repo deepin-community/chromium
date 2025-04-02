@@ -8,16 +8,21 @@
 #include "base/metrics/user_metrics.h"
 #include "chrome/browser/command_updater_impl.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
+#include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/new_tab_page/promos/promo_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/customize_chrome/side_panel_controller.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
 #include "chrome/browser/ui/tabs/tab_group_model.h"
 #include "chrome/browser/ui/ui_features.h"
+#include "chrome/browser/user_education/tutorial_identifiers.h"
 #include "chrome/browser/user_education/user_education_service.h"
 #include "chrome/browser/user_education/user_education_service_factory.h"
 #include "chrome/common/chrome_features.h"
@@ -28,8 +33,9 @@
 #include "components/safe_browsing/core/common/safe_browsing_policy_handler.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/safe_browsing/core/common/safebrowsing_referral_methods.h"
-#include "components/user_education/common/tutorial_identifier.h"
-#include "components/user_education/common/tutorial_service.h"
+#include "components/saved_tab_groups/public/features.h"
+#include "components/user_education/common/tutorial/tutorial_identifier.h"
+#include "components/user_education/common/tutorial/tutorial_service.h"
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/ui_base_features.h"
@@ -52,8 +58,9 @@ BrowserCommandHandler::BrowserCommandHandler(
       supported_commands_(supported_commands),
       command_updater_(std::make_unique<CommandUpdaterImpl>(this)),
       page_handler_(this, std::move(pending_page_handler)) {
-  if (supported_commands_.empty())
+  if (supported_commands_.empty()) {
     return;
+  }
 
   EnableSupportedCommands();
 }
@@ -74,7 +81,7 @@ void BrowserCommandHandler::CanExecuteCommand(
       // Nothing to do.
       break;
     case Command::kOpenSafetyCheck:
-      can_execute = !chrome::enterprise_util::IsBrowserManaged(profile_);
+      can_execute = !enterprise_util::IsBrowserManaged(profile_);
       break;
     case Command::kOpenSafeBrowsingEnhancedProtectionSettings: {
       bool managed = safe_browsing::SafeBrowsingPolicyHandler::
@@ -87,8 +94,8 @@ void BrowserCommandHandler::CanExecuteCommand(
       can_execute = true;
       break;
     case Command::kOpenPrivacyGuide:
-      can_execute = !chrome::enterprise_util::IsBrowserManaged(profile_) &&
-                    !profile_->IsChild();
+      can_execute =
+          !enterprise_util::IsBrowserManaged(profile_) && !profile_->IsChild();
       base::UmaHistogramBoolean("Privacy.Settings.PrivacyGuide.CanShowNTPPromo",
                                 can_execute);
       break;
@@ -105,18 +112,30 @@ void BrowserCommandHandler::CanExecuteCommand(
       can_execute = true;
       break;
     case Command::kOpenNTPAndStartCustomizeChromeTutorial:
-      can_execute = TutorialServiceExists() &&
-                    BrowserSupportsCustomizeChromeSidePanel() &&
-                    DefaultSearchProviderIsGoogle();
+      can_execute = TutorialServiceExists() && DefaultSearchProviderIsGoogle();
       break;
     case Command::kStartPasswordManagerTutorial:
       can_execute = TutorialServiceExists();
       break;
     case Command::kStartSavedTabGroupTutorial:
-      can_execute = TutorialServiceExists() && BrowserSupportsSavedTabGroups();
+      can_execute = TutorialServiceExists() &&
+                    BrowserSupportsSavedTabGroups() &&
+                    !tab_groups::IsTabGroupsSaveV2Enabled();
       break;
     case Command::kOpenAISettings:
       can_execute = true;
+      break;
+    case Command::kOpenSafetyCheckFromWhatsNew:
+      can_execute = true;
+      break;
+    case Command::kOpenPaymentsSettings:
+      can_execute = true;
+      break;
+    case Command::KOpenHistorySearchSettings:
+      can_execute = true;
+      break;
+    case Command::kShowCustomizeChromeToolbar:
+      can_execute = ActiveTabSupportsCustomizeChrome();
       break;
   }
   std::move(callback).Run(can_execute);
@@ -194,9 +213,23 @@ void BrowserCommandHandler::ExecuteCommandWithDisposition(
     case Command::kOpenAISettings:
       OpenAISettings();
       break;
+    case Command::kOpenSafetyCheckFromWhatsNew:
+      NavigateToURL(GURL(chrome::GetSettingsUrl(chrome::kSafetyCheckSubPage)),
+                    disposition);
+      break;
+    case Command::kOpenPaymentsSettings:
+      NavigateToURL(GURL(chrome::GetSettingsUrl(chrome::kPaymentsSubPage)),
+                    disposition);
+      break;
+    case Command::KOpenHistorySearchSettings:
+      NavigateToURL(GURL(chrome::GetSettingsUrl(chrome::kHistorySearchSubpage)),
+                    disposition);
+      break;
+    case Command::kShowCustomizeChromeToolbar:
+      ShowCustomizeChromeToolbar();
+      break;
     default:
       NOTREACHED() << "Unspecified behavior for command " << id;
-      break;
   }
 }
 
@@ -223,6 +256,18 @@ bool BrowserCommandHandler::TutorialServiceExists() {
 bool BrowserCommandHandler::BrowserSupportsTabGroups() {
   Browser* browser = chrome::FindBrowserWithProfile(profile_);
   return browser->tab_strip_model()->SupportsTabGroups();
+}
+
+bool BrowserCommandHandler::ActiveTabSupportsCustomizeChrome() {
+  Browser* browser = chrome::FindBrowserWithProfile(profile_);
+  tabs::TabInterface* tab = browser->tab_strip_model()->GetActiveTab();
+  if (!tab || !tab->GetTabFeatures()) {
+    return false;
+  }
+  customize_chrome::SidePanelController* side_panel_controller =
+      tab->GetTabFeatures()->customize_chrome_side_panel_controller();
+  return side_panel_controller &&
+         side_panel_controller->IsCustomizeChromeEntryAvailable();
 }
 
 void BrowserCommandHandler::StartTabGroupTutorial() {
@@ -252,8 +297,9 @@ void BrowserCommandHandler::OpenAISettings() {
                               chrome::kExperimentalAISettingsSubPage);
 }
 
-bool BrowserCommandHandler::BrowserSupportsCustomizeChromeSidePanel() {
-  return base::FeatureList::IsEnabled(features::kCustomizeChromeSidePanel);
+void BrowserCommandHandler::ShowCustomizeChromeToolbar() {
+  chrome::ExecuteCommand(chrome::FindBrowserWithProfile(profile_),
+                         IDC_SHOW_CUSTOMIZE_CHROME_TOOLBAR);
 }
 
 bool BrowserCommandHandler::DefaultSearchProviderIsGoogle() {
@@ -265,15 +311,13 @@ bool BrowserCommandHandler::BrowserSupportsSavedTabGroups() {
 
   // Duplicated from chrome/browser/ui/views/bookmarks/bookmark_bar_view.cc
   // Which cannot be included here
-  return base::FeatureList::IsEnabled(features::kTabGroupsSave) &&
-         browser->profile()->IsRegularProfile();
+  return browser->profile()->IsRegularProfile();
 }
 
 void BrowserCommandHandler::OpenNTPAndStartCustomizeChromeTutorial() {
   auto* tutorial_id = kSidePanelCustomizeChromeTutorialId;
 
-  if (BrowserSupportsCustomizeChromeSidePanel() &&
-      DefaultSearchProviderIsGoogle()) {
+  if (DefaultSearchProviderIsGoogle()) {
     StartTutorialInPage::Params params;
     params.tutorial_id = tutorial_id;
     params.callback = base::BindOnce(&BrowserCommandHandler::OnTutorialStarted,

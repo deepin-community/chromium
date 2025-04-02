@@ -10,8 +10,6 @@
 #include <string>
 #include <vector>
 
-#include "ash/components/arc/arc_features_parser.h"
-#include "ash/components/arc/mojom/webapk.mojom.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -19,7 +17,8 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/apps/app_service/webapk/webapk_metrics.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
-#include "chromeos/crosapi/mojom/web_app_service.mojom.h"
+#include "chromeos/ash/experiences/arc/arc_features_parser.h"
+#include "chromeos/ash/experiences/arc/mojom/webapk.mojom.h"
 
 class Profile;
 
@@ -70,10 +69,6 @@ class WebApkInstallTask {
   void OnInstallComplete(const std::string& package_name,
                          arc::mojom::WebApkInstallResult result);
 
-  void FetchWebApkInfoFromCrosapi();
-  void OnWebApkInfoFetchedFromCrosapi(
-      crosapi::mojom::WebApkCreationParamsPtr webapk_creation_params);
-
   // Delivers a result to the callback. The callback can delete this task, so no
   // further work should be done after calling this method.
   void DeliverResult(WebApkInstallStatus status);
@@ -99,7 +94,7 @@ class WebApkInstallTask {
   // Fails the installation if the request to the WebAPK minter takes too long.
   base::OneShotTimer timer_;
 
-  // TODO(crbug.com/1254199): Consider passing app short name to
+  // TODO(crbug.com/40199484): Consider passing app short name to
   // OnProtoSerialized() and OnUrlLoaderComplete().
   std::string app_short_name_;
 

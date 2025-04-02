@@ -63,9 +63,9 @@ class COMPONENT_EXPORT(EVDEV) GestureInterpreterLibevdevCros
   void SetupHapticButtonGeneration(
       const base::RepeatingCallback<void(bool)>& callback) override;
   void SetReceivedValidKeyboardInputCallback(
-      base::RepeatingCallback<void(uint64_t)> callback) override;
+      base::RepeatingCallback<void(uint64_t, double)> callback) override;
   void SetReceivedValidMouseInputCallback(
-      base::RepeatingCallback<void(int)> callback) override;
+      base::RepeatingCallback<void(int, double)> callback) override;
   void SetBlockModifiers(bool block_modifiers) override;
 
   // Handler for gesture events generated from libgestures.
@@ -105,6 +105,7 @@ class COMPONENT_EXPORT(EVDEV) GestureInterpreterLibevdevCros
   void ReleaseKeys(stime_t timestamp);
   bool SetMouseButtonState(unsigned int button, bool down);
   void ReleaseMouseButtons(stime_t timestamp);
+  void RecordClickMetric(stime_t duration, float movement);
 
   // The unique device id.
   int id_;
@@ -136,6 +137,9 @@ class COMPONENT_EXPORT(EVDEV) GestureInterpreterLibevdevCros
   static const int kMouseButtonCount = BTN_JOYSTICK - BTN_MOUSE;
   std::bitset<kMouseButtonCount> mouse_button_state_;
 
+  stime_t click_down_time_;
+  gfx::Vector2dF click_movement_;
+
   // Device pointer.
   Evdev* evdev_ = nullptr;
 
@@ -149,10 +153,10 @@ class COMPONENT_EXPORT(EVDEV) GestureInterpreterLibevdevCros
   base::RepeatingCallback<void(bool)> click_callback_;
 
   // Callback for when a keyboard key press is registered.
-  base::RepeatingCallback<void(uint64_t)> received_keyboard_input_;
+  base::RepeatingCallback<void(uint64_t, double)> received_keyboard_input_;
 
   // Callback for when a mouse rel event is registered.
-  base::RepeatingCallback<void(int)> received_mouse_input_;
+  base::RepeatingCallback<void(int, double)> received_mouse_input_;
 };
 
 }  // namespace ui

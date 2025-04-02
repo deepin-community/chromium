@@ -53,7 +53,7 @@ struct DowncastTraits<CSSFontVariationSettingsNonInterpolableValue> {
   }
 };
 
-static const Vector<uint32_t> GetTags(
+static Vector<uint32_t> GetTags(
     const NonInterpolableValue& non_interpolable_value) {
   return To<CSSFontVariationSettingsNonInterpolableValue>(
              non_interpolable_value)
@@ -122,7 +122,7 @@ InterpolationValue
 CSSFontVariationSettingsInterpolationType::MaybeConvertNeutral(
     const InterpolationValue& underlying,
     ConversionCheckers& conversion_checkers) const {
-  conversion_checkers.push_back(std::make_unique<UnderlyingTagsChecker>(
+  conversion_checkers.push_back(MakeGarbageCollected<UnderlyingTagsChecker>(
       GetTags(*underlying.non_interpolable_value)));
   return InterpolationValue(underlying.interpolable_value->CloneAndZero(),
                             underlying.non_interpolable_value);
@@ -142,7 +142,7 @@ CSSFontVariationSettingsInterpolationType::MaybeConvertInherit(
   const FontVariationSettings* inherited =
       state.ParentStyle()->GetFontDescription().VariationSettings();
   conversion_checkers.push_back(
-      std::make_unique<InheritedFontVariationSettingsChecker>(inherited));
+      MakeGarbageCollected<InheritedFontVariationSettingsChecker>(inherited));
   return ConvertFontVariationSettings(inherited);
 }
 

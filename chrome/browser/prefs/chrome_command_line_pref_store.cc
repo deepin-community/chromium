@@ -8,13 +8,13 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -54,7 +54,8 @@ const CommandLinePrefStore::SwitchToPreferenceMapEntry
          prefs::kAuthAndroidNegotiateAccountType},
 #endif
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-        {switches::kSchedulerConfiguration, prefs::kSchedulerConfiguration},
+        {ash::switches::kSchedulerConfiguration,
+         ash::prefs::kSchedulerConfiguration},
         {borealis::switches::kLaunchOptions,
          borealis::prefs::kExtraLaunchOptions},
 #endif
@@ -110,7 +111,7 @@ ChromeCommandLinePrefStore::ChromeCommandLinePrefStore(
   ApplyExplicitlyAllowedPortSwitch();
 }
 
-ChromeCommandLinePrefStore::~ChromeCommandLinePrefStore() {}
+ChromeCommandLinePrefStore::~ChromeCommandLinePrefStore() = default;
 
 bool ChromeCommandLinePrefStore::ValidateProxySwitches() {
   if (command_line()->HasSwitch(switches::kNoProxyServer) &&

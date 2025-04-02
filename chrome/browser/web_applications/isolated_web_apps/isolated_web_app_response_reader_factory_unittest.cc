@@ -7,13 +7,14 @@
 #include <memory>
 #include <optional>
 
+#include "base/auto_reset.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/functional/callback_helpers.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/test/gmock_callback_support.h"
 #include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/repeating_test_future.h"
@@ -25,13 +26,14 @@
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_response_reader.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_trust_checker.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_validator.h"
-#include "components/prefs/testing_pref_service.h"
+#include "chrome/browser/web_applications/test/web_app_test.h"
 #include "components/web_package/mojom/web_bundle_parser.mojom.h"
 #include "components/web_package/signed_web_bundles/ed25519_public_key.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_integrity_block.h"
 #include "components/web_package/signed_web_bundles/signed_web_bundle_signature_verifier.h"
 #include "components/web_package/test_support/mock_web_bundle_parser_factory.h"
+#include "components/web_package/test_support/signed_web_bundles/signature_verifier_test_utils.h"
 #include "content/public/common/content_features.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -44,6 +46,7 @@ namespace {
 
 using base::test::ErrorIs;
 using base::test::HasValue;
+using base::test::RunOnceCallback;
 using testing::ElementsAre;
 using testing::Eq;
 using testing::IsFalse;
@@ -62,58 +65,34 @@ constexpr uint8_t kEd25519Signature[64] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 7, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 7, 7, 0, 0};
 
-// This class needs to be a IsolatedWebAppVaidator, but also must provide
-// a TestingPrefServiceSimple that outlives it. So rather than making
-// TestingPrefServiceSimple a member, make it the leftmost base class.
-class FakeIsolatedWebAppValidator : public TestingPrefServiceSimple,
-                                    public IsolatedWebAppValidator {
+class FakeIsolatedWebAppValidator : public IsolatedWebAppValidator {
  public:
   explicit FakeIsolatedWebAppValidator(
-      std::optional<std::string> integrity_block_error)
-      : IsolatedWebAppValidator(std::make_unique<IsolatedWebAppTrustChecker>(
-            // Disambiguate the constructor using the form that takes the
-            // already-initialized leftmost base class, rather than the copy
-            // constructor for the uninitialized rightmost base class.
-            *static_cast<TestingPrefServiceSimple*>(this))),
-        integrity_block_error_(integrity_block_error) {}
+      base::expected<void, std::string> integrity_block_validation_result)
+      : integrity_block_validation_result_(integrity_block_validation_result) {}
 
-  void ValidateIntegrityBlock(
+  base::expected<void, std::string> ValidateIntegrityBlock(
       const web_package::SignedWebBundleId& web_bundle_id,
       const web_package::SignedWebBundleIntegrityBlock& integrity_block,
-      base::OnceCallback<void(std::optional<std::string>)> callback) override {
-    std::move(callback).Run(integrity_block_error_);
+      bool dev_mode,
+      const IsolatedWebAppTrustChecker& trust_checker) override {
+    return integrity_block_validation_result_;
   }
 
  private:
-  std::optional<std::string> integrity_block_error_;
+  base::expected<void, std::string> integrity_block_validation_result_;
 };
 
-class FakeSignatureVerifier
-    : public web_package::SignedWebBundleSignatureVerifier {
+class IsolatedWebAppResponseReaderFactoryTest : public WebAppTest {
  public:
-  explicit FakeSignatureVerifier(
-      std::optional<VerifierError> error,
-      base::RepeatingClosure on_verify_signatures = base::DoNothing())
-      : error_(error), on_verify_signatures_(on_verify_signatures) {}
-
-  void VerifySignatures(
-      base::File file,
-      web_package::SignedWebBundleIntegrityBlock integrity_block,
-      SignatureVerificationCallback callback) override {
-    on_verify_signatures_.Run();
-    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(callback), error_));
+  IsolatedWebAppResponseReaderFactoryTest()
+      : WebAppTest(base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
+    scoped_feature_list_.InitAndEnableFeature(features::kIsolatedWebApps);
   }
 
- private:
-  std::optional<VerifierError> error_;
-  base::RepeatingClosure on_verify_signatures_;
-};
-
-class IsolatedWebAppResponseReaderFactoryTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(features::kIsolatedWebApps);
+    WebAppTest::SetUp();
 
     parser_factory_ = std::make_unique<web_package::MockWebBundleParserFactory>(
         on_create_parser_future_.GetCallback());
@@ -132,13 +111,19 @@ class IsolatedWebAppResponseReaderFactoryTest : public ::testing::Test {
     metadata_ = web_package::mojom::BundleMetadata::New();
     metadata_->requests = std::move(requests);
 
+    auto signature_info_ed25519 =
+        web_package::mojom::SignatureInfoEd25519::New();
+    signature_info_ed25519->public_key =
+        web_package::Ed25519PublicKey::Create(base::span(kEd25519PublicKey));
+    signature_info_ed25519->signature =
+        web_package::Ed25519Signature::Create(base::span(kEd25519Signature));
+
     web_package::mojom::BundleIntegrityBlockSignatureStackEntryPtr
         signature_stack_entry =
             web_package::mojom::BundleIntegrityBlockSignatureStackEntry::New();
-    signature_stack_entry->public_key = web_package::Ed25519PublicKey::Create(
-        base::make_span(kEd25519PublicKey));
-    signature_stack_entry->signature = web_package::Ed25519Signature::Create(
-        base::make_span(kEd25519Signature));
+    signature_stack_entry->signature_info =
+        web_package::mojom::SignatureInfo::NewEd25519(
+            std::move(signature_info_ed25519));
 
     std::vector<web_package::mojom::BundleIntegrityBlockSignatureStackEntryPtr>
         signature_stack;
@@ -148,13 +133,11 @@ class IsolatedWebAppResponseReaderFactoryTest : public ::testing::Test {
     integrity_block_->size = 42;
     integrity_block_->signature_stack = std::move(signature_stack);
 
+    integrity_block_->attributes =
+        web_package::test::GetAttributesForSignedWebBundleId(kWebBundleId.id());
+
     factory_ = std::make_unique<IsolatedWebAppResponseReaderFactory>(
-        std::make_unique<FakeIsolatedWebAppValidator>(std::nullopt),
-        base::BindRepeating(
-            []() -> std::unique_ptr<
-                     web_package::SignedWebBundleSignatureVerifier> {
-              return std::make_unique<FakeSignatureVerifier>(std::nullopt);
-            }));
+        *profile(), std::make_unique<FakeIsolatedWebAppValidator>(base::ok()));
 
     CHECK(temp_dir_.CreateUniqueTempDir());
     CHECK(CreateTemporaryFileInDir(temp_dir_.GetPath(), &web_bundle_path_));
@@ -166,7 +149,10 @@ class IsolatedWebAppResponseReaderFactoryTest : public ::testing::Test {
             base::Unretained(parser_factory_.get())));
   }
 
-  void TearDown() override { factory_.reset(); }
+  void TearDown() override {
+    factory_.reset();
+    WebAppTest::TearDown();
+  }
 
   void FulfillIntegrityBlock() {
     parser_factory_->RunIntegrityBlockCallback(integrity_block_->Clone());
@@ -184,8 +170,6 @@ class IsolatedWebAppResponseReaderFactoryTest : public ::testing::Test {
         response_->Clone());
   }
 
-  base::test::TaskEnvironment task_environment_{
-      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
   base::test::ScopedFeatureList scoped_feature_list_;
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   base::ScopedTempDir temp_dir_;
@@ -206,12 +190,18 @@ class IsolatedWebAppResponseReaderFactoryTest : public ::testing::Test {
   web_package::mojom::BundleIntegrityBlockPtr integrity_block_;
   web_package::mojom::BundleMetadataPtr metadata_;
   web_package::mojom::BundleResponsePtr response_;
+
+  testing::StrictMock<web_package::test::MockSignatureVerifier>
+      signature_verifier_;
+  base::AutoReset<web_package::SignedWebBundleSignatureVerifier*>
+      reset_signature_verifier_ =
+          web_app::SignedWebBundleReader::SetSignatureVerifierForTesting(
+              &signature_verifier_);
 };
 
 using ReaderResult =
     base::expected<std::unique_ptr<IsolatedWebAppResponseReader>,
                    UnusableSwbnFileError>;
-
 class IsolatedWebAppResponseReaderFactoryIntegrityBlockParserErrorTest
     : public IsolatedWebAppResponseReaderFactoryTest,
       public ::testing::WithParamInterface<
@@ -224,8 +214,7 @@ TEST_P(IsolatedWebAppResponseReaderFactoryIntegrityBlockParserErrorTest,
 
   base::test::TestFuture<ReaderResult> reader_future;
   factory_->CreateResponseReader(web_bundle_path_, kWebBundleId,
-                                 /*skip_signature_verification=*/false,
-                                 reader_future.GetCallback());
+                                 /*flags=*/{}, reader_future.GetCallback());
 
   auto error = web_package::mojom::BundleIntegrityBlockParseError::New();
   error->type = GetParam().first;
@@ -258,17 +247,12 @@ TEST_F(IsolatedWebAppResponseReaderFactoryTest,
   base::HistogramTester histogram_tester;
 
   factory_ = std::make_unique<IsolatedWebAppResponseReaderFactory>(
-      std::make_unique<FakeIsolatedWebAppValidator>("test error"),
-      base::BindRepeating(
-          []() -> std::unique_ptr<
-                   web_package::SignedWebBundleSignatureVerifier> {
-            return std::make_unique<FakeSignatureVerifier>(std::nullopt);
-          }));
+      *profile(), std::make_unique<FakeIsolatedWebAppValidator>(
+                      base::unexpected("test error")));
 
   base::test::TestFuture<ReaderResult> reader_future;
   factory_->CreateResponseReader(web_bundle_path_, kWebBundleId,
-                                 /*skip_signature_verification=*/false,
-                                 reader_future.GetCallback());
+                                 /*flags=*/{}, reader_future.GetCallback());
 
   FulfillIntegrityBlock();
 
@@ -300,18 +284,18 @@ TEST_P(IsolatedWebAppResponseReaderFactorySignatureVerificationErrorTest,
   base::HistogramTester histogram_tester;
 
   factory_ = std::make_unique<IsolatedWebAppResponseReaderFactory>(
-      std::make_unique<FakeIsolatedWebAppValidator>(std::nullopt),
-      base::BindRepeating(
-          [](VerifierError error)
-              -> std::unique_ptr<
-                  web_package::SignedWebBundleSignatureVerifier> {
-            return std::make_unique<FakeSignatureVerifier>(error);
-          },
-          error_));
+      *profile(), std::make_unique<FakeIsolatedWebAppValidator>(base::ok()));
 
+  IsolatedWebAppResponseReaderFactory::Flags flags;
+  if (skip_signature_verification_) {
+    flags.Put(
+        IsolatedWebAppResponseReaderFactory::Flag::kSkipSignatureVerification);
+  } else {
+    EXPECT_CALL(signature_verifier_, VerifySignatures)
+        .WillOnce(RunOnceCallback<2>(base::unexpected(error_)));
+  }
   base::test::TestFuture<ReaderResult> reader_future;
-  factory_->CreateResponseReader(web_bundle_path_, kWebBundleId,
-                                 skip_signature_verification_,
+  factory_->CreateResponseReader(web_bundle_path_, kWebBundleId, flags,
                                  reader_future.GetCallback());
 
   FulfillIntegrityBlock();
@@ -355,12 +339,13 @@ class IsolatedWebAppResponseReaderFactoryMetadataParserErrorTest
 
 TEST_P(IsolatedWebAppResponseReaderFactoryMetadataParserErrorTest,
        TestMetadataParserError) {
+  EXPECT_CALL(signature_verifier_, VerifySignatures)
+      .WillOnce(RunOnceCallback<2>(base::ok()));
   base::HistogramTester histogram_tester;
 
   base::test::TestFuture<ReaderResult> reader_future;
   factory_->CreateResponseReader(web_bundle_path_, kWebBundleId,
-                                 /*skip_signature_verification=*/false,
-                                 reader_future.GetCallback());
+                                 /*flags=*/{}, reader_future.GetCallback());
 
   FulfillIntegrityBlock();
   auto error = web_package::mojom::BundleMetadataParseError::New();
@@ -391,12 +376,13 @@ INSTANTIATE_TEST_SUITE_P(
             UnusableSwbnFileError::Error::kMetadataParserFormatError)));
 
 TEST_F(IsolatedWebAppResponseReaderFactoryTest, TestInvalidMetadataPrimaryUrl) {
+  EXPECT_CALL(signature_verifier_, VerifySignatures)
+      .WillOnce(RunOnceCallback<2>(base::ok()));
   base::HistogramTester histogram_tester;
 
   base::test::TestFuture<ReaderResult> reader_future;
   factory_->CreateResponseReader(web_bundle_path_, kWebBundleId,
-                                 /*skip_signature_verification=*/false,
-                                 reader_future.GetCallback());
+                                 /*flags=*/{}, reader_future.GetCallback());
 
   FulfillIntegrityBlock();
   auto metadata = metadata_->Clone();
@@ -415,10 +401,11 @@ TEST_F(IsolatedWebAppResponseReaderFactoryTest, TestInvalidMetadataPrimaryUrl) {
 
 TEST_F(IsolatedWebAppResponseReaderFactoryTest,
        TestInvalidMetadataInvalidExchange) {
+  EXPECT_CALL(signature_verifier_, VerifySignatures)
+      .WillOnce(RunOnceCallback<2>(base::ok()));
   base::test::TestFuture<ReaderResult> reader_future;
   factory_->CreateResponseReader(web_bundle_path_, kWebBundleId,
-                                 /*skip_signature_verification=*/false,
-                                 reader_future.GetCallback());
+                                 /*flags=*/{}, reader_future.GetCallback());
 
   FulfillIntegrityBlock();
   auto metadata = metadata_->Clone();

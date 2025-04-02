@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 
 #include "base/compiler_specific.h"
@@ -17,7 +18,6 @@
 #include "chrome/test/base/testing_profile_manager.h"
 #include "chromeos/ash/components/proximity_auth/screenlock_bridge.h"
 #include "components/account_id/account_id.h"
-#include "components/user_manager/multi_user/multi_user_sign_in_policy_controller.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "components/user_manager/user.h"
 #include "content/public/test/browser_task_environment.h"
@@ -27,8 +27,8 @@ namespace ash {
 namespace {
 
 const size_t kMaxUsers = 50;  // same as in user_selection_screen.cc
-const char* kOwner = "owner@gmail.com";
-const char* kUsersPublic[] = {"public0@gmail.com", "public1@gmail.com"};
+const char kOwner[] = "owner@gmail.com";
+constexpr std::array kUsersPublic = {"public0@gmail.com", "public1@gmail.com"};
 
 std::string GenerateUserEmail(int number) {
   return "a" + base::NumberToString(number) + "@gmail.com";
@@ -46,39 +46,33 @@ class SigninPrepareUserListTest : public testing::Test {
   SigninPrepareUserListTest& operator=(const SigninPrepareUserListTest&) =
       delete;
 
-  ~SigninPrepareUserListTest() override {}
+  ~SigninPrepareUserListTest() override = default;
 
   // testing::Test:
   void SetUp() override {
     testing::Test::SetUp();
     profile_manager_ = std::make_unique<TestingProfileManager>(
-        TestingBrowserProcess::GetGlobal());
+        TestingBrowserProcess::GetGlobal(), &local_state_);
     ASSERT_TRUE(profile_manager_->SetUp());
-    controller_ =
-        std::make_unique<user_manager::MultiUserSignInPolicyController>(
-            TestingBrowserProcess::GetGlobal()->local_state(),
-            fake_user_manager_);
-    fake_user_manager_->set_multi_user_sign_in_policy_controller(
-        controller_.get());
 
-    for (size_t i = 0; i < std::size(kUsersPublic); ++i)
+    for (size_t i = 0; i < std::size(kUsersPublic); ++i) {
       fake_user_manager_->AddPublicAccountUser(
           AccountId::FromUserEmail(kUsersPublic[i]));
+    }
 
     for (size_t i = 0; i < kMaxUsers + 1; ++i) {
       fake_user_manager_->AddUser(
           AccountId::FromUserEmail(GenerateUserEmail(i)));
       // Insert owner second to last.
-      if (i == kMaxUsers - 1)
+      if (i == kMaxUsers - 1) {
         fake_user_manager_->AddUser(AccountId::FromUserEmail(kOwner));
+      }
     }
 
     fake_user_manager_->SetOwnerId(AccountId::FromUserEmail(kOwner));
   }
 
   void TearDown() override {
-    fake_user_manager_->set_multi_user_sign_in_policy_controller(nullptr);
-    controller_.reset();
     profile_manager_.reset();
     testing::Test::TearDown();
   }
@@ -86,13 +80,13 @@ class SigninPrepareUserListTest : public testing::Test {
   FakeChromeUserManager* user_manager() { return fake_user_manager_; }
 
  private:
+  ScopedTestingLocalState local_state_{TestingBrowserProcess::GetGlobal()};
   content::BrowserTaskEnvironment task_environment_;
   ScopedCrosSettingsTestHelper cros_settings_test_helper_;
   raw_ptr<FakeChromeUserManager, DanglingUntriaged> fake_user_manager_;
   user_manager::ScopedUserManager user_manager_enabler_;
   std::unique_ptr<TestingProfileManager> profile_manager_;
   std::map<std::string, proximity_auth::mojom::AuthType> user_auth_type_map;
-  std::unique_ptr<user_manager::MultiUserSignInPolicyController> controller_;
 };
 
 TEST_F(SigninPrepareUserListTest, AlwaysKeepOwnerInList) {

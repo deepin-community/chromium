@@ -13,6 +13,7 @@
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
+#include "net/http/http_cookie_indices.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom-forward.h"
 
@@ -36,7 +37,7 @@ class PrefetchStreamingURLLoader;
 // - The `PrefetchRequestHandler` returned by `CreateRequestHandler()`
 //   until it is called.
 //
-// TODO(crbug.com/1449360): Currently at most one client per
+// TODO(crbug.com/40064891): Currently at most one client per
 // `PrefetchResponseReader` is allowed due to other servablility conditions.
 // Upcoming CLs will enable multiple clients/navigation requests per
 // `PrefetchResponseReader` behind a flag.
@@ -44,7 +45,12 @@ class CONTENT_EXPORT PrefetchResponseReader final
     : public network::mojom::URLLoader,
       public base::RefCounted<PrefetchResponseReader> {
  public:
-  PrefetchResponseReader();
+  // TODO(crbug.com/373553133): Stop using two different constructors once we
+  // find how we enable `is_reusable_` path.
+  explicit PrefetchResponseReader(bool is_reusable);
+  // For
+  // //content/browser/preloading/prefetch/prefetch_streaming_url_loader_unittest.cc
+  explicit PrefetchResponseReader();
 
   void SetStreamingURLLoader(
       base::WeakPtr<PrefetchStreamingURLLoader> streaming_url_loader);
@@ -93,9 +99,21 @@ class CONTENT_EXPORT PrefetchResponseReader final
   }
   const network::mojom::URLResponseHead* GetHead() const { return head_.get(); }
 
+  // True if this response had Vary: Cookie (or Vary: *), and a Cookie-Indices
+  // header also applies.
+  bool VariesOnCookieIndices() const;
+
+  // True if the request cookies `cookies` match those originally used when the
+  // prefetch request was made, to the extent required by Cookie-Indices.
+  // Do not call this if |VariesOnCookieIndices()| returns false.
+  bool MatchesCookieIndices(
+      base::span<const std::pair<std::string, std::string>> cookies) const;
+
   base::WeakPtr<PrefetchResponseReader> GetWeakPtr() {
     return weak_ptr_factory_.GetWeakPtr();
   }
+
+  bool is_reusable() const { return is_reusable_; }
 
  private:
   // Identifies a client in `serving_url_loader_clients_`.
@@ -140,12 +158,18 @@ class CONTENT_EXPORT PrefetchResponseReader final
       const std::optional<GURL>& new_url) override;
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override;
-  void PauseReadingBodyFromNet() override;
-  void ResumeReadingBodyFromNet() override;
 
   void OnServingURLLoaderMojoDisconnect();
 
   PrefetchStreamingURLLoaderStatus GetStatusForRecording() const;
+
+  // Stores info from the response head that will be needed later, before it is
+  // stored into `head_` (for non-redirect responses) or `event_queue_` (or
+  // redirect responses).
+  void StoreInfoFromResponseHead(const network::mojom::URLResponseHead& head);
+
+  // If true, the body is reusable with help of `PrefetchDataPipeTee`.
+  const bool is_reusable_;
 
   // All URLLoader events are queued up here.
   std::vector<base::RepeatingCallback<void(ServingUrlLoaderClientId)>>
@@ -199,7 +223,7 @@ class CONTENT_EXPORT PrefetchResponseReader final
   LoadState load_state_{LoadState::kStarted};
 
   // Used for UMA recording.
-  // TODO(crbug.com/1449360): we might want to adapt these flags and UMA
+  // TODO(crbug.com/40064891): we might want to adapt these flags and UMA
   // semantics for multiple client settings, but so far we don't have any
   // specific plans.
   std::optional<PrefetchErrorOnResponseReceived> failure_reason_;
@@ -207,20 +231,38 @@ class CONTENT_EXPORT PrefetchResponseReader final
   bool served_after_completion_{false};
   bool should_record_metrics_{true};
 
+  // If present, this includes the sorted and unique names of the cookies which
+  // were specified in the Cookie-Indices header, and a hash of their values as
+  // obtained from `net::HashCookieIndices`. This is not set unless the Vary
+  // header also specified Cookie (or *).
+  //
+  // As one quirk, we presently still don't vary on cookies if Vary is specified
+  // and Cookie-Indices isn't, both because that was the prior behavior and
+  // because doing so requires having the precise string value of the header
+  // (including whitespace).
+  struct CookieIndicesInfo {
+    CookieIndicesInfo();
+    ~CookieIndicesInfo();
+
+    std::vector<std::string> cookie_names;
+    net::CookieIndicesHash expected_hash;
+  };
+  std::optional<CookieIndicesInfo> cookie_indices_;
+
   // The prefetched data and metadata. Not set for a redirect response.
   network::mojom::URLResponseHeadPtr head_;
-  // `body_` is set/used only when `features::kPrefetchReusable` is disabled.
+  // `body_` is set/used only when `!is_reusable_`.
   mojo::ScopedDataPipeConsumerHandle body_;
-  // `body_tee_` is set/used only when `features::kPrefetchReusable` is enabled.
+  // `body_tee_` is set/used only when `is_reusable_`.
   scoped_refptr<PrefetchDataPipeTee> body_tee_;
   std::optional<network::URLLoaderCompletionStatus> completion_status_;
+  // Recorded on `OnComplete` and used to check if the prefetch data is still
+  // fresh for use.
   std::optional<base::TimeTicks> response_complete_time_;
 
   // Only used temporarily to plumb the body `BindAndStart()` to
   // `ForwardResponse()`.
   mojo::ScopedDataPipeConsumerHandle forward_body_;
-
-  bool create_request_handler_called_{false};
 
   // The URL loader clients that will serve the prefetched data.
   mojo::ReceiverSet<network::mojom::URLLoader> serving_url_loader_receivers_;

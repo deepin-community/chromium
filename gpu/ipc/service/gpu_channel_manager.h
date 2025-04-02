@@ -8,10 +8,10 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include <optional>
 #include "base/containers/flat_map.h"
 #include "base/memory/memory_pressure_listener.h"
 #include "base/memory/raw_ptr.h"
@@ -67,7 +67,6 @@ class GpuChannel;
 class GpuChannelManagerDelegate;
 class GpuMemoryBufferFactory;
 class GpuWatchdogThread;
-class MailboxManager;
 class Scheduler;
 class SharedImageManager;
 class SyncPointManager;
@@ -112,7 +111,9 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelManager
       viz::MetalContextProvider* metal_context_provider = nullptr,
       DawnContextProvider* dawn_context_provider = nullptr,
       webgpu::DawnCachingInterfaceFactory* dawn_caching_interface_factory =
-          nullptr);
+          nullptr,
+      const SharedContextState::GrContextOptionsProvider*
+          gr_context_options_provider = nullptr);
 
   GpuChannelManager(const GpuChannelManager&) = delete;
   GpuChannelManager& operator=(const GpuChannelManager&) = delete;
@@ -200,8 +201,6 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelManager
   // Make sure that delayed cleanup is happening now. Expensive.
   void PerformImmediateCleanup();
 
-  MailboxManager* mailbox_manager() const { return mailbox_manager_.get(); }
-
   gl::GLShareGroup* share_group() const { return share_group_.get(); }
 
   SyncPointManager* sync_point_manager() const { return sync_point_manager_; }
@@ -209,6 +208,8 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelManager
   SharedImageManager* shared_image_manager() const {
     return shared_image_manager_;
   }
+
+  Scheduler* scheduler() const { return scheduler_; }
 
   bool use_passthrough_cmd_decoder() const {
     return gpu_preferences_.use_passthrough_cmd_decoder &&
@@ -347,7 +348,6 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelManager
   std::unique_ptr<BuiltInShaderCacheWriter> shader_cache_writer_;
 #endif
 
-  std::unique_ptr<MailboxManager> mailbox_manager_;
   std::unique_ptr<gles2::Outputter> outputter_;
   raw_ptr<Scheduler> scheduler_;
   // SyncPointManager guaranteed to outlive running MessageLoop.
@@ -406,6 +406,9 @@ class GPU_IPC_SERVICE_EXPORT GpuChannelManager
   raw_ptr<DawnContextProvider> dawn_context_provider_ = nullptr;
 
   GpuPeakMemoryMonitor peak_memory_monitor_;
+
+  raw_ptr<const SharedContextState::GrContextOptionsProvider>
+      gr_context_options_provider_ = nullptr;
 
   // Creation time of GpuChannelManger.
   const base::TimeTicks creation_time_ = base::TimeTicks::Now();

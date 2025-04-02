@@ -36,7 +36,7 @@ enum KeyboardPassThroughState {
   PENDING_SHORTCUT_KEYUPS = 'pending_shortcut_keyups',
 }
 
-class InternalKeyEvent extends KeyboardEvent {
+export class InternalKeyEvent extends KeyboardEvent {
   stickyMode?: boolean;
 }
 
@@ -114,7 +114,7 @@ export class BackgroundKeyboardHandler {
   }
 
   /** Returns true if the key should continue propagation. */
-  private callOnKeyDownHandlers_(evt: Event): boolean {
+  private callOnKeyDownHandlers_(evt: KeyboardEvent): boolean {
     // Defer first to the math handler, if it exists, then ordinary keyboard
     // commands.
     if (!MathHandler.onKeyDown(evt)) {

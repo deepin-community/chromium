@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -17,7 +18,6 @@
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/values.h"
@@ -70,8 +70,8 @@ std::vector<uint8_t> ExtractBytesFromValue(const base::Value& value) {
 }
 
 base::span<const uint8_t> GetCertDer(const net::X509Certificate& certificate) {
-  return base::as_bytes(base::make_span(
-      net::x509_util::CryptoBufferAsStringPiece(certificate.cert_buffer())));
+  return base::as_byte_span(
+      net::x509_util::CryptoBufferAsStringPiece(certificate.cert_buffer()));
 }
 
 base::Value MakeClientCertificateInfoValue(
@@ -145,7 +145,7 @@ std::unique_ptr<crypto::RSAPrivateKey> LoadPrivateKeyFromFile(
     EXPECT_TRUE(base::ReadFileToString(path, &key_pk8));
   }
   return crypto::RSAPrivateKey::CreateFromPrivateKeyInfo(
-      base::as_bytes(base::make_span(key_pk8)));
+      base::as_byte_span(key_pk8));
 }
 
 }  // namespace
@@ -176,7 +176,7 @@ TestCertificateProviderExtension::GetCertificate() {
 // static
 std::string TestCertificateProviderExtension::GetCertificateSpki() {
   const scoped_refptr<net::X509Certificate> certificate = GetCertificate();
-  base::StringPiece spki_bytes;
+  std::string_view spki_bytes;
   if (!net::asn1::ExtractSPKIFromDERCert(
           net::x509_util::CryptoBufferAsStringPiece(certificate->cert_buffer()),
           &spki_bytes)) {

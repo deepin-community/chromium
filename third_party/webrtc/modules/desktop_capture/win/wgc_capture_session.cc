@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "modules/desktop_capture/win/screen_capture_utils.h"
 #include "modules/desktop_capture/win/wgc_desktop_frame.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
@@ -99,12 +100,23 @@ bool SizeHasChanged(ABI::Windows::Graphics::SizeInt32 size_new,
 
 }  // namespace
 
-WgcCaptureSession::WgcCaptureSession(ComPtr<ID3D11Device> d3d11_device,
+WgcCaptureSession::WgcCaptureSession(intptr_t source_id,
+                                     ComPtr<ID3D11Device> d3d11_device,
                                      ComPtr<WGC::IGraphicsCaptureItem> item,
                                      ABI::Windows::Graphics::SizeInt32 size)
     : d3d11_device_(std::move(d3d11_device)),
       item_(std::move(item)),
-      size_(size) {}
+      size_(size) {
+  RTC_CHECK(source_id);
+  HMONITOR monitor = 0;
+  if (!GetHmonitorFromDeviceIndex(source_id, &monitor)) {
+    monitor = MonitorFromWindow(reinterpret_cast<HWND>(source_id),
+                                /*dwFlags=*/MONITOR_DEFAULTTONEAREST);
+  }
+  HRESULT hr = GetScaleFactorForMonitor(monitor, &device_scale_factor_);
+  RTC_LOG_IF(LS_ERROR, FAILED(hr))
+      << "Failed to get scale factor for monitor: " << hr;
+}
 
 WgcCaptureSession::~WgcCaptureSession() {
   RemoveEventHandler();
@@ -261,6 +273,12 @@ bool WgcCaptureSession::GetFrame(std::unique_ptr<DesktopFrame>* output_frame,
                                  bool source_should_be_capturable) {
   RTC_DCHECK_RUN_ON(&sequence_checker_);
 
+  if (item_closed_) {
+    RTC_LOG(LS_ERROR) << "The target source has been closed.";
+    RecordGetFrameResult(GetFrameResult::kItemClosed);
+    return false;
+  }
+
   // Try to process the captured frame and wait some if needed. Avoid trying
   // if we know that the source will not be capturable. This can happen e.g.
   // when captured window is minimized and if EnsureFrame() was called in this
@@ -315,12 +333,6 @@ HRESULT WgcCaptureSession::CreateMappedTexture(
 
 HRESULT WgcCaptureSession::ProcessFrame() {
   RTC_DCHECK_RUN_ON(&sequence_checker_);
-
-  if (item_closed_) {
-    RTC_LOG(LS_ERROR) << "The target source has been closed.";
-    RecordGetFrameResult(GetFrameResult::kItemClosed);
-    return E_ABORT;
-  }
 
   RTC_DCHECK(is_capture_started_);
 
@@ -456,6 +468,9 @@ HRESULT WgcCaptureSession::ProcessFrame() {
   }
 
   DesktopFrame* current_frame = queue_.current_frame();
+  if (device_scale_factor_ != DEVICE_SCALE_FACTOR_INVALID) {
+    current_frame->set_device_scale_factor(device_scale_factor_);
+  }
   DesktopFrame* previous_frame = queue_.previous_frame();
 
   // Will be set to true while copying the frame data to the `current_frame` if

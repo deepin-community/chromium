@@ -18,11 +18,12 @@
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "services/video_effects/public/mojom/video_effects_processor.mojom-forward.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using ::testing::InvokeWithoutArgs;
 using media::VideoFrameReceiver;
+using ::testing::InvokeWithoutArgs;
 
 namespace mirroring {
 
@@ -33,12 +34,12 @@ constexpr bool kNotPremapped = false;
 class MockVideoCaptureDevice final
     : public content::LaunchedVideoCaptureDevice {
  public:
-  MockVideoCaptureDevice() {}
+  MockVideoCaptureDevice() = default;
 
   MockVideoCaptureDevice(const MockVideoCaptureDevice&) = delete;
   MockVideoCaptureDevice& operator=(const MockVideoCaptureDevice&) = delete;
 
-  ~MockVideoCaptureDevice() override {}
+  ~MockVideoCaptureDevice() override = default;
   void GetPhotoState(
       VideoCaptureDevice::GetPhotoStateCallback callback) override {}
   void SetPhotoOptions(
@@ -83,8 +84,10 @@ class FakeDeviceLauncher final : public content::VideoCaptureDeviceLauncher {
       base::OnceClosure connection_lost_cb,
       Callbacks* callbacks,
       base::OnceClosure done_cb,
-      mojo::PendingRemote<video_capture::mojom::VideoEffectsManager>
-          video_effects_manager) override {
+      mojo::PendingRemote<video_effects::mojom::VideoEffectsProcessor>
+          video_effects_processor,
+      mojo::PendingRemote<media::mojom::ReadonlyVideoEffectsManager>
+          readonly_video_effects_manager) override {
     if (!params.IsValid()) {
       callbacks->OnDeviceLaunchFailed(
           media::VideoCaptureError::
@@ -117,12 +120,12 @@ class FakeDeviceLauncher final : public content::VideoCaptureDeviceLauncher {
 class StubReadWritePermission final
     : public VideoCaptureDevice::Client::Buffer::ScopedAccessPermission {
  public:
-  StubReadWritePermission() {}
+  StubReadWritePermission() = default;
 
   StubReadWritePermission(const StubReadWritePermission&) = delete;
   StubReadWritePermission& operator=(const StubReadWritePermission&) = delete;
 
-  ~StubReadWritePermission() override {}
+  ~StubReadWritePermission() override = default;
 };
 
 class MockVideoCaptureObserver final
@@ -169,16 +172,18 @@ class MockVideoCaptureObserver final
   MOCK_METHOD1(OnStateChangedCall, void(media::mojom::VideoCaptureState state));
   MOCK_METHOD1(OnVideoCaptureErrorCall, void(media::VideoCaptureError error));
   void OnStateChanged(media::mojom::VideoCaptureResultPtr result) override {
-    if (result->which() == media::mojom::VideoCaptureResult::Tag::kState)
+    if (result->which() == media::mojom::VideoCaptureResult::Tag::kState) {
       OnStateChangedCall(result->get_state());
-    else
+    } else {
       OnVideoCaptureErrorCall(result->get_error_code());
+    }
   }
 
   void Start(bool valid_params) {
     VideoCaptureParams params = VideoCaptureParams();
-    if (!valid_params)
+    if (!valid_params) {
       params.requested_format.frame_rate = std::numeric_limits<float>::max();
+    }
 
     host_->Start(device_id_, session_id_, params,
                  receiver_.BindNewPipeAndPassRemote());

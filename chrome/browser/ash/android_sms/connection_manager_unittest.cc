@@ -61,7 +61,6 @@ class ConnectionManagerTest : public testing::Test {
         return old_url_service_worker_;
 
       NOTREACHED();
-      return nullptr;
     }
 
     raw_ptr<content::FakeServiceWorkerContext> new_url_service_worker_;

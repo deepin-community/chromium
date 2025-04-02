@@ -3,10 +3,9 @@
 // found in the LICENSE file.
 
 import {goToResource} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {checkCommandResultFunction, navigateToConsoleTab} from '../helpers/console-helpers.js';
 
-describe('The Console Tab', async () => {
+describe('The Console Tab', () => {
   describe('provides a command line API', () => {
     beforeEach(async () => {
       await goToResource('../resources/console/command-line-api.html');

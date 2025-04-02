@@ -4,6 +4,8 @@
 
 #include "content/browser/permissions/permission_controller_impl.h"
 
+#include <string>
+
 #include "base/functional/bind.h"
 #include "content/browser/permissions/permission_service_context.h"
 #include "content/browser/permissions/permission_util.h"
@@ -31,16 +33,6 @@ namespace content {
 
 namespace {
 
-constexpr char kPermissionBlockedFencedFrameMessage[] =
-    "%s permission has been blocked because it was requested inside a fenced "
-    "frame. Fenced frames don't currently support permission requests.";
-
-#if !BUILDFLAG(IS_ANDROID)
-const char kPermissionBlockedPermissionsPolicyMessage[] =
-    "%s permission has been blocked because of a permissions policy applied to"
-    " the current document. See https://goo.gl/EuHzyv for more details.";
-#endif
-
 std::optional<blink::scheduler::WebSchedulerTrackedFeature>
 PermissionToSchedulingFeature(PermissionType permission_name) {
   switch (permission_name) {
@@ -61,14 +53,13 @@ PermissionToSchedulingFeature(PermissionType permission_name) {
           kRequestedBackgroundWorkPermission;
     case PermissionType::STORAGE_ACCESS_GRANT:
     // These two permissions are in the process of being split; they share logic
-    // for now. TODO(crbug.com/1385156): split and consolidate as much as
+    // for now. TODO(crbug.com/40246640): split and consolidate as much as
     // possible.
     case PermissionType::TOP_LEVEL_STORAGE_ACCESS:
       return blink::scheduler::WebSchedulerTrackedFeature::
           kRequestedStorageAccessGrant;
     case PermissionType::PROTECTED_MEDIA_IDENTIFIER:
     case PermissionType::DURABLE_STORAGE:
-    case PermissionType::ACCESSIBILITY_EVENTS:
     case PermissionType::CLIPBOARD_READ_WRITE:
     case PermissionType::CLIPBOARD_SANITIZED_WRITE:
     case PermissionType::PAYMENT_HANDLER:
@@ -80,6 +71,7 @@ PermissionToSchedulingFeature(PermissionType permission_name) {
     case PermissionType::SENSORS:
     case PermissionType::AR:
     case PermissionType::VR:
+    case PermissionType::HAND_TRACKING:
     case PermissionType::CAMERA_PAN_TILT_ZOOM:
     case PermissionType::WINDOW_MANAGEMENT:
     case PermissionType::LOCAL_FONTS:
@@ -90,17 +82,12 @@ PermissionToSchedulingFeature(PermissionType permission_name) {
     case PermissionType::SMART_CARD:
     case PermissionType::WEB_PRINTING:
     case PermissionType::SPEAKER_SELECTION:
+    case PermissionType::KEYBOARD_LOCK:
+    case PermissionType::POINTER_LOCK:
+    case PermissionType::AUTOMATIC_FULLSCREEN:
+    case PermissionType::WEB_APP_INSTALLATION:
       return std::nullopt;
   }
-}
-
-void LogPermissionBlockedMessage(PermissionType permission,
-                                 RenderFrameHost* rfh,
-                                 const char* message) {
-  rfh->GetOutermostMainFrame()->AddMessageToConsole(
-      blink::mojom::ConsoleMessageLevel::kWarning,
-      base::StringPrintfNonConstexpr(
-          message, blink::GetPermissionString(permission).c_str()));
 }
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -175,14 +162,21 @@ bool IsRequestAllowed(
     if (result.status == PermissionStatus::DENIED) {
       switch (result.source) {
         case PermissionStatusSource::FENCED_FRAME:
-          LogPermissionBlockedMessage(permission, render_frame_host,
-                                      kPermissionBlockedFencedFrameMessage);
+          render_frame_host->GetOutermostMainFrame()->AddMessageToConsole(
+              blink::mojom::ConsoleMessageLevel::kWarning,
+              blink::GetPermissionString(permission) +
+                  " permission has been blocked because it was requested "
+                  "inside a fenced frame. Fenced frames don't currently "
+                  "support permission requests.");
           break;
 #if !BUILDFLAG(IS_ANDROID)
         case PermissionStatusSource::FEATURE_POLICY:
-          LogPermissionBlockedMessage(
-              permission, render_frame_host,
-              kPermissionBlockedPermissionsPolicyMessage);
+          render_frame_host->GetOutermostMainFrame()->AddMessageToConsole(
+              blink::mojom::ConsoleMessageLevel::kWarning,
+              blink::GetPermissionString(permission) +
+                  " permission has been blocked because of a permissions "
+                  "policy applied to the current document. See "
+                  "https://goo.gl/EuHzyv for more details.");
           break;
 #endif
         default:
@@ -280,25 +274,12 @@ PermissionControllerImpl::PermissionControllerImpl(
     BrowserContext* browser_context)
     : browser_context_(browser_context) {}
 
-// TODO(https://crbug.com/1271543): Remove this method and use
-// `PermissionController` instead.
 // static
 PermissionControllerImpl* PermissionControllerImpl::FromBrowserContext(
     BrowserContext* browser_context) {
   return static_cast<PermissionControllerImpl*>(
       browser_context->GetPermissionController());
 }
-
-struct PermissionControllerImpl::Subscription {
-  PermissionType permission;
-  GURL requesting_origin;
-  GURL embedding_origin;
-  int render_frame_id = -1;
-  int render_process_id = -1;
-  base::RepeatingCallback<void(PermissionStatus)> callback;
-  // This is default-initialized to an invalid ID.
-  PermissionControllerDelegate::SubscriptionId delegate_subscription_id;
-};
 
 PermissionControllerImpl::~PermissionControllerImpl() {
   // Ideally we need to unsubscribe from delegate subscriptions here,
@@ -307,7 +288,7 @@ PermissionControllerImpl::~PermissionControllerImpl() {
 }
 
 PermissionStatus PermissionControllerImpl::GetSubscriptionCurrentValue(
-    const Subscription& subscription) {
+    const PermissionStatusSubscription& subscription) {
   // The RFH may be null if the request is for a worker.
   RenderFrameHost* rfh = RenderFrameHost::FromID(subscription.render_process_id,
                                                  subscription.render_frame_id);
@@ -334,7 +315,7 @@ PermissionControllerImpl::GetSubscriptionsStatuses(
   SubscriptionsStatusMap statuses;
   for (SubscriptionsMap::iterator iter(&subscriptions_); !iter.IsAtEnd();
        iter.Advance()) {
-    Subscription* subscription = iter.GetCurrentValue();
+    PermissionStatusSubscription* subscription = iter.GetCurrentValue();
     if (origin.has_value() && subscription->requesting_origin != *origin) {
       continue;
     }
@@ -348,14 +329,18 @@ void PermissionControllerImpl::NotifyChangedSubscriptions(
   std::vector<base::OnceClosure> callbacks;
   for (const auto& it : old_statuses) {
     auto key = it.first;
-    Subscription* subscription = subscriptions_.Lookup(key);
+    PermissionStatusSubscription* subscription = subscriptions_.Lookup(key);
     if (!subscription) {
       continue;
     }
     PermissionStatus old_status = it.second;
     PermissionStatus new_status = GetSubscriptionCurrentValue(*subscription);
     if (new_status != old_status) {
-      callbacks.push_back(base::BindOnce(subscription->callback, new_status));
+      // This is a private method that is called internally if a permission
+      // status was set by DevTools. Suppress permission status override
+      // verification and always notify listeners.
+      callbacks.push_back(base::BindOnce(subscription->callback, new_status,
+                                         /*ignore_status_override=*/true));
     }
   }
   for (auto& callback : callbacks)
@@ -545,6 +530,29 @@ PermissionStatus PermissionControllerImpl::GetPermissionStatusInternal(
                                        embedding_origin);
 }
 
+PermissionStatus
+PermissionControllerImpl::GetPermissionStatusForCurrentDocumentInternal(
+    PermissionType permission,
+    RenderFrameHost* render_frame_host,
+    bool should_include_device_status) {
+  std::optional<PermissionStatus> status = permission_overrides_.Get(
+      render_frame_host->GetLastCommittedOrigin(), permission);
+  if (status) {
+    return *status;
+  }
+  PermissionControllerDelegate* delegate =
+      browser_context_->GetPermissionControllerDelegate();
+  if (!delegate) {
+    return PermissionStatus::DENIED;
+  }
+  if (VerifyContextOfCurrentDocument(permission, render_frame_host).status ==
+      PermissionStatus::DENIED) {
+    return PermissionStatus::DENIED;
+  }
+  return delegate->GetPermissionStatusForCurrentDocument(
+      permission, render_frame_host, should_include_device_status);
+}
+
 PermissionStatus PermissionControllerImpl::GetPermissionStatusForWorker(
     PermissionType permission,
     RenderProcessHost* render_process_host,
@@ -569,22 +577,8 @@ PermissionStatus
 PermissionControllerImpl::GetPermissionStatusForCurrentDocument(
     PermissionType permission,
     RenderFrameHost* render_frame_host) {
-  std::optional<PermissionStatus> status = permission_overrides_.Get(
-      render_frame_host->GetLastCommittedOrigin(), permission);
-  if (status) {
-    return *status;
-  }
-  PermissionControllerDelegate* delegate =
-      browser_context_->GetPermissionControllerDelegate();
-  if (!delegate) {
-    return PermissionStatus::DENIED;
-  }
-  if (VerifyContextOfCurrentDocument(permission, render_frame_host).status ==
-      PermissionStatus::DENIED) {
-    return PermissionStatus::DENIED;
-  }
-  return delegate->GetPermissionStatusForCurrentDocument(permission,
-                                                         render_frame_host);
+  return GetPermissionStatusForCurrentDocumentInternal(permission,
+                                                       render_frame_host);
 }
 
 PermissionResult
@@ -610,8 +604,8 @@ PermissionControllerImpl::GetPermissionResultForCurrentDocument(
     return result;
   }
 
-  return delegate->GetPermissionResultForCurrentDocument(permission,
-                                                         render_frame_host);
+  return delegate->GetPermissionResultForCurrentDocument(
+      permission, render_frame_host, /*should_include_device_status=*/false);
 }
 
 PermissionResult
@@ -677,6 +671,16 @@ PermissionControllerImpl::GetPermissionStatusForEmbeddedRequester(
       permission, render_frame_host, requesting_origin);
 }
 
+PermissionStatus PermissionControllerImpl::GetCombinedPermissionAndDeviceStatus(
+    PermissionType permission,
+    RenderFrameHost* render_frame_host) {
+  CHECK(permission == blink::PermissionType::VIDEO_CAPTURE ||
+        permission == blink::PermissionType::AUDIO_CAPTURE ||
+        permission == blink::PermissionType::GEOLOCATION);
+  return GetPermissionStatusForCurrentDocumentInternal(
+      permission, render_frame_host, /*should_include_device_status=*/true);
+}
+
 void PermissionControllerImpl::ResetPermission(PermissionType permission,
                                                const GURL& requesting_origin,
                                                const GURL& embedding_origin) {
@@ -688,14 +692,24 @@ void PermissionControllerImpl::ResetPermission(PermissionType permission,
   delegate->ResetPermission(permission, requesting_origin, embedding_origin);
 }
 
-void PermissionControllerImpl::OnDelegatePermissionStatusChange(
+void PermissionControllerImpl::PermissionStatusChange(
+    const base::RepeatingCallback<void(PermissionStatus)>& callback,
     SubscriptionId subscription_id,
-    PermissionStatus status) {
-  Subscription* subscription = subscriptions_.Lookup(subscription_id);
+    PermissionStatus status,
+    bool ignore_status_override) {
+  // Check if the permission status override should be ignored. The verification
+  // is suppressed if a permission status change was initiated by DevTools. In
+  // all other cases permission status override is always checked.
+  if (ignore_status_override) {
+    callback.Run(status);
+    return;
+  }
+  PermissionStatusSubscription* subscription =
+      subscriptions_.Lookup(subscription_id);
   DCHECK(subscription);
-  // TODO(crbug.com/1223407) Adding this block to prevent crashes while we
+  // TODO(crbug.com/40056329) Adding this block to prevent crashes while we
   // investigate the root cause of the crash. This block will be removed as the
-  // CHECK() above should be enough.
+  // DCHECK() above should be enough.
   if (!subscription) {
     return;
   }
@@ -703,22 +717,28 @@ void PermissionControllerImpl::OnDelegatePermissionStatusChange(
       url::Origin::Create(subscription->requesting_origin),
       subscription->permission);
   if (!status_override.has_value()) {
-    subscription->callback.Run(status);
+    callback.Run(status);
   }
 }
 
-PermissionControllerImpl::SubscriptionId
+PermissionController::SubscriptionId
 PermissionControllerImpl::SubscribeToPermissionStatusChange(
     PermissionType permission,
     RenderProcessHost* render_process_host,
     RenderFrameHost* render_frame_host,
     const GURL& requesting_origin,
+    bool should_include_device_status,
     const base::RepeatingCallback<void(PermissionStatus)>& callback) {
   DCHECK(!render_process_host || !render_frame_host);
-  auto subscription = std::make_unique<Subscription>();
+
+  auto id = subscription_id_generator_.GenerateNextId();
+  auto subscription = std::make_unique<PermissionStatusSubscription>();
   subscription->permission = permission;
-  subscription->callback = callback;
+  subscription->callback =
+      base::BindRepeating(&PermissionControllerImpl::PermissionStatusChange,
+                          base::Unretained(this), callback, id);
   subscription->requesting_origin = requesting_origin;
+  subscription->should_include_device_status = should_include_device_status;
 
   // The RFH may be null if the request is for a worker.
   if (render_frame_host) {
@@ -726,52 +746,36 @@ PermissionControllerImpl::SubscribeToPermissionStatusChange(
         PermissionUtil::GetLastCommittedOriginAsURL(
             render_frame_host->GetMainFrame());
     subscription->render_frame_id = render_frame_host->GetRoutingID();
-    subscription->render_process_id = render_frame_host->GetProcess()->GetID();
+    subscription->render_process_id =
+        render_frame_host->GetProcess()->GetDeprecatedID();
   } else {
     subscription->embedding_origin = requesting_origin;
     subscription->render_frame_id = -1;
     subscription->render_process_id =
-        render_process_host ? render_process_host->GetID() : -1;
+        render_process_host ? render_process_host->GetDeprecatedID() : -1;
   }
+  subscriptions_.AddWithID(std::move(subscription), id);
 
-  auto id = subscription_id_generator_.GenerateNextId();
   PermissionControllerDelegate* delegate =
       browser_context_->GetPermissionControllerDelegate();
   if (delegate) {
-    subscription->delegate_subscription_id =
-        delegate->SubscribeToPermissionStatusChange(
-            permission, render_process_host, render_frame_host,
-            requesting_origin,
-            base::BindRepeating(
-                &PermissionControllerImpl::OnDelegatePermissionStatusChange,
-                base::Unretained(this), id));
+    delegate->SetSubscriptions(&subscriptions_);
+    delegate->OnPermissionStatusChangeSubscriptionAdded(id);
   }
-  subscriptions_.AddWithID(std::move(subscription), id);
   return id;
-}
-
-PermissionControllerImpl::SubscriptionId
-PermissionControllerImpl::SubscribeToPermissionStatusChange(
-    PermissionType permission,
-    RenderProcessHost* render_process_host,
-    const url::Origin& requesting_origin,
-    const base::RepeatingCallback<void(PermissionStatus)>& callback) {
-  return SubscribeToPermissionStatusChange(
-      permission, render_process_host,
-      /*render_frame_host=*/nullptr, requesting_origin.GetURL(), callback);
 }
 
 void PermissionControllerImpl::UnsubscribeFromPermissionStatusChange(
     SubscriptionId subscription_id) {
-  Subscription* subscription = subscriptions_.Lookup(subscription_id);
+  PermissionStatusSubscription* subscription =
+      subscriptions_.Lookup(subscription_id);
   if (!subscription) {
     return;
   }
   PermissionControllerDelegate* delegate =
       browser_context_->GetPermissionControllerDelegate();
   if (delegate) {
-    delegate->UnsubscribeFromPermissionStatusChange(
-        subscription->delegate_subscription_id);
+    delegate->UnsubscribeFromPermissionStatusChange(subscription_id);
   }
   subscriptions_.Remove(subscription_id);
 }
@@ -803,8 +807,8 @@ PermissionControllerImpl::GetExclusionAreaBoundsInScreen(
 }
 
 void PermissionControllerImpl::NotifyEventListener() {
-  if (onchange_listeners_callback_for_tests_.has_value()) {
-    onchange_listeners_callback_for_tests_.value().Run();
+  if (onchange_listeners_callback_for_tests_) {
+    onchange_listeners_callback_for_tests_.Run();
   }
 }
 

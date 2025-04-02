@@ -18,11 +18,14 @@
 #include "chrome/browser/profiles/profile_metrics.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/views/close_bubble_on_tab_activation_helper.h"
+#include "components/signin/public/identity_manager/account_info.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/flex_layout_view.h"
@@ -36,7 +39,6 @@ class Button;
 
 namespace ui {
 class ColorProvider;
-class ImageModel;
 }  // namespace ui
 
 // This class provides the UI for different menus that are created by user
@@ -49,6 +51,7 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
   // Enumeration of all actionable items in the profile menu.
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
+  // LINT.IfChange(ActionableItem)
   enum class ActionableItem {
     kManageGoogleAccountButton = 0,
     kPasswordsButton = 1,
@@ -72,8 +75,12 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
     kEditProfileButton = 17,
     // DEPRECATED: kCreateIncognitoShortcutButton = 18,
     kEnableSyncForWebOnlyAccountButton = 19,
-    kMaxValue = kEnableSyncForWebOnlyAccountButton,
+    kProfileManagementLabel = 20,
+    kSigninReauthButton = 21,
+    kAutofillSettingsButton = 22,
+    kMaxValue = kAutofillSettingsButton,
   };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/profile/enums.xml:ProfileMenuActionableItem)
 
   struct EditButtonParams {
     EditButtonParams(const gfx::VectorIcon* edit_icon,
@@ -89,11 +96,62 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
     base::RepeatingClosure edit_action;
   };
 
-  // Size of the large identity image in the menu.
-  static constexpr int kIdentityImageSize = 64;
+  // Parameters for `SetProfileIdentityWithCallToAction()`
+  struct IdentitySectionParams {
+    IdentitySectionParams();
+    ~IdentitySectionParams();
 
-  ProfileMenuViewBase(views::Button* anchor_button,
-                      Browser* browser);
+    IdentitySectionParams(const IdentitySectionParams&) = delete;
+    IdentitySectionParams& operator=(const IdentitySectionParams&) = delete;
+
+    IdentitySectionParams(IdentitySectionParams&&);
+    IdentitySectionParams& operator=(IdentitySectionParams&&);
+
+    // Optional header displayed at the top (e.g. for management notice).
+    // `header_string` and `header_image` must both be non-empty for the header
+    // to be shown.
+    std::u16string header_string;
+    ui::ImageModel header_image;
+    base::RepeatingClosure header_action;
+
+    // `profile_image` must not be empty. It does not need to be circular.
+    ui::ImageModel profile_image;
+    bool has_dotted_ring = false;
+
+    // Must not be empty.
+    std::u16string title;
+
+    // If `subtitle` is empty, no subtitle is shown (see disclaimer below).
+    std::u16string subtitle;
+
+    // If `button_text` is empty, no button is shown.
+    // Disclaimer: This function does not support showing a button with no
+    // subtitle. If the `subtitle` is empty then `button_text` must be empty.
+    std::u16string button_text;
+
+    // If `button_image` is empty, the button has no image.
+    ui::ImageModel button_image;
+
+    // Must be valid if there is a button.
+    base::RepeatingClosure button_action;
+  };
+
+  // Size of the large identity image in the Sync info section (deprecated).
+  static constexpr int kIdentityImageSize = 64;
+  // Size of the large identity image in the identity info section.
+  static constexpr int kIdentityInfoImageSize = 56;
+  // Size of the badge shown with the identity image when the profile is
+  // managed. This can be the business icon or a logo set by the
+  // `EnterpriseLogoUrl` policy.
+  static constexpr int kManagementBadgeSize = 24;
+  // Size of the small identity image shown inside the signin button.
+  static constexpr int kIdentityImageSizeForButton = 22;
+  // Size of the profile image in the "Other profiles" section, matches the
+  // icon size of other rows.
+  static constexpr int kOtherProfileImageSize = 16;
+  static constexpr int kDeprecatedOtherProfileImageSize = 20;
+
+  ProfileMenuViewBase(views::Button* anchor_button, Browser* browser);
   ~ProfileMenuViewBase() override;
 
   ProfileMenuViewBase(const ProfileMenuViewBase&) = delete;
@@ -106,6 +164,7 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
   virtual gfx::ImageSkia GetSyncIcon() const;
 
   // If |profile_name| is empty, no heading will be displayed.
+  // `management_badge` and `image_model` do not need to be circular.
   void SetProfileIdentityInfo(
       const std::u16string& profile_name,
       SkColor profile_background_color,
@@ -115,14 +174,22 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
       const std::u16string& title,
       const std::u16string& subtitle = std::u16string(),
       const std::u16string& management_label = std::u16string(),
-      const ui::ThemedVectorIcon& avatar_header_art = ui::ThemedVectorIcon());
+      const gfx::VectorIcon* header_art_icon = nullptr);
+
+  // See `IdentitySectionParams` for documentation of the parameters.
+  void SetProfileIdentityWithCallToAction(IdentitySectionParams params);
+
+#if !BUILDFLAG(IS_CHROMEOS)
   // Displays the sync info section as a rounded rectangle with text on top and
-  // a button on the bottom. Clicking the button triggers |action|.
+  // a button on the bottom. Clicking the button triggers |action|. |account| is
+  // only used for the sign-in promo for a web-only signed in account.
   void BuildSyncInfoWithCallToAction(const std::u16string& description,
                                      const std::u16string& button_text,
-                                     ui::ColorId background_color_id,
                                      const base::RepeatingClosure& action,
-                                     bool show_sync_badge);
+                                     bool show_sync_badge,
+                                     AccountInfo account = AccountInfo());
+#endif  // !BUILDFLAG(IS_CHROMEOS)
+
   // Displays the sync info section as a rectangle with text. Clicking the
   // rectangle triggers |action|.
   void BuildSyncInfoWithoutCallToAction(const std::u16string& text,
@@ -130,21 +197,20 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
   void AddShortcutFeatureButton(const gfx::VectorIcon& icon,
                                 const std::u16string& text,
                                 base::RepeatingClosure action);
-  void AddFeatureButton(const std::u16string& text,
-                        base::RepeatingClosure action,
-                        const gfx::VectorIcon& icon = gfx::kNoneIcon,
-                        float icon_to_image_ratio = 1.0f);
+  void AddFeatureButton(
+      const std::u16string& text,
+      base::RepeatingClosure action,
+      const gfx::VectorIcon& icon = gfx::VectorIcon::EmptyIcon(),
+      float icon_to_image_ratio = 1.0f);
   void SetProfileManagementHeading(const std::u16string& heading);
   void AddAvailableProfile(const ui::ImageModel& image_model,
                            const std::u16string& name,
                            bool is_guest,
-                           bool is_enabled,
                            base::RepeatingClosure action);
   void AddProfileManagementShortcutFeatureButton(const gfx::VectorIcon& icon,
                                                  const std::u16string& text,
                                                  base::RepeatingClosure action);
-  void AddProfileManagementManagedHint(const gfx::VectorIcon& icon,
-                                       const std::u16string& text);
+  void AddProfileManagementFeaturesSeparator();
   void AddProfileManagementFeatureButton(const gfx::VectorIcon& icon,
                                          const std::u16string& text,
                                          base::RepeatingClosure action);
@@ -157,7 +223,7 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
   Browser* browser() const { return browser_; }
 
   // Return maximal height for the view after which it becomes scrollable.
-  // TODO(crbug.com/870303): remove when a general solution is available.
+  // TODO(crbug.com/40587757): remove when a general solution is available.
   int GetMaxHeight() const;
 
   views::Button* anchor_button() const { return anchor_button_; }
@@ -190,7 +256,6 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
       const ui::ThemedVectorIcon& avatar_header_art);
 
   void BuildSyncInfoCallToActionBackground(
-      ui::ColorId background_color_id,
       const ui::ColorProvider* color_provider);
 
   // views::BubbleDialogDelegateView:
@@ -218,11 +283,14 @@ class ProfileMenuViewBase : public content::WebContentsDelegate,
   raw_ptr<views::View> profile_mgmt_heading_container_ = nullptr;
   raw_ptr<views::View> selectable_profiles_container_ = nullptr;
   raw_ptr<views::View> profile_mgmt_shortcut_features_container_ = nullptr;
+  raw_ptr<views::View> profile_mgmt_features_separator_container_ = nullptr;
   raw_ptr<views::View> profile_mgmt_features_container_ = nullptr;
 
   // Child components of `identity_info_container_`.
   raw_ptr<views::FlexLayoutView> profile_background_container_ = nullptr;
   raw_ptr<views::Label> heading_label_ = nullptr;
+  raw_ptr<views::Label> title_label_ = nullptr;
+  raw_ptr<views::Label> subtitle_label_ = nullptr;
 
   // The first profile button that should be focused when the menu is opened
   // using a key accelerator.

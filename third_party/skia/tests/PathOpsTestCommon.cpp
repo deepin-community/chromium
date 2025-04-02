@@ -259,16 +259,16 @@ void CubicPathToSimple(const SkPath& cubicPath, SkPath* simplePath) {
 }
 
 bool ValidBounds(const SkPathOpsBounds& bounds) {
-    if (SkScalarIsNaN(bounds.fLeft)) {
+    if (SkIsNaN(bounds.fLeft)) {
         return false;
     }
-    if (SkScalarIsNaN(bounds.fTop)) {
+    if (SkIsNaN(bounds.fTop)) {
         return false;
     }
-    if (SkScalarIsNaN(bounds.fRight)) {
+    if (SkIsNaN(bounds.fRight)) {
         return false;
     }
-    return !SkScalarIsNaN(bounds.fBottom);
+    return !SkIsNaN(bounds.fBottom);
 }
 
 bool ValidConic(const SkDConic& conic) {
@@ -277,7 +277,7 @@ bool ValidConic(const SkDConic& conic) {
             return false;
         }
     }
-    if (SkDoubleIsNaN(conic.fWeight)) {
+    if (SkIsNaN(conic.fWeight)) {
         return false;
     }
     return true;
@@ -302,18 +302,18 @@ bool ValidLine(const SkDLine& line) {
 }
 
 bool ValidPoint(const SkDPoint& pt) {
-    if (SkDoubleIsNaN(pt.fX)) {
+    if (SkIsNaN(pt.fX)) {
         return false;
     }
-    return !SkDoubleIsNaN(pt.fY);
+    return !SkIsNaN(pt.fY);
 }
 
 bool ValidPoints(const SkPoint* pts, int count) {
     for (int index = 0; index < count; ++index) {
-        if (SkScalarIsNaN(pts[index].fX)) {
+        if (SkIsNaN(pts[index].fX)) {
             return false;
         }
-        if (SkScalarIsNaN(pts[index].fY)) {
+        if (SkIsNaN(pts[index].fY)) {
             return false;
         }
     }
@@ -330,8 +330,8 @@ bool ValidQuad(const SkDQuad& quad) {
 }
 
 bool ValidVector(const SkDVector& v) {
-    if (SkDoubleIsNaN(v.fX)) {
+    if (SkIsNaN(v.fX)) {
         return false;
     }
-    return !SkDoubleIsNaN(v.fY);
+    return !SkIsNaN(v.fY);
 }

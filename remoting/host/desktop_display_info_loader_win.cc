@@ -6,6 +6,11 @@
 
 #include <windows.h>
 
+#include <algorithm>
+#include <limits>
+
+#include "base/strings/utf_string_conversions.h"
+
 namespace remoting {
 
 namespace {
@@ -19,8 +24,9 @@ class DesktopDisplayInfoLoaderWin : public DesktopDisplayInfoLoader {
 };
 
 DesktopDisplayInfo DesktopDisplayInfoLoaderWin::GetCurrentDisplayInfo() {
-  DesktopDisplayInfo result;
-
+  int32_t lowest_x = std::numeric_limits<int32_t>::max();
+  int32_t lowest_y = std::numeric_limits<int32_t>::max();
+  std::vector<DisplayGeometry> displays;
   BOOL enum_result = TRUE;
   for (int device_index = 0;; ++device_index) {
     DISPLAY_DEVICE device = {};
@@ -48,18 +54,26 @@ DesktopDisplayInfo DesktopDisplayInfoLoaderWin::GetCurrentDisplayInfo() {
     EnumDisplaySettingsEx(device.DeviceName, ENUM_CURRENT_SETTINGS, &devmode,
                           0);
 
-    DisplayGeometry info;
-    info.id = device_index;
-    info.is_default = is_default;
-    info.x = devmode.dmPosition.x;
-    info.y = devmode.dmPosition.y;
-    info.width = devmode.dmPelsWidth;
-    info.height = devmode.dmPelsHeight;
-    info.dpi = devmode.dmLogPixels;
-    info.bpp = devmode.dmBitsPerPel;
-    result.AddDisplay(info);
+    int32_t x = devmode.dmPosition.x;
+    int32_t y = devmode.dmPosition.y;
+    displays.emplace_back(
+        /* id */ device_index, x, y, devmode.dmPelsWidth, devmode.dmPelsHeight,
+        /* dpi */ devmode.dmLogPixels, devmode.dmBitsPerPel, is_default,
+        base::WideToUTF8(devmode.dmDeviceName));
+
+    lowest_x = std::min(x, lowest_x);
+    lowest_y = std::min(y, lowest_y);
   }
 
+  // Normalize the displays so the bounding-box's top-left corner is at (0, 0).
+  // This matches the coordinate system used by InputInjectorWin, so that
+  // the FractionalInputFilter produces correct x,y-coordinates for injection.
+  DesktopDisplayInfo result;
+  for (DisplayGeometry& info : displays) {
+    info.x -= lowest_x;
+    info.y -= lowest_y;
+    result.AddDisplay(info);
+  }
   return result;
 }
 

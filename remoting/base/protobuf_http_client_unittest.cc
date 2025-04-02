@@ -14,6 +14,7 @@
 #include "base/test/task_environment.h"
 #include "net/http/http_status_code.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "remoting/base/mock_oauth_token_getter.h"
 #include "remoting/base/protobuf_http_client_messages.pb.h"
 #include "remoting/base/protobuf_http_client_test_messages.pb.h"
 #include "remoting/base/protobuf_http_request.h"
@@ -76,12 +77,6 @@ MATCHER_P(IsResponseText, response_text, "") {
 MATCHER(IsNullResponse, "") {
   return arg.get() == nullptr;
 }
-
-class MockOAuthTokenGetter : public OAuthTokenGetter {
- public:
-  MOCK_METHOD1(CallWithToken, void(TokenCallback));
-  MOCK_METHOD0(InvalidateCache, void());
-};
 
 EchoResponseCallback DoNothingResponse() {
   return base::DoNothing();
@@ -156,20 +151,20 @@ class ProtobufHttpClientTest : public testing::Test {
 
 void ProtobufHttpClientTest::ExpectCallWithTokenSuccess() {
   EXPECT_CALL(mock_token_getter_, CallWithToken(_))
-      .WillOnce(RunOnceCallback<0>(OAuthTokenGetter::Status::SUCCESS, "",
-                                   kFakeAccessToken));
+      .WillOnce(RunOnceCallback<0>(OAuthTokenGetter::Status::SUCCESS,
+                                   OAuthTokenInfo(kFakeAccessToken)));
 }
 
 void ProtobufHttpClientTest::ExpectCallWithTokenAuthError() {
   EXPECT_CALL(mock_token_getter_, CallWithToken(_))
-      .WillOnce(
-          RunOnceCallback<0>(OAuthTokenGetter::Status::AUTH_ERROR, "", ""));
+      .WillOnce(RunOnceCallback<0>(OAuthTokenGetter::Status::AUTH_ERROR,
+                                   OAuthTokenInfo()));
 }
 
 void ProtobufHttpClientTest::ExpectCallWithTokenNetworkError() {
   EXPECT_CALL(mock_token_getter_, CallWithToken(_))
-      .WillOnce(
-          RunOnceCallback<0>(OAuthTokenGetter::Status::NETWORK_ERROR, "", ""));
+      .WillOnce(RunOnceCallback<0>(OAuthTokenGetter::Status::NETWORK_ERROR,
+                                   OAuthTokenInfo()));
 }
 
 // Unary request tests.
@@ -192,10 +187,9 @@ TEST_F(ProtobufHttpClientTest, SendRequestAndDecodeResponse) {
   ASSERT_TRUE(test_url_loader_factory_.IsPending(kTestFullUrl));
   ASSERT_EQ(1, test_url_loader_factory_.NumPending());
   auto* pending_request = test_url_loader_factory_.GetPendingRequest(0);
-  std::string auth_header;
-  ASSERT_TRUE(pending_request->request.headers.GetHeader(
-      kAuthorizationHeaderKey, &auth_header));
-  ASSERT_EQ(kFakeAccessTokenHeaderValue, auth_header);
+  ASSERT_THAT(
+      pending_request->request.headers.GetHeader(kAuthorizationHeaderKey),
+      testing::Optional(std::string(kFakeAccessTokenHeaderValue)));
   const auto& data_element =
       pending_request->request.request_body->elements()->front();
   ASSERT_EQ(data_element.type(), network::DataElement::Tag::kBytes);
@@ -360,7 +354,7 @@ TEST_F(ProtobufHttpClientTest,
   client_.CancelPendingRequests();
   ASSERT_TRUE(token_callback);
   std::move(token_callback)
-      .Run(OAuthTokenGetter::Status::SUCCESS, "", kFakeAccessToken);
+      .Run(OAuthTokenGetter::Status::SUCCESS, OAuthTokenInfo(kFakeAccessToken));
 
   // Verify no request.
   ASSERT_FALSE(test_url_loader_factory_.IsPending(kTestFullUrl));

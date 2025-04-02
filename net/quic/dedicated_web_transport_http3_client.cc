@@ -4,8 +4,10 @@
 
 #include "net/quic/dedicated_web_transport_http3_client.h"
 
+#include <string_view>
+#include <vector>
+
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/feature_list.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/field_trial_params.h"
@@ -307,7 +309,6 @@ void RecordNegotiatedHttpDatagramSupport(quic::HttpDatagramSupport support) {
       break;
     case quic::HttpDatagramSupport::kRfcAndDraft04:
       NOTREACHED();
-      return;
   }
   base::UmaHistogramEnumeration(
       "Net.WebTransport.NegotiatedHttpDatagramVersion", negotiated);
@@ -404,7 +405,6 @@ void DedicatedWebTransportHttp3Client::Connect() {
   if (state_ != WebTransportState::NEW ||
       next_connect_state_ != CONNECT_STATE_NONE) {
     NOTREACHED();
-    return;
   }
 
   TransitionToState(WebTransportState::CONNECTING);
@@ -428,6 +428,14 @@ void DedicatedWebTransportHttp3Client::Close(
     session()->CloseSession(close_info->code, close_info->reason);
   } else {
     session()->CloseSession(0, "");
+  }
+}
+
+void DedicatedWebTransportHttp3Client::CloseIfNonceMatches(
+    base::UnguessableToken nonce) {
+  if (anonymization_key_.GetNonce() == nonce) {
+    SetErrorIfNecessary(ERR_NETWORK_ACCESS_REVOKED);
+    TransitionToState(WebTransportState::FAILED);
   }
 }
 
@@ -480,8 +488,6 @@ void DedicatedWebTransportHttp3Client::DoLoop(int rv) {
         break;
       default:
         NOTREACHED() << "Invalid state reached: " << connect_state;
-        rv = ERR_FAILED;
-        break;
     }
   } while (rv == OK && next_connect_state_ != CONNECT_STATE_NONE);
 
@@ -585,8 +591,8 @@ int DedicatedWebTransportHttp3Client::DoConnect() {
 void DedicatedWebTransportHttp3Client::CreateConnection() {
   // Delete the objects in the same order they would be normally deleted by the
   // destructor.
-  packet_reader_ = nullptr;
   session_ = nullptr;
+  packet_reader_ = nullptr;
 
   IPEndPoint server_address =
       *resolve_host_request_->GetAddressResults()->begin();
@@ -618,7 +624,7 @@ void DedicatedWebTransportHttp3Client::CreateConnection() {
       kQuicYieldAfterPacketsRead,
       quic::QuicTime::Delta::FromMilliseconds(
           kQuicYieldAfterDurationMilliseconds),
-      net_log_);
+      quic_context_->params()->report_ecn, net_log_);
 
   event_logger_ = std::make_unique<QuicEventLogger>(session_.get(), net_log_);
   connection_->set_debug_visitor(event_logger_.get());
@@ -682,7 +688,7 @@ void DedicatedWebTransportHttp3Client::OnSettingsReceived() {
 }
 
 void DedicatedWebTransportHttp3Client::OnHeadersComplete(
-    const spdy::Http2HeaderBlock& headers) {
+    const quiche::HttpHeaderBlock& headers) {
   http_response_info_ = std::make_unique<HttpResponseInfo>();
   const int rv = SpdyHeadersToHttpResponse(headers, http_response_info_.get());
   if (rv != OK) {
@@ -733,7 +739,7 @@ int DedicatedWebTransportHttp3Client::DoSendRequest() {
     return ERR_QUIC_PROTOCOL_ERROR;
   }
 
-  spdy::Http2HeaderBlock headers;
+  quiche::HttpHeaderBlock headers;
   DCHECK_EQ(url_.scheme(), url::kHttpsScheme);
   headers[":scheme"] = url_.scheme();
   headers[":method"] = "CONNECT";
@@ -814,7 +820,6 @@ void DedicatedWebTransportHttp3Client::TransitionToState(
 
     default:
       NOTREACHED() << "Invalid state reached: " << next_state;
-      break;
   }
 }
 
@@ -825,7 +830,7 @@ void DedicatedWebTransportHttp3Client::SetErrorIfNecessary(int error) {
 void DedicatedWebTransportHttp3Client::SetErrorIfNecessary(
     int error,
     quic::QuicErrorCode quic_error,
-    base::StringPiece details) {
+    std::string_view details) {
   if (!error_) {
     error_ = WebTransportError(error, quic_error, details,
                                safe_to_report_error_details_);
@@ -937,7 +942,7 @@ void DedicatedWebTransportHttp3Client::OnConnectionClosed(
     retried_with_new_version_ = true;
     DCHECK(original_supported_versions_.empty());
     original_supported_versions_ = supported_versions_;
-    base::EraseIf(
+    std::erase_if(
         supported_versions_, [this](const quic::ParsedQuicVersion& version) {
           return !base::Contains(
               session_->connection()->server_supported_versions(), version);

@@ -52,6 +52,7 @@
 #include "net/test/embedded_test_server/http_response.h"
 #include "net/test/spawned_test_server/spawned_test_server.h"
 #include "net/test/test_data_directory.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "third_party/blink/public/common/features.h"
@@ -87,7 +88,6 @@ bool SupportsSharedWorker() {
 // 0 => Base
 // 1 => kPlzDedicatedWorker enabled
 // 2 => kPrivateNetworkAccessForWorkers enabled
-// 3 => kStorageAccessAPIBeyondCookies enabled
 class WorkerTest : public ContentBrowserTest,
                    public testing::WithParamInterface<int> {
  public:
@@ -116,16 +116,8 @@ class WorkerTest : public ContentBrowserTest,
             },
             {});
         break;
-      case 3:  // StorageAccessAPIBeyondCookies
-        feature_list_.InitWithFeatures(
-            {
-                blink::features::kStorageAccessAPIBeyondCookies,
-            },
-            {});
-        break;
       default:
         NOTREACHED();
-        break;
     }
   }
 
@@ -175,8 +167,10 @@ class WorkerTest : public ContentBrowserTest,
     RunTest(shell(), url, expect_failure);
   }
 
-  static void QuitUIMessageLoop(base::OnceClosure callback,
-                                bool is_primary_main_frame /* unused */) {
+  static void QuitUIMessageLoop(
+      base::OnceClosure callback,
+      bool is_primary_main_frame_navigation /* unused */,
+      bool is_navigation /* unused */) {
     GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(callback));
   }
 
@@ -204,10 +198,10 @@ class WorkerTest : public ContentBrowserTest,
             net::CookieOptions::SameSiteCookieContext::ContextType::
                 SAME_SITE_LAX));
     GURL cookie_url = ssl_server_.GetURL(host, "/");
-    std::unique_ptr<net::CanonicalCookie> cookie = net::CanonicalCookie::Create(
-        cookie_url, std::string(kSameSiteCookie) + "; SameSite=Lax; Secure",
-        base::Time::Now(), std::nullopt /* server_time */,
-        std::nullopt /* cookie_partition_key */);
+    std::unique_ptr<net::CanonicalCookie> cookie =
+        net::CanonicalCookie::CreateForTesting(
+            cookie_url, std::string(kSameSiteCookie) + "; SameSite=Lax; Secure",
+            base::Time::Now());
     base::RunLoop run_loop;
     cookie_manager->SetCanonicalCookie(
         *cookie, cookie_url, options,
@@ -328,7 +322,7 @@ class WorkerTest : public ContentBrowserTest,
   base::test::ScopedFeatureList feature_list_;
 };
 
-INSTANTIATE_TEST_SUITE_P(All, WorkerTest, testing::Range(0, 4));
+INSTANTIATE_TEST_SUITE_P(All, WorkerTest, testing::Range(0, 3));
 
 IN_PROC_BROWSER_TEST_P(WorkerTest, SingleWorker) {
   RunTest(GetTestURL("single_worker.html", std::string()));
@@ -348,7 +342,7 @@ class WorkerTestWithAllowFileAccessFromFiles : public WorkerTest {
 
 INSTANTIATE_TEST_SUITE_P(All,
                          WorkerTestWithAllowFileAccessFromFiles,
-                         testing::Range(0, 4));
+                         testing::Range(0, 3));
 
 IN_PROC_BROWSER_TEST_P(WorkerTestWithAllowFileAccessFromFiles,
                        SingleWorkerFromFile) {
@@ -928,7 +922,7 @@ class WorkerFromCredentiallessIframeNikBrowserTest : public WorkerTest {
 
 INSTANTIATE_TEST_SUITE_P(All,
                          WorkerFromCredentiallessIframeNikBrowserTest,
-                         testing::Range(0, 4));
+                         testing::Range(0, 3));
 
 IN_PROC_BROWSER_TEST_P(WorkerFromCredentiallessIframeNikBrowserTest,
                        SharedWorkerRequestIsDoneWithPartitionedNetworkState) {
@@ -969,7 +963,9 @@ IN_PROC_BROWSER_TEST_P(WorkerFromCredentiallessIframeNikBrowserTest,
         ->PreconnectSockets(1, worker_url.DeprecatedGetOriginAsURL(),
                             network::mojom::CredentialsMode::kInclude,
                             main_rfh->GetIsolationInfoForSubresources()
-                                .network_anonymization_key());
+                                .network_anonymization_key(),
+                            net::MutableNetworkTrafficAnnotationTag(
+                                TRAFFIC_ANNOTATION_FOR_TESTS));
 
     connection_tracker_->WaitForAcceptedConnections(1);
     EXPECT_EQ(1u, connection_tracker_->GetAcceptedSocketCount());
@@ -1021,18 +1017,9 @@ IN_PROC_BROWSER_TEST_P(WorkerTest, SameSiteCookiesSharedWorkerSameNone) {
       shell(),
       "new SharedWorker('/workers/worker.js', {sameSiteCookies: 'none'});");
   ASSERT_TRUE(result.error.empty());
-  if (base::FeatureList::IsEnabled(
-          blink::features::kStorageAccessAPIBeyondCookies)) {
-    EXPECT_EQ(kNoCookie, GetReceivedCookie("/workers/worker.js"));
-    EXPECT_EQ(kNoCookie, GetReceivedCookie("/workers/empty.js"));
-    EXPECT_EQ(kNoCookie, GetReceivedCookie("/workers/empty.html"));
-  } else {
-    // If the feature is off we still send SameSite cookies in a first-party
-    // context.
-    EXPECT_EQ(kSameSiteCookie, GetReceivedCookie("/workers/worker.js"));
-    EXPECT_EQ(kSameSiteCookie, GetReceivedCookie("/workers/empty.js"));
-    EXPECT_EQ(kSameSiteCookie, GetReceivedCookie("/workers/empty.html"));
-  }
+  EXPECT_EQ(kNoCookie, GetReceivedCookie("/workers/worker.js"));
+  EXPECT_EQ(kNoCookie, GetReceivedCookie("/workers/empty.js"));
+  EXPECT_EQ(kNoCookie, GetReceivedCookie("/workers/empty.html"));
 }
 
 // Test that an "a.test" frame starting a worker with `sameSiteCookies: 'none'`
@@ -1120,15 +1107,7 @@ IN_PROC_BROWSER_TEST_P(WorkerTest, SameSiteCookiesSharedWorkerCrossNone) {
 
 // Test that an "a.test" iframe in a "b.test" frame cannot set
 // `sameSiteCookies: 'all'` option when starting a shared worker.
-// TODO(b/325207698): Disabled on Mac due to flakiness.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_SameSiteCookiesSharedWorkerCrossAll \
-  DISABLED_SameSiteCookiesSharedWorkerCrossAl
-#else
-#define MAYBE_SameSiteCookiesSharedWorkerCrossAll \
-  SameSiteCookiesSharedWorkerCrossAl
-#endif
-IN_PROC_BROWSER_TEST_P(WorkerTest, MAYBE_SameSiteCookiesSharedWorkerCrossAll) {
+IN_PROC_BROWSER_TEST_P(WorkerTest, SameSiteCookiesSharedWorkerCrossAll) {
   if (!SupportsSharedWorker()) {
     return;
   }
@@ -1142,7 +1121,7 @@ IN_PROC_BROWSER_TEST_P(WorkerTest, MAYBE_SameSiteCookiesSharedWorkerCrossAll) {
       shell()->web_contents()->GetPrimaryMainFrame(),
       JsReplace(
           "createFrame($1, $2)",
-          ssl_server()->GetURL("a.test", "/workers/empty.html").spec().c_str(),
+          ssl_server()->GetURL("a.test", "/workers/simple.html").spec().c_str(),
           kSubframeName));
   ASSERT_TRUE(result_frame.error.empty());
   navigation_observer.Wait();
@@ -1153,17 +1132,7 @@ IN_PROC_BROWSER_TEST_P(WorkerTest, MAYBE_SameSiteCookiesSharedWorkerCrossAll) {
   EvalJsResult worker_result = EvalJs(
       subframe_rfh,
       "new SharedWorker('/workers/worker.js', {sameSiteCookies: 'all'});");
-  if (base::FeatureList::IsEnabled(
-          blink::features::kStorageAccessAPIBeyondCookies)) {
-    ASSERT_FALSE(worker_result.error.empty());
-  } else {
-    // If the feature is off, there is no error but we still don't send
-    // SameSite cookies.
-    ASSERT_TRUE(worker_result.error.empty());
-    EXPECT_EQ(kNoCookie, GetReceivedCookie("/workers/worker.js"));
-    EXPECT_EQ(kNoCookie, GetReceivedCookie("/workers/empty.js"));
-    EXPECT_EQ(kNoCookie, GetReceivedCookie("/workers/empty.html"));
-  }
+  ASSERT_FALSE(worker_result.error.empty());
 }
 
 }  // namespace content

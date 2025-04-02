@@ -14,7 +14,6 @@
  * </settings-lock-screen-subpage>
  */
 
-import 'chrome://resources/cr_components/settings_prefs/prefs.js';
 import 'chrome://resources/ash/common/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/ash/common/cr_elements/cr_radio_button/cr_radio_button.js';
 import 'chrome://resources/ash/common/cr_elements/cr_radio_group/cr_radio_group.js';
@@ -34,18 +33,20 @@ import {assert} from 'chrome://resources/js/assert.js';
 import {focusWithoutInk} from 'chrome://resources/js/focus_without_ink.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PluralStringProxyImpl} from 'chrome://resources/js/plural_string_proxy.js';
-import {AuthFactor, ConfigureResult, FactorObserverReceiver, ManagementType} from 'chrome://resources/mojo/chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-webui.js';
+import {AuthFactor, ConfigureResult, FactorObserverReceiver, ManagementType, PinFactorEditor} from 'chrome://resources/mojo/chromeos/ash/services/auth_factor_config/public/mojom/auth_factor_config.mojom-webui.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {castExists} from '../assert_extras.js';
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
 import {RouteObserverMixin} from '../common/route_observer_mixin.js';
-import {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
+import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 import {LockStateMixin} from '../lock_state_mixin.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import {Route, Router, routes} from '../router.js';
+import type {Route} from '../router.js';
+import {Router, routes} from '../router.js';
 
-import {FingerprintBrowserProxy, FingerprintBrowserProxyImpl} from './fingerprint_browser_proxy.js';
+import type {FingerprintBrowserProxy} from './fingerprint_browser_proxy.js';
+import {FingerprintBrowserProxyImpl} from './fingerprint_browser_proxy.js';
 import {getTemplate} from './lock_screen_subpage.html.js';
 
 const SettingsLockScreenElementBase =
@@ -162,6 +163,17 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
           Setting.kDataRecovery,
         ]),
       },
+
+      /**
+       * Whether the device account is managed.
+       */
+      deviceAccountManaged_: {
+        type: Boolean,
+        value() {
+          return loadTimeData.getBoolean('isDeviceAccountManaged');
+        },
+        readOnly: true,
+      },
     };
   }
 
@@ -178,6 +190,7 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
   private showPasswordSettings_: boolean;
   private showDisableRecoveryDialog_: boolean;
   private fingerprintBrowserProxy_: FingerprintBrowserProxy;
+  private deviceAccountManaged_: boolean;
 
   static get observers() {
     return [
@@ -204,7 +217,7 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
   override ready(): void {
     super.ready();
     // Register observer for auth factor updates.
-    // TODO(crbug/1321440): Are we leaking |this| here because we never remove
+    // TODO(crbug.com/40223898): Are we leaking |this| here because we never remove
     // the observer? We could close the pipe with |$.close()|, but not clear
     // whether that removes all references to |receiver| and then eventually to
     // |this|.
@@ -432,10 +445,37 @@ export class SettingsLockScreenElement extends SettingsLockScreenElementBase {
     }
     assert(authToken === this.authToken);
 
-    this.showPasswordSettings_ =
-        (await this.authFactorConfig.isConfigured(
-             this.authToken, AuthFactor.kLocalPassword))
-            .configured;
+    const [
+      { configured: hasGaiaPassword },
+      { configured: hasLocalPassword },
+      { pinFactor },
+    ] = await Promise.all([
+      this.authFactorConfig.isConfigured(
+        this.authToken, AuthFactor.kGaiaPassword),
+      this.authFactorConfig.isConfigured(
+        this.authToken, AuthFactor.kLocalPassword),
+      PinFactorEditor.getRemote().getConfiguredPinFactor(this.authToken),
+    ]);
+
+    if (hasLocalPassword) {
+      // Local Password is the overriding factor here. We need to show change
+      // option here.
+      this.showPasswordSettings_ = true;
+    } else if (!this.deviceAccountManaged_) {
+      // Onto scenarios for non managed accounts now.
+      if (hasGaiaPassword) {
+        // If the gaia password is setup, for non managed users, we will allow
+        // them to switch to local password.
+        this.showPasswordSettings_ = true;
+      } else if (!hasGaiaPassword && pinFactor !== null) {
+        // At this point we know the user does not have a password
+        // and has a pin. We can allow them to set password.
+        this.showPasswordSettings_ = true;
+      }
+    } else {
+      // This is a safety reset.
+      this.showPasswordSettings_ = false;
+    }
   }
 
   /**

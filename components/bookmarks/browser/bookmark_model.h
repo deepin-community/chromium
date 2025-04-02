@@ -36,6 +36,7 @@
 
 namespace base {
 class FilePath;
+class Location;
 }  // namespace base
 
 namespace favicon_base {
@@ -70,13 +71,9 @@ struct TitledUrlMatch;
 //
 // You should NOT directly create a BookmarkModel, instead go through the
 // BookmarkModelFactory.
-//
-// Marked final to prevent unintended subclassing.
-// `MoveToOtherModelWithNewNodeIdsAndUuids` affects two instances, and assumes
-// that both instances are `BookmarkModel`, not some subclasses.
-class BookmarkModel final : public BookmarkUndoProvider,
-                            public KeyedService,
-                            public base::SupportsUserData {
+class BookmarkModel : public BookmarkUndoProvider,
+                      public KeyedService,
+                      public base::SupportsUserData {
  public:
   // `client` must not be null.
   explicit BookmarkModel(std::unique_ptr<BookmarkClient> client);
@@ -91,12 +88,6 @@ class BookmarkModel final : public BookmarkUndoProvider,
   // loaded() will return true and observers will be notified via
   // BookmarkModelLoaded().
   void Load(const base::FilePath& profile_path);
-
-  // Special API for iOS only, where a dedicated BookmarkModel is used for
-  // account bookmarks, and counter-intuitively this BookmarkModel instance
-  // exposes those bookmarks as local-or-syncable bookmarks.
-  void LoadAccountBookmarksFileAsLocalOrSyncableBookmarks(
-      const base::FilePath& profile_path);
 
   // Returns true if the model finished loading.
   bool loaded() const {
@@ -172,12 +163,21 @@ class BookmarkModel final : public BookmarkUndoProvider,
     return node && (node == root_ || node->parent() == root_);
   }
 
+  // Returns true if `node` represents a bookmark that is stored on the local
+  // profile but not saved to the user's server-side account. The opposite case,
+  // returning null, can happen because the user turned sync-the-feature on,
+  // which syncs all bookmarks, or because `node` is a descendant of an account
+  // permanent folder, e.g. `account_bookmark_bar_node()`.
+  bool IsLocalOnlyNode(const BookmarkNode& node) const;
+
   void AddObserver(BookmarkModelObserver* observer);
   void RemoveObserver(BookmarkModelObserver* observer);
 
   // Notifies the observers that an extensive set of changes is about to happen,
   // such as during import or sync, so they can delay any expensive UI updates
   // until it's finished.
+  //
+  // Undo tracking is suspended during extensive changes.
   void BeginExtensiveChanges();
   void EndExtensiveChanges();
 
@@ -190,50 +190,44 @@ class BookmarkModel final : public BookmarkUndoProvider,
   // Removes `node` from the model and deletes it. Removing a folder node
   // recursively removes all nodes. Observers are notified immediately. `node`
   // must not be a permanent node. The source of the removal is passed through
-  // `source`.
-  void Remove(const BookmarkNode* node, metrics::BookmarkEditSource source);
+  // `source`. `location` is used for logging purposes and investigations.
+  void Remove(const BookmarkNode* node,
+              metrics::BookmarkEditSource source,
+              const base::Location& location);
+
+  // Removes the last child under `parent`. This is identical to invoking
+  // `Remove()` for the actual child, i.e.
+  // `Remove(parent->children()[parent->children().size() - 1].get())`. The
+  // only difference is that `RemoveLastChild()` is guaranteed to require
+  // constant time, for advanced cases where performance is a concern (to be
+  // more accurate, it exhibits logarithmic runtime complexity with respect to
+  // the tree depth, excluding the cost incurred in observers, which may
+  // implement arbitrary logic outside BookmarkModel's control).
+  void RemoveLastChild(const BookmarkNode* parent,
+                       metrics::BookmarkEditSource source,
+                       const base::Location& location);
 
   // Removes all the non-permanent bookmark nodes that are editable by the user.
   // Observers are only notified when all nodes have been removed. There is no
-  // notification for individual node removals.
-  void RemoveAllUserBookmarks();
+  // notification for individual node removals. `location` is used for logging
+  // purposes and investigations.
+  void RemoveAllUserBookmarks(const base::Location& location);
 
   // Moves `node` to `new_parent` and inserts it at the given `index`.
   //
   // Note: this might cause UUIDs to get reassigned for `node` or its
   // descendants, when the node is moved between local and account storages.
+  //
+  // `new_parent` may be the same as `node`'s current parent, in which case the
+  // semantics are "insert before the element currently at `index`". Suppose the
+  // initial current children of new_parent are ordered [A, B, C]:
+  // * Move(B, new_parent, 0) -> [B, A, C]
+  // * Move(B, new_parent, 1) -> [A, B, C]
+  // * Move(B, new_parent, 2) -> [A, B, C]
+  // * Move(B, new_parent, 3) -> [A, C, B]
   void Move(const BookmarkNode* node,
             const BookmarkNode* new_parent,
             size_t index);
-
-  // Inserts a copy of `node` into `new_parent` at `index`.
-  void Copy(const BookmarkNode* node,
-            const BookmarkNode* new_parent,
-            size_t index);
-
-  // TODO(crbug.com/1453250): Change this function to be invoked on the
-  //                          destination model rather than on the source one.
-  //
-  // Moves `node` to another instance of `BookmarkModel` as determined by
-  // `dest_model`, where it is inserted under `dest_parent` as a last child.
-  // If `node` is a folder, all descendants (if any) are also moved, maintaining
-  // the same hierarchy.
-  // Please note that `BookmarkNode` objects representing `node` itself and its
-  // descendants are not reused. Instead, the hierarchy is cloned (and new IDs
-  // are generated) and this cloned hierarchy is added to `dest_model`.
-  //
-  // `node` must belong to this model, while `dest_parent` must belong to
-  // `dest_model` (which must be different from `this`).
-  //
-  // Returns a pointer to the new node in the destination model.
-  //
-  // Calling this will send `OnWillRemoveBookmarks` and `BookmarkNodeRemoved`
-  // for observers of this model and `BookmarkNodeAdded` for observers of
-  // `dest_model`.
-  const BookmarkNode* MoveToOtherModelWithNewNodeIdsAndUuids(
-      const BookmarkNode* node,
-      BookmarkModel* dest_model,
-      const BookmarkNode* dest_parent);
 
   // Returns the favicon for `node`. If the favicon has not yet been loaded,
   // a load will be triggered and the observer of the model notified when done.
@@ -287,15 +281,10 @@ class BookmarkModel final : public BookmarkUndoProvider,
   enum class NodeTypeForUuidLookup {
     // Local or syncable nodes include all bookmark nodes that are not
     // descendants of account permanent folders (e.g. as returned by
-    // account_bookmark_bar_node()). On platforms where
-    // BookmarkClient::AreFoldersForAccountStorageAllowed() returns false, which
-    // most notably includes iOS, this includes all bookmark nodes.
+    // account_bookmark_bar_node()).
     kLocalOrSyncableNodes,
     // Account nodes include all bookmarks that are descendants of account
-    // permanent folders (e.g. as returned by account_bookmark_bar_node()). On
-    // platforms where BookmarkClient::AreFoldersForAccountStorageAllowed()
-    // returns false, which most notably includes iOS, these bookmarks don't
-    // exist.
+    // permanent folders (e.g. as returned by account_bookmark_bar_node()).
     kAccountNodes,
   };
 
@@ -444,6 +433,12 @@ class BookmarkModel final : public BookmarkUndoProvider,
   // by sync code only. Must only be invoked after BookmarkModel is loaded.
   void RemoveAccountPermanentFolders();
 
+  // Returns the total number of bookmark nodes (URLs and folders) in the model.
+  // This is equivalent to iterating the entire tree starting with root_node(),
+  // root node included.
+  // On Android this does *not* include partner bookmarks.
+  size_t GetTotalNumberOfUrlsAndFoldersIncludingManagedNodes() const;
+
   base::WeakPtr<BookmarkModel> AsWeakPtr() {
     return weak_factory_.GetWeakPtr();
   }
@@ -462,11 +457,6 @@ class BookmarkModel final : public BookmarkUndoProvider,
   bool LocalOrSyncableStorageHasPendingWriteForTest() const;
   bool AccountStorageHasPendingWriteForTest() const;
 
-  // Mimics `LoadAccountBookmarksFileAsLocalOrSyncableBookmarks()` having been
-  // used instead of `Load()`, for the purpose of logging metrics. For
-  // unit-tests only.
-  void SetLoadedAccountBookmarksFileAsLocalOrSyncableBookmarksForUmaForTest();
-
  private:
   friend class BookmarkCodecTest;
   friend class BookmarkModelFaviconTest;
@@ -478,12 +468,6 @@ class BookmarkModel final : public BookmarkUndoProvider,
                           size_t index,
                           std::unique_ptr<BookmarkNode> node) override;
 
-  // Internal version of Load() that takes two file paths, the second of which
-  // represents account bookmarks and is optional. If `account_file_path` is
-  // empty, account bookmarks are neither read from nor written to disk.
-  void LoadImpl(const base::FilePath& local_or_syncable_file_path,
-                const base::FilePath& account_file_path);
-
   // Given a node that is already part of the model, it determines the
   // corresponding type for the purpose of understanding uniqueness properties
   // of its UUID. That is, which subset of nodes this UUID is guaranteed to be
@@ -494,14 +478,6 @@ class BookmarkModel final : public BookmarkUndoProvider,
   // Notifies the observers for adding every descendant of `node`.
   void NotifyNodeAddedForAllDescendants(const BookmarkNode* node,
                                         bool added_by_user);
-
-  // Clones `node` and all its descendants (if any) for adding it in
-  // `dest_model`. Doesn't add it to `dest_model` - this is the responsibility
-  // of the caller. Bookmarks IDs are not copied and new IDs are generated
-  // instead.
-  std::unique_ptr<BookmarkNode> CloneSubtreeForOtherModelWithNewNodeIdsAndUuids(
-      const BookmarkNode* node,
-      BookmarkModel* dest_model);
 
   // Called when done loading. Updates internal state and notifies observers.
   void DoneLoading(std::unique_ptr<BookmarkLoadDetails> details);
@@ -520,10 +496,14 @@ class BookmarkModel final : public BookmarkUndoProvider,
   void AddNodeToIndicesRecursive(const BookmarkNode* node,
                                  NodeTypeForUuidLookup type_for_uuid_lookup);
 
-  // Removes `node` and notifies its observers, returning and transferring
-  // ownership of the node removed. The caller is responsible for allowing undo,
-  // if applicable.
-  std::unique_ptr<BookmarkNode> RemoveNode(const BookmarkNode* node);
+  // Removes a child under `parent` at position `index` and notifies its
+  // observers. `is_undoable` determines whether the deletion should be
+  // propagated via BookmarkClient to the undo stack.
+  void RemoveChildAt(const BookmarkNode* parent,
+                     size_t index,
+                     const base::Location& location,
+                     std::optional<metrics::BookmarkEditSource> source,
+                     bool is_undoable);
 
   // Removes the node from internal maps and recurses through all children. If
   // the node is a url, its url is added to removed_urls.
@@ -532,6 +512,15 @@ class BookmarkModel final : public BookmarkUndoProvider,
   void RemoveNodeFromIndicesRecursive(
       BookmarkNode* node,
       NodeTypeForUuidLookup type_for_uuid_lookup);
+
+  // Updates the UUID index to ensure that `node`, whose former type was
+  // `old_type_for_uuid_lookup`, is instead indexed under type
+  // `new_type_for_uuid_lookup`. This is exercised when a node is moved across
+  // type boundaries, which requires updating the UUID index.
+  void UpdateUuidIndexUponNodeMoveRecursive(
+      const BookmarkNode* node,
+      NodeTypeForUuidLookup old_type_for_uuid_lookup,
+      NodeTypeForUuidLookup new_type_for_uuid_lookup);
 
   // Returns true if the parent and index are valid.
   bool IsValidIndex(const BookmarkNode* parent, size_t index, bool allow_end);
@@ -592,12 +581,6 @@ class BookmarkModel final : public BookmarkUndoProvider,
   // Whether the initial set of data has been loaded.
   bool loaded_ = false;
 
-  // Whether or not loading was invoked via
-  // `LoadAccountBookmarksFileAsLocalOrSyncableBookmarks()`, remembered for the
-  // purpose of metrics.
-  bool loaded_account_bookmarks_file_as_local_or_syncable_bookmarks_for_uma_ =
-      false;
-
   // See `root_` for details.
   std::unique_ptr<BookmarkNode> owned_root_;
 
@@ -624,12 +607,7 @@ class BookmarkModel final : public BookmarkUndoProvider,
   int64_t next_node_id_ = 1;
 
   // The observers.
-#if BUILDFLAG(IS_IOS)
-  // TODO(crbug.com/1470748) Set the parameter to `true` on all platforms.
   base::ObserverList<BookmarkModelObserver, true> observers_;
-#else
-  base::ObserverList<BookmarkModelObserver> observers_;
-#endif
 
   std::unique_ptr<BookmarkClient> client_;
 

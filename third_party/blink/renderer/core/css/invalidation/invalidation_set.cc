@@ -34,9 +34,11 @@
 #include <utility>
 
 #include "base/memory/values_equivalent.h"
+#include "third_party/blink/renderer/core/css/invalidation/invalidation_tracing_flag.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/inspector/inspector_trace_events.h"
+#include "third_party/blink/renderer/core/inspector/invalidation_set_to_selector_map.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/traced_value.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
@@ -60,19 +62,11 @@ bool BackingEqual(const InvalidationSet::BackingFlags& a_flags,
   return true;
 }
 
-const unsigned char* GetCachedTracingFlags() {
-  DEFINE_STATIC_LOCAL(
-      const unsigned char*, tracing_enabled,
-      (TRACE_EVENT_API_GET_CATEGORY_GROUP_ENABLED(TRACE_DISABLED_BY_DEFAULT(
-          "devtools.timeline.invalidationTracking"))));
-  return tracing_enabled;
-}
-
 }  // namespace
 
 #define TRACE_STYLE_INVALIDATOR_INVALIDATION_SELECTORPART_IF_ENABLED( \
     element, reason, invalidationSet, singleSelectorPart)             \
-  if (UNLIKELY(*GetCachedTracingFlags()))                             \
+  if (InvalidationTracingFlag::IsEnabled()) [[unlikely]]              \
     TRACE_STYLE_INVALIDATOR_INVALIDATION_SELECTORPART(                \
         element, reason, invalidationSet, singleSelectorPart);
 
@@ -123,6 +117,8 @@ InvalidationSet::InvalidationSet(InvalidationType type)
 
 bool InvalidationSet::InvalidatesElement(Element& element) const {
   if (invalidation_flags_.WholeSubtreeInvalid()) {
+    TRACE_STYLE_INVALIDATOR_INVALIDATION_SELECTORPART_IF_ENABLED(
+        element, kInvalidationSetInvalidatesSubtree, *this, g_empty_atom);
     return true;
   }
 
@@ -141,7 +137,7 @@ bool InvalidationSet::InvalidatesElement(Element& element) const {
   }
 
   if (element.HasClass() && HasClasses()) {
-    if (const String* class_name = FindAnyClass(element)) {
+    if (const AtomicString* class_name = FindAnyClass(element)) {
       TRACE_STYLE_INVALIDATOR_INVALIDATION_SELECTORPART_IF_ENABLED(
           element, kInvalidationSetMatchedClass, *this, *class_name);
       return true;
@@ -149,7 +145,7 @@ bool InvalidationSet::InvalidatesElement(Element& element) const {
   }
 
   if (element.hasAttributes() && HasAttributes()) {
-    if (const String* attribute = FindAnyAttribute(element)) {
+    if (const AtomicString* attribute = FindAnyAttribute(element)) {
       TRACE_STYLE_INVALIDATOR_INVALIDATION_SELECTORPART_IF_ENABLED(
           element, kInvalidationSetMatchedAttribute, *this, *attribute);
       return true;
@@ -158,7 +154,7 @@ bool InvalidationSet::InvalidatesElement(Element& element) const {
 
   if (element.HasPart() && invalidation_flags_.InvalidatesParts()) {
     TRACE_STYLE_INVALIDATOR_INVALIDATION_SELECTORPART_IF_ENABLED(
-        element, kInvalidationSetMatchedPart, *this, "");
+        element, kInvalidationSetMatchedPart, *this, g_empty_atom);
     return true;
   }
 
@@ -192,6 +188,7 @@ void InvalidationSet::Combine(const InvalidationSet& other) {
   }
 
   CHECK_NE(&other, this);
+  InvalidationSetToSelectorMap::CombineScope combine_scope(this, &other);
 
   if (auto* invalidation_set = DynamicTo<SiblingInvalidationSet>(this)) {
     SiblingInvalidationSet& siblings = *invalidation_set;
@@ -207,6 +204,10 @@ void InvalidationSet::Combine(const InvalidationSet& other) {
     if (other_siblings.Descendants()) {
       siblings.EnsureDescendants().Combine(*other_siblings.Descendants());
     }
+  }
+
+  if (other.InvalidatesNth()) {
+    SetInvalidatesNth();
   }
 
   if (other.InvalidatesSelf()) {
@@ -265,6 +266,7 @@ void InvalidationSet::Combine(const InvalidationSet& other) {
 }
 
 void InvalidationSet::Destroy() const {
+  InvalidationSetToSelectorMap::RemoveEntriesForInvalidationSet(this);
   if (auto* invalidation_set = DynamicTo<DescendantInvalidationSet>(this)) {
     delete invalidation_set;
   } else {
@@ -285,10 +287,10 @@ bool InvalidationSet::HasEmptyBackings() const {
          attributes_.IsEmpty(backing_flags_);
 }
 
-const String* InvalidationSet::FindAnyClass(Element& element) const {
+const AtomicString* InvalidationSet::FindAnyClass(Element& element) const {
   const SpaceSplitString& class_names = element.ClassNames();
   wtf_size_t size = class_names.size();
-  if (const String* string = classes_.GetString(backing_flags_)) {
+  if (const AtomicString* string = classes_.GetString(backing_flags_)) {
     for (wtf_size_t i = 0; i < size; ++i) {
       if (*string == class_names[i]) {
         return string;
@@ -299,16 +301,16 @@ const String* InvalidationSet::FindAnyClass(Element& element) const {
     for (wtf_size_t i = 0; i < size; ++i) {
       auto item = set->find(class_names[i]);
       if (item != set->end()) {
-        return &item->GetString();
+        return item.Get();
       }
     }
   }
   return nullptr;
 }
 
-const String* InvalidationSet::FindAnyAttribute(Element& element) const {
-  if (const String* string = attributes_.GetString(backing_flags_)) {
-    if (element.HasAttributeIgnoringNamespace(AtomicString(*string))) {
+const AtomicString* InvalidationSet::FindAnyAttribute(Element& element) const {
+  if (const AtomicString* string = attributes_.GetString(backing_flags_)) {
+    if (element.HasAttributeIgnoringNamespace(*string)) {
       return string;
     }
   }
@@ -316,7 +318,7 @@ const String* InvalidationSet::FindAnyAttribute(Element& element) const {
           attributes_.GetHashSet(backing_flags_)) {
     for (const auto& attribute : *set) {
       if (element.HasAttributeIgnoringNamespace(attribute)) {
-        return &attribute.GetString();
+        return &attribute;
       }
     }
   }
@@ -494,6 +496,7 @@ String InvalidationSet::ToString() const {
 
   StringBuilder metadata;
   metadata.Append(InvalidatesSelf() ? "$" : "");
+  metadata.Append(InvalidatesNth() ? "N" : "");
   metadata.Append(invalidation_flags_.WholeSubtreeInvalid() ? "W" : "");
   metadata.Append(invalidation_flags_.InvalidateCustomPseudo() ? "C" : "");
   metadata.Append(invalidation_flags_.TreeBoundaryCrossing() ? "T" : "");

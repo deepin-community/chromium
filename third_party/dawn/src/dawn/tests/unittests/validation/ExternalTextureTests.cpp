@@ -25,8 +25,9 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "dawn/tests/unittests/validation/ValidationTest.h"
+#include <vector>
 
+#include "dawn/tests/unittests/validation/ValidationTest.h"
 #include "dawn/utils/ComboRenderPipelineDescriptor.h"
 #include "dawn/utils/WGPUHelpers.h"
 
@@ -119,7 +120,8 @@ class ExternalTextureTest : public ValidationTest {
         desc.gamutConversionMatrix = mPlaceholderConstantArray.data();
         desc.srcTransferFunctionParameters = mPlaceholderConstantArray.data();
         desc.dstTransferFunctionParameters = mPlaceholderConstantArray.data();
-        desc.visibleSize = {kWidth, kHeight};
+        desc.cropSize = {kWidth, kHeight};
+        desc.apparentSize = {kWidth, kHeight};
 
         return desc;
     }
@@ -647,8 +649,8 @@ TEST_F(ExternalTextureTest, UseErrorExternalTextureInBindGroup) {
     }
 }
 
-// Test create external texture with too large visible rect results in error.
-TEST_F(ExternalTextureTest, CreateExternalTextureWithErrorVisibleOriginOrSize) {
+// Test create external texture with too large crop rect results in error.
+TEST_F(ExternalTextureTest, CreateExternalTextureWithErrorCropOriginOrSize) {
     // Control case should succeed.
     {
         wgpu::TextureDescriptor textureDescriptor = CreateTextureDescriptor();
@@ -656,56 +658,109 @@ TEST_F(ExternalTextureTest, CreateExternalTextureWithErrorVisibleOriginOrSize) {
 
         wgpu::ExternalTextureDescriptor externalDesc = CreateDefaultExternalTextureDescriptor();
         externalDesc.plane0 = texture.CreateView();
-        externalDesc.visibleOrigin = {0, 0};
-        externalDesc.visibleSize = {texture.GetWidth(), texture.GetHeight()};
+        externalDesc.cropOrigin = {0, 0};
+        externalDesc.cropSize = {texture.GetWidth(), texture.GetHeight()};
+        externalDesc.apparentSize = {texture.GetWidth(), texture.GetHeight()};
         device.CreateExternalTexture(&externalDesc);
     }
 
-    // VisibleOrigin is OOB on x
+    // cropOrigin is OOB on x
     {
         wgpu::TextureDescriptor textureDescriptor = CreateTextureDescriptor();
         wgpu::Texture texture = device.CreateTexture(&textureDescriptor);
 
         wgpu::ExternalTextureDescriptor externalDesc = CreateDefaultExternalTextureDescriptor();
         externalDesc.plane0 = texture.CreateView();
-        externalDesc.visibleOrigin = {1, 0};
-        externalDesc.visibleSize = {texture.GetWidth(), texture.GetHeight()};
+        externalDesc.cropOrigin = {1, 0};
+        externalDesc.cropSize = {texture.GetWidth(), texture.GetHeight()};
+        externalDesc.apparentSize = {texture.GetWidth(), texture.GetHeight()};
         ASSERT_DEVICE_ERROR(device.CreateExternalTexture(&externalDesc));
     }
 
-    // VisibleOrigin is OOB on y
+    // cropOrigin is OOB on y
     {
         wgpu::TextureDescriptor textureDescriptor = CreateTextureDescriptor();
         wgpu::Texture texture = device.CreateTexture(&textureDescriptor);
 
         wgpu::ExternalTextureDescriptor externalDesc = CreateDefaultExternalTextureDescriptor();
         externalDesc.plane0 = texture.CreateView();
-        externalDesc.visibleOrigin = {0, 1};
-        externalDesc.visibleSize = {texture.GetWidth(), texture.GetHeight()};
+        externalDesc.cropOrigin = {0, 1};
+        externalDesc.cropSize = {texture.GetWidth(), texture.GetHeight()};
+        externalDesc.apparentSize = {texture.GetWidth(), texture.GetHeight()};
         ASSERT_DEVICE_ERROR(device.CreateExternalTexture(&externalDesc));
     }
 
-    // VisibleSize is OOB on width
+    // cropSize is OOB on width
     {
         wgpu::TextureDescriptor textureDescriptor = CreateTextureDescriptor();
         wgpu::Texture texture = device.CreateTexture(&textureDescriptor);
 
         wgpu::ExternalTextureDescriptor externalDesc = CreateDefaultExternalTextureDescriptor();
         externalDesc.plane0 = texture.CreateView();
-        externalDesc.visibleOrigin = {0, 0};
-        externalDesc.visibleSize = {texture.GetWidth() + 1, texture.GetHeight()};
+        externalDesc.cropOrigin = {0, 0};
+        externalDesc.cropSize = {texture.GetWidth() + 1, texture.GetHeight()};
+        externalDesc.apparentSize = {texture.GetWidth(), texture.GetHeight()};
         ASSERT_DEVICE_ERROR(device.CreateExternalTexture(&externalDesc));
     }
 
-    // VisibleSize is OOB on height
+    // cropSize is OOB on height
     {
         wgpu::TextureDescriptor textureDescriptor = CreateTextureDescriptor();
         wgpu::Texture texture = device.CreateTexture(&textureDescriptor);
 
         wgpu::ExternalTextureDescriptor externalDesc = CreateDefaultExternalTextureDescriptor();
         externalDesc.plane0 = texture.CreateView();
-        externalDesc.visibleOrigin = {0, 0};
-        externalDesc.visibleSize = {texture.GetWidth(), texture.GetHeight() + 1};
+        externalDesc.cropOrigin = {0, 0};
+        externalDesc.cropSize = {texture.GetWidth(), texture.GetHeight() + 1};
+        externalDesc.apparentSize = {texture.GetWidth(), texture.GetHeight()};
+        ASSERT_DEVICE_ERROR(device.CreateExternalTexture(&externalDesc));
+    }
+}
+
+// Test create external texture with too large apparent size results in error.
+TEST_F(ExternalTextureTest, CreateExternalTextureWithApparentSizeTooLarge) {
+    wgpu::SupportedLimits limits;
+    device.GetLimits(&limits);
+
+    // Control case should succeed.
+    {
+        wgpu::TextureDescriptor textureDescriptor = CreateTextureDescriptor();
+        wgpu::Texture texture = device.CreateTexture(&textureDescriptor);
+
+        wgpu::ExternalTextureDescriptor externalDesc = CreateDefaultExternalTextureDescriptor();
+        externalDesc.plane0 = texture.CreateView();
+        externalDesc.cropOrigin = {0, 0};
+        externalDesc.cropSize = {texture.GetWidth(), texture.GetHeight()};
+        externalDesc.apparentSize = {limits.limits.maxTextureDimension2D,
+                                     limits.limits.maxTextureDimension2D};
+        device.CreateExternalTexture(&externalDesc);
+    }
+
+    // Error: apparentSize.width is too large
+    {
+        wgpu::TextureDescriptor textureDescriptor = CreateTextureDescriptor();
+        wgpu::Texture texture = device.CreateTexture(&textureDescriptor);
+
+        wgpu::ExternalTextureDescriptor externalDesc = CreateDefaultExternalTextureDescriptor();
+        externalDesc.plane0 = texture.CreateView();
+        externalDesc.cropOrigin = {0, 0};
+        externalDesc.cropSize = {texture.GetWidth(), texture.GetHeight()};
+        externalDesc.apparentSize = {limits.limits.maxTextureDimension2D + 1,
+                                     limits.limits.maxTextureDimension2D};
+        ASSERT_DEVICE_ERROR(device.CreateExternalTexture(&externalDesc));
+    }
+
+    // Error: apparentSize.height is too large
+    {
+        wgpu::TextureDescriptor textureDescriptor = CreateTextureDescriptor();
+        wgpu::Texture texture = device.CreateTexture(&textureDescriptor);
+
+        wgpu::ExternalTextureDescriptor externalDesc = CreateDefaultExternalTextureDescriptor();
+        externalDesc.plane0 = texture.CreateView();
+        externalDesc.cropOrigin = {0, 0};
+        externalDesc.cropSize = {texture.GetWidth(), texture.GetHeight()};
+        externalDesc.apparentSize = {limits.limits.maxTextureDimension2D,
+                                     limits.limits.maxTextureDimension2D + 1};
         ASSERT_DEVICE_ERROR(device.CreateExternalTexture(&externalDesc));
     }
 }
@@ -764,12 +819,8 @@ class ExternalTextureNorm16Test : public ExternalTextureTest {
   protected:
     void SetUp() override { ExternalTextureTest::SetUp(); }
 
-    WGPUDevice CreateTestDevice(native::Adapter dawnAdapter,
-                                wgpu::DeviceDescriptor descriptor) override {
-        wgpu::FeatureName requiredFeatures[1] = {wgpu::FeatureName::Norm16TextureFormats};
-        descriptor.requiredFeatures = requiredFeatures;
-        descriptor.requiredFeatureCount = 1;
-        return dawnAdapter.CreateDevice(&descriptor);
+    std::vector<wgpu::FeatureName> GetRequiredFeatures() override {
+        return {wgpu::FeatureName::Unorm16TextureFormats};
     }
 
     static constexpr wgpu::TextureFormat kBiplanarPlane0FormatNorm16 =

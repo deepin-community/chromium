@@ -5,6 +5,7 @@
 #include "quiche/quic/core/quic_packets.h"
 
 #include <memory>
+#include <string>
 
 #include "absl/memory/memory.h"
 #include "quiche/quic/core/quic_time.h"
@@ -121,13 +122,28 @@ TEST_F(QuicPacketsTest, CopySerializedPacket) {
 }
 
 TEST_F(QuicPacketsTest, CloneReceivedPacket) {
-  SetQuicReloadableFlag(quic_clone_ecn, true);
   char header[4] = "bar";
   QuicReceivedPacket packet("foo", 3, QuicTime::Zero(), false, 0, true, header,
                             sizeof(header) - 1, false,
                             QuicEcnCodepoint::ECN_ECT1);
   std::unique_ptr<QuicReceivedPacket> copy = packet.Clone();
   EXPECT_EQ(packet.ecn_codepoint(), copy->ecn_codepoint());
+}
+
+TEST_F(QuicPacketsTest, NoFlowLabelByDefault) {
+  char header[4] = "bar";
+  QuicReceivedPacket packet("foo", 3, QuicTime::Zero(), false, 0, true, header,
+                            sizeof(header) - 1, false,
+                            QuicEcnCodepoint::ECN_ECT1);
+  EXPECT_EQ(0, packet.ipv6_flow_label());
+}
+
+TEST_F(QuicPacketsTest, ExplicitFlowLabel) {
+  char header[4] = "bar";
+  QuicReceivedPacket packet("foo", 3, QuicTime::Zero(), false, 0, true, header,
+                            sizeof(header) - 1, false,
+                            QuicEcnCodepoint::ECN_ECT1, 42);
+  EXPECT_EQ(42, packet.ipv6_flow_label());
 }
 
 }  // namespace

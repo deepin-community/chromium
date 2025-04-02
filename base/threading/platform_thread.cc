@@ -3,10 +3,9 @@
 // found in the LICENSE file.
 
 #include "base/threading/platform_thread.h"
-#include "base/threading/thread_id_name_manager.h"
 
 #include "base/task/current_thread.h"
-#include "third_party/abseil-cpp/absl/base/attributes.h"
+#include "base/threading/thread_id_name_manager.h"
 
 #if BUILDFLAG(IS_FUCHSIA)
 #include "base/fuchsia/scheduler.h"
@@ -16,8 +15,7 @@ namespace base {
 
 namespace {
 
-ABSL_CONST_INIT thread_local ThreadType current_thread_type =
-    ThreadType::kDefault;
+constinit thread_local ThreadType current_thread_type = ThreadType::kDefault;
 
 }  // namespace
 
@@ -41,16 +39,17 @@ ThreadType PlatformThreadBase::GetCurrentThreadType() {
 }
 
 // static
-absl::optional<TimeDelta> PlatformThreadBase::GetThreadLeewayOverride() {
+std::optional<TimeDelta> PlatformThreadBase::GetThreadLeewayOverride() {
 #if BUILDFLAG(IS_FUCHSIA)
   // On Fuchsia, all audio threads run with the CPU scheduling profile that uses
   // an interval of |kAudioSchedulingPeriod|. Using the default leeway may lead
   // to some tasks posted to audio threads to be executed too late (see
   // http://crbug.com/1368858).
-  if (GetCurrentThreadType() == ThreadType::kRealtimeAudio)
+  if (GetCurrentThreadType() == ThreadType::kRealtimeAudio) {
     return kAudioSchedulingPeriod;
+  }
 #endif
-  return absl::nullopt;
+  return std::nullopt;
 }
 
 // static

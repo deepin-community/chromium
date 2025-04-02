@@ -11,6 +11,7 @@
 #include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
+#include "device/vr/public/mojom/isolated_xr_service.mojom.h"
 #include "gpu/command_buffer/client/client_shared_image.h"
 #include "gpu/command_buffer/common/mailbox_holder.h"
 #include "mojo/public/cpp/platform/platform_handle.h"
@@ -25,7 +26,7 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/scoped_hardware_buffer_handle.h"
-#include "gpu/ipc/common/gpu_memory_buffer_impl_android_hardware_buffer.h"
+#include "device/vr/android/local_texture.h"  //nogncheck
 #include "ui/gl/scoped_egl_image.h"
 #endif
 
@@ -44,7 +45,7 @@ class ContextProvider;
 namespace device {
 class OpenXrViewConfiguration;
 
-// TODO(https://crbug.com/1441072): Refactor this class.
+// TODO(crbug.com/40909689): Refactor this class.
 struct SwapChainInfo {
  public:
 #if BUILDFLAG(IS_WIN)
@@ -58,22 +59,26 @@ struct SwapChainInfo {
   SwapChainInfo& operator=(SwapChainInfo&&);
 
   void Clear();
-  gpu::MailboxHolder GetMailboxHolder() const;
 
   scoped_refptr<gpu::ClientSharedImage> shared_image;
   gpu::SyncToken sync_token;
 
 #if BUILDFLAG(IS_WIN)
-  // When shared images are being used, there is a corresponding MailboxHolder
-  // and D3D11Fence for each D3D11 texture in the vector.
+  // When shared images are being used, there is a corresponding
+  // ClientSharedImage and D3D11Fence for each D3D11 texture in the vector.
   raw_ptr<ID3D11Texture2D> d3d11_texture = nullptr;
+  // If a shared handle cannot be created for the swap chain texture, a second
+  // texture which is shareable will be created and passed to the renderer
+  // proceess. When the frame is complete it will be copied to the swap chain
+  // texture prior to submission.
+  Microsoft::WRL::ComPtr<ID3D11Texture2D> d3d11_shared_texture = nullptr;
   Microsoft::WRL::ComPtr<ID3D11Fence> d3d11_fence;
 #elif BUILDFLAG(IS_ANDROID)
   // Ideally this would be a gluint, but there are conflicting headers for GL
   // depending on *how* you want to use it; so we can't use it at the moment.
   uint32_t openxr_texture;
 
-  uint32_t shared_buffer_texture;
+  LocalTexture shared_buffer_texture;
 
   // The size of the texture used for the shared buffer; which may be different
   // than the size of the actual swapchain image, as this size is influenced by
@@ -119,7 +124,7 @@ class OpenXrGraphicsBinding {
 
   // Returns a list of mutable SwapChainInfo objects. While the items themselves
   // are mutable, the list is not.
-  // TODO(https://crbug.com/1441072): Make SwapChainInfo internal to the child
+  // TODO(crbug.com/40909689): Make SwapChainInfo internal to the child
   // classes.
   virtual base::span<SwapChainInfo> GetSwapChainImages() = 0;
 
@@ -134,7 +139,7 @@ class OpenXrGraphicsBinding {
   // Returns the currently active swapchain image. This is only valid between
   // calls to ActivateSwapchainImage and ReleaseSwapchainImage, which happens
   // after BeginFrame and before EndFrame.
-  // TODO(https://crbug.com/1441072): Make SwapChainInfo internal to the child
+  // TODO(crbug.com/40909689): Make SwapChainInfo internal to the child
   // classes.
   virtual const SwapChainInfo& GetActiveSwapchainImage() = 0;
 
@@ -224,10 +229,15 @@ class OpenXrGraphicsBinding {
   // with the texture, but it's not tied to a swapchain info the same way that
   // the page's textures are, so we provide this additional method and simply
   // overwrite the overlay whenever we receive it.
-  virtual bool SetOverlayTexture(mojo::PlatformHandle texture_handle,
+  virtual bool SetOverlayTexture(gfx::GpuMemoryBufferHandle texture,
                                  const gpu::SyncToken& sync_token,
                                  const gfx::RectF& left,
                                  const gfx::RectF& right) = 0;
+
+  // Called to indicate which graphics API produced the textures submitted to
+  // OpenXR. Does not affect the API used for compositing.
+  void SetWebGPUSession(bool is_webgpu) { webgpu_session_ = is_webgpu; }
+  bool IsWebGPUSession() const { return webgpu_session_; }
 
  protected:
   // Internal helper to clear the list of images allocated during
@@ -267,6 +277,7 @@ class OpenXrGraphicsBinding {
   gfx::Size transfer_size_{0, 0};
   uint32_t active_swapchain_index_;
   bool has_active_swapchain_image_ = false;
+  bool webgpu_session_ = false;
 };
 
 }  // namespace device

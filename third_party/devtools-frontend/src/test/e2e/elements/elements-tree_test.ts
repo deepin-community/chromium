@@ -5,7 +5,6 @@
 import {assert} from 'chai';
 
 import {getBrowserAndPages, goToResource, waitForAria, waitForElementWithTextContent} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   expandSelectedNodeRecursively,
   getContentOfSelectedNode,
@@ -15,7 +14,7 @@ import {
 } from '../helpers/elements-helpers.js';
 import {togglePreferenceInSettingsTab} from '../helpers/settings-helpers.js';
 
-describe('The Elements tab', async function() {
+describe('The Elements tab', function() {
   it('is able to update shadow dom tree structure upon typing', async () => {
     await goToResource('elements/shadow-dom-modify-chardata.html');
     const {target} = getBrowserAndPages();

@@ -34,7 +34,8 @@
 #include <tuple>
 
 #include "base/debug/crash_logging.h"
-#include "third_party/blink/public/mojom/origin_trial_feature/origin_trial_feature.mojom-blink.h"
+#include "base/notreached.h"
+#include "third_party/blink/public/mojom/origin_trials/origin_trial_feature.mojom-blink.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_controller.h"
 #include "third_party/blink/renderer/core/execution_context/agent.h"
@@ -103,8 +104,10 @@ void WorkerOrWorkletScriptController::DisposeContextIfNeeded() {
     v8::Local<v8::Object> global_object =
         global_proxy_object->GetPrototype().As<v8::Object>();
     DCHECK(!global_object.IsEmpty());
-    V8DOMWrapper::ClearNativeInfo(isolate_, global_object);
-    V8DOMWrapper::ClearNativeInfo(isolate_, global_proxy_object);
+    V8DOMWrapper::ClearNativeInfo(isolate_, global_object,
+                                  global_scope_->GetWrapperTypeInfo());
+    V8DOMWrapper::ClearNativeInfo(isolate_, global_proxy_object,
+                                  global_scope_->GetWrapperTypeInfo());
 
     // This detaches v8::MicrotaskQueue pointer from v8::Context, so that we can
     // destroy EventLoop safely.
@@ -177,7 +180,7 @@ void WorkerOrWorkletScriptController::Initialize(const KURL& url_for_debugger) {
     }
     SCOPED_CRASH_KEY_STRING256("shared-storage", "context-empty",
                                ot_feature_string.ReleaseString().Utf8());
-    CHECK(false) << "V8 context is empty";
+    NOTREACHED() << "V8 context is empty";
   }
   CHECK(!context.IsEmpty());
 
@@ -220,8 +223,7 @@ void WorkerOrWorkletScriptController::Initialize(const KURL& url_for_debugger) {
   // The global object, aka worker/worklet wrapper object.
   v8::Local<v8::Object> global_object =
       global_proxy->GetPrototype().As<v8::Object>();
-  V8DOMWrapper::SetNativeInfo(isolate_, global_object, wrapper_type_info,
-                              script_wrappable);
+  V8DOMWrapper::SetNativeInfo(isolate_, global_object, script_wrappable);
 
   if (global_scope_->IsMainThreadWorkletGlobalScope()) {
     // Set the human readable name for the world.
@@ -384,6 +386,7 @@ void WorkerOrWorkletScriptController::SetWasmEvalErrorMessage(
 void WorkerOrWorkletScriptController::Trace(Visitor* visitor) const {
   visitor->Trace(global_scope_);
   visitor->Trace(script_state_);
+  visitor->Trace(world_);
 }
 
 }  // namespace blink

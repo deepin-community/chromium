@@ -153,7 +153,7 @@ void DevToolsSession::Dispose() {
 }
 
 DevToolsSession* DevToolsSession::GetRootSession() {
-  return root_session_ ? root_session_ : this;
+  return root_session_ ? root_session_.get() : this;
 }
 
 void DevToolsSession::AddHandler(
@@ -184,7 +184,7 @@ void DevToolsSession::AttachToAgent(blink::mojom::DevToolsAgent* agent,
     return;
   }
 
-  // TODO(https://crbug.com/978694): Consider a reset flow since new mojo types
+  // TODO(crbug.com/41467868): Consider a reset flow since new mojo types
   // checks is_bound strictly.
   if (receiver_.is_bound()) {
     receiver_.reset();
@@ -482,8 +482,7 @@ void DevToolsSession::ResumeSendingMessagesToAgent() {
 void DevToolsSession::ClearPendingMessages(bool did_crash) {
   for (auto it = pending_messages_.begin(); it != pending_messages_.end();) {
     const PendingMessage& message = *it;
-    if (SpanEquals(crdtp::SpanFrom("Page.reload"),
-                   crdtp::SpanFrom(message.method))) {
+    if (message.method == "Page.reload") {
       ++it;
       continue;
     }

@@ -122,7 +122,8 @@ class FileStreamWriter::OperationRunner
   void OnOpenFileCompletedOnUIThread(
       storage::AsyncFileUtil::StatusCallback callback,
       int file_handle,
-      base::File::Error result) {
+      base::File::Error result,
+      std::unique_ptr<EntryMetadata> metadata) {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
     abort_callback_.Reset();
@@ -243,7 +244,6 @@ int FileStreamWriter::Write(net::IOBuffer* buffer,
 
     case INITIALIZING:
       NOTREACHED();
-      break;
 
     case INITIALIZED:
       WriteAfterInitialized(buffer, buffer_length,
@@ -256,7 +256,6 @@ int FileStreamWriter::Write(net::IOBuffer* buffer,
     case CANCELLING:
     case FINALIZED:
       NOTREACHED();
-      break;
   }
 
   return net::ERR_IO_PENDING;

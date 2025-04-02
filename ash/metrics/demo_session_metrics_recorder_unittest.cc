@@ -8,7 +8,6 @@
 #include <string>
 #include <utility>
 
-#include "ash/constants/app_types.h"
 #include "ash/metrics/user_metrics_recorder.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "ash/public/cpp/window_properties.h"
@@ -20,10 +19,12 @@
 #include "ash/wm/window_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/metrics/user_action_tester.h"
 #include "base/timer/mock_timer.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "components/app_constants/constants.h"
 #include "extensions/common/constants.h"
-#include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/window_types.h"
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/window.h"
@@ -31,6 +32,8 @@
 
 namespace ash {
 namespace {
+
+constexpr char kUserEmail[] = "crosdemoandapbp@gmail.com";
 
 // Tests app usage recorded by DemoSessionMetricsRecorder.
 // Mocks out the timer to control the sampling cycle. Tests will create and
@@ -94,8 +97,7 @@ class DemoSessionMetricsRecorderTest : public AshTestBase {
     std::unique_ptr<aura::Window> window(CreateTestWindowInShellWithDelegate(
         aura::test::TestWindowDelegate::CreateSelfDestroyingDelegate(), 0,
         gfx::Rect(0, 0, 10, 10)));
-    window->SetProperty(aura::client::kAppType,
-                        static_cast<int>(ash::AppType::BROWSER));
+    window->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::BROWSER);
     return window;
   }
 
@@ -105,8 +107,7 @@ class DemoSessionMetricsRecorderTest : public AshTestBase {
     std::unique_ptr<aura::Window> window(CreateTestWindowInShellWithDelegate(
         aura::test::TestWindowDelegate::CreateSelfDestroyingDelegate(), 0,
         gfx::Rect(0, 0, 10, 10)));
-    window->SetProperty(aura::client::kAppType,
-                        static_cast<int>(ash::AppType::BROWSER));
+    window->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::BROWSER);
     window->SetProperty(
         kShelfIDKey,
         new std::string(ShelfID(app_id, std::string()).Serialize()));
@@ -119,8 +120,7 @@ class DemoSessionMetricsRecorderTest : public AshTestBase {
     std::unique_ptr<aura::Window> window(CreateTestWindowInShellWithDelegate(
         aura::test::TestWindowDelegate::CreateSelfDestroyingDelegate(), 0,
         gfx::Rect(0, 0, 10, 10)));
-    window->SetProperty(aura::client::kAppType,
-                        static_cast<int>(ash::AppType::CHROME_APP));
+    window->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::CHROME_APP);
     window->SetProperty(
         kShelfIDKey,
         new std::string(ShelfID(app_id, std::string()).Serialize()));
@@ -133,8 +133,7 @@ class DemoSessionMetricsRecorderTest : public AshTestBase {
     std::unique_ptr<aura::Window> window(CreateTestWindowInShellWithDelegate(
         aura::test::TestWindowDelegate::CreateSelfDestroyingDelegate(), 0,
         gfx::Rect(0, 0, 10, 10)));
-    window->SetProperty(aura::client::kAppType,
-                        static_cast<int>(ash::AppType::ARC_APP));
+    window->SetProperty(chromeos::kAppTypeKey, chromeos::AppType::ARC_APP);
 
     // ARC++ shelf app IDs are hashes of package_name#activity_name formatted as
     // extension IDs. The point is that they are opaque to the metrics recorder.
@@ -179,6 +178,8 @@ class DemoSessionMetricsRecorderTest : public AshTestBase {
  protected:
   // Captures histograms.
   std::unique_ptr<base::HistogramTester> histogram_tester_;
+
+  base::UserActionTester user_action_tester_;
 
   // The test target.
   std::unique_ptr<DemoSessionMetricsRecorder> metrics_recorder_;
@@ -281,6 +282,10 @@ TEST_F(DemoSessionMetricsRecorderTest, ActiveAppAfterDelayedArcPackageName) {
   // There should be no app activity recorded yet, because there was
   // no package name in the ARC window.
   histogram_tester_->ExpectTotalCount("DemoMode.ActiveApp", 0);
+
+  // Simulate that no package name in the ARC window but metric
+  // recording is triggered again. It should not cause any crash.
+  FireTimer();
 
   // Set the package name after window creation/activation.
   arc_window->SetProperty(kArcPackageNameKey,
@@ -712,12 +717,63 @@ TEST_F(DemoSessionMetricsRecorderTest, DwellTime) {
   task_environment()->FastForwardBy(base::Seconds(5));
   SendUserActivity();
 
-  // Simulate a session "timing out" after 60 seconds.
-  task_environment()->FastForwardBy(base::Seconds(60));
+  // Simulate a session "timing out" after 90 seconds.
+  task_environment()->FastForwardBy(base::Seconds(90));
   DeleteMetricsRecorder();
 
   // The recorded dwell time should be 10 seconds.
   histogram_tester_->ExpectUniqueSample("DemoMode.DwellTime", 10, 1);
+}
+
+TEST_F(DemoSessionMetricsRecorderTest, ShopperSessionDwellTime) {
+  // Simulate user activity for 12 seconds.
+  SendUserActivity();
+
+  task_environment()->FastForwardBy(base::Seconds(4));
+  SendUserActivity();
+
+  task_environment()->FastForwardBy(base::Seconds(8));
+  SendUserActivity();
+
+  // Simulate a shopper session "timing out" after 90 seconds.
+  task_environment()->FastForwardBy(base::Seconds(90));
+  DemoSessionMetricsRecorder::Get()->ReportShopperSessionDwellTime();
+
+  // The recorded dwell time should be 12 seconds.
+  histogram_tester_->ExpectUniqueSample("DemoMode.SignedIn.Shopper.DwellTime",
+                                        12, 1);
+
+  // Simulate user activity in another shopper session for 12 seconds.
+  SendUserActivity();
+
+  task_environment()->FastForwardBy(base::Seconds(12));
+  SendUserActivity();
+
+  // Simulate exiting the shopper and cros sessions after 90 seconds.
+  task_environment()->FastForwardBy(base::Seconds(90));
+  DeleteMetricsRecorder();
+
+  // The recorded dwell time should be 12 seconds again.
+  histogram_tester_->ExpectUniqueSample("DemoMode.SignedIn.Shopper.DwellTime",
+                                        12, 2);
+}
+
+TEST_F(DemoSessionMetricsRecorderTest, ZeroDwellTime) {
+  // Simulate the user comes in after 15 seconds.
+  task_environment()->FastForwardBy(base::Seconds(15));
+
+  // Simulate user interacting with the device only once.
+  SendUserActivity();
+
+  // Simulate a session "timing out" after 90 seconds.
+  task_environment()->FastForwardBy(base::Seconds(90));
+  DeleteMetricsRecorder();
+
+  // The recorded dwell time should be 0 second because the first and the last
+  // user activities are the same.
+  histogram_tester_->ExpectUniqueSample("DemoMode.DwellTime", 0, 1);
+  histogram_tester_->ExpectUniqueSample("DemoMode.SignedIn.Shopper.DwellTime",
+                                        0, 1);
 }
 
 // Within the demo session, test user clicks the home button on shelf, clicks on
@@ -725,6 +781,10 @@ TEST_F(DemoSessionMetricsRecorderTest, DwellTime) {
 // should be 4.
 TEST_F(DemoSessionMetricsRecorderTest,
        UserClicksAndPressesEqualsThreeInDemoSession) {
+  // SetIsDemoSession() will create another demo session metrics recorder. To
+  // avoid having two global instances, we delete the one created in the setup.
+  DeleteMetricsRecorder();
+
   TestSessionControllerClient* session =
       AshTestBase::GetSessionControllerClient();
   session->SetIsDemoSession();
@@ -737,23 +797,30 @@ TEST_F(DemoSessionMetricsRecorderTest,
   ash::Shell::Get()->metrics()->OnShellShuttingDown();
 
   // The recorded count UserInteracted should be 4, with one sample recorded.
-  histogram_tester_->ExpectUniqueSample(
+  // Additionally,  there should be one sample of 0 count recorded because we
+  // destroyed demo session metrics recorder at the beginning once.
+  histogram_tester_->ExpectBucketCount(
       DemoSessionMetricsRecorder::kUserClicksAndPressesMetric, 4, 1);
+  histogram_tester_->ExpectBucketCount(
+      DemoSessionMetricsRecorder::kUserClicksAndPressesMetric, 1, 0);
 }
 
 // Within the demo session, test user does not do any clicks/presses, then the
 // UserClickesAndPresses should be 0.
 TEST_F(DemoSessionMetricsRecorderTest,
        UserClicksAndPressesEqualsZeroInDemoSession) {
+  DeleteMetricsRecorder();
+
   TestSessionControllerClient* session =
       AshTestBase::GetSessionControllerClient();
   session->SetIsDemoSession();
 
   ash::Shell::Get()->metrics()->OnShellShuttingDown();
 
-  // The recorded count UserInteracted should be 0, with one sample recorded.
+  // The recorded count UserInteracted should be 0, with two samples recorded,
+  // because we destroyed demo session metrics recorder twice.
   histogram_tester_->ExpectUniqueSample(
-      DemoSessionMetricsRecorder::kUserClicksAndPressesMetric, 0, 1);
+      DemoSessionMetricsRecorder::kUserClicksAndPressesMetric, 0, 2);
 }
 
 // Out of demo session, test user clicks the home button on shelf, clicks on the
@@ -771,6 +838,68 @@ TEST_F(DemoSessionMetricsRecorderTest,
   // sample.
   histogram_tester_->ExpectUniqueSample(
       DemoSessionMetricsRecorder::kUserClicksAndPressesMetric, 0, 0);
+}
+
+// In MGS demo session, test user actively exits the session. Check the
+// corresponding user actions are recorded.
+TEST_F(DemoSessionMetricsRecorderTest, UserActivelyExitsMGS) {
+  TestSessionControllerClient* session = GetSessionControllerClient();
+  // Simulate to enter the demo MGS.
+  session->Reset();
+  session->AddUserSession(kUserEmail, user_manager::UserType::kPublicAccount);
+  session->SetSessionState(session_manager::SessionState::ACTIVE);
+
+  DemoSessionMetricsRecorder::RecordExitSessionAction(
+      DemoSessionMetricsRecorder::ExitSessionFrom::kShelf);
+  EXPECT_EQ(1, user_action_tester_.GetActionCount("DemoMode.ExitFromShelf"));
+
+  DemoSessionMetricsRecorder::RecordExitSessionAction(
+      DemoSessionMetricsRecorder::ExitSessionFrom::kSystemTray);
+  EXPECT_EQ(1,
+            user_action_tester_.GetActionCount("DemoMode.ExitFromSystemTray"));
+
+  DemoSessionMetricsRecorder::RecordExitSessionAction(
+      DemoSessionMetricsRecorder::ExitSessionFrom::kSystemTrayPowerButton);
+  EXPECT_EQ(1, user_action_tester_.GetActionCount(
+                   "DemoMode.ExitFromSystemTrayPowerButton"));
+
+  // Since it's not signed-in, expect signed-in session related user actions to
+  // have zero count.
+  EXPECT_EQ(
+      0, user_action_tester_.GetActionCount("DemoMode.SignedIn.ExitFromShelf"));
+  EXPECT_EQ(0, user_action_tester_.GetActionCount(
+                   "DemoMode.SignedIn.ExitFromSystemTray"));
+  EXPECT_EQ(0, user_action_tester_.GetActionCount(
+                   "DemoMode.SignedIn.ExitFromSystemTrayPowerButton"));
+}
+
+// In signed-in demo session, test user actively exits the session. Check the
+// corresponding user actions are recorded.
+TEST_F(DemoSessionMetricsRecorderTest, UserActivelyExitsSignedInSession) {
+  // Simulate to sign in the session with a regular user.
+  GetSessionControllerClient()->AddUserSession(kUserEmail);
+
+  // Even though it's signed-in, the generic exit demo session user actions are
+  // still recorded.
+  DemoSessionMetricsRecorder::RecordExitSessionAction(
+      DemoSessionMetricsRecorder::ExitSessionFrom::kShelf);
+  EXPECT_EQ(1, user_action_tester_.GetActionCount("DemoMode.ExitFromShelf"));
+  EXPECT_EQ(
+      1, user_action_tester_.GetActionCount("DemoMode.SignedIn.ExitFromShelf"));
+
+  DemoSessionMetricsRecorder::RecordExitSessionAction(
+      DemoSessionMetricsRecorder::ExitSessionFrom::kSystemTray);
+  EXPECT_EQ(1,
+            user_action_tester_.GetActionCount("DemoMode.ExitFromSystemTray"));
+  EXPECT_EQ(1, user_action_tester_.GetActionCount(
+                   "DemoMode.SignedIn.ExitFromSystemTray"));
+
+  DemoSessionMetricsRecorder::RecordExitSessionAction(
+      DemoSessionMetricsRecorder::ExitSessionFrom::kSystemTrayPowerButton);
+  EXPECT_EQ(1, user_action_tester_.GetActionCount(
+                   "DemoMode.ExitFromSystemTrayPowerButton"));
+  EXPECT_EQ(1, user_action_tester_.GetActionCount(
+                   "DemoMode.SignedIn.ExitFromSystemTrayPowerButton"));
 }
 
 }  // namespace

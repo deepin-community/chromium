@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/354829279): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ui/gfx/mac/io_surface.h"
 
 #include <Availability.h>
@@ -25,10 +30,6 @@
 namespace gfx {
 
 namespace {
-
-BASE_FEATURE(kIOSurfaceUseNamedSRGBForREC709,
-             "IOSurfaceUseNamedSRGBForREC709",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 void AddIntegerValue(CFMutableDictionaryRef dictionary,
                      const CFStringRef key,
@@ -82,7 +83,6 @@ int32_t BytesPerElement(gfx::BufferFormat format, int plane) {
     case gfx::BufferFormat::RGBA_1010102:
     case gfx::BufferFormat::YVU_420:
       NOTREACHED();
-      return 0;
   }
 }
 
@@ -151,13 +151,10 @@ bool IOSurfaceSetColorSpace(IOSurfaceRef io_surface,
   if (!color_space.IsValid())
     return true;
 
-  static const bool prefer_srgb_trfn =
-      base::FeatureList::IsEnabled(kIOSurfaceUseNamedSRGBForREC709);
-
   // Prefer using named spaces.
   CFStringRef color_space_name = nullptr;
   if (color_space == ColorSpace::CreateSRGB() ||
-      (prefer_srgb_trfn && color_space == ColorSpace::CreateREC709())) {
+      color_space == ColorSpace::CreateREC709()) {
     color_space_name = kCGColorSpaceSRGB;
   } else if (color_space == ColorSpace::CreateDisplayP3D65()) {
     color_space_name = kCGColorSpaceDisplayP3;
@@ -179,20 +176,12 @@ bool IOSurfaceSetColorSpace(IOSurfaceRef io_surface,
                                 ColorSpace::TransferID::PQ,
                                 ColorSpace::MatrixID::BT2020_NCL,
                                 ColorSpace::RangeID::LIMITED)) {
-    if (__builtin_available(macos 11.0, *)) {
-      color_space_name = kCGColorSpaceITUR_2100_PQ;
-    } else {
-      return true;
-    }
+    color_space_name = kCGColorSpaceITUR_2100_PQ;
   } else if (color_space == ColorSpace(ColorSpace::PrimaryID::BT2020,
                                        ColorSpace::TransferID::HLG,
                                        ColorSpace::MatrixID::BT2020_NCL,
                                        ColorSpace::RangeID::LIMITED)) {
-    if (__builtin_available(macos 11.0, *)) {
-      color_space_name = kCGColorSpaceITUR_2100_HLG;
-    } else {
-      return true;
-    }
+    color_space_name = kCGColorSpaceITUR_2100_HLG;
   }
 
   // https://crbug.com/1488397: Set parameters that will be rendering YUV
@@ -202,8 +191,8 @@ bool IOSurfaceSetColorSpace(IOSurfaceRef io_surface,
     CFStringRef primaries = nullptr;
     CFStringRef transfer = nullptr;
     CFStringRef matrix = nullptr;
-    if (ColorSpaceToCVImageBufferKeys(color_space, prefer_srgb_trfn, &primaries,
-                                      &transfer, &matrix)) {
+    if (ColorSpaceToCVImageBufferKeys(color_space, /*prefer_srgb_trfn=*/true,
+                                      &primaries, &transfer, &matrix)) {
       IOSurfaceSetValue(io_surface, CFSTR("IOSurfaceColorPrimaries"),
                         primaries);
       IOSurfaceSetValue(io_surface, CFSTR("IOSurfaceTransferFunction"),
@@ -359,8 +348,8 @@ void IOSurfaceSetColorSpace(IOSurfaceRef io_surface,
   }
 }
 
-GFX_EXPORT base::apple::ScopedCFTypeRef<IOSurfaceRef>
-IOSurfaceMachPortToIOSurface(
+COMPONENT_EXPORT(GFX)
+base::apple::ScopedCFTypeRef<IOSurfaceRef> IOSurfaceMachPortToIOSurface(
     ScopedRefCountedIOSurfaceMachPort io_surface_mach_port) {
   base::apple::ScopedCFTypeRef<IOSurfaceRef> io_surface;
   if (!io_surface_mach_port) {

@@ -55,7 +55,6 @@ std::string EntryStateToString(Entry::State state) {
       return "COMPLETE";
     default:
       NOTREACHED();
-      return std::string();
   }
 }
 
@@ -71,7 +70,6 @@ std::string DriverEntryStateToString(DriverEntry::State state) {
       return "INTERRUPTED";
     default:
       NOTREACHED();
-      return std::string();
   }
 }
 
@@ -95,7 +93,6 @@ std::string CompletionTypeToString(CompletionType type) {
       return "OUT_OF_RESUMPTIONS";
     default:
       NOTREACHED();
-      return std::string();
   }
 }
 
@@ -115,7 +112,6 @@ std::string StartResultToString(DownloadParams::StartResult result) {
       return "INTERNAL_ERROR";
     default:
       NOTREACHED();
-      return std::string();
   }
 }
 

@@ -36,6 +36,7 @@
 #include "third_party/blink/renderer/core/html/html_frame_element_base.h"
 #include "third_party/blink/renderer/core/html/html_plugin_element.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_offset.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
 #include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_replaced.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
@@ -101,6 +102,17 @@ const std::optional<PhysicalSize> LayoutEmbeddedContent::FrozenFrameSize()
   return std::nullopt;
 }
 
+PhysicalNaturalSizingInfo LayoutEmbeddedContent::GetNaturalDimensions() const {
+  NOT_DESTROYED();
+  // 300x150, no aspect ratio. (Should probably be none.)
+  PhysicalSize natural_size{LayoutUnit(kDefaultWidth),
+                            LayoutUnit(kDefaultHeight)};
+  natural_size.Scale(StyleRef().EffectiveZoom());
+  PhysicalNaturalSizingInfo sizing_info;
+  sizing_info.size = natural_size;
+  return sizing_info;
+}
+
 AffineTransform LayoutEmbeddedContent::EmbeddedContentTransform() const {
   auto frozen_size = FrozenFrameSize();
   if (!frozen_size || frozen_size->IsEmpty()) {
@@ -164,6 +176,17 @@ bool LayoutEmbeddedContent::PointOverResizer(
         ToRoundedPoint(location.Point() - accumulated_offset), resizer_type);
   }
   return false;
+}
+
+void LayoutEmbeddedContent::PropagateZoomFactor(double zoom_factor) {
+  if (GetDocument().StandardizedBrowserZoomEnabled()) {
+    const auto* fenced_frame = DynamicTo<HTMLFencedFrameElement>(GetNode());
+    if (!fenced_frame) {
+      if (auto* embedded_content_view = GetEmbeddedContentView()) {
+        embedded_content_view->ZoomFactorChanged(zoom_factor);
+      }
+    }
+  }
 }
 
 bool LayoutEmbeddedContent::NodeAtPointOverEmbeddedContentView(
@@ -298,8 +321,13 @@ void LayoutEmbeddedContent::StyleDidChange(StyleDifference diff,
   if (!frame_owner)
     return;
 
-  if (old_style && new_style.UsedColorScheme() != old_style->UsedColorScheme())
+  if (old_style &&
+      new_style.UsedColorScheme() != old_style->UsedColorScheme()) {
     frame_owner->SetColorScheme(new_style.UsedColorScheme());
+  }
+  if (!old_style || new_style.EffectiveZoom() != old_style->EffectiveZoom()) {
+    PropagateZoomFactor(new_style.EffectiveZoom());
+  }
 
   if (old_style &&
       new_style.VisibleToHitTesting() == old_style->VisibleToHitTesting()) {
@@ -308,12 +336,6 @@ void LayoutEmbeddedContent::StyleDidChange(StyleDifference diff,
 
   if (auto* frame = frame_owner->ContentFrame())
     frame->UpdateVisibleToHitTesting();
-}
-
-void LayoutEmbeddedContent::UpdateLayout() {
-  NOT_DESTROYED();
-  DCHECK(NeedsLayout());
-  ClearNeedsLayout();
 }
 
 void LayoutEmbeddedContent::PaintReplaced(
@@ -357,9 +379,8 @@ PhysicalRect LayoutEmbeddedContent::ReplacedContentRectFrom(
     // system forwards mouse events to the child frame even when the mouse is
     // outside of the child frame. Revisit this when the input system supports
     // different |ReplacedContentRect| from |PhysicalContentBoxRect|.
-    PhysicalSize frozen_layout_size = *frozen_size;
-    content_rect =
-        ComputeReplacedContentRect(base_content_rect, &frozen_layout_size);
+    content_rect = ComputeReplacedContentRect(
+        base_content_rect, PhysicalNaturalSizingInfo::MakeFixed(*frozen_size));
   }
 
   // We don't propagate sub-pixel into sub-frame layout, in other words, the
@@ -375,13 +396,17 @@ void LayoutEmbeddedContent::UpdateOnEmbeddedContentViewChange() {
     return;
 
   if (EmbeddedContentView* embedded_content_view = GetEmbeddedContentView()) {
-    if (!NeedsLayout())
+    if (!NeedsLayout()) {
       UpdateGeometry(*embedded_content_view);
-
-    if (StyleRef().Visibility() != EVisibility::kVisible)
-      embedded_content_view->Hide();
-    else
-      embedded_content_view->Show();
+    }
+    if (Style()) {
+      PropagateZoomFactor(StyleRef().EffectiveZoom());
+      if (StyleRef().Visibility() != EVisibility::kVisible) {
+        embedded_content_view->Hide();
+      } else {
+        embedded_content_view->Show();
+      }
+    }
   }
 
   // One of the reasons of the following is that the layout tree in the new

@@ -7,7 +7,7 @@
 #include <string_view>
 
 #include "base/time/time.h"
-#include "chrome/browser/ash/app_mode/arc/arc_kiosk_app_manager.h"
+#include "chrome/browser/ash/app_mode/isolated_web_app/kiosk_iwa_manager.h"
 #include "chrome/browser/ash/app_mode/kiosk_chrome_app_manager.h"
 #include "chrome/browser/ash/app_mode/web_app/web_kiosk_app_manager.h"
 #include "chrome/browser/ash/policy/core/device_local_account.h"
@@ -74,7 +74,7 @@ StatusCollectorParams& StatusCollectorParams::operator=(
 void StatusCollector::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(prefs::kReportArcStatusEnabled, false);
 
-  // TODO(crbug.com/827386): move to ChildStatusCollector after migration.
+  // TODO(crbug.com/40569404): move to ChildStatusCollector after migration.
   registry->RegisterDictionaryPref(prefs::kUserActivityTimes);
   registry->RegisterTimePref(prefs::kLastChildScreenTimeReset, base::Time());
   registry->RegisterTimePref(prefs::kLastChildScreenTimeSaved, base::Time());
@@ -122,23 +122,25 @@ StatusCollector::GetAutoLaunchedKioskSessionInfo() {
   }
 
   ash::KioskChromeAppManager::App current_app;
-  bool regular_app_auto_launched_with_zero_delay =
+  const bool chrome_app_auto_launched_with_zero_delay =
       ash::KioskChromeAppManager::Get()->GetApp(account->kiosk_app_id,
                                                 &current_app) &&
       current_app.was_auto_launched_with_zero_delay;
-  bool arc_app_auto_launched_with_zero_delay =
-      ash::ArcKioskAppManager::Get()
-          ->current_app_was_auto_launched_with_zero_delay();
 
-  bool web_app_auto_launched_with_zero_delay =
+  const bool web_app_auto_launched_with_zero_delay =
       ash::WebKioskAppManager::Get()
           ->current_app_was_auto_launched_with_zero_delay();
 
-  return regular_app_auto_launched_with_zero_delay ||
-                 arc_app_auto_launched_with_zero_delay ||
-                 web_app_auto_launched_with_zero_delay
-             ? std::move(account)
-             : nullptr;
+  const bool iwa_auto_launched_with_zero_delay =
+      ash::KioskIwaManager::Get()
+          ->current_app_was_auto_launched_with_zero_delay();
+
+  const bool kiosk_auto_launched_with_zero_delay =
+      chrome_app_auto_launched_with_zero_delay ||
+      web_app_auto_launched_with_zero_delay ||
+      iwa_auto_launched_with_zero_delay;
+
+  return kiosk_auto_launched_with_zero_delay ? std::move(account) : nullptr;
 }
 
 std::string StatusCollector::GetDMTokenForProfile(Profile* profile) const {

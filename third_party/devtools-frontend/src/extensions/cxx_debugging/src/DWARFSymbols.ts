@@ -4,7 +4,7 @@
 
 import './Formatters.js';
 
-import {type Chrome} from '../../../extension-api/ExtensionAPI.js';
+import type {Chrome} from '../../../extension-api/ExtensionAPI.js';
 
 import * as Formatters from './CustomFormatters.js';
 import {
@@ -15,7 +15,7 @@ import {
 } from './ModuleConfiguration.js';
 import type * as SymbolsBackend from './SymbolsBackend.js';
 import createSymbolsBackend from './SymbolsBackend.js';
-import {type HostInterface} from './WorkerRPC.js';
+import type {HostInterface} from './WorkerRPC.js';
 
 function mapVector<T, ApiT>(vector: SymbolsBackend.Vector<ApiT>, callback: (apiElement: ApiT) => T): T[] {
   const elements: T[] = [];
@@ -26,14 +26,13 @@ function mapVector<T, ApiT>(vector: SymbolsBackend.Vector<ApiT>, callback: (apiE
   return elements;
 }
 
-type ScopeInfo = {
-  type: 'GLOBAL'|'LOCAL'|'PARAMETER',
-  typeName: string,
-  icon?: string,
-};
+interface ScopeInfo {
+  type: 'GLOBAL'|'LOCAL'|'PARAMETER';
+  typeName: string;
+  icon?: string;
+}
 
-// eslint-disable-next-line @typescript-eslint/naming-convention
-type LazyFSNode = FS.FSNode&{node_ops: {getattr: Function}};
+type LazyFSNode = FS.FSNode&{contents: {cacheLength: Function, length: number}};
 
 function mapEnumerator(apiEnumerator: SymbolsBackend.Enumerator): Formatters.Enumerator {
   return {typeId: apiEnumerator.typeId, value: apiEnumerator.value, name: apiEnumerator.name};
@@ -144,7 +143,7 @@ function instantiateWasm(
 export type RawModule = Chrome.DevTools.RawModule&{dwp?: ArrayBuffer};
 
 export interface ResourceLoader {
-  loadSymbols(rawModuleId: string, rawModule: RawModule, url: URL, filesystem: typeof FS):
+  loadSymbols(rawModuleId: string, rawModule: RawModule, url: URL, filesystem: typeof FS, hostInterface: HostInterface):
       Promise<{symbolsFileName: string, symbolsDwpFileName?: string}>;
   createSymbolsBackendModulePromise(): Promise<WebAssembly.Module>;
   possiblyMissingSymbols?: string[];
@@ -174,9 +173,8 @@ export class DWARFLanguageExtensionPlugin implements Chrome.DevTools.LanguageExt
             return instantiateWasm(imports as unknown as WebAssembly.Imports, callback, this.resourceLoader);
           };
       const backend = await createSymbolsBackend({instantiateWasm: instantiateWasmWrapper});
-
       const {symbolsFileName, symbolsDwpFileName} =
-          await this.resourceLoader.loadSymbols(rawModuleId, rawModule, symbolsURL, backend.FS);
+          await this.resourceLoader.loadSymbols(rawModuleId, rawModule, symbolsURL, backend.FS, this.hostInterface);
       const moduleInfo = new ModuleInfo(symbolsURL.href, symbolsFileName, symbolsDwpFileName, backend);
 
       const addRawModuleResponse = manage(moduleInfo.dwarfSymbolsPlugin.AddRawModule(rawModuleId, symbolsFileName));
@@ -198,7 +196,7 @@ export class DWARFLanguageExtensionPlugin implements Chrome.DevTools.LanguageExt
           // Sometimes these stick around.
           try {
             backend.FS.unlink(absolutePath);
-          } catch (_) {
+          } catch {
           }
           // Ensure directory exists
           if (parentDirectory.length > 1) {
@@ -207,22 +205,22 @@ export class DWARFLanguageExtensionPlugin implements Chrome.DevTools.LanguageExt
             backend.FS.createPath('/', parentDirectory.substring(1), true, true);
           }
 
-          const node = backend.FS.createLazyFile(
-                           parentDirectory, fileName, new URL(dwoFile, symbolsURL).href, true, false) as LazyFSNode;
-          const oldget = node.node_ops.getattr;
-          const wrapper = (n: FS.FSNode): unknown => {
+          const dwoURL = new URL(dwoFile, symbolsURL).href;
+          const node = backend.FS.createLazyFile(parentDirectory, fileName, dwoURL, true, false) as LazyFSNode;
+          const cacheLength = node.contents.cacheLength;
+          const wrapper = (): void => {
             try {
-              return oldget(n);
-            } catch (_) {
+              cacheLength.apply(node.contents);
+              void this.hostInterface.reportResourceLoad(dwoURL, {success: true, size: node.contents.length});
+            } catch (e) {
+              void this.hostInterface.reportResourceLoad(dwoURL, {success: false, errorMessage: (e as Error).message});
               // Rethrow any error fetching the content as errno 44 (EEXIST)
               // TypeScript doesn't know about the ErrnoError constructor
               // @ts-ignore
               throw new backend.FS.ErrnoError(44);
             }
           };
-          if (oldget.toString() !== wrapper.toString()) {
-            node.node_ops.getattr = wrapper;
-          }
+          node.contents.cacheLength = wrapper;
         });
       }
 
@@ -393,7 +391,10 @@ export class DWARFLanguageExtensionPlugin implements Chrome.DevTools.LanguageExt
         apiMissingSymbolFiles = apiMissingSymbolFiles.concat(this.resourceLoader.possiblyMissingSymbols);
       }
 
-      return {frames: apiFunctionInfos, missingSymbolFiles: apiMissingSymbolFiles};
+      return {
+        frames: apiFunctionInfos,
+        missingSymbolFiles: apiMissingSymbolFiles.map(x => new URL(x, moduleInfo.symbolsUrl).href)
+      };
     } finally {
       flush();
     }
@@ -541,7 +542,7 @@ export class DWARFLanguageExtensionPlugin implements Chrome.DevTools.LanguageExt
   }
 
   async evaluate(expression: string, context: SymbolsBackend.RawLocation, stopId: unknown):
-      Promise<Chrome.DevTools.RemoteObject|null> {
+      Promise<Chrome.DevTools.RemoteObject|Chrome.DevTools.ForeignObject|null> {
     const valueInfo = await this.getValueInfo(expression, context, stopId);
     if (!valueInfo) {
       return null;

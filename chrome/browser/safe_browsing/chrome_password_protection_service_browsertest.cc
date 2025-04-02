@@ -13,7 +13,6 @@
 #include "chrome/browser/password_manager/password_reuse_manager_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/identity_test_environment_profile_adaptor.h"
-#include "chrome/browser/ssl/security_state_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/hats/mock_trust_safety_sentiment_service.h"
@@ -45,11 +44,13 @@
 #include "components/safe_browsing/core/browser/password_protection/metrics_util.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+#include "components/security_state/content/security_state_tab_helper.h"
 #include "components/security_state/core/security_state.h"
 #include "components/signin/public/identity_manager/account_info.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
+#include "components/signin/public/identity_manager/signin_constants.h"
 #include "components/user_manager/user_names.h"
-#include "components/variations/service/variations_service.h"
+#include "components/variations/pref_names.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
@@ -64,6 +65,7 @@
 using password_manager::FakePasswordStoreBackend;
 using password_manager::PasswordForm;
 using password_manager::PasswordStoreInterface;
+using signin::constants::kNoHostedDomainFound;
 using ::testing::_;
 using ::testing::ElementsAre;
 
@@ -106,7 +108,7 @@ namespace safe_browsing {
 
 class ChromePasswordProtectionServiceBrowserTest : public InProcessBrowserTest {
  public:
-  ChromePasswordProtectionServiceBrowserTest() {}
+  ChromePasswordProtectionServiceBrowserTest() = default;
 
   ChromePasswordProtectionServiceBrowserTest(
       const ChromePasswordProtectionServiceBrowserTest&) = delete;
@@ -221,17 +223,17 @@ class ChromePasswordProtectionServiceBrowserTest : public InProcessBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(ChromePasswordProtectionServiceBrowserTest,
                        VerifyIsInExcludedCountry) {
-  variations::VariationsService* variations_service =
-      g_browser_process->variations_service();
   const std::string non_excluded_countries[] = {"be", "br", "ca", "de", "es",
                                                 "fr", "ie", "in", "jp", "nl",
                                                 "ru", "se", "us"};
   ChromePasswordProtectionService* service = GetService(/*is_incognito=*/false);
   for (auto country : non_excluded_countries) {
-    variations_service->OverrideStoredPermanentCountry(country);
+    g_browser_process->local_state()->SetString(
+        variations::prefs::kVariationsCountry, country);
     EXPECT_FALSE(service->IsInExcludedCountry());
   }
-  variations_service->OverrideStoredPermanentCountry("cn");
+  g_browser_process->local_state()->SetString(
+      variations::prefs::kVariationsCountry, "cn");
   EXPECT_TRUE(service->IsInExcludedCountry());
 }
 
@@ -414,7 +416,7 @@ IN_PROC_BROWSER_TEST_F(
   AddFormToStore(password_store.get(), form);
 
   std::vector<password_manager::MatchingReusedCredential> credentials = {
-      {kSignonRealm, kUsername}};
+      {kSignonRealm, GURL(kSignonRealm), kUsername}};
 
   service->set_saved_passwords_matching_reused_credentials({credentials});
 
@@ -916,7 +918,7 @@ class ChromePasswordProtectionServiceNavigationDeferralBrowserTest
     const std::string kSignonRealm = "https://example.test";
     const std::u16string kUsername = u"username1";
     std::vector<password_manager::MatchingReusedCredential> credentials = {
-        {kSignonRealm, kUsername}};
+        {kSignonRealm, GURL(kSignonRealm), kUsername}};
 
     service->StartRequestForTesting(
         GetWebContents(), GURL(), GURL(), GURL(), "",
@@ -1253,8 +1255,7 @@ IN_PROC_BROWSER_TEST_F(
   const GURL kPrerenderUrl = embedded_test_server()->GetURL("/simple.html");
   prerender_helper_.AddPrerender(kPrerenderUrl);
 
-  ASSERT_NE(prerender_helper_.GetHostForUrl(kPrerenderUrl),
-            content::RenderFrameHost::kNoFrameTreeNodeId);
+  ASSERT_TRUE(prerender_helper_.GetHostForUrl(kPrerenderUrl));
 
   // Navigate to the prerendered URL. Ensure the activation navigation is
   // deferred until the request finishes without showing a modal.

@@ -80,6 +80,8 @@ source_set("base") {
     "audio_glitch_info.h",
     "audio_hash.cc",
     "audio_hash.h",
+    "audio_limiter.cc",
+    "audio_limiter.h",
     "audio_power_monitor.cc",
     "audio_power_monitor.h",
     "audio_processing.cc",
@@ -91,11 +93,6 @@ source_set("base") {
     "audio_push_fifo.h",
     "audio_renderer.cc",
     "audio_renderer.h",
-    "audio_renderer_mixer.cc",
-    "audio_renderer_mixer.h",
-    "audio_renderer_mixer_input.cc",
-    "audio_renderer_mixer_input.h",
-    "audio_renderer_mixer_pool.h",
     "audio_renderer_sink.h",
     "audio_shifter.cc",
     "audio_shifter.h",
@@ -118,6 +115,8 @@ source_set("base") {
     "callback_timeout_helpers.h",
     "cdm_callback_promise.cc",
     "cdm_callback_promise.h",
+    "cdm_capability.cc",
+    "cdm_capability.h",
     "cdm_config.cc",
     "cdm_config.h",
     "cdm_context.cc",
@@ -177,6 +176,7 @@ source_set("base") {
     "djb2.cc",
     "djb2.h",
     "eme_constants.h",
+    "encoder_status.cc",
     "encoder_status.h",
     "encryption_pattern.cc",
     "encryption_pattern.h",
@@ -192,13 +192,20 @@ source_set("base") {
     "frame_buffer_pool.h",
     "frame_rate_estimator.cc",
     "frame_rate_estimator.h",
+    "key_system_capability.cc",
+    "key_system_capability.h",
     "key_system_info.cc",
     "key_system_info.h",
     "key_system_names.cc",
     "key_system_names.h",
+    "key_systems.cc",
     "key_systems.h",
     "key_systems_impl.cc",
     "key_systems_impl.h",
+    "key_systems_support_registration.cc",
+    "key_systems_support_registration.h",
+    "limiting_audio_queue.cc",
+    "limiting_audio_queue.h",
     "localized_strings.cc",
     "localized_strings.h",
     "logging_override_if_enabled.h",
@@ -279,6 +286,7 @@ source_set("base") {
     "ranges.h",
     "reentrancy_checker.cc",
     "reentrancy_checker.h",
+    "remoting_constants.h",
     "renderer.cc",
     "renderer.h",
     "renderer_client.cc",
@@ -312,6 +320,8 @@ source_set("base") {
     "stream_parser_buffer.h",
     "subsample_entry.cc",
     "subsample_entry.h",
+    "supported_audio_decoder_config.cc",
+    "supported_audio_decoder_config.h",
     "supported_types.cc",
     "supported_types.h",
     "supported_video_decoder_config.cc",
@@ -325,8 +335,6 @@ source_set("base") {
     "tuneable.cc",
     "tuneable.h",
     "use_after_free_checker.h",
-    "user_input_monitor.cc",
-    "user_input_monitor.h",
     "video_aspect_ratio.cc",
     "video_aspect_ratio.h",
     "video_bitrate_allocation.cc",
@@ -358,6 +366,7 @@ source_set("base") {
     "video_frame_pool.h",
     "video_renderer.cc",
     "video_renderer.h",
+    "video_renderer_sink.h",
     "video_thumbnail_decoder.cc",
     "video_thumbnail_decoder.h",
     "video_transformation.cc",
@@ -380,6 +389,7 @@ source_set("base") {
     "//media:media_buildflags",
     "//media:shared_memory_support",
     "//media/gpu:buildflags",
+    "//media/mojo:buildflags",
     "//ui/gfx:color_space",
     "//ui/gl",
   ]
@@ -388,6 +398,7 @@ source_set("base") {
     "//base/allocator:buildflags",
     "//build:chromeos_buildflags",
     "//components/system_media_controls/linux/buildflags",
+    "//gpu/command_buffer/client:client",
     "//gpu/command_buffer/client:interface_base",
     "//gpu/command_buffer/client:raster_interface",
     "//gpu/command_buffer/common",
@@ -438,21 +449,15 @@ source_set("base") {
     deps += [ "//third_party/libaom" ]
   }
 
-  if (is_linux && !is_castos) {
-    sources += [ "user_input_monitor_linux.cc" ]
-  } else if (is_mac) {
-    sources += [ "user_input_monitor_mac.cc" ]
+  if (is_mac) {
     frameworks = [
       "CoreVideo.framework",
       "CoreFoundation.framework",
       "CoreGraphics.framework",
       "IOSurface.framework",
     ]
-  } else if (is_win) {
-    sources += [ "user_input_monitor_win.cc" ]
-  } else {
-    defines += [ "DISABLE_USER_INPUT_MONITOR" ]
   }
+
   if (use_ozone) {
     deps += [ "//ui/ozone" ]
   }
@@ -466,6 +471,8 @@ source_set("base") {
     sources += [
       "win/media_foundation_package_locator_helper.cc",
       "win/media_foundation_package_locator_helper.h",
+      "win/media_foundation_package_runtime_locator.cc",
+      "win/media_foundation_package_runtime_locator.h",
       "win/mf_feature_checks.cc",
       "win/mf_feature_checks.h",
     ]
@@ -586,13 +593,12 @@ source_set("unit_tests") {
     "audio_glitch_info_unittest.cc",
     "audio_hash_unittest.cc",
     "audio_latency_unittest.cc",
+    "audio_limiter_unittest.cc",
     "audio_parameters_unittest.cc",
     "audio_point_unittest.cc",
     "audio_power_monitor_unittest.cc",
     "audio_pull_fifo_unittest.cc",
     "audio_push_fifo_unittest.cc",
-    "audio_renderer_mixer_input_unittest.cc",
-    "audio_renderer_mixer_unittest.cc",
     "audio_sample_types_unittest.cc",
     "audio_shifter_unittest.cc",
     "audio_timestamp_helper_unittest.cc",
@@ -617,6 +623,7 @@ source_set("unit_tests") {
     "frame_buffer_pool_unittest.cc",
     "frame_rate_estimator_unittest.cc",
     "key_systems_unittest.cc",
+    "limiting_audio_queue_unittest.cc",
     "media_log_unittest.cc",
     "media_serializers_unittest.cc",
     "media_url_demuxer_unittest.cc",
@@ -635,11 +642,11 @@ source_set("unit_tests") {
     "status_unittest.cc",
     "stream_parser_unittest.cc",
     "subsample_entry_unittest.cc",
+    "supported_audio_decoder_config_unittest.cc",
     "supported_types_unittest.cc",
     "supported_video_decoder_config_unittest.cc",
     "time_delta_interpolator_unittest.cc",
     "tuneable_unittest.cc",
-    "user_input_monitor_unittest.cc",
     "vector_math_unittest.cc",
     "video_aspect_ratio_unittest.cc",
     "video_bitrate_allocation_unittest.cc",
@@ -700,6 +707,7 @@ source_set("perftests") {
   sources = [
     "audio_bus_perftest.cc",
     "audio_converter_perftest.cc",
+    "audio_limiter_perftest.cc",
     "run_all_perftests.cc",
     "sinc_resampler_perftest.cc",
     "vector_math_perftest.cc",

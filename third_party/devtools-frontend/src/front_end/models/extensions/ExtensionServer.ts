@@ -31,13 +31,12 @@
 // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration
 /* eslint-disable @typescript-eslint/naming-convention */
 
-import {type Chrome} from '../../../extension-api/ExtensionAPI.js';  // eslint-disable-line rulesdir/es_modules_import
+import type {Chrome} from '../../../extension-api/ExtensionAPI.js';
 import * as Common from '../../core/common/common.js';
 import * as Host from '../../core/host/host.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as Platform from '../../core/platform/platform.js';
 import * as _ProtocolClient from '../../core/protocol_client/protocol_client.js';  // eslint-disable-line @typescript-eslint/no-unused-vars
-import * as Root from '../../core/root/root.js';
 import * as SDK from '../../core/sdk/sdk.js';
 import type * as Protocol from '../../generated/protocol.js';
 import * as Logs from '../../models/logs/logs.js';
@@ -46,7 +45,7 @@ import * as UI from '../../ui/legacy/legacy.js';
 import * as ThemeSupport from '../../ui/legacy/theme_support/theme_support.js';
 import * as Bindings from '../bindings/bindings.js';
 import * as HAR from '../har/har.js';
-import type * as TextUtils from '../text_utils/text_utils.js';
+import * as TextUtils from '../text_utils/text_utils.js';
 import * as Workspace from '../workspace/workspace.js';
 
 import {PrivateAPI} from './ExtensionAPI.js';
@@ -57,14 +56,13 @@ import {RecorderExtensionEndpoint} from './RecorderExtensionEndpoint.js';
 import {RecorderPluginManager} from './RecorderPluginManager.js';
 
 const extensionOrigins: WeakMap<MessagePort, Platform.DevToolsPath.UrlString> = new WeakMap();
+const kPermittedSchemes = ['http:', 'https:', 'file:', 'data:', 'chrome-extension:', 'about:'];
 
 declare global {
   interface Window {
     DevToolsAPI?: {getInspectedTabId?(): string|undefined, getOriginsForbiddenForExtensions?(): string[]};
   }
 }
-
-const kAllowedOrigins = [].map(url => (new URL(url)).origin);
 
 let extensionServerInstance: ExtensionServer|null;
 
@@ -131,13 +129,18 @@ class RegisteredExtension {
       let parsedURL;
       try {
         parsedURL = new URL(inspectedURL);
-      } catch (exception) {
+      } catch {
         return false;
       }
       return parsedURL.protocol !== 'file:';
     }
 
     return true;
+  }
+}
+
+export class RevealableNetworkRequestFilter {
+  constructor(readonly filter: string|undefined) {
   }
 }
 
@@ -179,7 +182,6 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     this.extensionsEnabled = true;
 
     this.registerHandler(PrivateAPI.Commands.AddRequestHeaders, this.onAddRequestHeaders.bind(this));
-    this.registerHandler(PrivateAPI.Commands.ApplyStyleSheet, this.onApplyStyleSheet.bind(this));
     this.registerHandler(PrivateAPI.Commands.CreatePanel, this.onCreatePanel.bind(this));
     this.registerHandler(PrivateAPI.Commands.CreateSidebarPane, this.onCreateSidebarPane.bind(this));
     this.registerHandler(PrivateAPI.Commands.CreateToolbarButton, this.onCreateToolbarButton.bind(this));
@@ -209,8 +211,10 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     this.registerHandler(PrivateAPI.Commands.GetWasmOp, this.onGetWasmOp.bind(this));
     this.registerHandler(
         PrivateAPI.Commands.RegisterRecorderExtensionPlugin, this.registerRecorderExtensionEndpoint.bind(this));
+    this.registerHandler(PrivateAPI.Commands.ReportResourceLoad, this.onReportResourceLoad.bind(this));
     this.registerHandler(PrivateAPI.Commands.CreateRecorderView, this.onCreateRecorderView.bind(this));
     this.registerHandler(PrivateAPI.Commands.ShowRecorderView, this.onShowRecorderView.bind(this));
+    this.registerHandler(PrivateAPI.Commands.ShowNetworkPanel, this.onShowNetworkPanel.bind(this));
     window.addEventListener('message', this.onWindowMessage, false);  // Only for main window.
 
     const existingTabId =
@@ -227,13 +231,17 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     ThemeSupport.ThemeSupport.instance().addEventListener(ThemeSupport.ThemeChangeEvent.eventName, this.#onThemeChange);
   }
 
+  get isEnabledForTest(): boolean {
+    return this.extensionsEnabled;
+  }
+
   dispose(): void {
     ThemeSupport.ThemeSupport.instance().removeEventListener(
         ThemeSupport.ThemeChangeEvent.eventName, this.#onThemeChange);
 
     // Set up by this.initExtensions in the constructor.
     SDK.TargetManager.TargetManager.instance().removeEventListener(
-        SDK.TargetManager.Events.InspectedURLChanged, this.inspectedURLChanged, this);
+        SDK.TargetManager.Events.INSPECTED_URL_CHANGED, this.inspectedURLChanged, this);
 
     Host.InspectorFrontendHost.InspectorFrontendHostInstance.events.removeEventListener(
         Host.InspectorFrontendHostAPI.Events.SetInspectedTabId, this.setInspectedTabId, this);
@@ -287,6 +295,14 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     this.postNotification(PrivateAPI.Events.ButtonClicked + identifier);
   }
 
+  profilingStarted(): void {
+    this.postNotification(PrivateAPI.Events.ProfilingStarted);
+  }
+
+  profilingStopped(): void {
+    this.postNotification(PrivateAPI.Events.ProfilingStopped);
+  }
+
   private registerLanguageExtensionEndpoint(
       message: PrivateAPI.ExtensionServerRequestMessage, _shared_port: MessagePort): Record {
     if (message.command !== PrivateAPI.Commands.RegisterLanguageExtensionPlugin) {
@@ -296,12 +312,20 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     const {pluginName, port, supportedScriptTypes: {language, symbol_types}} = message;
     const symbol_types_array =
         (Array.isArray(symbol_types) && symbol_types.every(e => typeof e === 'string') ? symbol_types : []);
-    const endpoint = new LanguageExtensionEndpoint(pluginName, {language, symbol_types: symbol_types_array}, port);
+    const extensionOrigin = this.getExtensionOrigin(_shared_port);
+    const registration = this.registeredExtensions.get(extensionOrigin);
+    if (!registration) {
+      throw new Error('Received a message from an unregistered extension');
+    }
+    const endpoint = new LanguageExtensionEndpoint(
+        registration.allowFileAccess, extensionOrigin, pluginName, {language, symbol_types: symbol_types_array}, port);
     pluginManager.addPlugin(endpoint);
     return this.status.OK();
   }
 
-  private async loadWasmValue<T>(expression: string, stopId: unknown): Promise<Record|T> {
+  private async loadWasmValue<T>(
+      expectValue: boolean, convert: (result: Protocol.Runtime.RemoteObject) => Record | T, expression: string,
+      stopId: unknown): Promise<Record|T> {
     const {pluginManager} = Bindings.DebuggerWorkspaceBinding.DebuggerWorkspaceBinding.instance();
     const callFrame = pluginManager.callFrameForStopId(stopId as Bindings.DebuggerLanguagePlugins.StopId);
     if (!callFrame) {
@@ -311,12 +335,13 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       callFrameId: callFrame.id,
       expression,
       silent: true,
-      returnByValue: true,
+      returnByValue: !expectValue,
+      generatePreview: expectValue,
       throwOnSideEffect: true,
     });
 
     if (!result.exceptionDetails && !result.getError()) {
-      return result.result.value;
+      return convert(result.result);
     }
 
     return this.status.E_FAILED('Failed');
@@ -327,8 +352,35 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       return this.status.E_BADARG('command', `expected ${PrivateAPI.Commands.GetWasmLinearMemory}`);
     }
     return await this.loadWasmValue<number[]>(
+        false, result => result.value,
         `[].slice.call(new Uint8Array(memories[0].buffer, ${Number(message.offset)}, ${Number(message.length)}))`,
         message.stopId);
+  }
+
+  private convertWasmValue(valueClass: 'local'|'global'|'operand', index: number):
+      (obj: Protocol.Runtime.RemoteObject) => Chrome.DevTools.WasmValue | undefined | Record {
+    return obj => {
+      if (obj.type === 'undefined') {
+        return;
+      }
+      if (obj.type !== 'object' || obj.subtype !== 'wasmvalue') {
+        return this.status.E_FAILED('Bad object type');
+      }
+      const type = obj?.description;
+      const value: string = obj.preview?.properties?.find(o => o.name === 'value')?.value ?? '';
+      switch (type) {
+        case 'i32':
+        case 'f32':
+        case 'f64':
+          return {type, value: Number(value)};
+        case 'i64':
+          return {type, value: BigInt(value)};
+        case 'v128':
+          return {type, value};
+        default:
+          return {type: 'reftype', valueClass, index};
+      }
+    };
   }
 
   private async onGetWasmGlobal(message: PrivateAPI.ExtensionServerRequestMessage):
@@ -337,7 +389,8 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       return this.status.E_BADARG('command', `expected ${PrivateAPI.Commands.GetWasmGlobal}`);
     }
     const global = Number(message.global);
-    const result = await this.loadWasmValue<Chrome.DevTools.WasmValue>(`globals[${global}]`, message.stopId);
+    const result = await this.loadWasmValue<Chrome.DevTools.WasmValue|undefined>(
+        true, this.convertWasmValue('global', global), `globals[${global}]`, message.stopId);
     return result ?? this.status.E_BADARG('global', `No global with index ${global}`);
   }
 
@@ -347,7 +400,8 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       return this.status.E_BADARG('command', `expected ${PrivateAPI.Commands.GetWasmLocal}`);
     }
     const local = Number(message.local);
-    const result = await this.loadWasmValue<Chrome.DevTools.WasmValue>(`locals[${local}]`, message.stopId);
+    const result = await this.loadWasmValue<Chrome.DevTools.WasmValue|undefined>(
+        true, this.convertWasmValue('local', local), `locals[${local}]`, message.stopId);
     return result ?? this.status.E_BADARG('local', `No local with index ${local}`);
   }
 
@@ -357,7 +411,8 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       return this.status.E_BADARG('command', `expected ${PrivateAPI.Commands.GetWasmOp}`);
     }
     const op = Number(message.op);
-    const result = await this.loadWasmValue<Chrome.DevTools.WasmValue>(`stack[${op}]`, message.stopId);
+    const result = await this.loadWasmValue<Chrome.DevTools.WasmValue|undefined>(
+        true, this.convertWasmValue('operand', op), `stack[${op}]`, message.stopId);
     return result ?? this.status.E_BADARG('op', `No operand with index ${op}`);
   }
 
@@ -372,12 +427,40 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     return this.status.OK();
   }
 
+  private onReportResourceLoad(message: PrivateAPI.ExtensionServerRequestMessage): Record {
+    if (message.command !== PrivateAPI.Commands.ReportResourceLoad) {
+      return this.status.E_BADARG('command', `expected ${PrivateAPI.Commands.ReportResourceLoad}`);
+    }
+    const {resourceUrl, extensionId, status} = message;
+    const url = resourceUrl as Platform.DevToolsPath.UrlString;
+    const initiator: SDK.PageResourceLoader.ExtensionInitiator =
+        {target: null, frameId: null, initiatorUrl: extensionId as Platform.DevToolsPath.UrlString, extensionId};
+
+    const pageResource: SDK.PageResourceLoader.PageResource = {
+      url,
+      initiator,
+      errorMessage: status.errorMessage,
+      success: status.success ?? null,
+      size: status.size ?? null,
+    };
+    SDK.PageResourceLoader.PageResourceLoader.instance().resourceLoadedThroughExtension(pageResource);
+    return this.status.OK();
+  }
+
   private onShowRecorderView(message: PrivateAPI.ExtensionServerRequestMessage): Record|undefined {
     if (message.command !== PrivateAPI.Commands.ShowRecorderView) {
       return this.status.E_BADARG('command', `expected ${PrivateAPI.Commands.ShowRecorderView}`);
     }
     RecorderPluginManager.instance().showView(message.id);
     return undefined;
+  }
+
+  private onShowNetworkPanel(message: PrivateAPI.ExtensionServerRequestMessage): Record|undefined {
+    if (message.command !== PrivateAPI.Commands.ShowNetworkPanel) {
+      return this.status.E_BADARG('command', `expected ${PrivateAPI.Commands.ShowNetworkPanel}`);
+    }
+    void Common.Revealer.reveal(new RevealableNetworkRequestFilter(message.filter));
+    return this.status.OK();
   }
 
   private onCreateRecorderView(message: PrivateAPI.ExtensionServerRequestMessage, port: MessagePort): Record {
@@ -416,6 +499,7 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       return;
     }
     this.requests = new Map();
+    this.enableExtensions();
     const url = event.data.inspectedURL();
     this.postNotification(PrivateAPI.Events.InspectedURLChanged, url);
     const extensions = this.#pendingExtensions.splice(0);
@@ -520,28 +604,6 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     return undefined;
   }
 
-  private onApplyStyleSheet(message: PrivateAPI.ExtensionServerRequestMessage): Record|undefined {
-    if (message.command !== PrivateAPI.Commands.ApplyStyleSheet) {
-      return this.status.E_BADARG('command', `expected ${PrivateAPI.Commands.ApplyStyleSheet}`);
-    }
-    if (!Root.Runtime.experiments.isEnabled('applyCustomStylesheet')) {
-      return;
-    }
-
-    const styleSheet = document.createElement('style');
-    styleSheet.textContent = message.styleSheet;
-    document.head.appendChild(styleSheet);
-
-    ThemeSupport.ThemeSupport.instance().addCustomStylesheet(message.styleSheet);
-    // Add to all the shadow roots that have already been created
-    for (let node: (Node|null)|HTMLElement = document.body; node; node = node.traverseNextNode(document.body)) {
-      if (node instanceof ShadowRoot) {
-        ThemeSupport.ThemeSupport.instance().injectCustomStyleSheets(node);
-      }
-    }
-    return undefined;
-  }
-
   private getExtensionOrigin(port: MessagePort): Platform.DevToolsPath.UrlString {
     const origin = extensionOrigins.get(port);
     if (!origin) {
@@ -566,7 +628,7 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       return this.status.E_BADARG('page', 'Resources paths cannot point to non-extension resources');
     }
     let persistentId = this.getExtensionOrigin(port) + message.title;
-    persistentId = persistentId.replace(/\s/g, '');
+    persistentId = persistentId.replace(/\s|:\d+/g, '');
     const panelView = new ExtensionServerPanelView(
         persistentId, i18n.i18n.lockedString(message.title), new ExtensionPanel(this, persistentId, id, page));
     this.clientObjects.set(id, panelView);
@@ -764,7 +826,17 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
         {command: 'open-resource', resource: this.makeResource(contentProvider), lineNumber: lineNumber + 1});
   }
 
-  private onReload(message: PrivateAPI.ExtensionServerRequestMessage): Record {
+  private extensionAllowedOnURL(url: Platform.DevToolsPath.UrlString, port: MessagePort): boolean {
+    const origin = extensionOrigins.get(port);
+    const extension = origin && this.registeredExtensions.get(origin);
+    return Boolean(extension?.isAllowedOnTarget(url));
+  }
+
+  private extensionAllowedOnTarget(target: SDK.Target.Target, port: MessagePort): boolean {
+    return this.extensionAllowedOnURL(target.inspectedURL(), port);
+  }
+
+  private onReload(message: PrivateAPI.ExtensionServerRequestMessage, port: MessagePort): Record {
     if (message.command !== PrivateAPI.Commands.Reload) {
       return this.status.E_BADARG('command', `expected ${PrivateAPI.Commands.Reload}`);
     }
@@ -776,7 +848,15 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     if (options.injectedScript) {
       injectedScript = '(function(){' + options.injectedScript + '})()';
     }
-    SDK.ResourceTreeModel.ResourceTreeModel.reloadAllPages(Boolean(options.ignoreCache), injectedScript);
+    const target = SDK.TargetManager.TargetManager.instance().primaryPageTarget();
+    if (!target) {
+      return this.status.OK();
+    }
+    const resourceTreeModel = target.model(SDK.ResourceTreeModel.ResourceTreeModel);
+    if (!this.extensionAllowedOnTarget(target, port)) {
+      return this.status.E_FAILED('Permission denied');
+    }
+    resourceTreeModel?.reloadPage(Boolean(options.ignoreCache), injectedScript);
     return this.status.OK();
   }
 
@@ -809,11 +889,9 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     if (message.command !== PrivateAPI.Commands.GetHAR) {
       return this.status.E_BADARG('command', `expected ${PrivateAPI.Commands.GetHAR}`);
     }
-    const origin = extensionOrigins.get(port);
-    const extension = origin && this.registeredExtensions.get(origin);
     const requests =
-        Logs.NetworkLog.NetworkLog.instance().requests().filter(r => extension?.isAllowedOnTarget(r.url()));
-    const harLog = await HAR.Log.Log.build(requests);
+        Logs.NetworkLog.NetworkLog.instance().requests().filter(r => this.extensionAllowedOnURL(r.url(), port));
+    const harLog = await HAR.Log.Log.build(requests, {sanitize: false});
     for (let i = 0; i < harLog.entries.length; ++i) {
       // @ts-ignore
       harLog.entries[i]._requestId = this.requestId(requests[i]);
@@ -825,7 +903,7 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     return {url: contentProvider.contentURL(), type: contentProvider.contentType().name()};
   }
 
-  private onGetPageResources(): {url: string, type: string}[] {
+  private onGetPageResources(_message: unknown, port: MessagePort): {url: string, type: string}[] {
     const resources = new Map<unknown, {
       url: string,
       type: string,
@@ -844,7 +922,9 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     uiSourceCodes.forEach(pushResourceData.bind(this));
     for (const resourceTreeModel of SDK.TargetManager.TargetManager.instance().models(
              SDK.ResourceTreeModel.ResourceTreeModel)) {
-      resourceTreeModel.forAllResources(pushResourceData.bind(this));
+      if (this.extensionAllowedOnTarget(resourceTreeModel.target(), port)) {
+        resourceTreeModel.forAllResources(pushResourceData.bind(this));
+      }
     }
 
     return [...resources.values()];
@@ -853,15 +933,18 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
   private async getResourceContent(
       contentProvider: TextUtils.ContentProvider.ContentProvider, message: PrivateAPI.ExtensionServerRequestMessage,
       port: MessagePort): Promise<void> {
-    const url = contentProvider.contentURL();
-    const origin = extensionOrigins.get(port);
-    const extension = origin && this.registeredExtensions.get(origin);
-    if (!extension?.isAllowedOnTarget(url)) {
+    if (!this.extensionAllowedOnURL(contentProvider.contentURL(), port)) {
       this.dispatchCallback(message.requestId, port, this.status.E_FAILED('Permission denied'));
       return undefined;
     }
-    const {content, isEncoded} = await contentProvider.requestContent();
-    this.dispatchCallback(message.requestId, port, {encoding: isEncoded ? 'base64' : '', content: content});
+    const contentData = await contentProvider.requestContentData();
+    if (TextUtils.ContentData.ContentData.isError(contentData)) {
+      this.dispatchCallback(message.requestId, port, {encoding: '', content: null});
+      return;
+    }
+    const encoding = !contentData.isTextContent ? 'base64' : '';
+    const content = contentData.isTextContent ? contentData.text : contentData.base64;
+    this.dispatchCallback(message.requestId, port, {encoding, content});
   }
 
   private onGetRequestContent(message: PrivateAPI.ExtensionServerRequestMessage, port: MessagePort): Record|undefined {
@@ -900,9 +983,7 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       const response = error ? this.status.E_FAILED(error) : this.status.OK();
       this.dispatchCallback(requestId, port, response);
     }
-    const origin = extensionOrigins.get(port);
-    const extension = origin && this.registeredExtensions.get(origin);
-    if (!extension?.isAllowedOnTarget(url as Platform.DevToolsPath.UrlString)) {
+    if (!this.extensionAllowedOnURL(url as Platform.DevToolsPath.UrlString, port)) {
       return this.status.E_FAILED('Permission denied');
     }
 
@@ -978,7 +1059,7 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
 
   private dispatchCallback(requestId: unknown, port: MessagePort, result: unknown): void {
     if (requestId) {
-      port.postMessage({command: 'callback', requestId: requestId, result: result});
+      port.postMessage({command: 'callback', requestId, result});
     }
   }
 
@@ -1006,7 +1087,7 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     this.registerResourceContentCommittedHandler(this.notifyUISourceCodeContentCommitted);
 
     SDK.TargetManager.TargetManager.instance().addEventListener(
-        SDK.TargetManager.Events.InspectedURLChanged, this.inspectedURLChanged, this);
+        SDK.TargetManager.Events.INSPECTED_URL_CHANGED, this.inspectedURLChanged, this);
   }
 
   private notifyResourceAdded(event: Common.EventTarget.EventTargetEvent<Workspace.UISourceCode.UISourceCode>): void {
@@ -1023,7 +1104,7 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
   private async notifyRequestFinished(event: Common.EventTarget.EventTargetEvent<SDK.NetworkRequest.NetworkRequest>):
       Promise<void> {
     const request = event.data;
-    const entry = await HAR.Log.Entry.build(request);
+    const entry = await HAR.Log.Entry.build(request, {sanitize: false});
     this.postNotification(PrivateAPI.Events.NetworkRequestFinished, this.requestId(request), entry);
   }
 
@@ -1037,7 +1118,7 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       startColumn: range.startColumn,
       endLine: range.endLine,
       endColumn: range.endColumn,
-      url: url,
+      url,
     });
   }
 
@@ -1299,11 +1380,11 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     void context
         .evaluate(
             {
-              expression: expression,
+              expression,
               objectGroup: 'extension',
               includeCommandLineAPI: exposeCommandLineAPI,
               silent: true,
-              returnByValue: returnByValue,
+              returnByValue,
               generatePreview: false,
             },
             /* userGesture */ false, /* awaitPromise */ false)
@@ -1325,22 +1406,11 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
     // TODO(caseq): make sure tests supply valid URLs or we specifically handle invalid ones.
     try {
       parsedURL = new URL(url);
-    } catch (exception) {
+    } catch {
       return false;
     }
-    if (kAllowedOrigins.includes(parsedURL.origin)) {
-      return true;
-    }
-    if (parsedURL.protocol === 'chrome:' || parsedURL.protocol === 'devtools:' ||
-        parsedURL.protocol === 'chrome-untrusted:' || parsedURL.protocol === 'chrome-error:' ||
-        parsedURL.protocol === 'chrome-search:') {
-      return false;
-    }
-    if (parsedURL.protocol.startsWith('http') && parsedURL.hostname.match(/^chrome\.google\.com\.?$/) &&
-        parsedURL.pathname.startsWith('/webstore')) {
-      return false;
-    }
-    if (parsedURL.protocol.startsWith('http') && parsedURL.hostname.match(/^chromewebstore\.google\.com\.?$/)) {
+
+    if (!kPermittedSchemes.includes(parsedURL.protocol)) {
       return false;
     }
 
@@ -1350,11 +1420,40 @@ export class ExtensionServer extends Common.ObjectWrapper.ObjectWrapper<EventTyp
       return false;
     }
 
+    if (this.#isUrlFromChromeWebStore(parsedURL)) {
+      return false;
+    }
+
     return true;
+  }
+
+  /**
+   * Tests whether a given URL is from the Chrome web store to prevent the extension server from
+   * being injected. This is treated as separate from the `getOriginsForbiddenForExtensions` API because
+   * DevTools might not be being run from a native origin and we still want to lock down this specific
+   * origin from DevTools extensions.
+   *
+   * @param parsedURL The URL to check
+   * @returns `true` if the URL corresponds to the Chrome web store; otherwise `false`
+   */
+  static #isUrlFromChromeWebStore(parsedURL: URL): boolean {
+    if (parsedURL.protocol.startsWith('http') && parsedURL.hostname.match(/^chrome\.google\.com\.?$/) &&
+        parsedURL.pathname.startsWith('/webstore')) {
+      return true;
+    }
+    if (parsedURL.protocol.startsWith('http') && parsedURL.hostname.match(/^chromewebstore\.google\.com\.?$/)) {
+      return true;
+    }
+
+    return false;
   }
 
   private disableExtensions(): void {
     this.extensionsEnabled = false;
+  }
+
+  private enableExtensions(): void {
+    this.extensionsEnabled = true;
   }
 }
 
@@ -1362,9 +1461,9 @@ export const enum Events {
   SidebarPaneAdded = 'SidebarPaneAdded',
 }
 
-export type EventTypes = {
-  [Events.SidebarPaneAdded]: ExtensionSidebarPane,
-};
+export interface EventTypes {
+  [Events.SidebarPaneAdded]: ExtensionSidebarPane;
+}
 
 class ExtensionServerPanelView extends UI.View.SimpleView {
   private readonly name: string;

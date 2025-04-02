@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/performance_controls/memory_saver_chip_view.h"
+
 #include <string>
 
 #include "base/notreached.h"
@@ -16,8 +17,6 @@
 #include "chrome/browser/ui/performance_controls/memory_saver_chip_tab_helper.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_utils.h"
 #include "chrome/browser/ui/performance_controls/performance_controls_metrics.h"
-#include "chrome/browser/ui/side_panel/side_panel_enums.h"
-#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -25,19 +24,19 @@
 #include "chrome/browser/ui/views/location_bar/icon_label_bubble_view.h"
 #include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/performance_controls/memory_saver_bubble_view.h"
-#include "chrome/browser/ui/views/side_panel/performance_controls/performance_side_panel_coordinator.h"
-#include "chrome/browser/ui/webui/side_panel/performance_controls/performance.mojom-shared.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_enums.h"
+#include "chrome/browser/ui/views/side_panel/side_panel_ui.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/feature_engagement/public/event_constants.h"
 #include "components/feature_engagement/public/feature_constants.h"
-#include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/performance_manager/public/features.h"
 #include "components/performance_manager/public/user_tuning/prefs.h"
 #include "components/prefs/pref_service.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/text/bytes_formatting.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/view_class_properties.h"
 
 namespace {
@@ -68,7 +67,7 @@ MemorySaverChipView::MemorySaverChipView(
   OnMemorySaverModeChanged();
 
   SetUpForInOutAnimation(kChipAnimationDuration);
-  SetPaintLabelOverSolidBackground(true);
+  SetBackgroundVisibility(BackgroundVisibility::kWithLabel);
   SetProperty(views::kElementIdentifierKey, kMemorySaverChipElementId);
 }
 
@@ -108,7 +107,7 @@ void MemorySaverChipView::UpdateImpl() {
       }
       case memory_saver::ChipState::EXPANDED_WITH_SAVINGS: {
         SetVisible(true);
-        int const memory_savings =
+        int64_t const memory_savings =
             memory_saver::GetDiscardedMemorySavingsInBytes(web_contents);
         std::u16string memory_savings_string = ui::FormatBytes(memory_savings);
         SetLabel(l10n_util::GetStringFUTF16(IDS_MEMORY_SAVER_CHIP_SAVINGS_LABEL,
@@ -129,7 +128,7 @@ void MemorySaverChipView::UpdateImpl() {
       }
       case memory_saver::ChipState::COLLAPSED: {
         SetVisible(true);
-        SetAccessibleName(chip_accessible_label_);
+        GetViewAccessibility().SetName(chip_accessible_label_);
         RecordMemorySaverChipState(MemorySaverChipState::kCollapsed);
         break;
       }
@@ -146,15 +145,6 @@ void MemorySaverChipView::UpdateImpl() {
 
 void MemorySaverChipView::OnExecuting(
     PageActionIconView::ExecuteSource execute_source) {
-  if (base::FeatureList::IsEnabled(
-          performance_manager::features::kPerformanceControlsSidePanel)) {
-    PerformanceSidePanelCoordinator::GetOrCreateForBrowser(browser_)->Show(
-        {side_panel::mojom::PerformanceSidePanelNotification::
-             kMemorySaverRevisitDiscardedTab},
-        SidePanelOpenTrigger::kToolbarButton);
-    return;
-  }
-
   // If the dialog bubble is currently open, close it.
   if (IsBubbleShowing()) {
     bubble_->Close();
@@ -164,19 +154,15 @@ void MemorySaverChipView::OnExecuting(
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
 
   // Open the dialog bubble.
-  View* anchor_view = browser_view->toolbar_button_provider()->GetAnchorView(
-      PageActionIconType::kMemorySaver);
+  // TODO(crbug.com/376283619): An action ID should be created and used here
+  // when Memory Saver is migrated to the new page actions framework.
+  View* anchor_view =
+      browser_view->toolbar_button_provider()->GetAnchorView(std::nullopt);
   bubble_ = MemorySaverBubbleView::ShowBubble(browser_, anchor_view, this);
-  if (browser_->window() != nullptr) {
-    browser_->window()->NotifyFeatureEngagementEvent(
-        feature_engagement::events::kMemorySaverDialogShown);
-  }
 }
 
 const gfx::VectorIcon& MemorySaverChipView::GetVectorIcon() const {
-  return OmniboxFieldTrial::IsChromeRefreshIconsEnabled()
-             ? kMemorySaverChromeRefreshIcon
-             : kMemorySaverIcon;
+  return kPerformanceSpeedometerIcon;
 }
 
 views::BubbleDialogDelegate* MemorySaverChipView::GetBubble() const {

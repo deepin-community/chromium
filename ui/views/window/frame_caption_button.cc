@@ -152,8 +152,9 @@ void FrameCaptionButton::SetImage(CaptionButtonIcon icon,
     return;
   }
 
-  if (animate == Animate::kYes)
+  if (animate == Animate::kYes) {
     crossfade_icon_image_ = icon_image_;
+  }
 
   icon_ = icon;
   icon_definition_ = &icon_definition;
@@ -187,8 +188,8 @@ void FrameCaptionButton::OnGestureEvent(ui::GestureEvent* event) {
   // Button does not become pressed when the user drags off and then back
   // onto the button. Make FrameCaptionButton pressed in this case because this
   // behavior is more consistent with AlternateFrameSizeButton.
-  if (event->type() == ui::ET_GESTURE_SCROLL_BEGIN ||
-      event->type() == ui::ET_GESTURE_SCROLL_UPDATE) {
+  if (event->type() == ui::EventType::kGestureScrollBegin ||
+      event->type() == ui::EventType::kGestureScrollUpdate) {
     if (HitTestPoint(event->location())) {
       SetState(STATE_PRESSED);
       RequestFocus();
@@ -196,7 +197,7 @@ void FrameCaptionButton::OnGestureEvent(ui::GestureEvent* event) {
     } else {
       SetState(STATE_NORMAL);
     }
-  } else if (event->type() == ui::ET_GESTURE_SCROLL_END) {
+  } else if (event->type() == ui::EventType::kGestureScrollEnd) {
     if (HitTestPoint(event->location())) {
       SetState(STATE_HOVERED);
       NotifyClick(*event);
@@ -204,8 +205,9 @@ void FrameCaptionButton::OnGestureEvent(ui::GestureEvent* event) {
     }
   }
 
-  if (!event->handled())
+  if (!event->handled()) {
     Button::OnGestureEvent(event);
+  }
 }
 
 views::PaintInfo::ScaleType FrameCaptionButton::GetPaintScaleType() const {
@@ -254,8 +256,9 @@ FrameCaptionButton::AddBackgroundColorChangedCallback(
 }
 
 void FrameCaptionButton::SetPaintAsActive(bool paint_as_active) {
-  if (paint_as_active == paint_as_active_)
+  if (paint_as_active == paint_as_active_) {
     return;
+  }
   paint_as_active_ = paint_as_active;
   OnPropertyChanged(&paint_as_active_, kPropertyEffectsPaint);
 }
@@ -350,8 +353,9 @@ void FrameCaptionButton::PaintButtonContents(gfx::Canvas* canvas) {
                      icon_bounds_y, flags);
     canvas->Restore();
   } else {
-    if (!swap_images_animation_->is_animating())
+    if (!swap_images_animation_->is_animating()) {
       icon_alpha = alpha_;
+    }
     cc::PaintFlags flags;
     flags.setAlphaf(GetAlphaForIcon(icon_alpha) / 255.0f);
     DrawIconContents(canvas, icon_image_, icon_bounds_x, icon_bounds_y, flags);
@@ -365,11 +369,13 @@ void FrameCaptionButton::OnThemeChanged() {
 }
 
 SkAlpha FrameCaptionButton::GetAlphaForIcon(SkAlpha base_alpha) const {
-  if (!GetEnabled())
+  if (!GetEnabled()) {
     return base::ClampRound<SkAlpha>(base_alpha * kDisabledButtonAlphaRatio);
+  }
 
-  if (paint_as_active_)
+  if (paint_as_active_) {
     return base_alpha;
+  }
 
   // Paint icons as active when they are hovered over or pressed.
   double inactive_alpha = GetInactiveButtonColorAlphaRatio();

@@ -18,6 +18,8 @@ It handles only a small subset of SVG (paths, circles, etc.) and it's finicky ab
 
 Some SVGs are already pretty minimal, like the ones at [the Material Design Icon repository](https://material.io/icons/) so they don't require much if any adjustment, but some SVG editing tools like Sketch leave a lot of random cruft so SVGOMG helps a lot. Take the output and insert into a `.icon` file.
 
+**Note: If you are a Google employee, please reference [go/chrome-gm3-icons](http://go/chrome-gm3-icons) to ensure standardized icon sizes and weights.**
+
 ### Troubleshooting icon generation
 
 + **My colors are inverted!** There is probably a surplus square path encompassing your icon. For example, `<path d="M0 0h16v16H0z"/>`. Delete this and try again.
@@ -47,6 +49,16 @@ A sample call site to create an icon for the `foo_bar.icon` file looks something
 If the size argument is unspecified, the size will be taken from the smallest icon size in the `.icon` file.
 
 `CreateVectorIcon()` will use the icon definition that best matches the final pixel size required, which is the product of DIP and the device scale factor (DSF). For example, for a DIP size of 32 and DSF of 100%, a rep with `CANVAS_DIMENSIONS, 32,` would be used, whereas a configuration with DSF of 150% would prefer a rep with `CANVAS_DIMENSIONS, 48`.
+
+### Preparing for review
+
+1. Prefer to add new icons in the same commit that introduces the code which uses the icons, rather than as a standalone change. This will:
+    1. give reviewers a chance to verify that the icon is being used correctly and is added to the appropriate directory.
+    1. create an easily discoverable two-way connection between icon and code in git history.
+    1. ensure the icon is removed if the code change ends up being reverted for any reason.
+1. In the commit description,
+    1. reference the source SVG.
+    1. link to a screenshot, preferably hosted on a publicly visible site such as the Chromium issue tracker.
 
 ## FAQ
 

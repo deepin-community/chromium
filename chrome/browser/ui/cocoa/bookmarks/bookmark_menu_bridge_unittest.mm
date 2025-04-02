@@ -51,10 +51,12 @@ class BookmarkMenuBridgeTest : public BrowserWithTestWindowTest {
   }
 
   TestingProfile::TestingFactories GetTestingFactories() override {
-    return {{BookmarkModelFactory::GetInstance(),
-             BookmarkModelFactory::GetDefaultFactory()},
-            {ManagedBookmarkServiceFactory::GetInstance(),
-             ManagedBookmarkServiceFactory::GetDefaultFactory()}};
+    return {TestingProfile::TestingFactory{
+                BookmarkModelFactory::GetInstance(),
+                BookmarkModelFactory::GetDefaultFactory()},
+            TestingProfile::TestingFactory{
+                ManagedBookmarkServiceFactory::GetInstance(),
+                ManagedBookmarkServiceFactory::GetDefaultFactory()}};
   }
 
   void UpdateRootMenu() {
@@ -67,7 +69,7 @@ class BookmarkMenuBridgeTest : public BrowserWithTestWindowTest {
   // derived test classes have access to protected methods.
   void ClearBookmarkMenu() { bridge_->ClearBookmarkMenu(); }
 
-  void InvalidateMenu()  { bridge_->InvalidateMenu(); }
+  void InvalidateMenu() { bridge_->InvalidateMenu(); }
   bool menu_is_valid() { return bridge_->IsMenuValid(); }
 
   void AddNodeToMenu(BookmarkMenuBridge* bridge,
@@ -81,12 +83,13 @@ class BookmarkMenuBridgeTest : public BrowserWithTestWindowTest {
     return bridge->MenuItemForNode(node);
   }
 
-  NSMenuItem* AddTestMenuItem(NSMenu *menu, NSString *title, SEL selector) {
+  NSMenuItem* AddTestMenuItem(NSMenu* menu, NSString* title, SEL selector) {
     NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title
                                                   action:nullptr
                                            keyEquivalent:@""];
-    if (selector)
+    if (selector) {
       [item setAction:selector];
+    }
     [menu addItem:item];
     return item;
   }
@@ -101,7 +104,7 @@ class BookmarkMenuBridgeTest : public BrowserWithTestWindowTest {
 
 TEST_F(BookmarkMenuBridgeTest, TestBookmarkMenuAutoSeparator) {
   BookmarkModel* model = bridge_->GetBookmarkModel();
-  bridge_->BookmarkModelLoaded(model, false);
+  bridge_->BookmarkModelLoaded(false);
   UpdateRootMenu();
   // The bare menu after loading used to have a separator and an
   // "Other Bookmarks" submenu, but we no longer show those items if the
@@ -117,7 +120,7 @@ TEST_F(BookmarkMenuBridgeTest, TestBookmarkMenuAutoSeparator) {
   // Remove the new bookmark and reload and we should have 0 items again
   // because the separator should have been removed as well.
   model->Remove(parent->children().front().get(),
-                bookmarks::metrics::BookmarkEditSource::kOther);
+                bookmarks::metrics::BookmarkEditSource::kOther, FROM_HERE);
   UpdateRootMenu();
   EXPECT_EQ(0, [menu_ numberOfItems]);
 }
@@ -147,7 +150,7 @@ TEST_F(BookmarkMenuBridgeTest, TestInvalidation) {
   BookmarkModel* model = bridge_->GetBookmarkModel();
   model->AddURL(model->bookmark_bar_node(), 0, u"Google",
                 GURL("https://google.com"));
-  bridge_->BookmarkModelLoaded(model, false);
+  bridge_->BookmarkModelLoaded(false);
 
   EXPECT_FALSE(menu_is_valid());
   UpdateRootMenu();
@@ -182,9 +185,9 @@ TEST_F(BookmarkMenuBridgeTest, TestAddNodeToMenu) {
 
   const char* short_url = "http://foo/";
   const char* long_url = "http://super-duper-long-url--."
-    "that.cannot.possibly.fit.even-in-80-columns"
-    "or.be.reasonably-displayed-in-a-menu"
-    "without.looking-ridiculous.com/"; // 140 chars total
+                         "that.cannot.possibly.fit.even-in-80-columns"
+                         "or.be.reasonably-displayed-in-a-menu"
+                         "without.looking-ridiculous.com/";  // 140 chars total
 
   // 3 nodes; middle one has a child, last one has a HUGE URL
   // Set their titles to be the same as the URLs
@@ -212,8 +215,9 @@ TEST_F(BookmarkMenuBridgeTest, TestAddNodeToMenu) {
   // Now confirm we have 1 submenu (the one we added, and not "other")
   int subs = 0;
   for (item in [menu_ itemArray]) {
-    if ([item hasSubmenu])
+    if ([item hasSubmenu]) {
       subs++;
+    }
   }
   EXPECT_EQ(1, subs);
 
@@ -300,7 +304,7 @@ TEST_F(BookmarkMenuBridgeTest, TestGetMenuItemForNode) {
   const BookmarkNode* removed_node = folder->children()[0].get();
   EXPECT_EQ(2u, folder->children().size());
   model->Remove(folder->children()[0].get(),
-                bookmarks::metrics::BookmarkEditSource::kOther);
+                bookmarks::metrics::BookmarkEditSource::kOther, FROM_HERE);
   EXPECT_EQ(1u, folder->children().size());
 
   EXPECT_FALSE(menu_is_valid());
@@ -360,7 +364,7 @@ TEST_F(BookmarkMenuBridgeTest, TestFaviconLoading) {
   NSMenuItem* item = [menu_ itemWithTitle:@"Test Item"];
   EXPECT_TRUE([item image]);
   [item setImage:nil];
-  bridge_->BookmarkNodeFaviconChanged(model, node);
+  bridge_->BookmarkNodeFaviconChanged(node);
   EXPECT_TRUE([item image]);
 }
 

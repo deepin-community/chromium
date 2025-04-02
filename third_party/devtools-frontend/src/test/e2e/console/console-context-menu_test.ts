@@ -5,10 +5,9 @@
 import {assert} from 'chai';
 
 import {click, getBrowserAndPages, typeText, waitForFunction} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {clickOnContextMenu, CONSOLE_TAB_SELECTOR, focusConsolePrompt} from '../helpers/console-helpers.js';
 
-describe('The Console Tab', async function() {
+describe('The Console Tab', function() {
   beforeEach(async () => {
     const {frontend} = getBrowserAndPages();
     await frontend.bringToFront();
@@ -26,7 +25,7 @@ describe('The Console Tab', async function() {
     await click(CONSOLE_TAB_SELECTOR);
     await focusConsolePrompt();
     await typeText('\'string\\ncontent\'\n');
-    await clickOnContextMenu(RESULT_SELECTOR, 'Copy string contents');
+    await clickOnContextMenu(RESULT_SELECTOR, 'copy-string-contents');
     const copiedContent = await waitForFunction(async () => {
       return await frontend.evaluate('globalThis._clipboardData');
     });
@@ -38,7 +37,7 @@ describe('The Console Tab', async function() {
     await click(CONSOLE_TAB_SELECTOR);
     await focusConsolePrompt();
     await typeText('\'string\\ncontent\'\n');
-    await clickOnContextMenu(RESULT_SELECTOR, 'Copy string as JavaScript literal');
+    await clickOnContextMenu(RESULT_SELECTOR, 'copy-string-as-js-literal');
     const copiedContent = await waitForFunction(async () => {
       return await frontend.evaluate('globalThis._clipboardData');
     });
@@ -50,7 +49,7 @@ describe('The Console Tab', async function() {
     await click(CONSOLE_TAB_SELECTOR);
     await focusConsolePrompt();
     await typeText('\'string\\ncontent\'\n');
-    await clickOnContextMenu(RESULT_SELECTOR, 'Copy string as JSON literal');
+    await clickOnContextMenu(RESULT_SELECTOR, 'copy-string-as-json-literal');
     const copiedContent = await waitForFunction(async () => {
       return await frontend.evaluate('globalThis._clipboardData');
     });
@@ -62,7 +61,7 @@ describe('The Console Tab', async function() {
     await click(CONSOLE_TAB_SELECTOR);
     await focusConsolePrompt();
     await typeText('500\n');
-    await clickOnContextMenu(RESULT_SELECTOR, 'Copy number');
+    await clickOnContextMenu(RESULT_SELECTOR, 'copy-primitive');
     const copiedContent = await waitForFunction(async () => {
       return await frontend.evaluate('globalThis._clipboardData');
     });
@@ -74,7 +73,7 @@ describe('The Console Tab', async function() {
     await click(CONSOLE_TAB_SELECTOR);
     await focusConsolePrompt();
     await typeText('500n\n');
-    await clickOnContextMenu(RESULT_SELECTOR, 'Copy bigint');
+    await clickOnContextMenu(RESULT_SELECTOR, 'copy-primitive');
     const copiedContent = await waitForFunction(async () => {
       return await frontend.evaluate('globalThis._clipboardData');
     });
@@ -86,7 +85,7 @@ describe('The Console Tab', async function() {
     await click(CONSOLE_TAB_SELECTOR);
     await focusConsolePrompt();
     await typeText('true\n');
-    await clickOnContextMenu(RESULT_SELECTOR, 'Copy boolean');
+    await clickOnContextMenu(RESULT_SELECTOR, 'copy-primitive');
     const copiedContent = await waitForFunction(async () => {
       return await frontend.evaluate('globalThis._clipboardData');
     });
@@ -98,7 +97,7 @@ describe('The Console Tab', async function() {
     await click(CONSOLE_TAB_SELECTOR);
     await focusConsolePrompt();
     await typeText('undefined\n');
-    await clickOnContextMenu(RESULT_SELECTOR, 'Copy undefined');
+    await clickOnContextMenu(RESULT_SELECTOR, 'copy-primitive');
     const copiedContent = await waitForFunction(async () => {
       return await frontend.evaluate('globalThis._clipboardData');
     });
@@ -110,7 +109,7 @@ describe('The Console Tab', async function() {
     await click(CONSOLE_TAB_SELECTOR);
     await focusConsolePrompt();
     await typeText('new Map([["key1","value1"],["key2","value2"]])\n');
-    await clickOnContextMenu(RESULT_SELECTOR, 'Copy object');
+    await clickOnContextMenu(RESULT_SELECTOR, 'copy-object');
     const copiedContent = await waitForFunction(async () => {
       return await frontend.evaluate('globalThis._clipboardData');
     });
@@ -124,7 +123,7 @@ describe('The Console Tab', async function() {
     await click(CONSOLE_TAB_SELECTOR);
     await focusConsolePrompt();
     await typeText('new Set(["a","b","c"])\n');
-    await clickOnContextMenu(RESULT_SELECTOR, 'Copy object');
+    await clickOnContextMenu(RESULT_SELECTOR, 'copy-object');
     const copiedContent = await waitForFunction(async () => {
       return await frontend.evaluate('globalThis._clipboardData');
     });

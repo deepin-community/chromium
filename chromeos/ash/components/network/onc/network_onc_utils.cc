@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string>
 #include <utility>
 
 #include "base/base64.h"
@@ -64,7 +65,6 @@ namespace ash::onc {
 namespace {
 
 // Scheme strings for supported |net::ProxyServer::SCHEME_*| enum values.
-constexpr char kQuicScheme[] = "quic";
 constexpr char kSocksScheme[] = "socks";
 constexpr char kSocks4Scheme[] = "socks4";
 constexpr char kSocks5Scheme[] = "socks5";
@@ -149,12 +149,14 @@ std::string SchemeToString(net::ProxyServer::Scheme scheme) {
     case net::ProxyServer::SCHEME_HTTPS:
       return url::kHttpsScheme;
     case net::ProxyServer::SCHEME_QUIC:
-      return kQuicScheme;
+      // Re-map the legacy "quic://" proxy protocol scheme to "https://",
+      // because that's how it's actually treated. See
+      // https://issues.chromium.org/issues/40141686.
+      return url::kHttpsScheme;
     case net::ProxyServer::SCHEME_INVALID:
       break;
   }
   NOTREACHED();
-  return "";
 }
 
 void SetProxyForScheme(const net::ProxyConfig::ProxyRules& proxy_rules,
@@ -407,7 +409,6 @@ std::optional<base::Value::Dict> ConvertOncProxySettingsToProxyConfig(
                                                      bypass_rules.ToString());
   }
   NOTREACHED();
-  return std::nullopt;
 }
 
 std::optional<base::Value::Dict> ConvertProxyConfigToOncProxySettings(
@@ -513,36 +514,30 @@ int ImportNetworksForUser(const user_manager::User* user,
     base::Value::Dict normalized_network = normalizer.NormalizeObject(
         &chromeos::onc::kNetworkConfigurationSignature, network);
 
-    // TODO(b/235297258): Use ONC and ManagedNetworkConfigurationHandler
-    // instead.
-    base::Value::Dict shill_dict = onc::TranslateONCObjectToShill(
-        &chromeos::onc::kNetworkConfigurationSignature,
-        std::move(normalized_network));
-
-    std::unique_ptr<NetworkUIData> ui_data(
-        NetworkUIData::CreateFromONC(::onc::ONC_SOURCE_USER_IMPORT));
-    shill_dict.Set(shill::kUIDataProperty, ui_data->GetAsJson());
-    shill_dict.Set(shill::kProfileProperty, profile->path);
-
-    std::string type = GetString(shill_dict, shill::kTypeProperty);
-    NetworkConfigurationHandler* config_handler =
-        NetworkHandler::Get()->network_configuration_handler();
-    if (NetworkTypePattern::Ethernet().MatchesType(type)) {
+    std::string type =
+        GetString(normalized_network, ::onc::network_config::kType);
+    ManagedNetworkConfigurationHandler* managed_network_config_handler =
+        NetworkHandler::Get()->managed_network_configuration_handler();
+    // "type" might be removed if the imported onc has ::onc:kRemove field.
+    if (type.empty()) {
+      continue;
+    }
+    if (type == ::onc::network_config::kEthernet) {
       // Ethernet has to be configured using an existing Ethernet service.
       const NetworkState* ethernet =
           NetworkHandler::Get()->network_state_handler()->FirstNetworkByType(
               NetworkTypePattern::Ethernet());
       if (ethernet) {
-        config_handler->SetShillProperties(ethernet->path(), shill_dict,
-                                           base::OnceClosure(),
-                                           network_handler::ErrorCallback());
+        managed_network_config_handler->SetProperties(
+            ethernet->path(), normalized_network.Clone(), base::OnceClosure(),
+            network_handler::ErrorCallback());
       } else {
         ethernet_not_found = true;
       }
-
     } else {
-      config_handler->CreateShillConfiguration(
-          shill_dict, network_handler::ServiceResultCallback(),
+      managed_network_config_handler->CreateConfiguration(
+          user->username_hash(), normalized_network.Clone(),
+          network_handler::ServiceResultCallback(),
           network_handler::ErrorCallback());
       ++networks_created;
     }

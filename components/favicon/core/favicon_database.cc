@@ -44,10 +44,10 @@ namespace favicon {
 //   icon_id          The ID of favicon that this mapping maps to.
 //
 // favicons           This table associates a row to each favicon for a
-//                    |page_url| in the |icon_mapping| table. This is the
-//                    default favicon |page_url|/favicon.ico plus any favicons
+//                    `page_url` in the `icon_mapping` table. This is the
+//                    default favicon `page_url`/favicon.ico plus any favicons
 //                    associated via <link rel="icon_type" href="url">.
-//                    The |id| matches the |icon_id| field in the appropriate
+//                    The `id` matches the `icon_id` field in the appropriate
 //                    row in the icon_mapping table.
 //
 //   id               Unique ID.
@@ -59,8 +59,8 @@ namespace favicon {
 // favicon_bitmaps    This table contains the PNG encoded bitmap data of the
 //                    favicons. There is a separate row for every size in a
 //                    multi resolution bitmap. The bitmap data is associated
-//                    to the favicon via the |icon_id| field which matches
-//                    the |id| field in the appropriate row in the |favicons|
+//                    to the favicon via the `icon_id` field which matches
+//                    the `id` field in the appropriate row in the `favicons`
 //                    table.
 //
 //   id               Unique ID.
@@ -72,8 +72,8 @@ namespace favicon {
 //                    This is used only for ON_VISIT icons, for ON_DEMAND the
 //                    value is always 0.
 //   image_data       PNG encoded data of the favicon.
-//   width            Pixel width of |image_data|.
-//   height           Pixel height of |image_data|.
+//   width            Pixel width of `image_data`.
+//   height           Pixel height of `image_data`.
 //   last_requested   The time at which this bitmap was last requested. This
 //                    entry is non-zero iff the bitmap is of type ON_DEMAND.
 //                    This info is used for clearing old ON_DEMAND bitmaps.
@@ -92,7 +92,7 @@ namespace {
 // anyhow).
 
 // Version 8: 982ef2c1/r323176 by rogerm@chromium.org on 2015-03-31
-// Version 7: 911a634d/r209424 by qsr@chromium.org on 2013-07-01
+// Version 7: 911a634d/r209424 by qsr@chromium.org on 2013-07-01 (depr.)
 // Version 6: 610f923b/r152367 by pkotwicz@chromium.org on 2012-08-20 (depr.)
 // Version 5: e2ee8ae9/r105004 by groby@chromium.org on 2011-10-12 (deprecated)
 // Version 4: 5f104d76/r77288 by sky@chromium.org on 2011-03-08 (deprecated)
@@ -103,14 +103,7 @@ namespace {
 // the new version and a test to verify that Init() works with it.
 const int kCurrentVersionNumber = 8;
 const int kCompatibleVersionNumber = 8;
-const int kDeprecatedVersionNumber = 6;  // and earlier.
-
-// When enabled, prefer to use the new recovery module to recover the
-// `FaviconDatabase` database. See https://crbug.com/1385500 for details.
-// This is a kill switch and is not intended to be used in a field trial.
-BASE_FEATURE(kFaviconDatabaseUseBuiltInRecoveryIfSupported,
-             "FaviconDatabaseUseBuiltInRecoveryIfSupported",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+const int kDeprecatedVersionNumber = 7;  // and earlier.
 
 void FillIconMapping(const GURL& page_url,
                      sql::Statement& statement,
@@ -124,7 +117,7 @@ void FillIconMapping(const GURL& page_url,
 }
 
 // NOTE(shess): Schema modifications must consider initial creation in
-// |InitImpl()| and history pruning in |RetainDataForPageUrls()|.
+// `InitImpl()` and history pruning in `RetainDataForPageUrls()`.
 bool InitTables(sql::Database* db) {
   static const char kIconMappingSql[] =
       "CREATE TABLE IF NOT EXISTS icon_mapping"
@@ -167,7 +160,7 @@ bool InitTables(sql::Database* db) {
 }
 
 // NOTE(shess): Schema modifications must consider initial creation in
-// |InitImpl()| and history pruning in |RetainDataForPageUrls()|.
+// `InitImpl()` and history pruning in `RetainDataForPageUrls()`.
 bool InitIndices(sql::Database* db) {
   static const char kIconMappingUrlIndexSql[] =
       "CREATE INDEX IF NOT EXISTS icon_mapping_page_url_idx"
@@ -202,10 +195,9 @@ void DatabaseErrorCallback(sql::Database* db,
   // see how to reach that.
 
   // Attempt to recover a corrupt database, if it is eligible to be recovered.
-  if (sql::BuiltInRecovery::RecoverIfPossible(
+  if (sql::Recovery::RecoverIfPossible(
           db, extended_error,
-          sql::BuiltInRecovery::Strategy::kRecoverWithMetaVersionOrRaze,
-          &kFaviconDatabaseUseBuiltInRecoveryIfSupported)) {
+          sql::Recovery::Strategy::kRecoverWithMetaVersionOrRaze)) {
     // Recovery was attempted. The database handle has been poisoned and the
     // error callback has been reset.
 
@@ -224,16 +216,17 @@ void DatabaseErrorCallback(sql::Database* db,
     return;
   }
 
-  // The default handling is to assert on debug and to ignore on release.
-  if (!sql::Database::IsExpectedSqliteError(extended_error))
-    DLOG(FATAL) << db->GetErrorMessage();
+  // The default handling is to log an error on debug and to ignore on release.
+  if (!sql::Database::IsExpectedSqliteError(extended_error)) {
+    DLOG(ERROR) << db->GetErrorMessage();
+  }
 }
 
 }  // namespace
 
-FaviconDatabase::IconMappingEnumerator::IconMappingEnumerator() {}
+FaviconDatabase::IconMappingEnumerator::IconMappingEnumerator() = default;
 
-FaviconDatabase::IconMappingEnumerator::~IconMappingEnumerator() {}
+FaviconDatabase::IconMappingEnumerator::~IconMappingEnumerator() = default;
 
 bool FaviconDatabase::IconMappingEnumerator::GetNextIconMapping(
     IconMapping* icon_mapping) {
@@ -244,10 +237,12 @@ bool FaviconDatabase::IconMappingEnumerator::GetNextIconMapping(
 }
 
 FaviconDatabase::FaviconDatabase()
-    : db_({// Favicons db only stores favicons, so we don't need that big a page
-           // size or cache.
-           .page_size = 2048,
-           .cache_size = 32}) {}
+    : db_(sql::DatabaseOptions()
+              // Favicons db only stores favicons, so we don't need that big a
+              // page size or cache.
+              .set_page_size(2048)
+              .set_cache_size(32),
+          /*tag=*/"Thumbnail") {}
 
 FaviconDatabase::~FaviconDatabase() {
   // The DBCloseScoper will delete the DB and the cache.
@@ -287,15 +282,15 @@ void FaviconDatabase::ComputeDatabaseMetrics() {
 }
 
 void FaviconDatabase::BeginTransaction() {
-  db_.BeginTransaction();
+  db_.BeginTransactionDeprecated();
 }
 
 void FaviconDatabase::CommitTransaction() {
-  db_.CommitTransaction();
+  db_.CommitTransactionDeprecated();
 }
 
 void FaviconDatabase::RollbackTransaction() {
-  db_.RollbackTransaction();
+  db_.RollbackTransactionDeprecated();
 }
 
 void FaviconDatabase::Vacuum() {
@@ -380,8 +375,8 @@ bool FaviconDatabase::GetFaviconBitmaps(
     std::vector<uint8_t> bitmap_data_blob;
     statement.ColumnBlobAsVector(2, &bitmap_data_blob);
     if (!bitmap_data_blob.empty()) {
-      favicon_bitmap.bitmap_data =
-          base::RefCountedBytes::TakeVector(&bitmap_data_blob);
+      favicon_bitmap.bitmap_data = base::MakeRefCounted<base::RefCountedBytes>(
+          std::move(bitmap_data_blob));
     }
     favicon_bitmap.pixel_size =
         gfx::Size(statement.ColumnInt(3), statement.ColumnInt(4));
@@ -415,7 +410,8 @@ bool FaviconDatabase::GetFaviconBitmap(
     std::vector<uint8_t> png_data_blob;
     statement.ColumnBlobAsVector(1, &png_data_blob);
     if (!png_data_blob.empty())
-      *png_icon_data = base::RefCountedBytes::TakeVector(&png_data_blob);
+      *png_icon_data =
+          base::MakeRefCounted<base::RefCountedBytes>(std::move(png_data_blob));
   }
 
   if (pixel_size) {
@@ -576,7 +572,7 @@ bool FaviconDatabase::GetFaviconLastUpdatedTime(favicon_base::FaviconID icon_id,
   if (!statement.Step())
     return false;
 
-  // Return false also if there there is no bitmap with |icon_id|.
+  // Return false also if there there is no bitmap with `icon_id`.
   if (statement.GetColumnType(0) == sql::ColumnType::kNull)
     return false;
 
@@ -860,7 +856,7 @@ bool FaviconDatabase::RetainDataForPageUrls(
   if (!transaction.Begin())
     return false;
 
-  // Populate temp.retained_urls with |urls_to_keep|.
+  // Populate temp.retained_urls with `urls_to_keep`.
   {
     static const char kCreateRetainedUrls[] =
         "CREATE TEMP TABLE retained_urls (url LONGVARCHAR PRIMARY KEY)";
@@ -1003,8 +999,6 @@ favicon_base::IconType FaviconDatabase::FromPersistedIconType(int icon_type) {
 
 sql::InitStatus FaviconDatabase::OpenDatabase(sql::Database* db,
                                               const base::FilePath& db_name) {
-  db->set_histogram_tag("Thumbnail");
-
   // `OpenDatabase()` may be called repeatedly on the same `db`. Ensure that we
   // don't attempt to overwrite an existing error callback.
   if (!db_.has_error_callback()) {
@@ -1024,9 +1018,9 @@ sql::InitStatus FaviconDatabase::InitImpl(const base::FilePath& db_name) {
 
   // Clear databases which are too old to process.
   DCHECK_LT(kDeprecatedVersionNumber, kCurrentVersionNumber);
-  if (!sql::MetaTable::RazeIfIncompatible(
+  if (sql::MetaTable::RazeIfIncompatible(
           &db_, /*lowest_supported_version=*/kDeprecatedVersionNumber + 1,
-          kCurrentVersionNumber)) {
+          kCurrentVersionNumber) == sql::RazeIfIncompatibleResult::kFailed) {
     return sql::INIT_FAILURE;
   }
 
@@ -1077,38 +1071,14 @@ sql::InitStatus FaviconDatabase::InitImpl(const base::FilePath& db_name) {
 
   int cur_version = meta_table_.GetVersionNumber();
 
-  if (!db_.DoesColumnExist("favicons", "icon_type")) {
-    LOG(ERROR) << "Raze because of missing favicon.icon_type";
-
-    db_.RazeAndPoison();
-    return sql::INIT_FAILURE;
-  }
-
-  if (cur_version < 7 && !db_.DoesColumnExist("favicons", "sizes")) {
-    LOG(ERROR) << "Raze because of missing favicon.sizes";
-
-    db_.RazeAndPoison();
-    return sql::INIT_FAILURE;
-  }
-
-  if (cur_version == 6) {
-    ++cur_version;
-    if (!UpgradeToVersion7())
-      return CantUpgradeToVersion(cur_version);
-  }
-
-  if (cur_version == 7) {
-    ++cur_version;
-    if (!UpgradeToVersion8())
-      return CantUpgradeToVersion(cur_version);
-  }
-
   LOG_IF(WARNING, cur_version < kCurrentVersionNumber)
       << "Favicon database version " << cur_version << " is too old to handle.";
 
   // Initialization is complete.
-  if (!transaction.Commit())
+  if (!transaction.Commit()) {
+    LOG(ERROR) << "Favicon init transaction commit failure.";
     return sql::INIT_FAILURE;
+  }
 
   // Raze the database if the structure of the favicons database is not what
   // it should be. This error cannot be detected via the SQL error code because
@@ -1131,43 +1101,6 @@ sql::InitStatus FaviconDatabase::CantUpgradeToVersion(int cur_version) {
                << cur_version << ".";
   db_.Close();
   return sql::INIT_FAILURE;
-}
-
-bool FaviconDatabase::UpgradeToVersion7() {
-  // Sizes column was never used, remove it.
-  bool success =
-      db_.Execute(
-          "CREATE TABLE temp_favicons ("
-          "id INTEGER PRIMARY KEY,"
-          "url LONGVARCHAR NOT NULL,"
-          // default icon_type kFavicon to be consistent with
-          // past migration.
-          "icon_type INTEGER DEFAULT 1)") &&
-      db_.Execute(
-          "INSERT INTO temp_favicons (id, url, icon_type) "
-          "SELECT id, url, icon_type FROM favicons") &&
-      db_.Execute("DROP TABLE favicons") &&
-      db_.Execute("ALTER TABLE temp_favicons RENAME TO favicons") &&
-      db_.Execute("CREATE INDEX IF NOT EXISTS favicons_url ON favicons(url)");
-
-  if (!success)
-    return false;
-
-  return meta_table_.SetVersionNumber(7) &&
-         meta_table_.SetCompatibleVersionNumber(
-             std::min(7, kCompatibleVersionNumber));
-}
-
-bool FaviconDatabase::UpgradeToVersion8() {
-  // Add the last_requested column to the favicon_bitmaps table.
-  static const char kFaviconBitmapsAddLastRequestedSql[] =
-      "ALTER TABLE favicon_bitmaps ADD COLUMN last_requested INTEGER DEFAULT 0";
-  if (!db_.Execute(kFaviconBitmapsAddLastRequestedSql))
-    return false;
-
-  return meta_table_.SetVersionNumber(8) &&
-         meta_table_.SetCompatibleVersionNumber(
-             std::min(8, kCompatibleVersionNumber));
 }
 
 bool FaviconDatabase::IsFaviconDBStructureIncorrect() {

@@ -2,14 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/login/login_handler.h"
-
 #include <string>
 
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/blocked_content/popunder_preventer.h"
 #include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/login/login_handler.h"
 #include "chrome/browser/ui/views/login_view.h"
 #include "components/constrained_window/constrained_window_views.h"
 #include "components/password_manager/core/browser/password_manager.h"
@@ -18,6 +17,8 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_delegate.h"
 
@@ -57,8 +58,10 @@ class LoginHandlerViews : public LoginHandler {
     // manager may not be available during the shutdown process of the
     // WebContents, which can trigger DidFinishNavigation events.
     // See https://crbug.com/328462789.
-    if (!web_modal::WebContentsModalDialogManager::FromWebContents(
-            constrained_window::GetTopLevelWebContents(web_contents()))) {
+    web_modal::WebContentsModalDialogManager* manager =
+        web_modal::WebContentsModalDialogManager::FromWebContents(
+            constrained_window::GetTopLevelWebContents(web_contents()));
+    if (!manager || !manager->delegate()) {
       return false;
     }
     dialog_ = new Dialog(this, web_contents(), authority, explanation,
@@ -96,24 +99,26 @@ class LoginHandlerViews : public LoginHandler {
            LoginHandler::LoginModelData* login_model_data)
         : handler_(handler), login_view_(nullptr), widget_(nullptr) {
       SetButtonLabel(
-          ui::DIALOG_BUTTON_OK,
+          ui::mojom::DialogButton::kOk,
           l10n_util::GetStringUTF16(IDS_LOGIN_DIALOG_OK_BUTTON_LABEL));
       SetAcceptCallback(base::BindOnce(
           [](Dialog* dialog) {
-            if (!dialog->handler_)
+            if (!dialog->handler_) {
               return;
+            }
             dialog->handler_->SetAuth(dialog->login_view_->GetUsername(),
                                       dialog->login_view_->GetPassword());
           },
           base::Unretained(this)));
       SetCancelCallback(base::BindOnce(
           [](Dialog* dialog) {
-            if (!dialog->handler_)
+            if (!dialog->handler_) {
               return;
-            dialog->handler_->CancelAuth();
+            }
+            dialog->handler_->CancelAuth(/*notify_others=*/true);
           },
           base::Unretained(this)));
-      SetModalType(ui::MODAL_TYPE_CHILD);
+      SetModalType(ui::mojom::ModalType::kChild);
       SetOwnedByWidget(true);
 
       // Create a new LoginView and set the model for it.  The model (password
@@ -131,8 +136,9 @@ class LoginHandlerViews : public LoginHandler {
     void CloseDialog() {
       handler_ = nullptr;
       // The hosting widget may have been freed.
-      if (widget_)
+      if (widget_) {
         widget_->Close();
+      }
     }
 
     // views::DialogDelegate:
@@ -145,8 +151,9 @@ class LoginHandlerViews : public LoginHandler {
     void WindowClosing() override {
       // Reference is no longer valid.
       widget_ = nullptr;
-      if (handler_)
-        handler_->CancelAuth();
+      if (handler_) {
+        handler_->CancelAuth(/*notify_others=*/true);
+      }
     }
 
     views::View* GetInitiallyFocusedView() override {
@@ -163,8 +170,9 @@ class LoginHandlerViews : public LoginHandler {
 
    private:
     ~Dialog() override {
-      if (handler_)
+      if (handler_) {
         handler_->OnDialogDestroyed();
+      }
     }
 
     raw_ptr<LoginHandlerViews> handler_;

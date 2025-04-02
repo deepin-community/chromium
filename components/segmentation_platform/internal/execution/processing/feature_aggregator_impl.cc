@@ -241,7 +241,6 @@ std::optional<std::vector<float>> FeatureAggregatorImpl::Process(
   switch (aggregation) {
     case proto::Aggregation::UNKNOWN:
       NOTREACHED();
-      return std::vector<float>();
     case proto::Aggregation::COUNT:
       return CountAggregation(samples);
     case proto::Aggregation::COUNT_BOOLEAN:

@@ -23,6 +23,7 @@
 #include "media/filters/file_data_source.h"
 #include "media/filters/memory_data_source.h"
 #include "media/media_buildflags.h"
+#include "media/mojo/services/gpu_mojo_media_client_test_util.h"
 #include "media/renderers/audio_renderer_impl.h"
 #include "media/renderers/renderer_impl.h"
 #include "media/test/fake_encrypted_media.h"
@@ -70,9 +71,17 @@ class TestDataSourceFactory
     : public HlsDataSourceProviderImpl::DataSourceFactory {
  public:
   ~TestDataSourceFactory() override = default;
-  void CreateDataSource(GURL uri, DataSourceCb callback) override {
+  void CreateDataSource(GURL uri, bool, DataSourceCb callback) override {
     auto file_data_source = std::make_unique<FileDataSource>();
-    base::FilePath file_path(uri.GetContent());
+    base::FilePath file_path(
+#if BUILDFLAG(IS_WIN)
+        // Windows file paths can't start with '/' the way unix file paths can,
+        // So we have to strip the leading one which comes from GetContent().
+        base::UTF8ToWide(uri.GetContent().erase(0, 1))
+#else
+        uri.GetContent()
+#endif
+    );
     CHECK(file_data_source->Initialize(file_path))
         << "Is " << file_path.value() << " missing?";
     std::move(callback).Run(std::move(file_data_source));
@@ -129,14 +138,7 @@ const char kNullVideoHash[] = "d41d8cd98f00b204e9800998ecf8427e";
 const char kNullAudioHash[] = "0.00,0.00,0.00,0.00,0.00,0.00,";
 
 PipelineIntegrationTestBase::PipelineIntegrationTestBase()
-    :
-// Use a UI type message loop on macOS, because it doesn't seem to schedule
-// callbacks with enough precision to drive our fake audio output. See
-// https://crbug.com/1014646 for more details.
-#if BUILDFLAG(IS_MAC)
-      task_environment_(base::test::TaskEnvironment::MainThreadType::UI),
-#endif
-      hashing_enabled_(false),
+    : hashing_enabled_(false),
       clockless_playback_(false),
       webaudio_attached_(false),
       mono_output_(false),
@@ -145,6 +147,8 @@ PipelineIntegrationTestBase::PipelineIntegrationTestBase()
       pipeline_status_(PIPELINE_OK),
       last_video_frame_format_(PIXEL_FORMAT_UNKNOWN),
       current_duration_(kInfiniteDuration) {
+  AddSupplementalCodecsForTesting();
+
   pipeline_ = std::make_unique<PipelineImpl>(
       task_environment_.GetMainThreadTaskRunner(),
       task_environment_.GetMainThreadTaskRunner(),
@@ -218,8 +222,8 @@ void PipelineIntegrationTestBase::DemuxerMediaTracksUpdatedCB(
   // Verify that track ids are unique.
   std::set<MediaTrack::Id> track_ids;
   for (const auto& track : tracks->tracks()) {
-    EXPECT_EQ(track_ids.end(), track_ids.find(track->id()));
-    track_ids.insert(track->id());
+    EXPECT_EQ(track_ids.end(), track_ids.find(track->track_id()));
+    track_ids.insert(track->track_id());
   }
 }
 
@@ -284,7 +288,8 @@ PipelineStatus PipelineIntegrationTestBase::StartPipelineWithHlsManifest(
 
   auto engine = std::make_unique<HlsManifestDemuxerEngine>(
       std::move(hls_dsp), task_environment_.GetMainThreadTaskRunner(),
-      manifest_root, &media_log_);
+      base::DoNothing(), base::DoNothing(),
+      /*name=*/false, manifest_root, &media_log_);
   demuxer_ = std::make_unique<ManifestDemuxer>(
       task_environment_.GetMainThreadTaskRunner(), base::DoNothing(),
       std::move(engine), &media_log_);

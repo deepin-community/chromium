@@ -19,7 +19,9 @@ limitations under the License.
 #include <vector>
 
 #include "absl/cleanup/cleanup.h"
+#include "absl/strings/string_view.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/LogicalResult.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinDialect.h"  // from @llvm-project
@@ -32,7 +34,7 @@ limitations under the License.
 #include "mlir/Support/TypeID.h"  // from @llvm-project
 #include "mlir/Transforms/Passes.h"  // from @llvm-project
 #include "stablehlo/dialect/StablehloOps.h"  // from @stablehlo
-#include "tsl/lib/core/status_test_util.h"
+#include "xla/tsl/lib/core/status_test_util.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/path.h"
 #include "tsl/platform/test.h"
@@ -131,18 +133,19 @@ TEST_F(EnableIrPrintingTest, PassSuccessfullyRuns) {
   mlir::PassManager pm = {ctx_.get()};
   pm.addPass(CreateNoOpPass());
   pm.addNestedPass<mlir::func::FuncOp>(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::func::FuncOp>(mlir::createCanonicalizerPass());
 
   EnableIrPrinting(pm, "dump");
 
   constexpr absl::string_view program = R"mlir(
 module{
+  func.func @main(%arg0: tensor<10xf32>) -> tensor<10xf32> {
+    return %arg0 : tensor<10xf32>
+  }
   func.func @func1(%arg0: tensor<10xf32>, %arg1: tensor<10xf32>) -> tensor<10xf32> {
     %0 = stablehlo.add %arg0, %arg1 : tensor<10xf32>
     %1 = stablehlo.add %arg0, %arg1 : tensor<10xf32>
     return %0 : tensor<10xf32>
-  }
-  func.func @main(%arg0: tensor<10xf32>) -> tensor<10xf32> {
-    return %arg0 : tensor<10xf32>
   }
 })mlir";
   auto module_op = mlir::parseSourceString<mlir::ModuleOp>(program, ctx_.get());
@@ -154,12 +157,12 @@ module{
       tsl::io::JoinPath(test_dir_,
                         "dump_0001_tensorflow::quantization::mlir_dump_test"
                         "::NoOpPass_before.mlir")));
-  TF_EXPECT_OK(tsl::Env::Default()->FileExists(tsl::io::JoinPath(
-      test_dir_, "dump_0002_Canonicalizer_func1_before.mlir")));
-  TF_EXPECT_OK(tsl::Env::Default()->FileExists(tsl::io::JoinPath(
-      test_dir_, "dump_0003_Canonicalizer_func1_after.mlir")));
-  TF_EXPECT_OK(tsl::Env::Default()->FileExists(tsl::io::JoinPath(
-      test_dir_, "dump_0004_Canonicalizer_main_before.mlir")));
+  TF_EXPECT_OK(tsl::Env::Default()->FileExists(
+      tsl::io::JoinPath(test_dir_, "dump_0002_Canonicalizer_before.mlir")));
+  TF_EXPECT_OK(tsl::Env::Default()->FileExists(
+      tsl::io::JoinPath(test_dir_, "dump_0002_Canonicalizer_after.mlir")));
+  TF_EXPECT_OK(tsl::Env::Default()->FileExists(
+      tsl::io::JoinPath(test_dir_, "dump_0003_Canonicalizer_before.mlir")));
 }
 
 TEST_F(EnableIrPrintingTest, NestedPassSuccessfullyRuns) {

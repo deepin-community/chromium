@@ -8,9 +8,9 @@
 #include "ash/ash_export.h"
 #include "ash/wm/desks/desk.h"
 #include "ash/wm/desks/desk_action_context_menu.h"
-#include "ash/wm/overview/overview_focusable_view.h"
 #include "base/memory/raw_ptr.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
 #include "ui/views/controls/button/image_button.h"
 
 namespace ash {
@@ -18,23 +18,18 @@ namespace ash {
 class DeskMiniView;
 
 class ASH_EXPORT DeskProfilesButton : public views::ImageButton,
-                                      public Desk::Observer,
-                                      public OverviewFocusableView {
+                                      public Desk::Observer {
   METADATA_HEADER(DeskProfilesButton, views::ImageButton)
 
  public:
-  // Creates a DeskProfilesButton for desk `desk`. If `owner_bar_is_overview`,
-  // then a focus predicate is installed on the focus ring. This is required
-  // to properly implement the `OverviewFocusableView` interface.
-  DeskProfilesButton(Desk* desk,
-                     DeskMiniView* desk_mini_view,
-                     bool owner_bar_is_overview);
+  // Creates a DeskProfilesButton for desk `desk`.
+  DeskProfilesButton(Desk* desk, DeskMiniView* desk_mini_view);
   DeskProfilesButton(const DeskProfilesButton&) = delete;
   DeskProfilesButton& operator=(const DeskProfilesButton&) = delete;
   ~DeskProfilesButton() override;
 
   // This is non-null when the profile menu is visible.
-  DeskActionContextMenu* menu() const { return context_menu_.get(); }
+  DeskActionContextMenu* menu() { return context_menu_.get(); }
 
   // Desk::Observer:
   void OnContentChanged() override {}
@@ -44,25 +39,17 @@ class ASH_EXPORT DeskProfilesButton : public views::ImageButton,
 
   // views::ImageButton:
   bool OnMousePressed(const ui::MouseEvent& event) override;
-  void OnGestureEvent(ui::GestureEvent* event) override;
-  bool OnKeyPressed(const ui::KeyEvent& event) override;
   void AboutToRequestFocusFromTabTraversal(bool reverse) override;
 
-  // OverviewFocusableView:
-  views::View* GetView() override;
-  void MaybeActivateFocusedView() override;
-  void MaybeCloseFocusedView(bool primary_action) override;
-  void MaybeSwapFocusedView(bool right) override;
-  void OnFocusableViewFocused() override;
-  void OnFocusableViewBlurred() override;
-
  private:
+  void OnButtonPressed(const ui::Event& event);
+
   // Loads the icon that is currently associated with `desk_`.
   void LoadIconForProfile();
 
   // Helper function to create context menu when needed.
   void CreateMenu(gfx::Point location_in_screen,
-                  ui::MenuSourceType menu_source);
+                  ui::mojom::MenuSourceType menu_source);
 
   // Invoked when the context menu is closed.
   void OnMenuClosed();

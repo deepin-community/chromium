@@ -9,7 +9,10 @@
 #include <set>
 #include <utility>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
 #include "core/fxcrt/fx_extension.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/stl_util.h"
 #include "core/fxcrt/xml/cfx_xmldocument.h"
 #include "core/fxcrt/xml/cfx_xmlelement.h"
@@ -17,9 +20,6 @@
 #include "fxjs/xfa/cfxjse_engine.h"
 #include "fxjs/xfa/cfxjse_resolveprocessor.h"
 #include "fxjs/xfa/cjx_object.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/notreached.h"
 #include "xfa/fxfa/cxfa_ffdoc.h"
 #include "xfa/fxfa/cxfa_ffnotify.h"
 #include "xfa/fxfa/parser/cscript_datawindow.h"
@@ -413,10 +413,7 @@ CXFA_Node* FindMatchingDataNode(
     CXFA_Occur* pTemplateNodeOccur =
         pCurTemplateNode->GetFirstChildByClass<CXFA_Occur>(XFA_Element::Occur);
     if (pTemplateNodeOccur) {
-      int32_t iMin;
-      int32_t iMax;
-      int32_t iInit;
-      std::tie(iMin, iMax, iInit) = pTemplateNodeOccur->GetOccurInfo();
+      auto [iMin, iMax, iInit] = pTemplateNodeOccur->GetOccurInfo();
       if (iMax == 0) {
         pCurTemplateNode = pIterator->MoveToNext();
         continue;
@@ -1092,6 +1089,9 @@ CXFA_Node* CopyContainer_SubformSet(CXFA_Document* pDocument,
     bool bFound = false;
     for (CXFA_Node* pTemplateChild = pTemplateNode->GetFirstChild();
          pTemplateChild; pTemplateChild = pTemplateChild->GetNextSibling()) {
+      if (pTemplateChild->GetPacketType() != XFA_PacketType::Template) {
+        continue;
+      }
       if (XFA_DataMerge_NeedGenerateForm(pTemplateChild, bUseInstanceManager)) {
         XFA_NodeMerge_CloneOrMergeContainer(pDocument, pSubformSetNode,
                                             pTemplateChild, true, nullptr);
@@ -1288,7 +1288,7 @@ CXFA_Document::CXFA_Document(CXFA_FFNotify* notify,
       notify_(notify),
       node_owner_(cppgc::MakeGarbageCollected<CXFA_NodeOwner>(
           heap->GetAllocationHandle())),
-      m_pLayoutProcessor(std::move(pLayout)) {
+      m_pLayoutProcessor(pLayout) {
   if (m_pLayoutProcessor)
     m_pLayoutProcessor->SetDocument(this);
 }
@@ -1629,7 +1629,7 @@ CXFA_Node* CXFA_Document::DataMerge_CopyContainer(CXFA_Node* pTemplateNode,
                                                   bool bOneInstance,
                                                   bool bDataMerge,
                                                   bool bUpLevel) {
-  DCHECK(pTemplateNode->IsContainerNode());
+  CHECK(pTemplateNode->IsContainerNode());
   switch (pTemplateNode->GetElementType()) {
     case XFA_Element::Area:
     case XFA_Element::PageArea:
@@ -1647,7 +1647,7 @@ CXFA_Node* CXFA_Document::DataMerge_CopyContainer(CXFA_Node* pTemplateNode,
     case XFA_Element::Variables:
       return nullptr;
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 

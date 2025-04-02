@@ -35,6 +35,35 @@ TEST_F(LayoutSVGTextTest, RectBasedHitTest) {
   EXPECT_EQ(2, count);
 }
 
+TEST_F(LayoutSVGTextTest, RectBasedHitTest_RotatedText) {
+  LoadAhem();
+  SetBodyInnerHTML(R"HTML(
+    <style>body { margin: 0 }</style>
+    <svg id="svg" width="300" height="300">
+      <path id="path" d="M50,80L150,180"/>
+      <text font-size="100" font-family="Ahem">
+        <textPath href="#path">MM</textPath>
+      </text>
+    </svg>
+  )HTML");
+
+  auto* svg = GetElementById("svg");
+
+  {
+    // Non-intersecting.
+    auto results = RectBasedHitTest(PhysicalRect(25, 10, 10, 100));
+    EXPECT_EQ(1u, results.size());
+    EXPECT_TRUE(results.Contains(svg));
+  }
+  {
+    // Intersects the axis-aligned bounding box of the text but not the actual
+    // (local) bounding box.
+    auto results = RectBasedHitTest(PhysicalRect(12, 12, 50, 50));
+    EXPECT_EQ(1u, results.size());
+    EXPECT_TRUE(results.Contains(svg));
+  }
+}
+
 TEST_F(LayoutSVGTextTest, TransformAffectsVectorEffect) {
   SetBodyInnerHTML(R"HTML(
     <svg width="300" height="300">
@@ -81,24 +110,6 @@ body { margin:0; padding: 0; }
   gfx::RectF bounding = quads.back().BoundingBox();
   EXPECT_EQ(7.0f, bounding.x());
   EXPECT_EQ(307.0f, bounding.right());
-}
-
-TEST_F(LayoutSVGTextTest, LocalVisualRect) {
-  LoadAhem();
-  SetBodyInnerHTML(R"HTML(
-<style>
-body { margin:0; padding: 0; }
-text { font-family: Ahem; }
-</style>
-<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
-  <text id="t" font-size="20" y="32" rotate="45">Foo</text>
-</svg>)HTML");
-  UpdateAllLifecyclePhasesForTest();
-
-  auto* object = GetLayoutObjectByElementId("t");
-  // The descent of the font is 4px.  The bottom of the visual rect should
-  // be greater than 32 + 4 if rotate is specified.
-  EXPECT_GT(object->LocalVisualRect().Bottom(), LayoutUnit(36));
 }
 
 TEST_F(LayoutSVGTextTest, ObjectBoundingBox) {

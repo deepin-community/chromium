@@ -30,18 +30,15 @@ class CORE_EXPORT MathMLTokenElement : public MathMLElement {
 
  private:
   bool IsPresentationAttribute(const QualifiedName&) const final;
-  void CollectStyleForPresentationAttribute(const QualifiedName&,
-                                            const AtomicString&,
-                                            MutableCSSPropertyValueSet*) final;
+  void CollectStyleForPresentationAttribute(
+      const QualifiedName&,
+      const AtomicString&,
+      HeapVector<CSSPropertyValue, 8>&) final;
   TokenContent ParseTokenContent();
   std::optional<TokenContent> token_content_;
   LayoutObject* CreateLayoutObject(const ComputedStyle&) final;
 };
 
-template <>
-inline bool IsElementOfType<const MathMLTokenElement>(const Node& node) {
-  return IsA<MathMLTokenElement>(node);
-}
 template <>
 struct DowncastTraits<MathMLTokenElement> {
   static bool AllowFrom(const Node& node) {

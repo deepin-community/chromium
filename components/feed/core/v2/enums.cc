@@ -5,7 +5,7 @@
 #include "components/feed/core/v2/enums.h"
 
 #include <ostream>
-#include "base/strings/string_piece.h"
+#include <string_view>
 
 namespace feed {
 
@@ -40,8 +40,6 @@ std::ostream& operator<<(std::ostream& out, NetworkRequestType value) {
       return out << "kSingleWebFeedListContents";
     case NetworkRequestType::kQueryWebFeed:
       return out << "kQueryWebFeed";
-    case NetworkRequestType::kSupervisedFeed:
-      return out << "kSupervisedFeed";
   }
 #endif
   return out << (static_cast<int>(value));
@@ -230,7 +228,7 @@ std::ostream& operator<<(std::ostream& out, WebFeedRefreshStatus value) {
   }
 }
 
-base::StringPiece ToString(UserSettingsOnStart v) {
+std::string_view ToString(UserSettingsOnStart v) {
   switch (v) {
     case UserSettingsOnStart::kFeedNotEnabledByPolicy:
       return "FeedNotEnabledByPolicy";

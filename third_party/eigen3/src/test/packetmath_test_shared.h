@@ -19,11 +19,17 @@
 bool g_first_pass = true;
 
 namespace Eigen {
-namespace internal {
 
-template <typename T>
+namespace test {
+
+template <typename T, std::enable_if_t<NumTraits<T>::IsSigned, bool> = true>
 T negate(const T& x) {
   return -x;
+}
+
+template <typename T, std::enable_if_t<!NumTraits<T>::IsSigned, bool> = true>
+T negate(const T& x) {
+  return T(0) - x;
 }
 
 template <typename T>
@@ -31,49 +37,10 @@ Map<const Array<unsigned char, sizeof(T), 1> > bits(const T& x) {
   return Map<const Array<unsigned char, sizeof(T), 1> >(reinterpret_cast<const unsigned char*>(&x));
 }
 
-// The following implement bitwise operations on floating point types
-template <typename T, typename Bits, typename Func>
-T apply_bit_op(Bits a, Bits b, Func f) {
-  Array<unsigned char, sizeof(T), 1> data;
-  T res;
-  for (Index i = 0; i < data.size(); ++i) data[i] = f(a[i], b[i]);
-  // Note: The reinterpret_cast works around GCC's class-memaccess warnings:
-  std::memcpy(reinterpret_cast<unsigned char*>(&res), data.data(), sizeof(T));
-  return res;
-}
-
-#define EIGEN_TEST_MAKE_BITWISE2(OP, FUNC, T)       \
-  template <>                                       \
-  T EIGEN_CAT(p, OP)(const T& a, const T& b) {      \
-    return apply_bit_op<T>(bits(a), bits(b), FUNC); \
-  }
-
-#define EIGEN_TEST_MAKE_BITWISE(OP, FUNC)                 \
-  EIGEN_TEST_MAKE_BITWISE2(OP, FUNC, float)               \
-  EIGEN_TEST_MAKE_BITWISE2(OP, FUNC, double)              \
-  EIGEN_TEST_MAKE_BITWISE2(OP, FUNC, half)                \
-  EIGEN_TEST_MAKE_BITWISE2(OP, FUNC, bfloat16)            \
-  EIGEN_TEST_MAKE_BITWISE2(OP, FUNC, std::complex<float>) \
-  EIGEN_TEST_MAKE_BITWISE2(OP, FUNC, std::complex<double>)
-
-EIGEN_TEST_MAKE_BITWISE(xor, std::bit_xor<unsigned char>())
-EIGEN_TEST_MAKE_BITWISE(and, std::bit_and<unsigned char>())
-EIGEN_TEST_MAKE_BITWISE(or, std::bit_or<unsigned char>())
-struct bit_andnot {
-  template <typename T>
-  T operator()(T a, T b) const {
-    return a & (~b);
-  }
-};
-EIGEN_TEST_MAKE_BITWISE(andnot, bit_andnot())
 template <typename T>
 bool biteq(T a, T b) {
   return (bits(a) == bits(b)).all();
 }
-
-}  // namespace internal
-
-namespace test {
 
 // NOTE: we disable inlining for this function to workaround a GCC issue when using -O3 and the i387 FPU.
 template <typename Scalar>
@@ -92,7 +59,8 @@ bool areApproxAbs(const Scalar* a, const Scalar* b, int size, const typename Num
   for (int i = 0; i < size; ++i) {
     if (!isApproxAbs(a[i], b[i], refvalue)) {
       print_mismatch(a, b, size);
-      std::cout << "Values differ in position " << i << ": " << a[i] << " vs " << b[i] << std::endl;
+      std::cout << std::setprecision(16) << "Values differ in position " << i << ": " << a[i] << " vs " << b[i]
+                << std::endl;
       return false;
     }
   }
@@ -105,7 +73,8 @@ bool areApprox(const Scalar* a, const Scalar* b, int size) {
     if (numext::not_equal_strict(a[i], b[i]) && !internal::isApprox(a[i], b[i]) &&
         !((numext::isnan)(a[i]) && (numext::isnan)(b[i]))) {
       print_mismatch(a, b, size);
-      std::cout << "Values differ in position " << i << ": " << a[i] << " vs " << b[i] << std::endl;
+      std::cout << std::setprecision(16) << "Values differ in position " << i << ": " << a[i] << " vs " << b[i]
+                << std::endl;
       return false;
     }
   }
@@ -117,7 +86,8 @@ bool areEqual(const Scalar* a, const Scalar* b, int size) {
   for (int i = 0; i < size; ++i) {
     if (numext::not_equal_strict(a[i], b[i]) && !((numext::isnan)(a[i]) && (numext::isnan)(b[i]))) {
       print_mismatch(a, b, size);
-      std::cout << "Values differ in position " << i << ": " << a[i] << " vs " << b[i] << std::endl;
+      std::cout << std::setprecision(16) << "Values differ in position " << i << ": " << a[i] << " vs " << b[i]
+                << std::endl;
       return false;
     }
   }
@@ -130,7 +100,8 @@ bool areApprox(const Scalar* a, const Scalar* b, int size, const typename NumTra
     if (numext::not_equal_strict(a[i], b[i]) && !internal::isApprox(a[i], b[i], precision) &&
         !((numext::isnan)(a[i]) && (numext::isnan)(b[i]))) {
       print_mismatch(a, b, size);
-      std::cout << "Values differ in position " << i << ": " << a[i] << " vs " << b[i] << std::endl;
+      std::cout << std::setprecision(16) << "Values differ in position " << i << ": " << a[i] << " vs " << b[i]
+                << std::endl;
       return false;
     }
   }

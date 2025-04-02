@@ -5,6 +5,7 @@
 #include "ui/message_center/views/notification_view_base.h"
 
 #include <stddef.h>
+
 #include <algorithm>
 #include <memory>
 #include <utility>
@@ -17,7 +18,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "base/strings/string_util.h"
-#include "build/chromeos_buildflags.h"
 #include "components/url_formatter/elide_url.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "ui/base/class_property.h"
@@ -61,6 +61,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/style/typography.h"
+#include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 
@@ -83,25 +84,6 @@ constexpr int kProgressBarHeight = 4;
 // However, it is not preferable that we completely omit the title, so
 // the ratio of the message width is limited to this value.
 constexpr double kProgressNotificationMessageRatio = 0.7;
-
-class ClickActivator : public ui::EventHandler {
- public:
-  explicit ClickActivator(NotificationViewBase* owner) : owner_(owner) {}
-  ClickActivator(const ClickActivator&) = delete;
-  ClickActivator& operator=(const ClickActivator&) = delete;
-  ~ClickActivator() override = default;
-
- private:
-  // ui::EventHandler
-  void OnEvent(ui::Event* event) override {
-    if (event->type() == ui::ET_MOUSE_PRESSED ||
-        event->type() == ui::ET_GESTURE_TAP) {
-      owner_->Activate();
-    }
-  }
-
-  const raw_ptr<NotificationViewBase> owner_;
-};
 
 // Creates a view responsible for drawing each list notification item's title
 // and message next to each other within a single column.
@@ -126,11 +108,11 @@ std::unique_ptr<views::View> CreateItemView(const NotificationItem& item) {
 }
 
 bool IsForAshNotification() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   return true;
 #else
   return false;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 }  // anonymous namespace
@@ -148,9 +130,11 @@ CompactTitleMessageView::CompactTitleMessageView() {
       std::u16string(), views::style::CONTEXT_DIALOG_BODY_TEXT,
       views::style::STYLE_SECONDARY));
   message_->SetHorizontalAlignment(gfx::ALIGN_RIGHT);
+  SetLayoutManager(std::make_unique<views::DelegatingLayoutManager>(this));
 }
 
-gfx::Size CompactTitleMessageView::CalculatePreferredSize() const {
+gfx::Size CompactTitleMessageView::CalculatePreferredSize(
+    const views::SizeBounds& /*available_size*/) const {
   gfx::Size title_size = title_->GetPreferredSize();
   gfx::Size message_size = message_->GetPreferredSize();
   return gfx::Size(title_size.width() + message_size.width() +
@@ -158,7 +142,12 @@ gfx::Size CompactTitleMessageView::CalculatePreferredSize() const {
                    std::max(title_size.height(), message_size.height()));
 }
 
-void CompactTitleMessageView::Layout(PassKey) {
+views::ProposedLayout CompactTitleMessageView::CalculateProposedLayout(
+    const views::SizeBounds& size_bounds) const {
+  views::ProposedLayout layout;
+  DCHECK(size_bounds.is_fully_bounded());
+  layout.host_size =
+      gfx::Size(size_bounds.width().value(), size_bounds.height().value());
   // Elides title and message.
   // * If the message is too long, the message occupies at most
   //   kProgressNotificationMessageRatio of the width.
@@ -167,16 +156,22 @@ void CompactTitleMessageView::Layout(PassKey) {
   //   title is shown.
   // * If they are short enough, the title is left-aligned and the message is
   //   right-aligned.
-  const int message_width = std::min(
-      message_->GetPreferredSize().width(),
-      title_->GetPreferredSize().width() > 0
-          ? static_cast<int>(kProgressNotificationMessageRatio * width())
-          : width());
-  const int title_width =
-      std::max(0, width() - message_width - kCompactTitleMessageViewSpacing);
-
-  title_->SetBounds(0, 0, title_width, height());
-  message_->SetBounds(width() - message_width, 0, message_width, height());
+  const int message_width =
+      std::min(message_->GetPreferredSize().width(),
+               title_->GetPreferredSize().width() > 0
+                   ? static_cast<int>(kProgressNotificationMessageRatio *
+                                      layout.host_size.width())
+                   : layout.host_size.width());
+  const int title_width = std::max(0, layout.host_size.width() - message_width -
+                                          kCompactTitleMessageViewSpacing);
+  layout.child_layouts.emplace_back(
+      title_.get(), title_->GetVisible(),
+      gfx::Rect(0, 0, title_width, layout.host_size.height()));
+  layout.child_layouts.emplace_back(
+      message_.get(), message_->GetVisible(),
+      gfx::Rect(layout.host_size.width() - message_width, 0, message_width,
+                layout.host_size.height()));
+  return layout;
 }
 
 void CompactTitleMessageView::set_title(const std::u16string& title) {
@@ -217,19 +212,12 @@ void NotificationViewBase::CreateOrUpdateViews(
 
 NotificationViewBase::NotificationViewBase(const Notification& notification)
     : MessageView(notification), for_ash_notification_(IsForAshNotification()) {
-  click_activator_ = std::make_unique<ClickActivator>(this);
-  // Reasons to use pretarget handler instead of OnMousePressed:
-  // - NotificationViewBase::OnMousePresssed would not fire on the inline reply
-  //   textfield click in native notification.
-  // - To make it look similar to ArcNotificationContentView::EventForwarder.
-  AddPreTargetHandler(click_activator_.get());
-
   UpdateCornerRadius(kNotificationCornerRadius, kNotificationCornerRadius);
+  SetProperty(views::kElementIdentifierKey,
+              notification.host_view_element_id());
 }
 
-NotificationViewBase::~NotificationViewBase() {
-  RemovePreTargetHandler(click_activator_.get());
-}
+NotificationViewBase::~NotificationViewBase() = default;
 
 void NotificationViewBase::OnFocus() {
   MessageView::OnFocus();
@@ -276,7 +264,7 @@ void NotificationViewBase::OnMouseReleased(const ui::MouseEvent& event) {
 }
 
 void NotificationViewBase::OnGestureEvent(ui::GestureEvent* event) {
-  if (event->type() == ui::ET_GESTURE_LONG_TAP) {
+  if (event->type() == ui::EventType::kGestureLongTap) {
     ToggleInlineSettings(*event);
     return;
   }
@@ -325,6 +313,7 @@ views::Builder<views::BoxLayoutView>
 NotificationViewBase::CreateLeftContentBuilder() {
   DCHECK(!left_content_);
   return views::Builder<views::BoxLayoutView>()
+      .SetID(ViewId::kLeftContent)
       .CopyAddressTo(&left_content_)
       .SetOrientation(views::BoxLayout::Orientation::kVertical);
 }
@@ -347,6 +336,7 @@ views::Builder<views::BoxLayoutView>
 NotificationViewBase::CreateInlineSettingsBuilder() {
   DCHECK(!settings_row_);
   return views::Builder<views::BoxLayoutView>()
+      .SetID(ViewId::kInlineSettingsRow)
       .CopyAddressTo(&settings_row_)
       .SetVisible(false);
 }
@@ -363,6 +353,7 @@ views::Builder<views::View>
 NotificationViewBase::CreateImageContainerBuilder() {
   DCHECK(!image_container_view_);
   return views::Builder<views::View>()
+      .SetID(ViewId::kImageContainerView)
       .CopyAddressTo(&image_container_view_)
       .SetUseDefaultFillLayout(true);
 }
@@ -526,8 +517,8 @@ void NotificationViewBase::CreateOrUpdateMessageLabel(
     return;
   }
 
-  const std::u16string& text = gfx::TruncateString(
-      notification.message(), kMessageCharacterLimit, gfx::WORD_BREAK);
+  const std::u16string text = gfx::TruncateString(
+      notification.message(), GetMessageCharacterLimit(), gfx::WORD_BREAK);
 
   if (!message_label_) {
     auto message_label = std::make_unique<views::Label>(
@@ -593,12 +584,13 @@ void NotificationViewBase::CreateOrUpdateIconView(
   if (!icon_view_) {
     icon_view_ = right_content_->AddChildView(
         std::make_unique<ProportionalImageView>(GetIconViewSize()));
+    icon_view_->SetID(ViewId::kIconView);
   }
 
   bool apply_rounded_corners = false;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   apply_rounded_corners = for_ash_notification_;
-#endif  // IS_CHROMEOS_ASH
+#endif  // BUILDFLAG(IS_CHROMEOS)
   icon_view_->SetImage(icon, icon.Size(), apply_rounded_corners);
 
   // Hide the icon on the right side when the notification is expanded.
@@ -688,7 +680,7 @@ void NotificationViewBase::CreateOrUpdateActionButtonViews(
       // in the right location in the view hierarchy when
       // SynthesizeMouseMoveEvent() is called.
       DeprecatedLayoutImmediately();
-      widget->SetSize(widget->GetContentsView()->GetPreferredSize());
+      widget->SetSize(widget->GetContentsView()->GetPreferredSize({}));
       widget->SynthesizeMouseMoveEvent();
     }
   }
@@ -838,11 +830,6 @@ void NotificationViewBase::ToggleSnoozeSettings(const ui::Event& event) {
       return;
     }
   }
-}
-
-void NotificationViewBase::Activate() {
-  GetWidget()->widget_delegate()->SetCanActivate(true);
-  GetWidget()->Activate();
 }
 
 void NotificationViewBase::InkDropAnimationStarted() {

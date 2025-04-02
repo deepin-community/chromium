@@ -21,13 +21,13 @@ import './voice_match_entry.js';
 
 import {loadTimeData} from '//resources/ash/common/load_time_data.m.js';
 import {announceAccessibleMessage} from '//resources/ash/common/util.js';
-import {afterNextRender, html, mixinBehaviors, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {afterNextRender, PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {MultiStepBehavior, MultiStepBehaviorInterface} from '../components/behaviors/multi_step_behavior.js';
-import {OobeI18nBehavior} from '../components/behaviors/oobe_i18n_behavior.js';
+import {MultiStepMixin} from '../components/mixins/multi_step_mixin.js';
+import {OobeI18nMixin} from '../components/mixins/oobe_i18n_mixin.js';
 
-import {BrowserProxy, BrowserProxyImpl} from './browser_proxy.js';
-
+import {getTemplate} from './assistant_voice_match.html.js';
+import {BrowserProxyImpl} from './browser_proxy.js';
 
 /** Maximum recording index. */
 const MAX_INDEX = 4;
@@ -48,10 +48,9 @@ const VoiceMatchUIState = {
 /**
  * @constructor
  * @extends {PolymerElement}
- * @implements {MultiStepBehaviorInterface}
+ * @implements {MultiStepMixinInterface}
  */
-const AssistantVoiceMatchBase =
-    mixinBehaviors([OobeI18nBehavior, MultiStepBehavior], PolymerElement);
+const AssistantVoiceMatchBase = MultiStepMixin(OobeI18nMixin(PolymerElement));
 
 /**
  * @polymer
@@ -62,7 +61,7 @@ class AssistantVoiceMatch extends AssistantVoiceMatchBase {
   }
 
   static get template() {
-    return html`{__html_template__}`;
+    return getTemplate();
   }
 
   static get properties() {
@@ -192,7 +191,9 @@ class AssistantVoiceMatch extends AssistantVoiceMatchBase {
    */
   reloadPage() {
     this.setUIStep(VoiceMatchUIState.INTRO);
-    this.$['agree-button'].focus();
+    if (!this.equalWeightButtons_) {
+      this.$['agree-button'].focus();
+    }
     this.resetElements_();
     this.browserProxy_.userActed(VOICE_MATCH_SCREEN_ID, ['reload-requested']);
     this.dispatchEvent(
@@ -271,7 +272,11 @@ class AssistantVoiceMatch extends AssistantVoiceMatchBase {
 
     this.browserProxy_.screenShown(VOICE_MATCH_SCREEN_ID);
     this.$['voice-match-lottie'].playing = true;
-    afterNextRender(this, () => this.$['agree-button'].focus());
+    afterNextRender(this, () => {
+      if (!this.equalWeightButtons_) {
+        this.$['agree-button'].focus();
+      }
+    });
   }
 
   /**

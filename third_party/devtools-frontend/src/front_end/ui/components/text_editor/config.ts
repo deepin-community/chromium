@@ -8,12 +8,14 @@ import * as TextUtils from '../../../models/text_utils/text_utils.js';
 import * as WindowBoundsService from '../../../services/window_bounds/window_bounds.js';
 import * as CM from '../../../third_party/codemirror.next/codemirror.next.js';
 import * as UI from '../../legacy/legacy.js';
+import * as VisualLogging from '../../visual_logging/visual_logging.js';
 import * as CodeHighlighter from '../code_highlighter/code_highlighter.js';
 import * as Icon from '../icon_button/icon_button.js';
 
 import {editorTheme} from './theme.js';
 
 const LINES_TO_SCAN_FOR_INDENTATION_GUESSING = 1000;
+const RECOMPUTE_INDENT_MAX_SIZE = 200;
 
 const UIStrings = {
   /**
@@ -195,6 +197,7 @@ export const codeFolding = DynamicSetting.bool('text-editor-code-folding', [
       const iconName = open ? 'triangle-down' : 'triangle-right';
       const icon = new Icon.Icon.Icon();
       icon.setAttribute('class', open ? 'cm-foldGutterElement' : 'cm-foldGutterElement cm-foldGutterElement-folded');
+      icon.setAttribute('jslog', `${VisualLogging.expand().track({click: true})}`);
       icon.data = {
         iconName,
         color: 'var(--icon-fold-marker)',
@@ -207,13 +210,30 @@ export const codeFolding = DynamicSetting.bool('text-editor-code-folding', [
   CM.keymap.of(CM.foldKeymap),
 ]);
 
-const deriveIndentUnit = CM.Prec.highest(CM.indentUnit.compute([], (state: CM.EditorState) => {
-  const lines = state.doc.iterLines(1, Math.min(state.doc.lines + 1, LINES_TO_SCAN_FOR_INDENTATION_GUESSING));
+const AutoDetectIndent = CM.StateField.define<string>({
+  create: state => detectIndentation(state.doc),
+  update: (indent, tr) => {
+    return tr.docChanged && preservedLength(tr.changes) <= RECOMPUTE_INDENT_MAX_SIZE ? detectIndentation(tr.state.doc) :
+                                                                                       indent;
+  },
+  provide: f => CM.Prec.highest(CM.indentUnit.from(f)),
+});
+
+function preservedLength(ch: CM.ChangeDesc): number {
+  let len = 0;
+  ch.iterGaps((from, to, l) => {
+    len += l;
+  });
+  return len;
+}
+
+function detectIndentation(doc: CM.Text): string {
+  const lines = doc.iterLines(1, Math.min(doc.lines + 1, LINES_TO_SCAN_FOR_INDENTATION_GUESSING));
   const indentUnit = TextUtils.TextUtils.detectIndentation(lines);
   return indentUnit ?? Common.Settings.Settings.instance().moduleSetting('text-editor-indent').get();
-}));
+}
 
-export const autoDetectIndent = DynamicSetting.bool('text-editor-auto-detect-indent', deriveIndentUnit);
+export const autoDetectIndent = DynamicSetting.bool('text-editor-auto-detect-indent', AutoDetectIndent);
 
 function matcher(decorator: CM.MatchDecorator): CM.Extension {
   return CM.ViewPlugin.define(
@@ -350,10 +370,11 @@ export function baseConfiguration(text: string|CM.Text): CM.Extension {
   ];
 }
 
-export const closeBrackets: CM.Extension = [
+export const closeBrackets = DynamicSetting.bool('text-editor-bracket-closing', [
+  CM.html.autoCloseTags,
   CM.closeBrackets(),
   CM.keymap.of(CM.closeBracketsKeymap),
-];
+]);
 
 // Root editor tooltips at the top of the document, creating a special
 // element with the editor styles mounted in it for them. This is
@@ -406,8 +427,10 @@ class CompletionHint extends CM.WidgetType {
 }
 
 export const showCompletionHint = CM.ViewPlugin.fromClass(class {
-  decorations: CM.DecorationSet = CM.Decoration.none;
-  currentHint: string|null = null;
+decorations:
+  CM.DecorationSet = CM.Decoration.none;
+currentHint:
+  string|null = null;
 
   update(update: CM.ViewUpdate): void {
     const top = this.currentHint = this.topCompletion(update.state);

@@ -67,8 +67,7 @@ class CORE_EXPORT ScopedStyleResolver final
   CounterStyleMap* GetCounterStyleMap() { return counter_style_map_.Get(); }
   static void CounterStyleRulesChanged(TreeScope& scope);
 
-  StyleRulePositionFallback* PositionFallbackForName(
-      const AtomicString& fallback_name);
+  StyleRulePositionTry* PositionTryForName(const AtomicString& try_name);
 
   StyleRuleFunction* FunctionForName(StringView name);
 
@@ -84,13 +83,16 @@ class CORE_EXPORT ScopedStyleResolver final
     return active_style_sheets_;
   }
 
+  // See InspectorGhostRules.
+  void QuietlySwapActiveStyleSheets(ActiveStyleSheetVector& other);
+
   void AppendActiveStyleSheets(unsigned index, const ActiveStyleSheetVector&);
-  void CollectMatchingElementScopeRules(ElementRuleCollector&);
+  void CollectMatchingElementScopeRules(ElementRuleCollector&,
+                                        PartNames* part_names);
   void CollectMatchingShadowHostRules(ElementRuleCollector&);
   void CollectMatchingSlottedRules(ElementRuleCollector&);
   void CollectMatchingPartPseudoRules(ElementRuleCollector&,
-                                      PartNames& part_names,
-                                      bool for_shadow_pseudo);
+                                      PartNames* part_names);
   void MatchPageRules(PageRuleCollector&);
   void CollectFeaturesTo(RuleFeatureSet&,
                          HeapHashSet<Member<const StyleSheetContents>>&
@@ -118,7 +120,7 @@ class CORE_EXPORT ScopedStyleResolver final
   bool KeyframeStyleShouldOverride(
       const StyleRuleKeyframes* new_rule,
       const StyleRuleKeyframes* existing_rule) const;
-  void AddPositionFallbackRules(const RuleSet&);
+  void AddPositionTryRules(const RuleSet&);
   void AddFunctionRules(const RuleSet&);
 
   CounterStyleMap& EnsureCounterStyleMap();
@@ -133,14 +135,15 @@ class CORE_EXPORT ScopedStyleResolver final
 
   ActiveStyleSheetVector active_style_sheets_;
   MediaQueryResultFlags media_query_result_flags_;
+  HeapVector<RuleSetGroup> rule_set_groups_;
 
   using KeyframesRuleMap =
       HeapHashMap<AtomicString, Member<StyleRuleKeyframes>>;
   KeyframesRuleMap keyframes_rule_map_;
 
-  using PositionFallbackRuleMap =
-      HeapHashMap<AtomicString, Member<StyleRulePositionFallback>>;
-  PositionFallbackRuleMap position_fallback_rule_map_;
+  using PositionTryRuleMap =
+      HeapHashMap<AtomicString, Member<StyleRulePositionTry>>;
+  PositionTryRuleMap position_try_rule_map_;
 
   using FunctionRuleMap = HeapHashMap<String, Member<StyleRuleFunction>>;
   FunctionRuleMap function_rule_map_;

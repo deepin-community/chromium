@@ -27,8 +27,12 @@
 
 #include "dawn/native/Queue.h"
 
+#include <webgpu/webgpu.h>
+
 #include <algorithm>
 #include <cstring>
+#include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -55,7 +59,6 @@
 #include "dawn/native/Texture.h"
 #include "dawn/platform/DawnPlatform.h"
 #include "dawn/platform/tracing/TraceEvent.h"
-#include "dawn/webgpu.h"
 #include "partition_alloc/pointers/raw_ptr.h"
 
 namespace dawn::native {
@@ -152,37 +155,9 @@ ResultOrError<UploadHandle> UploadTextureDataAligningBytesPerRowAndOffset(
     return uploadHandle;
 }
 
-struct SubmittedWorkDone : TrackTaskCallback {
-    SubmittedWorkDone(dawn::platform::Platform* platform,
-                      WGPUQueueWorkDoneCallback callback,
-                      void* userdata)
-        : TrackTaskCallback(platform), mCallback(callback), mUserdata(userdata) {}
-    ~SubmittedWorkDone() override = default;
-
-  private:
-    void FinishImpl() override {
-        DAWN_ASSERT(mCallback != nullptr);
-        DAWN_ASSERT(mSerial != kMaxExecutionSerial);
-        TRACE_EVENT1(mPlatform, General, "Queue::SubmittedWorkDone::Finished", "serial",
-                     uint64_t(mSerial));
-        mCallback(WGPUQueueWorkDoneStatus_Success, mUserdata);
-        mCallback = nullptr;
-    }
-    void HandleDeviceLossImpl() override {
-        DAWN_ASSERT(mCallback != nullptr);
-        mCallback(WGPUQueueWorkDoneStatus_DeviceLost, mUserdata);
-        mCallback = nullptr;
-    }
-    void HandleShutDownImpl() override { HandleDeviceLossImpl(); }
-
-    WGPUQueueWorkDoneCallback mCallback = nullptr;
-    // TODO(https://crbug.com/dawn/2349): Investigate DanglingUntriaged in dawn/native.
-    raw_ptr<void, DanglingUntriaged> mUserdata;
-};
-
 class ErrorQueue : public QueueBase {
   public:
-    explicit ErrorQueue(DeviceBase* device, const char* label)
+    explicit ErrorQueue(DeviceBase* device, StringView label)
         : QueueBase(device, ObjectBase::kError, label) {}
 
   private:
@@ -197,46 +172,6 @@ class ErrorQueue : public QueueBase {
         DAWN_UNREACHABLE();
     }
     MaybeError WaitForIdleForDestruction() override { DAWN_UNREACHABLE(); }
-};
-
-struct WorkDoneEvent final : public EventManager::TrackedEvent {
-    std::optional<wgpu::QueueWorkDoneStatus> mEarlyStatus;
-    WGPUQueueWorkDoneCallback mCallback;
-    // TODO(https://crbug.com/dawn/2349): Investigate DanglingUntriaged in dawn/native.
-    raw_ptr<void, DanglingUntriaged> mUserdata;
-
-    // Create an event backed by the given queue execution serial.
-    WorkDoneEvent(const QueueWorkDoneCallbackInfo& callbackInfo,
-                  QueueBase* queue,
-                  ExecutionSerial serial)
-        : TrackedEvent(callbackInfo.mode, queue, serial),
-          mCallback(callbackInfo.callback),
-          mUserdata(callbackInfo.userdata) {}
-
-    // Create an event that's ready at creation (for errors, etc.)
-    WorkDoneEvent(const QueueWorkDoneCallbackInfo& callbackInfo,
-                  QueueBase* queue,
-                  wgpu::QueueWorkDoneStatus earlyStatus)
-        : TrackedEvent(callbackInfo.mode, queue, kBeginningOfGPUTime),
-          mEarlyStatus(earlyStatus),
-          mCallback(callbackInfo.callback),
-          mUserdata(callbackInfo.userdata) {
-        CompleteIfSpontaneous();
-    }
-
-    ~WorkDoneEvent() override { EnsureComplete(EventCompletionType::Shutdown); }
-
-    void Complete(EventCompletionType completionType) override {
-        // WorkDoneEvent has no error cases other than the mEarlyStatus ones.
-        wgpu::QueueWorkDoneStatus status = wgpu::QueueWorkDoneStatus::Success;
-        if (completionType == EventCompletionType::Shutdown) {
-            status = wgpu::QueueWorkDoneStatus::InstanceDropped;
-        } else if (mEarlyStatus) {
-            status = mEarlyStatus.value();
-        }
-
-        mCallback(ToAPI(status), mUserdata);
-    }
 };
 
 }  // namespace
@@ -254,7 +189,7 @@ QueueBase::QueueBase(DeviceBase* device, const QueueDescriptor* descriptor)
     GetObjectTrackingList()->Track(this);
 }
 
-QueueBase::QueueBase(DeviceBase* device, ObjectBase::ErrorTag tag, const char* label)
+QueueBase::QueueBase(DeviceBase* device, ObjectBase::ErrorTag tag, StringView label)
     : ApiObjectBase(device, tag, label) {}
 
 QueueBase::~QueueBase() {
@@ -264,12 +199,22 @@ QueueBase::~QueueBase() {
 void QueueBase::DestroyImpl() {}
 
 // static
-Ref<QueueBase> QueueBase::MakeError(DeviceBase* device, const char* label) {
+Ref<QueueBase> QueueBase::MakeError(DeviceBase* device, StringView label) {
     return AcquireRef(new ErrorQueue(device, label));
 }
 
 ObjectType QueueBase::GetType() const {
     return ObjectType::Queue;
+}
+
+// It doesn't make much sense right now to mark the default queue as "unlabeled", so this override
+// prevents that. Consider removing when multiqueue is implemented.
+void QueueBase::FormatLabel(absl::FormatSink* s) const {
+    s->Append(ObjectTypeAsString(GetType()));
+    const std::string& label = GetLabel();
+    if (!label.empty()) {
+        s->Append(absl::StrFormat(" \"%s\"", label));
+    }
 }
 
 void QueueBase::APISubmit(uint32_t commandCount, CommandBufferBase* const* commands) {
@@ -280,53 +225,74 @@ void QueueBase::APISubmit(uint32_t commandCount, CommandBufferBase* const* comma
         commands[i]->Destroy();
     }
 
-    DAWN_UNUSED(GetDevice()->ConsumedError(
+    [[maybe_unused]] bool hadError = GetDevice()->ConsumedError(
         std::move(result), "calling %s.Submit(%s)", this,
-        ityp::span<uint32_t, CommandBufferBase* const>(commands, commandCount)));
+        ityp::span<uint32_t, CommandBufferBase* const>(commands, commandCount));
 }
 
-void QueueBase::APIOnSubmittedWorkDone(WGPUQueueWorkDoneCallback callback, void* userdata) {
-    // The error status depends on the type of error so we let the validation function choose it
-    wgpu::QueueWorkDoneStatus status;
-    if (GetDevice()->ConsumedError(ValidateOnSubmittedWorkDone(&status))) {
-        GetDevice()->GetCallbackTaskManager()->AddCallbackTask(
-            [callback, status, userdata] { callback(ToAPI(status), userdata); });
-        return;
-    }
+Future QueueBase::APIOnSubmittedWorkDone(const WGPUQueueWorkDoneCallbackInfo& callbackInfo) {
+    struct WorkDoneEvent final : public EventManager::TrackedEvent {
+        std::optional<WGPUQueueWorkDoneStatus> mEarlyStatus;
+        WGPUQueueWorkDoneCallback mCallback;
+        raw_ptr<void> mUserdata1;
+        raw_ptr<void> mUserdata2;
 
-    std::unique_ptr<SubmittedWorkDone> task =
-        std::make_unique<SubmittedWorkDone>(GetDevice()->GetPlatform(), callback, userdata);
+        // Create an event backed by the given queue execution serial.
+        WorkDoneEvent(const WGPUQueueWorkDoneCallbackInfo& callbackInfo,
+                      QueueBase* queue,
+                      ExecutionSerial serial)
+            : TrackedEvent(static_cast<wgpu::CallbackMode>(callbackInfo.mode), queue, serial),
+              mCallback(callbackInfo.callback),
+              mUserdata1(callbackInfo.userdata1),
+              mUserdata2(callbackInfo.userdata2) {}
 
-    // Technically we only need to wait for previously submitted work but OnSubmittedWorkDone is
-    // also used to make sure ALL queue work is finished in tests, so we also wait for pending
-    // commands (this is non-observable outside of tests so it's ok to do deviate a bit from the
-    // spec).
-    TrackTaskAfterEventualFlush(std::move(task));
+        // Create an event that's ready at creation (for errors, etc.)
+        WorkDoneEvent(const WGPUQueueWorkDoneCallbackInfo& callbackInfo,
+                      QueueBase* queue,
+                      wgpu::QueueWorkDoneStatus earlyStatus)
+            : TrackedEvent(static_cast<wgpu::CallbackMode>(callbackInfo.mode),
+                           queue,
+                           kBeginningOfGPUTime),
+              mEarlyStatus(ToAPI(earlyStatus)),
+              mCallback(callbackInfo.callback),
+              mUserdata1(callbackInfo.userdata1),
+              mUserdata2(callbackInfo.userdata2) {}
 
-    TRACE_EVENT1(GetDevice()->GetPlatform(), General, "Queue::APIOnSubmittedWorkDone", "serial",
-                 uint64_t(GetPendingCommandSerial()));
-}
+        ~WorkDoneEvent() override { EnsureComplete(EventCompletionType::Shutdown); }
 
-Future QueueBase::APIOnSubmittedWorkDoneF(const QueueWorkDoneCallbackInfo& callbackInfo) {
+        void Complete(EventCompletionType completionType) override {
+            // WorkDoneEvent has no error cases other than the mEarlyStatus ones.
+            WGPUQueueWorkDoneStatus status = WGPUQueueWorkDoneStatus_Success;
+            if (completionType == EventCompletionType::Shutdown) {
+                status = WGPUQueueWorkDoneStatus_InstanceDropped;
+            } else if (mEarlyStatus) {
+                status = mEarlyStatus.value();
+            }
+
+            mCallback(status, mUserdata1.ExtractAsDangling(), mUserdata2.ExtractAsDangling());
+        }
+    };
+
     // TODO(crbug.com/dawn/2052): Once we always return a future, change this to log to the instance
     // (note, not raise a validation error to the device) and return the null future.
     DAWN_ASSERT(callbackInfo.nextInChain == nullptr);
 
     Ref<EventManager::TrackedEvent> event;
+    {
+        // TODO(crbug.com/dawn/831) Manually acquire device lock instead of relying on code-gen for
+        // re-entrancy.
+        auto deviceLock(GetDevice()->GetScopedLock());
 
-    wgpu::QueueWorkDoneStatus validationEarlyStatus;
-    if (GetDevice()->ConsumedError(ValidateOnSubmittedWorkDone(&validationEarlyStatus))) {
-        // TODO(crbug.com/dawn/2021): This is here to pretend that things succeed when the device is
-        // lost. When the old OnSubmittedWorkDone is removed then we can update
-        // ValidateOnSubmittedWorkDone to just return the correct thing here.
-        if (validationEarlyStatus == wgpu::QueueWorkDoneStatus::DeviceLost) {
-            validationEarlyStatus = wgpu::QueueWorkDoneStatus::Success;
+        // Note: if the callback is spontaneous, it may get called in here.
+        if (GetDevice()->ConsumedError(GetDevice()->ValidateIsAlive())) {
+            event = AcquireRef(
+                new WorkDoneEvent(callbackInfo, this, wgpu::QueueWorkDoneStatus::Success));
+        } else if (GetDevice()->ConsumedError(ValidateOnSubmittedWorkDone())) {
+            event =
+                AcquireRef(new WorkDoneEvent(callbackInfo, this, wgpu::QueueWorkDoneStatus::Error));
+        } else {
+            event = AcquireRef(new WorkDoneEvent(callbackInfo, this, GetScheduledWorkDoneSerial()));
         }
-
-        // Note: if the callback is spontaneous, it'll get called in here.
-        event = AcquireRef(new WorkDoneEvent(callbackInfo, this, validationEarlyStatus));
-    } else {
-        event = AcquireRef(new WorkDoneEvent(callbackInfo, this, GetScheduledWorkDoneSerial()));
     }
 
     FutureID futureID = GetInstance()->GetEventManager()->TrackEvent(std::move(event));
@@ -399,10 +365,10 @@ void QueueBase::APIWriteBuffer(BufferBase* buffer,
                                uint64_t bufferOffset,
                                const void* data,
                                size_t size) {
-    DAWN_UNUSED(
+    [[maybe_unused]] bool hadError =
         GetDevice()->ConsumedError(WriteBuffer(buffer, bufferOffset, data, size),
                                    "calling %s.WriteBuffer(%s, (%d bytes), data, (%d bytes))", this,
-                                   buffer, bufferOffset, size));
+                                   buffer, bufferOffset, size);
 }
 
 MaybeError QueueBase::WriteBuffer(BufferBase* buffer,
@@ -420,22 +386,7 @@ MaybeError QueueBase::WriteBufferImpl(BufferBase* buffer,
                                       uint64_t bufferOffset,
                                       const void* data,
                                       size_t size) {
-    if (size == 0) {
-        return {};
-    }
-
-    DeviceBase* device = GetDevice();
-
-    UploadHandle uploadHandle;
-    DAWN_TRY_ASSIGN(uploadHandle,
-                    device->GetDynamicUploader()->Allocate(size, GetPendingCommandSerial(),
-                                                           kCopyBufferToBufferOffsetAlignment));
-    DAWN_ASSERT(uploadHandle.mappedBuffer != nullptr);
-
-    memcpy(uploadHandle.mappedBuffer, data, size);
-
-    return device->CopyFromStagingToBuffer(uploadHandle.stagingBuffer, uploadHandle.startOffset,
-                                           buffer, bufferOffset, size);
+    return buffer->UploadData(bufferOffset, data, size);
 }
 
 void QueueBase::APIWriteTexture(const ImageCopyTexture* destination,
@@ -443,10 +394,10 @@ void QueueBase::APIWriteTexture(const ImageCopyTexture* destination,
                                 size_t dataSize,
                                 const TextureDataLayout* dataLayout,
                                 const Extent3D* writeSize) {
-    DAWN_UNUSED(GetDevice()->ConsumedError(
+    [[maybe_unused]] bool hadError = GetDevice()->ConsumedError(
         WriteTextureInternal(destination, data, dataSize, *dataLayout, writeSize),
         "calling %s.WriteTexture(%s, (%u bytes), %s, %s)", this, destination, dataSize, dataLayout,
-        writeSize));
+        writeSize);
 }
 
 MaybeError QueueBase::WriteTextureInternal(const ImageCopyTexture* destinationOrig,
@@ -515,16 +466,16 @@ void QueueBase::APICopyTextureForBrowser(const ImageCopyTexture* source,
                                          const ImageCopyTexture* destination,
                                          const Extent3D* copySize,
                                          const CopyTextureForBrowserOptions* options) {
-    DAWN_UNUSED(GetDevice()->ConsumedError(
-        CopyTextureForBrowserInternal(source, destination, copySize, options)));
+    [[maybe_unused]] bool hadError = GetDevice()->ConsumedError(
+        CopyTextureForBrowserInternal(source, destination, copySize, options));
 }
 
 void QueueBase::APICopyExternalTextureForBrowser(const ImageCopyExternalTexture* source,
                                                  const ImageCopyTexture* destination,
                                                  const Extent3D* copySize,
                                                  const CopyTextureForBrowserOptions* options) {
-    DAWN_UNUSED(GetDevice()->ConsumedError(
-        CopyExternalTextureForBrowserInternal(source, destination, copySize, options)));
+    [[maybe_unused]] bool hadError = GetDevice()->ConsumedError(
+        CopyExternalTextureForBrowserInternal(source, destination, copySize, options));
 }
 
 MaybeError QueueBase::CopyTextureForBrowserInternal(const ImageCopyTexture* sourceOrig,
@@ -565,9 +516,15 @@ MaybeError QueueBase::ValidateSubmit(uint32_t commandCount,
     TRACE_EVENT0(GetDevice()->GetPlatform(), Validation, "Queue::ValidateSubmit");
     DAWN_TRY(GetDevice()->ValidateObject(this));
 
+    std::set<CommandBufferBase*> uniqueCommandBuffers;
+
     for (uint32_t i = 0; i < commandCount; ++i) {
         DAWN_TRY(GetDevice()->ValidateObject(commands[i]));
         DAWN_TRY(commands[i]->ValidateCanUseInSubmitNow());
+
+        auto insertResult = uniqueCommandBuffers.insert(commands[i]);
+        DAWN_INVALID_IF(!insertResult.second, "Submit contains duplicates of %s.", commands[i]);
+
         const CommandBufferResourceUsage& usages = commands[i]->GetResourceUsages();
 
         for (const BufferBase* buffer : usages.topLevelBuffers) {
@@ -612,13 +569,8 @@ MaybeError QueueBase::ValidateSubmit(uint32_t commandCount,
     return {};
 }
 
-MaybeError QueueBase::ValidateOnSubmittedWorkDone(wgpu::QueueWorkDoneStatus* status) const {
-    *status = wgpu::QueueWorkDoneStatus::DeviceLost;
-    DAWN_TRY(GetDevice()->ValidateIsAlive());
-
-    *status = wgpu::QueueWorkDoneStatus::Error;
+MaybeError QueueBase::ValidateOnSubmittedWorkDone() const {
     DAWN_TRY(GetDevice()->ValidateObject(this));
-
     return {};
 }
 

@@ -64,8 +64,7 @@ void AddPrivateSwitches(base::CommandLine* command_line) {
 
 }  // namespace
 
-PPAPITestMessageHandler::PPAPITestMessageHandler() {
-}
+PPAPITestMessageHandler::PPAPITestMessageHandler() = default;
 
 TestMessageHandler::MessageResponse PPAPITestMessageHandler::HandleMessage(
     const std::string& json) {
@@ -144,8 +143,7 @@ PPAPITestBase::PPAPITestBase() {
   // These are needed to test that the right NetworkAnonymizationKey is used.
   scoped_feature_list_.InitWithFeatures(
       // enabled_features
-      {net::features::kSplitHostCacheByNetworkIsolationKey,
-       net::features::kPartitionConnectionsByNetworkIsolationKey, kNaclAllow},
+      {net::features::kPartitionConnectionsByNetworkIsolationKey, kNaclAllow},
       // disabled_features
       {});
 }
@@ -286,7 +284,7 @@ void PPAPITest::SetUpCommandLine(base::CommandLine* command_line) {
   if (in_process_)
     command_line->AppendSwitch(switches::kPpapiInProcess);
 
-  // TODO(https://crbug.com/1172495): Remove once NaCl code can be deleted.
+  // TODO(crbug.com/40166667): Remove once NaCl code can be deleted.
   command_line->AppendSwitchASCII(blink::switches::kBlinkSettings,
                                   "allowNonEmptyNavigatorPlugins=true");
 }

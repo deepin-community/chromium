@@ -22,9 +22,8 @@
 #include "chrome/grit/renderer_resources.h"
 #include "chrome/renderer/chrome_content_renderer_client.h"
 #include "chrome/renderer/custom_menu_commands.h"
-#include "chrome/renderer/plugins/plugin_uma.h"
 #include "components/content_settings/renderer/content_settings_agent_impl.h"
-#include "components/no_state_prefetch/renderer/prerender_observer_list.h"
+#include "components/no_state_prefetch/renderer/no_state_prefetch_observer_list.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/renderer/render_frame.h"
@@ -102,7 +101,8 @@ ChromePluginPlaceholder::ChromePluginPlaceholder(
       status_(chrome::mojom::PluginStatus::kAllowed),
       title_(title) {
   RenderThread::Get()->AddObserver(this);
-  prerender::PrerenderObserverList::AddObserverForFrame(render_frame, this);
+  prerender::NoStatePrefetchObserverList::AddObserverForFrame(render_frame,
+                                                              this);
 
   // Keep track of all placeholders associated with |render_frame|.
   PlaceholderSet::GetOrCreate(render_frame)->placeholders().insert(this);
@@ -117,8 +117,8 @@ ChromePluginPlaceholder::~ChromePluginPlaceholder() {
     if (set)
       set->placeholders().erase(this);
 
-    prerender::PrerenderObserverList::RemoveObserverForFrame(render_frame(),
-                                                             this);
+    prerender::NoStatePrefetchObserverList::RemoveObserverForFrame(
+        render_frame(), this);
   }
 }
 
@@ -198,8 +198,9 @@ void ChromePluginPlaceholder::SetStatus(chrome::mojom::PluginStatus status) {
   status_ = status;
 }
 
-void ChromePluginPlaceholder::SetIsPrerendering(bool is_prerendering) {
-  OnSetIsPrerendering(is_prerendering);
+void ChromePluginPlaceholder::SetIsNoStatePrefetching(
+    bool is_no_state_prefetching) {
+  OnSetIsNoStatePrefetching(is_no_state_prefetching);
 }
 
 void ChromePluginPlaceholder::PluginListChanged() {
@@ -221,10 +222,6 @@ void ChromePluginPlaceholder::PluginListChanged() {
   blink::WebPlugin* new_plugin = ChromeContentRendererClient::CreatePlugin(
       render_frame(), GetPluginParams(), *plugin_info);
   ReplacePlugin(new_plugin);
-  if (!new_plugin) {
-    PluginUMAReporter::GetInstance()->ReportPluginMissing(
-        GetPluginParams().mime_type.Utf8(), GetPluginParams().url);
-  }
 }
 
 v8::Local<v8::Value> ChromePluginPlaceholder::GetV8Handle(
@@ -275,7 +272,7 @@ void ChromePluginPlaceholder::ShowContextMenu(
   if (plugin() && plugin()->Container())
     point = plugin()->Container()->LocalToRootFramePoint(point);
 
-  // TODO(crbug.com/1093904): This essentially is a floor of the coordinates.
+  // TODO(crbug.com/40699157): This essentially is a floor of the coordinates.
   // Determine if rounding is more appropriate.
   gfx::Rect position_in_dips =
       render_frame()
@@ -312,7 +309,9 @@ void ChromePluginPlaceholder::CustomContextMenuAction(uint32_t action) {
   }
 }
 
-void ChromePluginPlaceholder::ContextMenuClosed(const GURL&) {
+void ChromePluginPlaceholder::ContextMenuClosed(
+    const GURL&,
+    const std::optional<blink::Impression>&) {
   context_menu_client_receiver_.reset();
   render_frame()->GetWebFrame()->View()->DidCloseContextMenu();
 }

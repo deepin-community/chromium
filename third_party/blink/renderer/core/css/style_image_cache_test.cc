@@ -7,7 +7,6 @@
 #include "third_party/blink/renderer/core/css/style_engine.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/core/loader/empty_clients.h"
 #include "third_party/blink/renderer/core/style/style_fetched_image.h"
@@ -138,12 +137,12 @@ TEST_F(StyleImageCacheTest, ComputedValueRelativePath) {
       CSSProperty::Get(CSSPropertyID::kBackgroundImage);
   EXPECT_EQ(property
                 .CSSValueFromComputedStyle(target1->ComputedStyleRef(), nullptr,
-                                           false)
+                                           false, CSSValuePhase::kComputedValue)
                 ->CssText(),
             "url(\"http://test.com/url.png\")");
   EXPECT_EQ(property
                 .CSSValueFromComputedStyle(target2->ComputedStyleRef(), nullptr,
-                                           false)
+                                           false, CSSValuePhase::kComputedValue)
                 ->CssText(),
             "url(\"http://test.com/url.png\")");
 }

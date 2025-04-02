@@ -78,7 +78,8 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   bool CanTakeFocus(mojom::blink::FocusType) override;
   void TakeFocus(mojom::blink::FocusType) override;
   void SetKeyboardFocusURL(Element* new_focus_element) override;
-  bool SupportsAppRegion() override;
+  bool SupportsDraggableRegions() override;
+  void DraggableRegionsChanged() override;
   void BeginLifecycleUpdates(LocalFrame& main_frame) override;
   void RegisterForCommitObservation(CommitObserver*) override;
   void UnregisterFromCommitObservation(CommitObserver*) override;
@@ -109,10 +110,6 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
             LocalFrame& opener_frame,
             NavigationPolicy navigation_policy,
             bool user_gesture) override;
-  void DidOverscroll(const gfx::Vector2dF& overscroll_delta,
-                     const gfx::Vector2dF& accumulated_overscroll,
-                     const gfx::PointF& position_in_viewport,
-                     const gfx::Vector2dF& velocity_in_viewport) override;
   void SetOverscrollBehavior(LocalFrame& main_frame,
                              const cc::OverscrollBehavior&) override;
   void InjectScrollbarGestureScroll(
@@ -265,15 +262,17 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   void HandleKeyboardEventOnTextField(HTMLInputElement&,
                                       KeyboardEvent&) override;
   void DidChangeValueInTextField(HTMLFormControlElement&) override;
+  void DidClearValueInTextField(HTMLFormControlElement&) override;
   void DidUserChangeContentEditableContent(Element&) override;
   void DidEndEditingOnTextField(HTMLInputElement&) override;
   void OpenTextDataListChooser(HTMLInputElement&) override;
   void TextFieldDataListChanged(HTMLInputElement&) override;
   void DidChangeSelectionInSelectControl(HTMLFormControlElement&) override;
-  void SelectOrSelectListFieldOptionsChanged(HTMLFormControlElement&) override;
+  void SelectFieldOptionsChanged(HTMLFormControlElement&) override;
   void AjaxSucceeded(LocalFrame*) override;
-  void JavaScriptChangedAutofilledValue(HTMLFormControlElement&,
-                                        const String& old_value) override;
+  void JavaScriptChangedValue(HTMLFormControlElement&,
+                              const String& old_value,
+                              bool was_autofilled) override;
 
   void ShowVirtualKeyboardOnElementFocus(LocalFrame&) override;
 
@@ -281,6 +280,9 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
 
   void OnMouseDown(Node&) override;
   void DidUpdateBrowserControls() const override;
+
+  void DidUpdateMaxSafeAreaInsets(
+      const gfx::InsetsF& max_safe_area_insets) const override;
 
   gfx::Vector2dF ElasticOverscroll() const override;
 
@@ -291,7 +293,7 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
   viz::FrameSinkId GetFrameSinkId(LocalFrame*) override;
 
   void RequestDecode(LocalFrame*,
-                     const cc::PaintImage&,
+                     const cc::DrawImage&,
                      base::OnceCallback<void(bool)>) override;
 
   void NotifyPresentationTime(LocalFrame& frame,
@@ -307,13 +309,15 @@ class CORE_EXPORT ChromeClientImpl final : public ChromeClient {
 
   void DocumentDetached(Document&) override;
 
-  double UserZoomFactor() const override;
+  double UserZoomFactor(LocalFrame* frame) const override;
 
   void FormElementReset(HTMLFormElement& element) override;
 
   void PasswordFieldReset(HTMLInputElement& element) override;
 
   float ZoomFactorForViewportLayout() override;
+
+  void OnFirstContentfulPaint() override;
 
  private:
   bool IsChromeClientImpl() const override { return true; }

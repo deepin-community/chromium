@@ -2,10 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/task_manager_view.h"
+
 #include <stddef.h>
 
+#include <algorithm>
+
 #include "base/functional/callback.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/pattern.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
@@ -22,7 +25,6 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/task_manager/task_manager_columns.h"
 #include "chrome/browser/ui/task_manager/task_manager_table_model.h"
-#include "chrome/browser/ui/views/task_manager_view.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
@@ -45,22 +47,24 @@
 #include "ui/views/controls/table/table_view.h"
 #include "ui/views/test/widget_test.h"
 
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
+#include "ui/aura/window.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 namespace task_manager {
 
 using browsertest_util::WaitForTaskManagerRows;
 
 class TaskManagerViewTest : public InProcessBrowserTest {
  public:
-  TaskManagerViewTest() {
-#if BUILDFLAG(IS_MAC)
-    feature_list_.InitAndEnableFeature(features::kViewsTaskManager);
-#endif
-  }
+  TaskManagerViewTest() = default;
 
   TaskManagerViewTest(const TaskManagerViewTest&) = delete;
   TaskManagerViewTest& operator=(const TaskManagerViewTest&) = delete;
 
-  ~TaskManagerViewTest() override {}
+  ~TaskManagerViewTest() override = default;
 
   void SetUpOnMainThread() override {
     host_resolver()->AddRule("*", "127.0.0.1");
@@ -86,8 +90,9 @@ class TaskManagerViewTest : public InProcessBrowserTest {
 
   void ClearStoredColumnSettings() const {
     PrefService* local_state = g_browser_process->local_state();
-    if (!local_state)
+    if (!local_state) {
       FAIL();
+    }
 
     ScopedDictPrefUpdate dict_update(local_state,
                                      prefs::kTaskManagerColumnVisibility);
@@ -102,8 +107,8 @@ class TaskManagerViewTest : public InProcessBrowserTest {
   // Looks up a tab based on its tab ID.
   content::WebContents* FindWebContentsByTabId(SessionID tab_id) {
     auto& all_tabs = AllTabContentses();
-    auto it = base::ranges::find(all_tabs, tab_id,
-                                 &sessions::SessionTabHelper::IdForTab);
+    auto it = std::ranges::find(all_tabs, tab_id,
+                                &sessions::SessionTabHelper::IdForTab);
     return (it == all_tabs.end()) ? nullptr : *it;
   }
 
@@ -114,8 +119,9 @@ class TaskManagerViewTest : public InProcessBrowserTest {
     std::unique_ptr<TaskManagerTester> tester =
         TaskManagerTester::Create(base::RepeatingClosure());
     for (size_t i = 0; i < tester->GetRowCount(); ++i) {
-      if (tester->GetTabId(i) == tab_id)
+      if (tester->GetTabId(i) == tab_id) {
         return i;
+      }
     }
     return std::nullopt;
   }
@@ -133,8 +139,9 @@ class TaskManagerViewTest : public InProcessBrowserTest {
 // Tests that all defined columns have a corresponding string IDs for keying
 // into the user preferences dictionary.
 IN_PROC_BROWSER_TEST_F(TaskManagerViewTest, AllColumnsHaveStringIds) {
-  for (size_t i = 0; i < kColumnsSize; ++i)
+  for (size_t i = 0; i < kColumnsSize; ++i) {
     EXPECT_NE("", GetColumnIdAsString(kColumns[i].id));
+  }
 }
 
 // Test that all defined columns can be sorted
@@ -335,8 +342,9 @@ IN_PROC_BROWSER_TEST_F(TaskManagerViewTest, DISABLED_SelectionConsistency) {
   std::vector<content::WebContents*> tabs;
   for (size_t i = 0; i < tester->GetRowCount(); ++i) {
     // Filter based on our title.
-    if (!base::MatchPattern(tester->GetRowTitle(i), pattern))
+    if (!base::MatchPattern(tester->GetRowTitle(i), pattern)) {
       continue;
+    }
     content::WebContents* tab = FindWebContentsByTabId(tester->GetTabId(i));
     EXPECT_NE(nullptr, tab);
     tabs.push_back(tab);
@@ -449,4 +457,15 @@ IN_PROC_BROWSER_TEST_F(TaskManagerViewTest, CloseByAccelerator) {
 
   EXPECT_TRUE(GetView()->GetWidget()->IsClosed());
 }
+
+#if BUILDFLAG(IS_CHROMEOS)
+IN_PROC_BROWSER_TEST_F(TaskManagerViewTest, AppType) {
+  chrome::ShowTaskManager(browser());
+
+  EXPECT_EQ(chromeos::AppType::SYSTEM_APP,
+            GetView()->GetWidget()->GetNativeWindow()->GetProperty(
+                chromeos::kAppTypeKey));
+}
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 }  // namespace task_manager

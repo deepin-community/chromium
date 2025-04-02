@@ -8,12 +8,12 @@
 #include <memory>
 
 #include "base/memory/raw_ptr.h"
-#include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "chrome/browser/ssl/cert_verifier_browser_test.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
+#include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_store/password_store_consumer.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -30,6 +30,9 @@ class BubbleObserver {
 
   BubbleObserver(const BubbleObserver&) = delete;
   BubbleObserver& operator=(const BubbleObserver&) = delete;
+
+  // Checks whether bubble was displayed automatically.
+  bool IsBubbleDisplayedAutomatically() const;
 
   // Checks if the save prompt is being currently available due to either manual
   // fallback or successful login.
@@ -118,9 +121,10 @@ class PasswordManagerBrowserTestBase : public CertVerifierBrowserTest {
   void TearDownOnMainThread() override;
   void SetUpCommandLine(base::CommandLine* command_line) override;
 
-  // Creates a new tab with all the password manager test hooks and returns it
-  // in |web_contents|.
-  static void GetNewTab(Browser* browser, content::WebContents** web_contents);
+  // Creates a new tab with all the password manager test hooks and returns it.
+  // Closes previously active tab when `open_new_tab` is false.
+  static content::WebContents* GetNewTab(Browser* browser,
+                                         bool open_new_tab = false);
 
   // Make sure that the password store associated with the given browser
   // processed all the previous calls, calls executed on another thread.
@@ -172,14 +176,20 @@ class PasswordManagerBrowserTestBase : public CertVerifierBrowserTest {
   void CheckElementValue(const std::string& iframe_id,
                          const std::string& element_id,
                          const std::string& expected_value);
+  // Returns the current "value" attribute of the HTML element with
+  // `element_id`.
+  std::string GetElementValue(const std::string& iframe_id,
+                              const std::string& element_id);
 
   // Synchronoulsy adds the given host to the list of valid HSTS hosts.
   void AddHSTSHost(const std::string& host);
 
-  // Checks that |password_store| stores only one credential with |username| and
-  // |password|.
-  void CheckThatCredentialsStored(const std::string& username,
-                                  const std::string& password);
+  // Checks that |password_store| stores only one credential with |username|,
+  // |password| and |password_type| optionally.
+  void CheckThatCredentialsStored(
+      const std::string& username,
+      const std::string& password,
+      std::optional<password_manager::PasswordForm::Type> type = std::nullopt);
 
   // Accessors
   // Return the first created tab with a custom ManagePasswordsUIController.
@@ -187,12 +197,13 @@ class PasswordManagerBrowserTestBase : public CertVerifierBrowserTest {
   content::RenderFrameHost* RenderFrameHost() const;
   net::EmbeddedTestServer& https_test_server() { return https_test_server_; }
 
+  void SetWebContents(content::WebContents* web_content);
+  void ClearWebContentsPtr();
+
  private:
   net::EmbeddedTestServer https_test_server_;
   // A tab with some hooks injected.
-  // This field is not a raw_ptr<> because it was filtered by the rewriter for:
-  // #addr-of
-  RAW_PTR_EXCLUSION content::WebContents* web_contents_;
+  raw_ptr<content::WebContents> web_contents_ = nullptr;
 
   base::CallbackListSubscription create_services_subscription_;
 };

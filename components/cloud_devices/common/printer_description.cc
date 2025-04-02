@@ -17,11 +17,9 @@
 #include "base/json/json_writer.h"
 #include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/cloud_devices/common/cloud_device_description_consts.h"
 #include "components/cloud_devices/common/description_items_inl.h"
 #include "ui/gfx/geometry/rect.h"
@@ -454,7 +452,6 @@ const gfx::Size& FindMediaSizeByType(MediaSize size_name) {
     }
   }
   NOTREACHED();
-  return kMediaDefinitions[0].size_um;
 }
 
 const MediaDefinition* FindMediaBySize(const gfx::Size& size_um) {
@@ -476,7 +473,6 @@ std::string TypeToString(const T& names, IdType id) {
       return name.json_name;
   }
   NOTREACHED();
-  return std::string();
 }
 
 template <class T, class IdType>
@@ -497,7 +493,7 @@ PwgRasterConfig::PwgRasterConfig()
       reverse_order_streaming(false),
       rotate_all_pages(false) {}
 
-PwgRasterConfig::~PwgRasterConfig() {}
+PwgRasterConfig::~PwgRasterConfig() = default;
 
 RangeVendorCapability::RangeVendorCapability() = default;
 
@@ -572,7 +568,6 @@ bool RangeVendorCapability::IsValid() const {
     }
   }
   NOTREACHED() << "Bad range capability value type";
-  return false;
 }
 
 bool RangeVendorCapability::LoadFrom(const base::Value::Dict& dict) {
@@ -665,7 +660,6 @@ bool TypedValueVendorCapability::IsValid() const {
       return true;
   }
   NOTREACHED() << "Bad typed value capability value type";
-  return false;
 }
 
 bool TypedValueVendorCapability::LoadFrom(const base::Value::Dict& dict) {
@@ -793,7 +787,6 @@ bool VendorCapability::IsValid() const {
       return typed_value_capability_.IsValid();
   }
   NOTREACHED() << "Bad vendor capability type";
-  return false;
 }
 
 bool VendorCapability::LoadFrom(const base::Value::Dict& dict) {
@@ -835,7 +828,6 @@ bool VendorCapability::LoadFrom(const base::Value::Dict& dict) {
     case Type::NONE:
     default:
       NOTREACHED();
-      break;
     case Type::RANGE:
       new (&range_capability_) RangeVendorCapability();
       return range_capability_.LoadFrom(*range_capability_value);
@@ -846,8 +838,6 @@ bool VendorCapability::LoadFrom(const base::Value::Dict& dict) {
       new (&typed_value_capability_) TypedValueVendorCapability();
       return typed_value_capability_.LoadFrom(*typed_value_capability_value);
   }
-
-  return false;
 }
 
 void VendorCapability::SaveTo(base::Value::Dict* dict) const {
@@ -859,7 +849,6 @@ void VendorCapability::SaveTo(base::Value::Dict* dict) const {
   switch (type_) {
     case Type::NONE:
       NOTREACHED();
-      break;
     case Type::RANGE: {
       base::Value::Dict range_capability_value;
       range_capability_.SaveTo(&range_capability_value);

@@ -4,12 +4,14 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/gmock_expected_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -35,9 +37,11 @@
 #include "chrome/browser/usb/web_usb_chooser.h"
 #include "chrome/browser/usb/web_usb_histograms.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
+#include "chrome/browser/web_applications/isolated_web_apps/test/isolated_web_app_builder.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/console_message.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/service_worker_context.h"
@@ -71,11 +75,11 @@
 #include "extensions/test/extension_test_message_listener.h"
 #include "extensions/test/result_catcher.h"
 #include "extensions/test/test_extension_dir.h"
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/scoped_user_manager.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 namespace {
@@ -117,10 +121,10 @@ MATCHER_P(FailedWithSubstr, substr, "") {
   return arg.error.find(substr) != std::string::npos;
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS) && BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(ENABLE_EXTENSIONS) && BUILDFLAG(IS_CHROMEOS)
 const AccountId kManagedUserAccountId =
     AccountId::FromUserEmail("example@example.com");
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS) && BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS) && BUILDFLAG(IS_CHROMEOS)
 
 // Observer for an extension service worker events like start, activated, and
 // stop.
@@ -640,10 +644,14 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppUsbBrowserTest, ClaimInterface) {
   GURL frame_url = https_server()->GetURL("/banners/isolated/simple.html");
   auto* non_app_main_frame = ui_test_utils::NavigateToURL(browser(), frame_url);
 
-  std::unique_ptr<net::EmbeddedTestServer> isolated_web_app_dev_server =
-      CreateAndStartServer(FILE_PATH_LITERAL("web_apps/simple_isolated_app"));
-  web_app::IsolatedWebAppUrlInfo url_info = InstallDevModeProxyIsolatedWebApp(
-      isolated_web_app_dev_server->GetOrigin());
+  std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().AddPermissionsPolicyWildcard(
+              network::mojom::PermissionsPolicyFeature::kUsb))
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(web_app::IsolatedWebAppUrlInfo url_info,
+                       app->Install(profile()));
+
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
 
   web_app::CreateIframe(app_frame, "child", frame_url,
@@ -716,15 +724,17 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
   // manifest. Create a same-origin iframe on the page that does not specify an
   // allow attribute, and expect that usb is accessible on the main frame, as
   // well as in the iframe.
-  std::unique_ptr<net::EmbeddedTestServer> isolated_web_app_dev_server =
-      CreateAndStartServer(FILE_PATH_LITERAL("web_apps/simple_isolated_app"));
-  web_app::IsolatedWebAppUrlInfo url_info = InstallDevModeProxyIsolatedWebApp(
-      isolated_web_app_dev_server->GetOrigin());
+  std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().AddPermissionsPolicyWildcard(
+              network::mojom::PermissionsPolicyFeature::kUsb))
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(web_app::IsolatedWebAppUrlInfo url_info,
+                       app->Install(profile()));
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
 
   const std::string permissions_policy = "";
-  web_app::CreateIframe(app_frame, "child", GURL("/index.html"),
-                        permissions_policy);
+  web_app::CreateIframe(app_frame, "child", GURL("/"), permissions_policy);
   auto* iframe = ChildFrameAt(app_frame, 0);
 
   auto fake_device_info = CreateUsbDevice(kUsbPrinterClass);
@@ -751,15 +761,17 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
   // manifest. Create a same-origin iframe on the page that specifies an allow
   // attribute allowing usb for 'self', and expect that usb is accessible on the
   // main frame, as well as in the iframe.
-  std::unique_ptr<net::EmbeddedTestServer> isolated_web_app_dev_server =
-      CreateAndStartServer(FILE_PATH_LITERAL("web_apps/simple_isolated_app"));
-  web_app::IsolatedWebAppUrlInfo url_info = InstallDevModeProxyIsolatedWebApp(
-      isolated_web_app_dev_server->GetOrigin());
+  std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().AddPermissionsPolicyWildcard(
+              network::mojom::PermissionsPolicyFeature::kUsb))
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(web_app::IsolatedWebAppUrlInfo url_info,
+                       app->Install(profile()));
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
 
   const std::string permissions_policy = "usb 'self'";
-  web_app::CreateIframe(app_frame, "child", GURL("/index.html"),
-                        permissions_policy);
+  web_app::CreateIframe(app_frame, "child", GURL("/"), permissions_policy);
   auto* iframe = ChildFrameAt(app_frame, 0);
 
   auto fake_device_info = CreateUsbDevice(kUsbPrinterClass);
@@ -788,10 +800,13 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
   // manifest. Create a cross-origin iframe on the page that specifies an allow
   // attribute allowing usb for 'src', and expect that usb is accessible on the
   // main frame, as well as in the iframe.
-  std::unique_ptr<net::EmbeddedTestServer> isolated_web_app_dev_server =
-      CreateAndStartServer(FILE_PATH_LITERAL("web_apps/simple_isolated_app"));
-  web_app::IsolatedWebAppUrlInfo url_info = InstallDevModeProxyIsolatedWebApp(
-      isolated_web_app_dev_server->GetOrigin());
+  std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().AddPermissionsPolicyWildcard(
+              network::mojom::PermissionsPolicyFeature::kUsb))
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(web_app::IsolatedWebAppUrlInfo url_info,
+                       app->Install(profile()));
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
 
   GURL non_app_url =
@@ -828,10 +843,13 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
   // attribute allowing usb with the 'none' token, and expect that usb is
   // accessible on the main frame, but is blocked by permissions policy in the
   // iframe.
-  std::unique_ptr<net::EmbeddedTestServer> isolated_web_app_dev_server =
-      CreateAndStartServer(FILE_PATH_LITERAL("web_apps/simple_isolated_app"));
-  web_app::IsolatedWebAppUrlInfo url_info = InstallDevModeProxyIsolatedWebApp(
-      isolated_web_app_dev_server->GetOrigin());
+  std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().AddPermissionsPolicyWildcard(
+              network::mojom::PermissionsPolicyFeature::kUsb))
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(web_app::IsolatedWebAppUrlInfo url_info,
+                       app->Install(profile()));
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
 
   const std::string permissions_policy = "usb 'none'";
@@ -856,10 +874,13 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
   // attribute allowing usb for the iframe by explicitly listing the iframe
   // origin in the allowlist, and expect that usb is accessible on the main
   // frame as well as in the iframe.
-  std::unique_ptr<net::EmbeddedTestServer> isolated_web_app_dev_server =
-      CreateAndStartServer(FILE_PATH_LITERAL("web_apps/simple_isolated_app"));
-  web_app::IsolatedWebAppUrlInfo url_info = InstallDevModeProxyIsolatedWebApp(
-      isolated_web_app_dev_server->GetOrigin());
+  std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().AddPermissionsPolicyWildcard(
+              network::mojom::PermissionsPolicyFeature::kUsb))
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(web_app::IsolatedWebAppUrlInfo url_info,
+                       app->Install(profile()));
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
 
   GURL non_app_url =
@@ -885,10 +906,15 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
   // Create a same-origin iframe on the page that does not specify an allow
   // attribute, and expect that usb is not accessible on the main frame or in
   // the iframe.
-  std::unique_ptr<net::EmbeddedTestServer> isolated_web_app_dev_server =
-      CreateAndStartServer(FILE_PATH_LITERAL("web_apps/simple_isolated_app"));
-  web_app::IsolatedWebAppUrlInfo url_info = InstallDevModeProxyIsolatedWebApp(
-      isolated_web_app_dev_server->GetOrigin());
+  std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().AddPermissionsPolicyWildcard(
+              network::mojom::PermissionsPolicyFeature::kUsb))
+          .AddFileFromDisk("/usb_none.html",
+                           "web_apps/simple_isolated_app/usb_none.html")
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(web_app::IsolatedWebAppUrlInfo url_info,
+                       app->Install(profile()));
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
 
   GURL app_url = url_info.origin().GetURL().Resolve("/usb_none.html");
@@ -926,10 +952,15 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
   // same-origin iframe on the page that does not specify an allow attribute,
   // and expect that usb is accessible on the main frame, as well as in the
   // iframe.
-  std::unique_ptr<net::EmbeddedTestServer> isolated_web_app_dev_server =
-      CreateAndStartServer(FILE_PATH_LITERAL("web_apps/simple_isolated_app"));
-  web_app::IsolatedWebAppUrlInfo url_info = InstallDevModeProxyIsolatedWebApp(
-      isolated_web_app_dev_server->GetOrigin());
+  std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().AddPermissionsPolicyWildcard(
+              network::mojom::PermissionsPolicyFeature::kUsb))
+          .AddFileFromDisk("/usb_self.html",
+                           "web_apps/simple_isolated_app/usb_self.html")
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(web_app::IsolatedWebAppUrlInfo url_info,
+                       app->Install(profile()));
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
 
   GURL app_url = url_info.origin().GetURL().Resolve("/usb_self.html");
@@ -964,10 +995,15 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
   // header which allows usb on any origin. Create a same-origin iframe on the
   // page that does not specify an allow attribute, and expect that usb is
   // accessible on the main frame, as well as in the iframe.
-  std::unique_ptr<net::EmbeddedTestServer> isolated_web_app_dev_server =
-      CreateAndStartServer(FILE_PATH_LITERAL("web_apps/simple_isolated_app"));
-  web_app::IsolatedWebAppUrlInfo url_info = InstallDevModeProxyIsolatedWebApp(
-      isolated_web_app_dev_server->GetOrigin());
+  std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder().AddPermissionsPolicyWildcard(
+              network::mojom::PermissionsPolicyFeature::kUsb))
+          .AddFileFromDisk("/usb_all.html",
+                           "web_apps/simple_isolated_app/usb_all.html")
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(web_app::IsolatedWebAppUrlInfo url_info,
+                       app->Install(profile()));
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
 
   GURL app_url = url_info.origin().GetURL().Resolve("/usb_all.html");
@@ -997,11 +1033,19 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
                        PermissionsPolicy_Usb_Unrestricted_CrossOrigin_Iframe) {
-  std::unique_ptr<net::EmbeddedTestServer> isolated_web_app_dev_server =
-      CreateAndStartServer(
-          FILE_PATH_LITERAL("web_apps/unrestricted_usb_isolated_app"));
-  web_app::IsolatedWebAppUrlInfo url_info = InstallDevModeProxyIsolatedWebApp(
-      isolated_web_app_dev_server->GetOrigin());
+  std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder()
+              .AddPermissionsPolicyWildcard(
+                  network::mojom::PermissionsPolicyFeature::kUsb)
+              .AddPermissionsPolicyWildcard(
+                  network::mojom::PermissionsPolicyFeature::kUsbUnrestricted)
+              .AddPermissionsPolicyWildcard(
+                  network::mojom::PermissionsPolicyFeature::
+                      kCrossOriginIsolated))
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(web_app::IsolatedWebAppUrlInfo url_info,
+                       app->Install(profile()));
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
 
   // Create a fake device with protected class and grant permission.
@@ -1058,11 +1102,20 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
                        PermissionsPolicy_Usb_Unrestricted_Iframe) {
-  std::unique_ptr<net::EmbeddedTestServer> isolated_web_app_dev_server =
-      CreateAndStartServer(
-          FILE_PATH_LITERAL("web_apps/unrestricted_usb_isolated_app"));
-  web_app::IsolatedWebAppUrlInfo url_info = InstallDevModeProxyIsolatedWebApp(
-      isolated_web_app_dev_server->GetOrigin());
+  std::unique_ptr<web_app::ScopedBundledIsolatedWebApp> app =
+      web_app::IsolatedWebAppBuilder(
+          web_app::ManifestBuilder()
+              .AddPermissionsPolicyWildcard(
+                  network::mojom::PermissionsPolicyFeature::kUsb)
+              .AddPermissionsPolicyWildcard(
+                  network::mojom::PermissionsPolicyFeature::kUsbUnrestricted)
+              .AddPermissionsPolicyWildcard(
+                  network::mojom::PermissionsPolicyFeature::
+                      kCrossOriginIsolated))
+          .AddHtml("/empty.html", "Empty Page")
+          .BuildBundle();
+  ASSERT_OK_AND_ASSIGN(web_app::IsolatedWebAppUrlInfo url_info,
+                       app->Install(profile()));
   content::RenderFrameHost* app_frame = OpenApp(url_info.app_id());
 
   // Create a fake device with protected class and grant permission.
@@ -1094,8 +1147,6 @@ IN_PROC_BROWSER_TEST_F(IsolatedWebAppPermissionsPolicyBrowserTest,
 }
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-// Base Test fixture with kEnableWebUsbOnExtensionServiceWorker default
-// disabled.
 class WebUsbExtensionBrowserTest : public extensions::ExtensionBrowserTest {
  public:
   WebUsbExtensionBrowserTest() = default;
@@ -1115,16 +1166,14 @@ class WebUsbExtensionBrowserTest : public extensions::ExtensionBrowserTest {
     chooser_context->GetDevices(devices_future.GetCallback());
     ASSERT_TRUE(devices_future.Get().empty());
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     // Create a user account affiliated with the machine owner.
     auto fake_user_manager = std::make_unique<ash::FakeChromeUserManager>();
     fake_user_manager->AddUserWithAffiliation(kManagedUserAccountId, true);
     fake_user_manager->LoginUser(kManagedUserAccountId);
     scoped_user_manager_ = std::make_unique<user_manager::ScopedUserManager>(
         std::move(fake_user_manager));
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if BUILDFLAG(IS_CHROMEOS)
     display_service_for_system_notification_ =
         std::make_unique<NotificationDisplayServiceTester>(
             /*profile=*/nullptr);
@@ -1132,23 +1181,23 @@ class WebUsbExtensionBrowserTest : public extensions::ExtensionBrowserTest {
   }
 
   void TearDownOnMainThread() override {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     // Explicitly removing the user is required; otherwise ProfileHelper keeps
     // a dangling pointer to the User.
     // TODO(b/208629291): Consider removing all users from ProfileHelper in the
     // destructor of ash::FakeChromeUserManager.
     GetFakeUserManager()->RemoveUserFromList(kManagedUserAccountId);
     scoped_user_manager_.reset();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
     ExtensionBrowserTest::TearDownOnMainThread();
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::FakeChromeUserManager* GetFakeUserManager() const {
     return static_cast<ash::FakeChromeUserManager*>(
         user_manager::UserManager::Get());
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   void SetUpPolicy(const extensions::Extension* extension) {
     // Define a policy to automatically grant permission to access the device
@@ -1167,7 +1216,7 @@ class WebUsbExtensionBrowserTest : public extensions::ExtensionBrowserTest {
   }
 
   void SetUpTestDir(extensions::TestExtensionDir& test_dir,
-                    base::StringPiece background_js) {
+                    std::string_view background_js) {
     test_dir.WriteManifest(base::StringPrintf(
         R"({
           "name": "Test Extension",
@@ -1182,7 +1231,7 @@ class WebUsbExtensionBrowserTest : public extensions::ExtensionBrowserTest {
     test_dir.WriteFile(FILE_PATH_LITERAL("background.js"), background_js);
   }
 
-  const Extension* LoadExtensionAndRunTest(base::StringPiece background_js) {
+  const Extension* LoadExtensionAndRunTest(std::string_view background_js) {
     extensions::TestExtensionDir test_dir;
     SetUpTestDir(test_dir, background_js);
 
@@ -1195,7 +1244,7 @@ class WebUsbExtensionBrowserTest : public extensions::ExtensionBrowserTest {
     CHECK(extension);
     CHECK_EQ(extension->id(), kTestExtensionId);
 
-    // TODO(crbug.com/1336400): Grant permission using requestDevice().
+    // TODO(crbug.com/40847683): Grant permission using requestDevice().
     // Run the test.
     SetUpPolicy(extension);
     EXPECT_TRUE(ready_listener.WaitUntilSatisfied());
@@ -1281,44 +1330,19 @@ class WebUsbExtensionBrowserTest : public extensions::ExtensionBrowserTest {
  private:
   device::FakeUsbDeviceManager device_manager_;
   device::mojom::UsbDeviceInfoPtr fake_device_info_;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   std::unique_ptr<user_manager::ScopedUserManager> scoped_user_manager_;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 };
 
-// Test fixture with kEnableWebUsbOnExtensionServiceWorker disabled.
-class WebUsbExtensionFeatureDisabledBrowserTest
-    : public WebUsbExtensionBrowserTest {
- public:
-  WebUsbExtensionFeatureDisabledBrowserTest() {
-    scoped_feature_list_.InitWithFeatures(
-        {}, {features::kEnableWebUsbOnExtensionServiceWorker});
-  }
-};
-
-// TODO(crbug.com/1521554): Flaky on non-Mac release builds.
+// TODO(crbug.com/41494522): Flaky on non-Mac release builds.
 #if !BUILDFLAG(IS_MAC) && defined(NDEBUG)
-#define MAYBE_FeatureDisabled DISABLED_FeatureDisabled
+#define MAYBE_GetDevices DISABLED_GetDevices
 #else
-#define MAYBE_FeatureDisabled FeatureDisabled
+#define MAYBE_GetDevices GetDevices
 #endif
-IN_PROC_BROWSER_TEST_F(WebUsbExtensionFeatureDisabledBrowserTest,
-                       MAYBE_FeatureDisabled) {
-  constexpr base::StringPiece kBackgroundJs = R"(
-    chrome.test.sendMessage("ready", async () => {
-      try {
-        chrome.test.assertEq(navigator.usb, undefined);
-        chrome.test.notifyPass();
-      } catch (e) {
-        chrome.test.fail(e.name + ':' + e.message);
-      }
-    });
-  )";
-  LoadExtensionAndRunTest(kBackgroundJs);
-}
-
-IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest, GetDevices) {
-  constexpr base::StringPiece kBackgroundJs = R"(
+IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest, MAYBE_GetDevices) {
+  constexpr std::string_view kBackgroundJs = R"(
     chrome.test.sendMessage("ready", async () => {
       try {
         const devices = await navigator.usb.getDevices();
@@ -1333,8 +1357,14 @@ IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest, GetDevices) {
   LoadExtensionAndRunTest(kBackgroundJs);
 }
 
-IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest, RequestDevice) {
-  constexpr base::StringPiece kBackgroundJs = R"(
+// TODO(crbug.com/41494522): Flaky on non-Mac release builds.
+#if !BUILDFLAG(IS_MAC) && defined(NDEBUG)
+#define MAYBE_RequestDevice DISABLED_RequestDevice
+#else
+#define MAYBE_RequestDevice RequestDevice
+#endif
+IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest, MAYBE_RequestDevice) {
+  constexpr std::string_view kBackgroundJs = R"(
     chrome.test.sendMessage("ready", async () => {
       try {
         chrome.test.assertEq(navigator.usb.requestDevice, undefined);
@@ -1347,7 +1377,7 @@ IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest, RequestDevice) {
   LoadExtensionAndRunTest(kBackgroundJs);
 }
 
-// TODO(crbug.com/1521554): Flaky on non-Mac release builds.
+// TODO(crbug.com/41494522): Flaky on non-Mac release builds.
 #if !BUILDFLAG(IS_MAC) && defined(NDEBUG)
 #define MAYBE_UsbConnectionTracker DISABLED_UsbConnectionTracker
 #else
@@ -1382,16 +1412,18 @@ IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest, MAYBE_UsbConnectionTracker) {
 
 // Test the scenario of waking up the service worker upon device events and
 // the service worker being kept alive with active device session.
-// TODO(crbug.com/1521554): Flaky on non-Mac release builds.
-#if !BUILDFLAG(IS_MAC) && defined(NDEBUG)
+// TODO(crbug.com/41494522): Flaky on non-Mac release builds and ChromeOS
+// builds.
+#if (!BUILDFLAG(IS_MAC) && defined(NDEBUG)) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_DeviceConnectAndOpenDeviceWhenServiceWorkerStopped \
   DISABLED_DeviceConnectAndOpenDeviceWhenServiceWorkerStopped
 #else
 #define MAYBE_DeviceConnectAndOpenDeviceWhenServiceWorkerStopped \
   DeviceConnectAndOpenDeviceWhenServiceWorkerStopped
 #endif
-IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest,
-                       DeviceConnectAndOpenDeviceWhenServiceWorkerStopped) {
+IN_PROC_BROWSER_TEST_F(
+    WebUsbExtensionBrowserTest,
+    MAYBE_DeviceConnectAndOpenDeviceWhenServiceWorkerStopped) {
   content::ServiceWorkerContext* context = browser()
                                                ->profile()
                                                ->GetDefaultStoragePartition()
@@ -1436,7 +1468,7 @@ IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest,
                                                 ReplyBehavior::kWillReply);
   extensions::ResultCatcher result_catcher;
   const Extension* extension = LoadExtension(test_dir.UnpackedPath());
-  // TODO(crbug.com/1336400): Grant permission using requestDevice().
+  // TODO(crbug.com/40847683): Grant permission using requestDevice().
   // Run the test.
   SetUpPolicy(extension);
   ASSERT_TRUE(extension);
@@ -1493,8 +1525,16 @@ IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest,
   SimulateClickOnSystemTrayIconButton(browser(), extension);
 }
 
+// TODO(crbug.com/41494522): Flaky on non-Mac release builds.
+#if !BUILDFLAG(IS_MAC) && defined(NDEBUG)
+#define MAYBE_EventListenerAddedAfterServiceWorkerIsActivated \
+  DISABLED_EventListenerAddedAfterServiceWorkerIsActivated
+#else
+#define MAYBE_EventListenerAddedAfterServiceWorkerIsActivated \
+  EventListenerAddedAfterServiceWorkerIsActivated
+#endif
 IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest,
-                       EventListenerAddedAfterServiceWorkerIsActivated) {
+                       MAYBE_EventListenerAddedAfterServiceWorkerIsActivated) {
   const char kWarningMessage[] =
       "Event handler of '%s' event must be added on the initial evaluation "
       "of worker script. More info: "
@@ -1523,7 +1563,7 @@ IN_PROC_BROWSER_TEST_F(WebUsbExtensionBrowserTest,
   // Launch the test app.
   extensions::ResultCatcher result_catcher;
   const Extension* extension = LoadExtension(test_dir.UnpackedPath());
-  // TODO(crbug.com/1336400): Grant permission using requestDevice().
+  // TODO(crbug.com/40847683): Grant permission using requestDevice().
   // Run the test.
   SetUpPolicy(extension);
   ASSERT_TRUE(extension);

@@ -16,7 +16,6 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/browser/process_manager.h"
-#include "extensions/common/extension_features.h"
 #include "extensions/common/manifest_handlers/incognito_info.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 
@@ -41,9 +40,11 @@ std::unique_ptr<ExtensionViewHost> CreateViewHostForExtension(
       ProcessManager::Get(profile)->GetSiteInstanceForURL(url);
   return view_type == mojom::ViewType::kExtensionSidePanel
              ? std::make_unique<ExtensionSidePanelViewHost>(
-                   extension, site_instance.get(), url, browser, web_contents)
-             : std::make_unique<ExtensionViewHost>(
-                   extension, site_instance.get(), url, view_type, browser);
+                   extension, site_instance.get(), url, profile, browser,
+                   web_contents)
+             : std::make_unique<ExtensionViewHost>(extension,
+                                                   site_instance.get(), profile,
+                                                   url, view_type, browser);
 }
 
 // Creates a view host for an extension in an incognito window. Returns NULL
@@ -70,10 +71,8 @@ std::unique_ptr<ExtensionViewHost> CreateViewHostForIncognito(
     return CreateViewHostForExtension(extension, url, profile, view_type,
                                       browser, web_contents);
   }
-  NOTREACHED() <<
-      "We shouldn't be trying to create an incognito extension view unless "
-      "it has been enabled for incognito.";
-  return nullptr;
+  NOTREACHED() << "We shouldn't be trying to create an incognito extension "
+                  "view unless it has been enabled for incognito.";
 }
 
 // Returns the extension associated with |url| in |profile|. Returns NULL if
@@ -125,17 +124,17 @@ std::unique_ptr<ExtensionViewHost> ExtensionViewHostFactory::CreatePopupHost(
 std::unique_ptr<ExtensionViewHost>
 ExtensionViewHostFactory::CreateSidePanelHost(
     const GURL& url,
-    Browser* browser,
-    content::WebContents* web_contents) {
-  DCHECK(browser == nullptr ^ web_contents == nullptr);
-  DCHECK(base::FeatureList::IsEnabled(
-      extensions_features::kExtensionSidePanelIntegration));
+    BrowserWindowInterface* browser,
+    tabs::TabInterface* tab_interface) {
+  DCHECK(browser == nullptr ^ tab_interface == nullptr);
 
-  Profile* profile = browser
-                         ? browser->profile()
-                         : chrome::FindBrowserWithTab(web_contents)->profile();
-  return CreateViewHost(url, profile, browser, web_contents,
-                        mojom::ViewType::kExtensionSidePanel);
+  Profile* profile =
+      browser ? browser->GetProfile()
+              : tab_interface->GetBrowserWindowInterface()->GetProfile();
+  return CreateViewHost(
+      url, profile, browser ? browser->GetBrowserForMigrationOnly() : nullptr,
+      tab_interface ? tab_interface->GetContents() : nullptr,
+      mojom::ViewType::kExtensionSidePanel);
 }
 
 }  // namespace extensions

@@ -17,6 +17,8 @@
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/synchronization/lock.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/thread_annotations.h"
 #include "components/optimization_guide/core/optimization_target_model_observer.h"
 #include "components/safe_browsing/core/common/fbs/client_model_generated.h"
@@ -44,8 +46,7 @@ class ClientSidePhishingModel
     : public optimization_guide::OptimizationTargetModelObserver {
  public:
   ClientSidePhishingModel(
-      optimization_guide::OptimizationGuideModelProvider* opt_guide,
-      const scoped_refptr<base::SequencedTaskRunner>& background_task_runner);
+      optimization_guide::OptimizationGuideModelProvider* opt_guide);
 
   ~ClientSidePhishingModel() override;
 
@@ -174,9 +175,17 @@ class ClientSidePhishingModel
   // These two integer values will be set from reading the metadata specified
   // under each optimization target. These two are used to match the model
   // pairings properly. If the two values match, then the image embedding model
-  // will be sent to the renderer process along with the trigger models.
+  // will be sent to the renderer process along with the trigger models. They do
+  // not reflect any versions used in the model file itself.
+  std::optional<int> trigger_model_opt_guide_metadata_image_embedding_version_;
+  std::optional<int>
+      embedding_model_opt_guide_metadata_image_embedding_version_;
+
+  // This value is set from a version set in the model file's metadata. This
+  // value will be used to send to the CSD service class so that it can be added
+  // to the debugging metadata so that we can understand what version has been
+  // sent to the renderer.
   std::optional<int> trigger_model_version_;
-  std::optional<int> embedding_model_version_;
 
   scoped_refptr<base::SequencedTaskRunner> background_task_runner_;
 

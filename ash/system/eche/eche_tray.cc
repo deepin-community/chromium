@@ -72,6 +72,7 @@
 #include "ui/gfx/text_constants.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/strings/grit/ui_strings.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
@@ -120,9 +121,6 @@ constexpr base::TimeDelta kUnloadTimeoutDuration = base::Milliseconds(500);
 // Timeout for initializer connection attempts.
 constexpr base::TimeDelta kInitializerTimeout = base::Seconds(6);
 
-// The ID for the "Copy/paste not yet implemented" toast.
-constexpr char kEcheTrayCopyPasteNotImplementedToastId[] =
-    "eche_tray_toast_ids.copy_paste_not_implemented";
 // The ID for the "Tablet mode not supported" toast.
 constexpr char kEcheTrayTabletModeNotSupportedId[] =
     "eche_tray_toast_ids.tablet_mode_not_supported";
@@ -190,10 +188,12 @@ void ConfigureLabelText(views::Label* title) {
   title->SetAllowCharacterBreak(true);
   title->SetProperty(
       views::kFlexBehaviorKey,
-      views::FlexSpecification(views::MinimumFlexSizeRule::kScaleToZero,
-                               views::MaximumFlexSizeRule::kUnbounded,
-                               /*adjust_height_for_width =*/true)
+      views::FlexSpecification(views::LayoutOrientation::kHorizontal,
+                               views::MinimumFlexSizeRule::kScaleToZero,
+                               views::MaximumFlexSizeRule::kUnbounded)
           .WithWeight(1));
+  title->SetProperty(views::kCrossAxisAlignmentKey,
+                     views::LayoutAlignment::kStretch);
   title->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   title->SetEnabledColorId(cros_tokens::kCrosSysOnSurface);
   TypographyProvider::Get()->StyleLabel(ash::TypographyToken::kCrosHeadline1,
@@ -229,12 +229,14 @@ EcheTray::EcheTray(Shelf* shelf)
   // Observers setup
   // Note: `ScreenLayoutObserver` starts observing at its constructor.
   observed_session_.Observe(Shell::Get()->session_controller());
-  icon_->SetTooltipText(GetAccessibleNameForTray());
+  icon_->SetTooltipText(GetAccessibleName());
   UpdateTrayItemColor(is_active());
 
   shelf_observation_.Observe(shelf);
   shell_observer_.Observe(Shell::Get());
   keyboard_observation_.Observe(keyboard::KeyboardUIController::Get());
+
+  GetViewAccessibility().SetName(GetAccessibleName());
 }
 
 EcheTray::~EcheTray() {
@@ -251,7 +253,7 @@ bool EcheTray::IsInitialized() const {
   return GetBubbleWidget() != nullptr;
 }
 
-void EcheTray::ClickedOutsideBubble() {
+void EcheTray::ClickedOutsideBubble(const ui::LocatedEvent& event) {
   //  Do nothing
 }
 
@@ -262,14 +264,8 @@ void EcheTray::UpdateTrayItemColor(bool is_active) {
                               : cros_tokens::kCrosSysOnSurface));
 }
 
-std::u16string EcheTray::GetAccessibleNameForTray() {
-  // TODO(nayebi): Change this based on the final model of interaction
-  // between phone hub and Eche.
-  return l10n_util::GetStringUTF16(IDS_ASH_PHONE_HUB_TRAY_ACCESSIBLE_NAME);
-}
-
 void EcheTray::HandleLocaleChange() {
-  icon_->SetTooltipText(GetAccessibleNameForTray());
+  icon_->SetTooltipText(GetAccessibleName());
 }
 
 void EcheTray::HideBubbleWithView(const TrayBubbleView* bubble_view) {
@@ -293,7 +289,7 @@ void EcheTray::Initialize() {
   SetVisiblePreferred(visibility);
 }
 
-void EcheTray::CloseBubble() {
+void EcheTray::CloseBubbleInternal() {
   if (bubble_)
     HideBubble();
 }
@@ -355,7 +351,7 @@ bool EcheTray::CacheBubbleViewForHide() const {
 }
 
 std::u16string EcheTray::GetAccessibleNameForBubble() {
-  return GetAccessibleNameForTray();
+  return GetAccessibleName();
 }
 
 bool EcheTray::ShouldEnableExtraKeyboardAccessibility() {
@@ -697,7 +693,6 @@ void EcheTray::InitBubble(
         break;
       case eche_app::mojom::AppStreamLaunchEntryPoint::UNKNOWN:
         NOTREACHED();
-        break;
     }
   }
   init_stream_timestamp_ = base::TimeTicks::Now();
@@ -723,10 +718,8 @@ void EcheTray::InitBubble(
   header_view_ = bubble_view->AddChildView(CreateBubbleHeaderView(phone_name));
 
   // We need the header be always visible with the same size.
-  static_cast<views::BoxLayout*>(bubble_view->GetLayoutManager())
-      ->SetFlexForView(header_view_, 0, true);
-  static_cast<views::BoxLayout*>(bubble_view->GetLayoutManager())
-      ->set_inside_border_insets(kBubblePadding);
+  bubble_view->box_layout()->SetFlexForView(header_view_, 0, true);
+  bubble_view->box_layout()->set_inside_border_insets(kBubblePadding);
 
   // TODO(b/271478560): Re-use initializer_webview_ when available, once support
   // launching apps on prewarmed connection is available.
@@ -860,6 +853,12 @@ views::ImageButton* EcheTray::GetIcon() {
   return phone_hub_tray->eche_icon_view();
 }
 
+std::u16string EcheTray::GetAccessibleName() {
+  // TODO(nayebi): Change this based on the final model of interaction
+  // between phone hub and Eche.
+  return l10n_util::GetStringUTF16(IDS_ASH_PHONE_HUB_TRAY_ACCESSIBLE_NAME);
+}
+
 void EcheTray::ResizeIcon(int offset_dip) {
   views::ImageButton* icon_view = GetIcon();
   if (icon_view) {
@@ -919,7 +918,7 @@ void EcheTray::UpdateEcheSizeAndBubbleBounds() {
       shelf()->GetSystemTrayAnchorRect());
 }
 
-void EcheTray::OnDisplayConfigurationChanged() {
+void EcheTray::OnDidApplyDisplayChanges() {
   UpdateEcheSizeAndBubbleBounds();
 }
 
@@ -1012,23 +1011,11 @@ bool EcheTray::ProcessAcceleratorKeys(ui::KeyEvent* event) {
   const bool any_modifier_pressed =
       ui::Accelerator::MaskOutKeyEventFlags(event->flags());
 
-  if (event->type() != ui::ET_KEY_PRESSED)
+  if (event->type() != ui::EventType::kKeyPressed) {
     return false;
+  }
 
   switch (key_code) {
-    case ui::VKEY_C:
-    case ui::VKEY_V:
-    case ui::VKEY_X:
-      if (!is_only_control_down)
-        return false;
-      ash::ToastManager::Get()->Show(ash::ToastData(
-          kEcheTrayCopyPasteNotImplementedToastId,
-          ash::ToastCatalogName::kEcheTrayCopyPasteNotImplemented,
-          l10n_util::GetStringUTF16(
-              IDS_ASH_ECHE_TOAST_COPY_PASTE_NOT_IMPLEMENTED),
-          ash::ToastData::kDefaultToastDuration,
-          /*visible_on_lock_screen=*/false));
-      return true;
     case ui::VKEY_W:
       if (!is_only_control_down)
         return false;

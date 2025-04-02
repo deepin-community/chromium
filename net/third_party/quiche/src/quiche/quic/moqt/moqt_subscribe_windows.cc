@@ -10,6 +10,7 @@
 
 #include "quiche/quic/moqt/moqt_messages.h"
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
+#include "quiche/common/platform/api/quiche_logging.h"
 #include "quiche/web_transport/web_transport.h"
 
 namespace moqt {
@@ -21,87 +22,95 @@ bool SubscribeWindow::InWindow(const FullSequence& seq) const {
   return (!end_.has_value() || seq <= *end_);
 }
 
-std::optional<webtransport::StreamId> SubscribeWindow::GetStreamForSequence(
-    FullSequence sequence,
-    MoqtForwardingPreference forwarding_preference) const {
-  if (forwarding_preference == MoqtForwardingPreference::kTrack) {
-    return track_stream_;
+ReducedSequenceIndex::ReducedSequenceIndex(
+    FullSequence sequence, MoqtForwardingPreference preference) {
+  switch (preference) {
+    case MoqtForwardingPreference::kSubgroup:
+      sequence_ = FullSequence(sequence.group, sequence.subgroup, 0);
+      break;
+    case MoqtForwardingPreference::kDatagram:
+      sequence_ = FullSequence(sequence.group, sequence.object, 0);
+      return;
   }
-  auto group_it = group_streams_.find(sequence.group);
-  if (group_it == group_streams_.end()) {
+}
+
+std::optional<webtransport::StreamId> SendStreamMap::GetStreamForSequence(
+    FullSequence sequence) const {
+  FullSequence index =
+      ReducedSequenceIndex(sequence, forwarding_preference_).sequence();
+  auto group_it = send_streams_.find(index.group);
+  if (group_it == send_streams_.end()) {
     return std::nullopt;
   }
-  if (forwarding_preference == MoqtForwardingPreference::kGroup) {
-    return group_it->second.group_stream;
-  }
-  auto object_it = group_it->second.object_streams.find(sequence.object);
-  if (object_it == group_it->second.object_streams.end()) {
+  auto subgroup_it = group_it->second.find(index.subgroup);
+  if (subgroup_it == group_it->second.end()) {
     return std::nullopt;
   }
-  return object_it->second;
+  return subgroup_it->second;
 }
 
-void SubscribeWindow::AddStream(MoqtForwardingPreference forwarding_preference,
-                                uint64_t group_id, uint64_t object_id,
-                                webtransport::StreamId stream_id) {
-  if (forwarding_preference == MoqtForwardingPreference::kTrack) {
-    QUIC_BUG_IF(quic_bug_moqt_draft_02_01, track_stream_.has_value())
-        << "Track stream already assigned";
-    track_stream_ = stream_id;
-    return;
-  }
-  if (forwarding_preference == MoqtForwardingPreference::kGroup) {
-    QUIC_BUG_IF(quic_bug_moqt_draft_02_02,
-                group_streams_[group_id].group_stream.has_value())
-        << "Group stream already assigned";
-    group_streams_[group_id].group_stream = stream_id;
-    return;
-  }
-  // ObjectStream or ObjectPreferDatagram
-  QUIC_BUG_IF(quic_bug_moqt_draft_02_03,
-              group_streams_[group_id].object_streams.contains(object_id))
-      << "Object stream already assigned";
-  group_streams_[group_id].object_streams[object_id] = stream_id;
+void SendStreamMap::AddStream(FullSequence sequence,
+                              webtransport::StreamId stream_id) {
+  FullSequence index =
+      ReducedSequenceIndex(sequence, forwarding_preference_).sequence();
+  auto [it, result] = send_streams_.insert({index.group, Group()});
+  auto [sg, success] = it->second.try_emplace(index.subgroup, stream_id);
+  QUIC_BUG_IF(quic_bug_moqt_draft_03_02, !success) << "Stream already added";
 }
 
-void SubscribeWindow::RemoveStream(
-    MoqtForwardingPreference forwarding_preference, uint64_t group_id,
-    uint64_t object_id) {
-  if (forwarding_preference == moqt::MoqtForwardingPreference::kTrack) {
-    track_stream_ = std::nullopt;
+void SendStreamMap::RemoveStream(FullSequence sequence,
+                                 webtransport::StreamId stream_id) {
+  FullSequence index =
+      ReducedSequenceIndex(sequence, forwarding_preference_).sequence();
+  auto group_it = send_streams_.find(index.group);
+  if (group_it == send_streams_.end()) {
+    QUICHE_NOTREACHED();
     return;
   }
-  auto group_it = group_streams_.find(group_id);
-  if (group_it == group_streams_.end()) {
+  auto subgroup_it = group_it->second.find(index.subgroup);
+  if (subgroup_it == group_it->second.end() ||
+      subgroup_it->second != stream_id) {
+    QUICHE_NOTREACHED();
     return;
   }
-  GroupStreams& group = group_it->second;
-  if (forwarding_preference == moqt::MoqtForwardingPreference::kGroup) {
-    group.group_stream = std::nullopt;
-    if (group.object_streams.empty()) {
-      group_streams_.erase(group_id);
-    }
-    return;
-  }
-  // ObjectStream or ObjectPreferDatagram
-  if (group.object_streams.contains(object_id)) {
-    group_streams_[group_id].object_streams.erase(object_id);
-    if (!group.group_stream.has_value() &&
-        group_streams_[group_id].object_streams.empty()) {
-      group_streams_.erase(group_id);
-    }
-  }
+  group_it->second.erase(subgroup_it);
 }
 
-std::vector<SubscribeWindow*> MoqtSubscribeWindows::SequenceIsSubscribed(
-    FullSequence sequence) {
-  std::vector<SubscribeWindow*> retval;
-  for (auto& [subscribe_id, window] : windows_) {
-    if (window.InWindow(sequence)) {
-      retval.push_back(&(window));
+bool SubscribeWindow::UpdateStartEnd(FullSequence start,
+                                     std::optional<FullSequence> end) {
+  // Can't make the subscription window bigger.
+  if (!InWindow(start)) {
+    return false;
+  }
+  if (end_.has_value() && (!end.has_value() || *end_ < *end)) {
+    return false;
+  }
+  start_ = start;
+  end_ = end;
+  return true;
+}
+
+std::vector<webtransport::StreamId> SendStreamMap::GetAllStreams() const {
+  std::vector<webtransport::StreamId> ids;
+  for (const auto& [group, subgroup_map] : send_streams_) {
+    for (const auto& [subgroup, stream_id] : subgroup_map) {
+      ids.push_back(stream_id);
     }
   }
-  return retval;
+  return ids;
+}
+
+std::vector<webtransport::StreamId> SendStreamMap::GetStreamsForGroup(
+    uint64_t group_id) const {
+  std::vector<webtransport::StreamId> ids;
+  auto it = send_streams_.find(group_id);
+  if (it == send_streams_.end()) {
+    return ids;
+  }
+  for (const auto& [subgroup, stream_id] : it->second) {
+    ids.push_back(stream_id);
+  }
+  return ids;
 }
 
 }  // namespace moqt

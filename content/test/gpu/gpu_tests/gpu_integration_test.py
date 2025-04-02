@@ -5,6 +5,7 @@
 # pylint: disable=too-many-lines
 
 import collections
+import datetime
 import fnmatch
 import functools
 import importlib
@@ -14,14 +15,15 @@ import logging
 import os
 import pkgutil
 import re
-import sys
 import types
-from typing import Any, Dict, Generator, List, Optional, Set, Tuple, Type
+from typing import (Any, Dict, Generator, Iterable, List, Optional, Set, Tuple,
+                    Type)
 import unittest
 
 import dataclasses  # Built-in, but pylint gives an ordering false positive.
 
 from telemetry.internal.browser import browser_options as bo
+from telemetry.internal.platform import gpu_info as telemetry_gpu_info
 from telemetry.internal.platform import system_info as si_module
 from telemetry.internal.results import artifact_compatibility_wrapper as acw
 from telemetry.testing import serially_executed_browser_test_case
@@ -34,8 +36,10 @@ import validate_tag_consistency
 
 from gpu_tests import common_browser_args as cba
 from gpu_tests import common_typing as ct
+from gpu_tests import constants
 from gpu_tests import gpu_helper
 from gpu_tests import overlay_support
+from gpu_tests.util import host_information
 
 TEST_WAS_SLOW = 'test_was_slow'
 
@@ -48,11 +52,17 @@ ResultType = json_results.ResultType
 # Please expand the following lists when we expand to new bot configs.
 _SUPPORTED_WIN_VERSIONS = ['win7', 'win10', 'win11']
 _SUPPORTED_WIN_GPU_VENDORS = [
-    gpu_helper.GpuVendors.AMD,
-    gpu_helper.GpuVendors.INTEL,
-    gpu_helper.GpuVendors.NVIDIA,
-    gpu_helper.GpuVendors.QUALCOMM,
+    constants.GpuVendor.AMD,
+    constants.GpuVendor.INTEL,
+    constants.GpuVendor.NVIDIA,
+    constants.GpuVendor.QUALCOMM,
 ]
+
+_ARGS_TO_PREEMPT = (
+    '--use-angle',
+    '--use-vulkan',
+    '--use-webgpu-adapter',
+)
 
 _ARGS_TO_CONSOLIDATE = frozenset([
     '--enable-features',
@@ -97,7 +107,6 @@ class GpuIntegrationTest(
     serially_executed_browser_test_case.SeriallyExecutedBrowserTestCase):
 
   _disable_log_uploads = False
-  _extra_intel_device_id_with_overlays: Optional[str] = None
   _skip_post_test_cleanup_and_debug_info = False
   _skip_post_failure_browser_restart = False
   _enforce_browser_version = False
@@ -118,7 +127,7 @@ class GpuIntegrationTest(
   _last_launched_browser_info = _BrowserLaunchInfo()
 
   # Keeps track of flaky tests that we're retrying.
-  # TODO(crbug.com/1248602): Remove this in favor of a method that doesn't rely
+  # TODO(crbug.com/40197330): Remove this in favor of a method that doesn't rely
   # on assumptions about retries, etc. if possible.
   _flaky_test_tries = collections.Counter()
 
@@ -129,6 +138,23 @@ class GpuIntegrationTest(
   # Keeps track of whether this is the first browser start on a shard for a
   # flakiness workaround. See crbug.com/323927831.
   _is_first_browser_start = True
+
+  _is_asan = False
+
+  # Used to verify that command line arguments are actually taking effect.
+  _gl_backend = ''
+  _angle_backend = ''
+  _command_decoder = ''
+  _graphite_status = ''
+
+  # Used for storing the contents of about:gpu between test runs and for
+  # determining whether the contents need to be retrieved again after a browser
+  # restart. This caching is also shared with the tag generation code to avoid
+  # unnecessary communication with the browser when args did not change.
+  _about_gpu_content = None
+  _test_that_started_browser = None
+  _args_changed_this_browser_start = True
+  _cached_platform_tags: Optional[List[str]] = None
 
   tab: Optional[ct.Tab] = None
 
@@ -195,14 +221,17 @@ class GpuIntegrationTest(
     cls._skip_post_failure_browser_restart =\
         options.no_browser_restart_on_failure
     cls._disable_log_uploads = options.disable_log_uploads
-    cls._extra_intel_device_id_with_overlays = (
-        options.extra_intel_device_id_with_overlays)
     cls._enforce_browser_version = options.enforce_browser_version
 
   @classmethod
   def SetUpProcess(cls) -> None:
     super(GpuIntegrationTest, cls).SetUpProcess()
     cls._SetClassVariablesFromOptions(cls._finder_options)
+    # Handled here instead of in _SetClassVariablesFromOptions since we only
+    # ever want to do this once per process.
+    if cls._finder_options.extra_overlay_config_json:
+      overlay_support.ParseOverlayJsonFile(
+          cls._finder_options.extra_overlay_config_json)
 
   @classmethod
   def AddCommandlineArgs(cls, parser: ct.CmdArgParser) -> None:
@@ -210,37 +239,40 @@ class GpuIntegrationTest(
 
     Subclasses overriding this method must invoke the superclass's
     version!"""
-    parser.add_option(
-        '--disable-log-uploads',
-        dest='disable_log_uploads',
+    parser.add_argument('--disable-log-uploads',
+                        dest='disable_log_uploads',
+                        action='store_true',
+                        default=False,
+                        help='Disables uploads of logs to cloud storage')
+    parser.add_argument('--extra-overlay-config-json',
+                        help=('A path to a JSON file containing additional '
+                              'overlay configs to use. See '
+                              'overlay_support.ParseOverlayJsonFile() for more '
+                              'information on expected format.'))
+    parser.add_argument(
+        '--skip-post-test-cleanup-and-debug-info',
         action='store_true',
-        default=False,
-        help='Disables uploads of logs to cloud storage')
-    parser.add_option('--extra-intel-device-id-with-overlays',
-                      dest='extra_intel_device_id_with_overlays',
-                      help='The extra Intel device id with overlays')
-    parser.add_option('--skip-post-test-cleanup-and-debug-info',
-                      action='store_true',
-                      help=('Disables the automatic cleanup of minidumps after '
-                            'each test and prevents collection of debug '
-                            'information such as screenshots when a test '
-                            'fails. This can can speed up local testing at the '
-                            'cost of providing less actionable data when a '
-                            'test does fail.'))
-    parser.add_option('--no-browser-restart-on-failure',
-                      action='store_true',
-                      help=('Disables the automatic browser restarts after '
-                            'failing tests. This can speed up local testing at '
-                            'the cost of potentially leaving bad state around '
-                            'after a test fails.'))
-    parser.add_option('--enforce-browser-version',
-                      default=False,
-                      action='store_true',
-                      help=('Enforces that the started browser version is '
-                            'the same as what the current Chromium revision '
-                            'would build, i.e. that the browser being used '
-                            'is one that was built at the current Chromium '
-                            'revision.'))
+        help=('Disables the automatic cleanup of minidumps after '
+              'each test and prevents collection of debug '
+              'information such as screenshots when a test '
+              'fails. This can can speed up local testing at the '
+              'cost of providing less actionable data when a '
+              'test does fail.'))
+    parser.add_argument(
+        '--no-browser-restart-on-failure',
+        action='store_true',
+        help=('Disables the automatic browser restarts after '
+              'failing tests. This can speed up local testing at '
+              'the cost of potentially leaving bad state around '
+              'after a test fails.'))
+    parser.add_argument('--enforce-browser-version',
+                        default=False,
+                        action='store_true',
+                        help=('Enforces that the started browser version is '
+                              'the same as what the current Chromium revision '
+                              'would build, i.e. that the browser being used '
+                              'is one that was built at the current Chromium '
+                              'revision.'))
 
   @classmethod
   def GenerateBrowserArgs(cls, additional_args: List[str]) -> List[str]:
@@ -260,6 +292,10 @@ class GpuIntegrationTest(
     """
     default_args = [
         '--disable-metal-test-shaders',
+        # TODO(crbug.com/339479329): Remove this once we either determine that
+        # RenderDocument is not the culprit or it is and the root cause of
+        # flakiness is fixed.
+        '--disable-features=RenderDocument',
     ]
     if cls._SuiteSupportsParallelTests():
       # When running tests in parallel, windows can be treated as occluded if a
@@ -306,7 +342,7 @@ class GpuIntegrationTest(
     if cba.DISABLE_GPU in browser_args:
       # Some platforms require GPU process, so browser fails to launch with
       # --disable-gpu mode, therefore, even test expectations fail to evaluate.
-      os_name = cls.browser.platform.GetOSName()
+      os_name = cls.platform.GetOSName()
       if os_name in ('android', 'chromeos'):
         browser_args.remove(cba.DISABLE_GPU)
 
@@ -315,7 +351,7 @@ class GpuIntegrationTest(
     ]:
       # Reduce number of video buffers when running tests on Fuchsia to
       # workaround crbug.com/1203580
-      # TODO(https://crbug.com/1203580): Remove this once the bug is resolved.
+      # TODO(crbug.com/40763608): Remove this once the bug is resolved.
       browser_args.append('--double-buffer-compositing')
 
       # Increase GPU watchdog timeout to 60 seconds to avoid flake when
@@ -351,6 +387,10 @@ class GpuIntegrationTest(
     # If requested, disable uploading of failure logs to cloud storage.
     if cls._disable_log_uploads:
       browser_options.logs_cloud_bucket = None
+
+    # Remove any suite-wide browser args that conflict with the test-specific
+    # browser args.
+    _PreemptArguments(browser_options, browser_args)
 
     # Append the new arguments.
     browser_options.AppendExtraBrowserArgs(browser_args)
@@ -407,6 +447,7 @@ class GpuIntegrationTest(
                                           profile_type)
     args_differ = (new_browser_info.browser_args !=
                    cls._last_launched_browser_info.browser_args)
+    cls._args_changed_this_browser_start = args_differ
     if force_restart or new_browser_info != cls._last_launched_browser_info:
       logging.info(
           'Restarting browser with arguments: %s, profile type %s, and profile '
@@ -448,6 +489,7 @@ class GpuIntegrationTest(
   @classmethod
   def StartBrowser(cls) -> None:
     cls._ModifyBrowserEnvironment()
+    cls._DetermineExpectedFeatureValues()
     # We still need to retry the browser's launch even though
     # desktop_browser_finder does so too, because it wasn't possible
     # to push the fetch of the first tab into the lower retry loop
@@ -464,6 +506,8 @@ class GpuIntegrationTest(
         # when running many small tests like for WebGPU.
         cls._EnsureScreenOn()
         cls._CheckBrowserVersion()
+        cls._VerifyBrowserFeaturesMatchExpectedValues()
+        cls._RetrieveAboutGpu()
         return
       except Exception as e:  # pylint: disable=broad-except
         last_exception = e
@@ -505,6 +549,52 @@ class GpuIntegrationTest(
                          f'actual browser version {actual_version}')
 
   @classmethod
+  def _RetrieveAboutGpu(cls) -> None:
+    """Retrieves the plaintext representation of about:gpu / chrome://gpu.
+
+    No-op if the browser args did not change since the content should be
+    identical in that case.
+    """
+    if not cls._args_changed_this_browser_start:
+      return
+
+    # chrome://gpu does not exist for Webview or the Fuchsia cast streaming
+    # shell.
+    if cls.browser.browser_type in ('android-webview-instrumentation',
+                                    'cast-streaming-shell'):
+      return
+
+    # TODO(crbug.com/376498163): Remove this early return once Telemetry's
+    # fake tab implementation actually has an action runner so that the GPU
+    # unittests pass.
+    if not hasattr(cls.tab, 'action_runner'):
+      return
+
+    cls._about_gpu_content = None
+    cls._test_that_started_browser = None
+
+    # This is non-critical to actually running tests, so suppress any
+    # exceptions.
+    try:
+      cls.tab.Navigate('chrome://gpu')
+      # WaitForNavigate does not work properly on this page, so instead wait
+      # until the relevant element is available with the relevant function
+      # defined.
+      cls.tab.action_runner.WaitForElement(selector='info-view')
+      cls.tab.action_runner.WaitForJavaScriptCondition(
+          'document.getElementsByTagName("info-view")[0].getSelectionText '
+          '!= undefined')
+      about_gpu_content = cls.tab.action_runner.EvaluateJavaScript(
+          'document.getElementsByTagName("info-view")[0]'
+          '.getSelectionText(true)')
+      # We expect there to be a fair bit of data, so use that as a heuristic for
+      # whether we got back useful data.
+      if about_gpu_content and len(about_gpu_content) > 1024:
+        cls._about_gpu_content = about_gpu_content
+    except Exception as e:  # pylint: disable=broad-except
+      logging.error('Exception while retrieving about:gpu: %s', e)
+
+  @classmethod
   def _ModifyBrowserEnvironment(cls):
     """Modify the environment before browser startup, if necessary.
 
@@ -536,6 +626,130 @@ class GpuIntegrationTest(
       cls.platform.RestartTsProxyServerOnRemotePlatforms()
       cls.SetBrowserOptions(cls._finder_options)
       cls.StartBrowser()
+
+  @classmethod
+  def _ClearFeatureValues(cls) -> None:
+    cls._gl_backend = ''
+    cls._angle_backend = ''
+    cls._command_decoder = ''
+    cls._graphite_status = ''
+
+  @classmethod
+  def _DetermineExpectedFeatureValues(cls) -> None:
+    """Determines and stores the expected features.
+
+    This is later used to verify that the features are actually enabled in the
+    browser.
+    """
+    cls._ClearFeatureValues()
+    browser_options = cls._finder_options.browser_options
+
+    if not browser_options or not browser_options.extra_browser_args:
+      return
+
+    for arg in browser_options.extra_browser_args:
+      if arg == cba.DISABLE_GPU:
+        cls._ClearFeatureValues()
+        return
+      if arg.startswith('--use-gl='):
+        cls._gl_backend = arg[len('--use-gl='):]
+      elif arg.startswith('--use-angle='):
+        cls._angle_backend = arg[len('--use-angle='):]
+      elif arg.startswith('--use-cmd-decoder='):
+        cls._command_decoder = arg[len('--use-cmd-decoder='):]
+      elif arg.startswith('--enable-features='):
+        values = arg[len('--enable-features='):]
+        for feature in values.split(','):
+          if feature == 'SkiaGraphite':
+            cls._graphite_status = 'graphite-enabled'
+      elif arg.startswith('--disable-features='):
+        values = arg[len('--disable-features='):]
+        for feature in values.split(','):
+          if feature == 'SkiaGraphite':
+            cls._graphite_status = 'graphite-disabled'
+
+  @classmethod
+  def _VerifyBrowserFeaturesMatchExpectedValues(cls) -> None:
+    """Verifies that the browser's enabled features match expectations."""
+    assert cls.browser
+    gpu_info = cls.browser.GetSystemInfo().gpu
+    cls._VerifyGLBackend(gpu_info)
+    cls._VerifyANGLEBackend(gpu_info)
+    cls._VerifyCommandDecoder(gpu_info)
+    cls._VerifySkiaGraphite(gpu_info)
+
+  @classmethod
+  def _VerifyGLBackend(cls, gpu_info: telemetry_gpu_info.GPUInfo) -> None:
+    """Verifies that Chrome's GL backend matches the requested one."""
+    if not cls._gl_backend:
+      return
+
+    if (cls._gl_backend == 'angle'
+        and gpu_helper.GetANGLERenderer(gpu_info) == 'angle-disabled'):
+      raise RuntimeError(
+          f'Requested GL backend ({cls._gl_backend}) had no effect on the '
+          f'browser: {_GetGPUInfoErrorString(gpu_info)}')
+
+  @classmethod
+  def _VerifyANGLEBackend(cls, gpu_info: telemetry_gpu_info.GPUInfo) -> None:
+    """Verifies that Chrome's ANGLE backend matches the requested one."""
+    if not cls._angle_backend:
+      return
+
+    # GPU exepections use slightly different names for the angle backends
+    # than the Chrome flags
+    known_backend_flag_map = {
+        'angle-d3d11': ['d3d11'],
+        'angle-d3d9': ['d3d9'],
+        'angle-opengl': ['gl'],
+        'angle-opengles': ['gles'],
+        'angle-metal': ['metal'],
+        'angle-vulkan': ['vulkan'],
+        # Support setting VK_ICD_FILENAMES for swiftshader when requesting
+        # the 'vulkan' backend.
+        'angle-swiftshader': ['swiftshader', 'vulkan'],
+    }
+    current_angle_backend = gpu_helper.GetANGLERenderer(gpu_info)
+
+    if (current_angle_backend not in known_backend_flag_map
+        or cls._angle_backend
+        not in known_backend_flag_map[current_angle_backend]):
+      raise RuntimeError(
+          f'Requested ANGLE backend ({cls._angle_backend}) had no effect on '
+          f'the browser: {_GetGPUInfoErrorString(gpu_info)}')
+
+  @classmethod
+  def _VerifyCommandDecoder(cls, gpu_info: telemetry_gpu_info.GPUInfo) -> None:
+    """Verifies that Chrome's command decoder matches the requested one."""
+    if not cls._command_decoder:
+      return
+
+    # GPU exepections use slightly different names for the command decoders
+    # than the Chrome flags
+    known_command_decoder_flag_map = {
+        'passthrough': 'passthrough',
+        'no_passthrough': 'validating',
+    }
+    current_command_decoder = gpu_helper.GetCommandDecoder(gpu_info)
+
+    if (current_command_decoder not in known_command_decoder_flag_map
+        or known_command_decoder_flag_map[current_command_decoder]
+        != cls._command_decoder):
+      raise RuntimeError(
+          f'Requested command decoder ({cls._command_decoder}) had no effect '
+          f'on the browser: {_GetGPUInfoErrorString(gpu_info)}')
+
+  @classmethod
+  def _VerifySkiaGraphite(cls, gpu_info: telemetry_gpu_info.GPUInfo) -> None:
+    """Verifies that Chrome's Skia Graphite status matches the requested one."""
+    if not cls._graphite_status:
+      return
+
+    status = gpu_helper.GetSkiaGraphiteStatus(gpu_info)
+    if cls._graphite_status != status:
+      raise RuntimeError(
+          f'Requested Skia Graphite status ({cls._graphite_status}) had no '
+          f'effect on the browser: {_GetGPUInfoErrorString(gpu_info)}')
 
   @classmethod
   def _EnsureScreenOn(cls) -> None:
@@ -584,7 +798,7 @@ class GpuIntegrationTest(
     # GetPlatformTags() to restrict this to the flaking Mac configs.
     if not GpuIntegrationTest._is_first_browser_start:
       return False
-    return sys.platform == 'darwin'
+    return host_information.IsMac()
 
   # pylint: enable=no-self-use
 
@@ -652,6 +866,48 @@ class GpuIntegrationTest(
       self._HandlePass(test_name, expected_crashes, expected_results)
     finally:
       self.additionalTags[TEST_WAS_SLOW] = json.dumps(self._TestWasSlow())
+      self._ReportAboutGpu(test_name)
+      self._OnAfterTest(args)
+
+  def _OnAfterTest(self, args: ct.TestArgs) -> None:
+    """Called at the end of _RunGpuTest.
+
+    Meant to be overridden by subclasses to perform actions that cannot be done
+    during the actual test for whatever reason.
+
+    Args:
+      args: The same arguments that the test was run with.
+    """
+
+  def _ReportAboutGpu(self, test_name: str) -> None:
+    """Report the cached about:gpu content as an artifact.
+
+    The actual content is only reported for the first test that is run after
+    new content is retrieved. Subsequent tests simply point to the first test.
+
+    Args:
+      test_name: The name of the test that was run.
+    """
+    # pylint: disable=protected-access
+    cls = self.__class__
+    if not cls._about_gpu_content:
+      return
+
+    if cls._test_that_started_browser is None:
+      cls._test_that_started_browser = test_name
+      # Replacement is necessary to not create an invalid path on Windows.
+      timestamp = datetime.datetime.now().isoformat().replace(':', '_')
+      self.artifacts.CreateArtifact('about_gpu',
+                                    f'about_gpu_{timestamp}.txt',
+                                    cls._about_gpu_content,
+                                    write_as_text=True)
+    else:
+      # We use an in-memory artifact since this is going to be reported in
+      # in almost every test and large numbers of files negatively impact
+      # Swarming task cleanup, particularly on Windows.
+      self.artifacts.CreateInMemoryTextArtifact(
+          'about_gpu', f'See artifacts for {cls._test_that_started_browser}')
+    # pylint: enable=protected-access
 
   def _HandleExpectedFailureOrFlake(self, test_name: str,
                                     expected_crashes: Dict[str, int],
@@ -665,7 +921,7 @@ class GpuIntegrationTest(
       # Perform the same data collection as we do for an unexpected failure
       # but only if this was the last try for a flaky test so we don't
       # waste time symbolizing minidumps for expected flaky crashes.
-      # TODO(crbug.com/1248602): Replace this with a different method of
+      # TODO(crbug.com/40197330): Replace this with a different method of
       # tracking retries if possible.
       self._flaky_test_tries[test_name] += 1
       if self._flaky_test_tries[test_name] == _MAX_TEST_TRIES:
@@ -742,7 +998,7 @@ class GpuIntegrationTest(
     number_of_crashes = -1
     system_info = self.browser.GetSystemInfo()
     number_of_crashes = \
-        system_info.gpu.aux_attributes[u'process_crash_count']
+        system_info.gpu.aux_attributes['process_crash_count']
 
     retval = True
     if number_of_crashes != total_expected_crashes:
@@ -762,7 +1018,7 @@ class GpuIntegrationTest(
     return gpu_helper.IsIntel(gpu.devices[0].vendor_id)
 
   def IsDualGPUMacLaptop(self) -> bool:
-    if sys.platform != 'darwin':
+    if not host_information.IsMac():
       return False
     system_info = self.browser.GetSystemInfo()
     if not system_info:
@@ -911,11 +1167,15 @@ class GpuIntegrationTest(
     angle renderer, and command line decoder tags to that list before
     returning it.
     """
+    if not cls._args_changed_this_browser_start and cls._cached_platform_tags:
+      return cls._cached_platform_tags
+
     tags = super(GpuIntegrationTest, cls).GetPlatformTags(browser)
     system_info = browser.GetSystemInfo()
     if system_info:
       gpu_tags = []
       gpu_info = system_info.gpu
+      cls._is_asan = gpu_info.aux_attributes.get('is_asan', False)
       # On the dual-GPU MacBook Pros, surface the tags of the secondary GPU if
       # it's the discrete GPU, so that test expectations can be written that
       # target the discrete GPU.
@@ -954,14 +1214,15 @@ class GpuIntegrationTest(
       tags.extend([re.sub('[ _]', '-', tag) for tag in gpu_tags])
 
       # Add tags based on GPU feature status.
-      startup_args = getattr(browser, 'startup_args', None)
-      skia_renderer = gpu_helper.GetSkiaRenderer(gpu_info, startup_args)
+      skia_renderer = gpu_helper.GetSkiaRenderer(gpu_info)
       tags.append(skia_renderer)
       tags.extend(cls._GetDriverVersionTags(browser, system_info))
     display_server = gpu_helper.GetDisplayServer(browser.browser_type)
     if display_server:
       tags.append(display_server)
     tags = gpu_helper.ReplaceTags(tags)
+
+    cls._cached_platform_tags = tags
     return tags
 
   @classmethod
@@ -1040,13 +1301,6 @@ class GpuIntegrationTest(
     finally:
       GpuIntegrationTest._is_first_browser_start = False
 
-    # Append overlay support for extra Intel GPUs when the extra device id is
-    # current active GPU's device id
-    gpu = self.browser.GetSystemInfo().gpu.devices[0]
-    extra_device_id = self._extra_intel_device_id_with_overlays
-    if extra_device_id and extra_device_id != gpu.device_id:
-      overlay_support.AppendOverlayConfigWithExtraIntelGPU(gpu)
-
   @staticmethod
   def GetJSONResultsDelimiter() -> str:
     return '/'
@@ -1060,12 +1314,13 @@ class GpuIntegrationTest(
         'android-not-webview',
         # These GPUs are analogous to a particular device, and specifying the
         # device name is clearer.
-        'arm-mali-g52',  # android-sm-a135m
+        'arm-mali-g52-mc2',  # android-sm-a137f
         'arm-mali-t860',  # chromeos-board-kevin
         'qualcomm-adreno-(tm)-418',  # android-nexus-5x
         'qualcomm-adreno-(tm)-540',  # android-pixel-2
         'qualcomm-adreno-(tm)-610',  # android-sm-a235m
         'qualcomm-adreno-(tm)-640',  # android-pixel-4
+        'qualcomm-adreno-(tm)-740',  # android-sm-s911u1
         'arm-mali-g78',  # android-pixel-6
         'nvidia-nvidia-tegra',  # android-shield-android-tv
         'vmware,',  # VMs
@@ -1076,14 +1331,7 @@ class GpuIntegrationTest(
         'chromium-os',  # ChromeOS
         'cros-chrome',  # ChromeOS
         'web-engine-shell',  # Fuchsia
-        'cast-streaming-shell',  # Syonymous with cast_streaming suite
-        # WebGL version is already handled by having expectations in separate
-        # files.
-        # TODO(crbug.com/1140283): Remove these tags once we're sure that
-        # all relevant data has aged out. Should be safe to do so at the end of
-        # August 2023.
-        'webgl-version-1',
-        'webgl-version-2',
+        'cast-streaming-shell',  # Synonymous with cast_streaming suite
         # GPU tests are always run in remote mode on the bots, and it shouldn't
         # make a difference to these tests anyways.
         'chromeos-local',
@@ -1097,6 +1345,17 @@ class GpuIntegrationTest(
         'unknown-gpu',
         'unknown-gpu-0x8c',
         'unknown-gpu-',
+        # Android versions prior to Android 14 use the letter corresponding to
+        # the code name, e.g. O for Oreo. 14 and later uses the numerical
+        # version. See crbug.com/333795261 for context on why this is
+        # necessary.
+        'android-8',  # Android O
+        'android-9',  # Android P
+        'android-10',  # Android Q
+        'android-11',  # Android R
+        'android-12',  # Android S
+        'android-13',  # Android T
+        'android-a',  # Android 14+ releases in 2024
     ]
 
   @classmethod
@@ -1107,6 +1366,42 @@ class GpuIntegrationTest(
     expectation file lives in a third party repo.
     """
     return gpu_path_util.CHROMIUM_SRC_DIR
+
+
+def _PreemptArguments(browser_options: bo.BrowserOptions,
+                      extra_browser_args: Iterable[str]) -> None:
+  """Removes existing args that would conflict with extra args.
+
+  Certain args such as --use-angle are liable to be specified both at the
+  suite level and on a per-test basis. If such args are specified multiple
+  times. we want the per-test value to take precedence.
+
+  Args:
+    browser_options: The BrowserOptions that will be used to start the browser.
+        The browser args contained within may be modified in place if any
+        conflicting args are found.
+    extra_browser_args: Extra per-test browser args that will be added for this
+        particular browser start.
+  """
+
+  def _GetMatchingArg(arg_to_look_for: str,
+                      all_args: Iterable[str]) -> Optional[str]:
+    for arg in all_args:
+      # Per the comments in BrowserOptions.ConsolidateValuesForArg, only the
+      # --flag=value format for browser args is supported.
+      if '=' not in arg:
+        continue
+      if arg.split('=', 1)[0] == arg_to_look_for:
+        return arg
+    return None
+
+  for arg_to_look_for in _ARGS_TO_PREEMPT:
+    existing_instance = _GetMatchingArg(arg_to_look_for,
+                                        browser_options.extra_browser_args)
+    new_instance = _GetMatchingArg(arg_to_look_for, extra_browser_args)
+    if existing_instance and new_instance:
+      browser_options.RemoveExtraBrowserArg(existing_instance)
+      # Adding the new one will be handled automatically by the caller.
 
 
 def _TagConflictChecker(tag1: str, tag2: str) -> bool:
@@ -1161,6 +1456,22 @@ def _GetExpectedBrowserVersion() -> str:
     version_info[k] = v
   return (f'{version_info["MAJOR"]}.{version_info["MINOR"]}.'
           f'{version_info["BUILD"]}.{version_info["PATCH"]}')
+
+
+def _GetGPUInfoErrorString(gpu_info: telemetry_gpu_info.GPUInfo) -> str:
+  primary_gpu = gpu_info.devices[0]
+  error_str = f'primary gpu={primary_gpu.device_string}'
+  if gpu_info.aux_attributes:
+    gl_renderer = gpu_info.aux_attributes.get('gl_renderer')
+    if gl_renderer:
+      error_str += f', gl_renderer={gl_renderer}'
+  if gpu_info.feature_status:
+    pairs = []
+    for key in sorted(gpu_info.feature_status.keys()):
+      pairs.append(f'{key}={gpu_info.feature_status[key]}')
+    if pairs:
+      error_str += f', feature_statuses={",".join(pairs)}'
+  return error_str
 
 
 def LoadAllTestsInModule(module: types.ModuleType) -> unittest.TestSuite:

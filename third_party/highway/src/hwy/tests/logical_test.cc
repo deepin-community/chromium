@@ -14,10 +14,6 @@
 // limitations under the License.
 
 #include <stddef.h>
-#include <stdint.h>
-#include <string.h>  // memcmp
-
-#include "hwy/aligned_allocator.h"
 
 #undef HWY_TARGET_INCLUDE
 #define HWY_TARGET_INCLUDE "tests/logical_test.cc"
@@ -28,14 +24,15 @@
 HWY_BEFORE_NAMESPACE();
 namespace hwy {
 namespace HWY_NAMESPACE {
+namespace {
 
 struct TestNot {
   template <class T, class D>
   HWY_NOINLINE void operator()(T /*unused*/, D d) {
-    const auto v0 = Zero(d);
-    const auto ones = VecFromMask(d, Eq(v0, v0));
-    const auto v1 = Set(d, 1);
-    const auto vnot1 = Set(d, T(~T(1)));
+    const Vec<D> v0 = Zero(d);
+    const Vec<D> ones = VecFromMask(d, Eq(v0, v0));
+    const Vec<D> v1 = Set(d, 1);
+    const Vec<D> vnot1 = Set(d, static_cast<T>(~static_cast<T>(1)));
 
     HWY_ASSERT_VEC_EQ(d, v0, Not(ones));
     HWY_ASSERT_VEC_EQ(d, ones, Not(v0));
@@ -119,72 +116,16 @@ HWY_NOINLINE void TestAllLogical() {
   ForAllTypes(ForPartialVectors<TestLogical>());
 }
 
-struct TestCopySign {
-  template <class T, class D>
-  HWY_NOINLINE void operator()(T /*unused*/, D d) {
-    const auto v0 = Zero(d);
-    const auto vp = Iota(d, 1);
-    const auto vn = Iota(d, T(-1E5));  // assumes N < 10^5
-
-    // Zero remains zero regardless of sign
-    HWY_ASSERT_VEC_EQ(d, v0, CopySign(v0, v0));
-    HWY_ASSERT_VEC_EQ(d, v0, CopySign(v0, vp));
-    HWY_ASSERT_VEC_EQ(d, v0, CopySign(v0, vn));
-    HWY_ASSERT_VEC_EQ(d, v0, CopySignToAbs(v0, v0));
-    HWY_ASSERT_VEC_EQ(d, v0, CopySignToAbs(v0, vp));
-    HWY_ASSERT_VEC_EQ(d, v0, CopySignToAbs(v0, vn));
-
-    // Positive input, positive sign => unchanged
-    HWY_ASSERT_VEC_EQ(d, vp, CopySign(vp, vp));
-    HWY_ASSERT_VEC_EQ(d, vp, CopySignToAbs(vp, vp));
-
-    // Positive input, negative sign => negated
-    HWY_ASSERT_VEC_EQ(d, Neg(vp), CopySign(vp, vn));
-    HWY_ASSERT_VEC_EQ(d, Neg(vp), CopySignToAbs(vp, vn));
-
-    // Negative input, negative sign => unchanged
-    HWY_ASSERT_VEC_EQ(d, vn, CopySign(vn, vn));
-
-    // Negative input, positive sign => negated
-    HWY_ASSERT_VEC_EQ(d, Neg(vn), CopySign(vn, vp));
-  }
-};
-
-HWY_NOINLINE void TestAllCopySign() {
-  ForFloatTypes(ForPartialVectors<TestCopySign>());
-}
-
-struct TestBroadcastSignBit {
-  template <class T, class D>
-  HWY_NOINLINE void operator()(T /*unused*/, D d) {
-    const auto s0 = Zero(d);
-    const auto s1 = Set(d, -1);  // all bit set
-    const auto vpos = And(Iota(d, 0), Set(d, LimitsMax<T>()));
-    const auto vneg = Sub(s1, vpos);
-
-    HWY_ASSERT_VEC_EQ(d, s0, BroadcastSignBit(vpos));
-    HWY_ASSERT_VEC_EQ(d, s0, BroadcastSignBit(Set(d, LimitsMax<T>())));
-
-    HWY_ASSERT_VEC_EQ(d, s1, BroadcastSignBit(vneg));
-    HWY_ASSERT_VEC_EQ(d, s1, BroadcastSignBit(Set(d, LimitsMin<T>())));
-    HWY_ASSERT_VEC_EQ(d, s1, BroadcastSignBit(Set(d, LimitsMin<T>() / 2)));
-  }
-};
-
-HWY_NOINLINE void TestAllBroadcastSignBit() {
-  ForSignedTypes(ForPartialVectors<TestBroadcastSignBit>());
-}
-
 struct TestTestBit {
   template <class T, class D>
   HWY_NOINLINE void operator()(T /*unused*/, D d) {
     const size_t kNumBits = sizeof(T) * 8;
     for (size_t i = 0; i < kNumBits; ++i) {
-      const auto bit1 = Set(d, T(1ull << i));
-      const auto bit2 = Set(d, T(1ull << ((i + 1) % kNumBits)));
-      const auto bit3 = Set(d, T(1ull << ((i + 2) % kNumBits)));
-      const auto bits12 = Or(bit1, bit2);
-      const auto bits23 = Or(bit2, bit3);
+      const Vec<D> bit1 = Set(d, static_cast<T>(1ull << i));
+      const Vec<D> bit2 = Set(d, static_cast<T>(1ull << ((i + 1) % kNumBits)));
+      const Vec<D> bit3 = Set(d, static_cast<T>(1ull << ((i + 2) % kNumBits)));
+      const Vec<D> bits12 = Or(bit1, bit2);
+      const Vec<D> bits23 = Or(bit2, bit3);
       HWY_ASSERT(AllTrue(d, TestBit(bit1, bit1)));
       HWY_ASSERT(AllTrue(d, TestBit(bits12, bit1)));
       HWY_ASSERT(AllTrue(d, TestBit(bits12, bit2)));
@@ -205,42 +146,21 @@ HWY_NOINLINE void TestAllTestBit() {
   ForIntegerTypes(ForPartialVectors<TestTestBit>());
 }
 
-struct TestPopulationCount {
-  template <class T, class D>
-  HWY_NOINLINE void operator()(T /*unused*/, D d) {
-    RandomState rng;
-    size_t N = Lanes(d);
-    auto data = AllocateAligned<T>(N);
-    auto popcnt = AllocateAligned<T>(N);
-    for (size_t i = 0; i < AdjustedReps(1 << 18) / N; i++) {
-      for (size_t i = 0; i < N; i++) {
-        data[i] = static_cast<T>(rng());
-        popcnt[i] = static_cast<T>(PopCount(data[i]));
-      }
-      HWY_ASSERT_VEC_EQ(d, popcnt.get(), PopulationCount(Load(d, data.get())));
-    }
-  }
-};
-
-HWY_NOINLINE void TestAllPopulationCount() {
-  ForUnsignedTypes(ForPartialVectors<TestPopulationCount>());
-}
-
+}  // namespace
 // NOLINTNEXTLINE(google-readability-namespace-comments)
 }  // namespace HWY_NAMESPACE
 }  // namespace hwy
 HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
-
 namespace hwy {
+namespace {
 HWY_BEFORE_TEST(HwyLogicalTest);
 HWY_EXPORT_AND_TEST_P(HwyLogicalTest, TestAllNot);
 HWY_EXPORT_AND_TEST_P(HwyLogicalTest, TestAllLogical);
-HWY_EXPORT_AND_TEST_P(HwyLogicalTest, TestAllCopySign);
-HWY_EXPORT_AND_TEST_P(HwyLogicalTest, TestAllBroadcastSignBit);
 HWY_EXPORT_AND_TEST_P(HwyLogicalTest, TestAllTestBit);
-HWY_EXPORT_AND_TEST_P(HwyLogicalTest, TestAllPopulationCount);
+HWY_AFTER_TEST();
+}  // namespace
 }  // namespace hwy
-
-#endif
+HWY_TEST_MAIN();
+#endif  // HWY_ONCE

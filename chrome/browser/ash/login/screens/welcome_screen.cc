@@ -26,7 +26,6 @@
 #include "chrome/browser/ash/login/demo_mode/demo_setup_controller.h"
 #include "chrome/browser/ash/login/login_pref_names.h"
 #include "chrome/browser/ash/login/oobe_screen.h"
-#include "chrome/browser/ash/login/ui/input_events_blocker.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_requisition_manager.h"
 #include "chrome/browser/ash/system/timezone_resolver_manager.h"
@@ -34,12 +33,14 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/ash/login_screen_client_impl.h"
+#include "chrome/browser/ui/ash/login/input_events_blocker.h"
+#include "chrome/browser/ui/ash/login/login_screen_client_impl.h"
 #include "chrome/browser/ui/webui/ash/login/l10n_util.h"
 #include "chrome/browser/ui/webui/ash/login/welcome_screen_handler.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/branded_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/components/quick_start/quick_start_metrics.h"
 #include "chromeos/dbus/constants/dbus_switches.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/prefs/pref_service.h"
@@ -157,7 +158,7 @@ void RecordA11yUserAction(const std::string& action_id) {
 // Returns true if is a Meet Device or the remora requisition bit has been set
 // for testing. Note: Can be overridden with the command line switch
 // --enable-requisition-edits.
-bool IsRemoraRequisitionConfigurable() {
+bool IsMeetDeviceConfigurable() {
   return policy::EnrollmentRequisitionManager::IsMeetDevice() ||
          switches::IsDeviceRequisitionConfigurable();
 }
@@ -173,6 +174,7 @@ std::string GetApplicationLocale() {
 
 // static
 std::string WelcomeScreen::GetResultString(Result result) {
+  // LINT.IfChange(UsageMetrics)
   switch (result) {
     case Result::kNext:
       return "Next";
@@ -185,6 +187,7 @@ std::string WelcomeScreen::GetResultString(Result result) {
     case Result::kQuickStart:
       return "QuickStart";
   }
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/oobe/histograms.xml)
 }
 
 WelcomeScreen::WelcomeScreen(base::WeakPtr<WelcomeView> view,
@@ -314,7 +317,7 @@ std::string WelcomeScreen::GetTimezone() const {
 
 void WelcomeScreen::SetDeviceRequisition(const std::string& requisition) {
   if (requisition == kRemoraRequisitionIdentifier) {
-    if (!IsRemoraRequisitionConfigurable())
+    if (!IsMeetDeviceConfigurable())
       return;
   } else {
     if (!switches::IsDeviceRequisitionConfigurable())
@@ -325,7 +328,7 @@ void WelcomeScreen::SetDeviceRequisition(const std::string& requisition) {
       policy::EnrollmentRequisitionManager::GetDeviceRequisition();
   policy::EnrollmentRequisitionManager::SetDeviceRequisition(requisition);
 
-  if (policy::EnrollmentRequisitionManager::IsRemoraRequisition()) {
+  if (policy::EnrollmentRequisitionManager::IsMeetDevice()) {
     // CfM devices default to static timezone.
     g_browser_process->local_state()->SetInteger(
         ::prefs::kResolveDeviceTimezoneByGeolocationMethod,
@@ -388,8 +391,8 @@ void WelcomeScreen::ShowImpl() {
   WizardController::default_controller()
       ->quick_start_controller()
       ->DetermineEntryPointVisibility(
-          base::BindOnce(&WelcomeScreen::SetQuickStartButtonVisibility,
-                         weak_ptr_factory_.GetWeakPtr()));
+          base::BindRepeating(&WelcomeScreen::SetQuickStartButtonVisibility,
+                              weak_ptr_factory_.GetWeakPtr()));
 
   if (LoginScreenClientImpl::HasInstance()) {
     LoginScreenClientImpl::Get()->AddSystemTrayObserver(this);
@@ -540,7 +543,7 @@ bool WelcomeScreen::HandleAccelerator(LoginAcceleratorAction action) {
           policy::EnrollmentRequisitionManager::GetDeviceRequisition());
     return true;
   } else if (action == LoginAcceleratorAction::kDeviceRequisitionRemora &&
-             IsRemoraRequisitionConfigurable()) {
+             IsMeetDeviceConfigurable()) {
     if (view_)
       view_->ShowRemoraRequisitionDialog();
     return true;
@@ -556,8 +559,8 @@ bool WelcomeScreen::HandleAccelerator(LoginAcceleratorAction action) {
     WizardController::default_controller()
         ->quick_start_controller()
         ->DetermineEntryPointVisibility(
-            base::BindOnce(&WelcomeScreen::SetQuickStartButtonVisibility,
-                           weak_ptr_factory_.GetWeakPtr()));
+            base::BindRepeating(&WelcomeScreen::SetQuickStartButtonVisibility,
+                                weak_ptr_factory_.GetWeakPtr()));
     return true;
   }
 
@@ -578,8 +581,19 @@ void WelcomeScreen::InputMethodChanged(
 }
 
 void WelcomeScreen::SetQuickStartButtonVisibility(bool visible) {
-  if (visible && view_) {
+  if (!view_) {
+    return;
+  }
+
+  if (visible) {
     view_->SetQuickStartEnabled();
+    base::UmaHistogramBoolean(
+        "QuickStart.WelcomeScreen.QuickStartButtonVisible", visible);
+    if (!has_emitted_quick_start_visible) {
+      has_emitted_quick_start_visible = true;
+      quick_start::QuickStartMetrics::RecordEntryPointVisible(
+          quick_start::QuickStartMetrics::EntryPoint::WELCOME_SCREEN);
+    }
   }
 }
 
@@ -715,6 +729,7 @@ void WelcomeScreen::UpdateA11yState() {
 
 void WelcomeScreen::OnQuickStartClicked() {
   CHECK(context()->quick_start_enabled);
+  CHECK(!context()->quick_start_setup_ongoing);
   Exit(Result::kQuickStart);
 }
 

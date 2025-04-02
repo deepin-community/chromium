@@ -1,3 +1,2 @@
-// File automatically generated. See crbug.com/495833.
-// Last modified 2024-01-25.
+// Automatically generated on Mon Dec  9 16:35:31 2024. See crbug.com/495833.
 #include "hpeldsp_neon.S"

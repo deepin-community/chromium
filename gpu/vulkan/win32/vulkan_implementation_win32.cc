@@ -75,14 +75,12 @@ VulkanImplementationWin32::GetOptionalDeviceExtensions() {
 VkFence VulkanImplementationWin32::CreateVkFenceForGpuFence(
     VkDevice vk_device) {
   NOTREACHED();
-  return VK_NULL_HANDLE;
 }
 
 std::unique_ptr<gfx::GpuFence>
 VulkanImplementationWin32::ExportVkFenceToGpuFence(VkDevice vk_device,
                                                    VkFence vk_fence) {
   NOTREACHED();
-  return nullptr;
 }
 
 VkExternalSemaphoreHandleTypeFlagBits

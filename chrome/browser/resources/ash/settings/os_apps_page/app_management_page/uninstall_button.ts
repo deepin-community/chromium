@@ -6,7 +6,7 @@ import './app_management_cros_shared_style.css.js';
 import '//resources/ash/common/cr_elements/cr_button/cr_button.js';
 import '//resources/ash/common/cr_elements/policy/cr_tooltip_icon.js';
 
-import {App} from '//resources/cr_components/app_management/app_management.mojom-webui.js';
+import type {App} from '//resources/cr_components/app_management/app_management.mojom-webui.js';
 import {BrowserProxy} from '//resources/cr_components/app_management/browser_proxy.js';
 import {AppManagementUserAction, InstallReason} from '//resources/cr_components/app_management/constants.js';
 import {recordAppManagementUserAction} from '//resources/cr_components/app_management/util.js';
@@ -37,26 +37,9 @@ export class AppManagementUninstallButtonElement extends PolymerElement {
 
   /**
    * Returns true if the button should be disabled due to app install type.
-   *
-   * If the compiler complains about the "lack of ending return statement",
-   * you maybe just added a new InstallReason and need to add a new case.
    */
   private getDisableState_(): boolean {
-    switch (this.app.installReason) {
-      case InstallReason.kSystem:
-      case InstallReason.kPolicy:
-      case InstallReason.kKiosk:
-        return true;
-      case InstallReason.kUnknown:
-      case InstallReason.kOem:
-      case InstallReason.kDefault:
-      case InstallReason.kSubApp:
-      case InstallReason.kSync:
-      case InstallReason.kUser:
-      case InstallReason.kSubApp:
-      case InstallReason.kCommandLine:
-        return false;
-    }
+    return this.app.installReason === InstallReason.kPolicy;
   }
 
   /**
@@ -70,7 +53,8 @@ export class AppManagementUninstallButtonElement extends PolymerElement {
    * Returns true if the uninstall button should be shown.
    */
   private showUninstallButton_(): boolean {
-    return this.app.installReason !== InstallReason.kSystem;
+    return this.app.allowUninstall ||
+        (this.app.installReason === InstallReason.kPolicy);
   }
 
   private onClick_(): void {

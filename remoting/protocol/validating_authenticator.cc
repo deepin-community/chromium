@@ -11,6 +11,7 @@
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "remoting/protocol/authenticator.h"
@@ -34,6 +35,15 @@ ValidatingAuthenticator::ValidatingAuthenticator(
 
 ValidatingAuthenticator::~ValidatingAuthenticator() = default;
 
+CredentialsType ValidatingAuthenticator::credentials_type() const {
+  return current_authenticator_->credentials_type();
+}
+
+const Authenticator& ValidatingAuthenticator::implementing_authenticator()
+    const {
+  return current_authenticator_->implementing_authenticator();
+}
+
 Authenticator::State ValidatingAuthenticator::state() const {
   return pending_auth_message_ ? MESSAGE_READY : state_;
 }
@@ -47,8 +57,17 @@ Authenticator::RejectionReason ValidatingAuthenticator::rejection_reason()
   return rejection_reason_;
 }
 
+Authenticator::RejectionDetails ValidatingAuthenticator::rejection_details()
+    const {
+  return rejection_details_;
+}
+
 const std::string& ValidatingAuthenticator::GetAuthKey() const {
   return current_authenticator_->GetAuthKey();
+}
+
+const SessionPolicies* ValidatingAuthenticator::GetSessionPolicies() const {
+  return current_authenticator_->GetSessionPolicies();
 }
 
 std::unique_ptr<ChannelAuthenticator>
@@ -115,6 +134,7 @@ void ValidatingAuthenticator::OnValidateComplete(base::OnceClosure callback,
   }
 
   state_ = Authenticator::REJECTED;
+  rejection_details_ = RejectionDetails("Validation failed.");
 
   // Clear the pending message so the signal strategy will generate a new
   // SESSION_REJECT message in response to this state change.
@@ -130,6 +150,7 @@ void ValidatingAuthenticator::UpdateState(base::OnceClosure resume_callback) {
   state_ = current_authenticator_->state();
   if (state_ == REJECTED) {
     rejection_reason_ = current_authenticator_->rejection_reason();
+    rejection_details_ = current_authenticator_->rejection_details();
   } else if (state_ == MESSAGE_READY) {
     DCHECK(!pending_auth_message_);
     pending_auth_message_ = current_authenticator_->GetNextMessage();
@@ -145,6 +166,15 @@ void ValidatingAuthenticator::UpdateState(base::OnceClosure resume_callback) {
   } else {
     std::move(resume_callback).Run();
   }
+}
+
+void ValidatingAuthenticator::NotifyStateChangeAfterAccepted() {
+  state_ = current_authenticator_->state();
+  if (state_ == REJECTED) {
+    rejection_reason_ = current_authenticator_->rejection_reason();
+    rejection_details_ = current_authenticator_->rejection_details();
+  }
+  Authenticator::NotifyStateChangeAfterAccepted();
 }
 
 }  // namespace remoting::protocol

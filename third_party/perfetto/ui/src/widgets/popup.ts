@@ -19,10 +19,9 @@ import {MountOptions, Portal, PortalAttrs} from './portal';
 import {classNames} from '../base/classnames';
 import {findRef, isOrContains, toHTMLElement} from '../base/dom_utils';
 import {assertExists} from '../base/logging';
-import {scheduleFullRedraw} from './raf';
 
 type CustomModifier = Modifier<'sameWidth', {}>;
-type ExtendedModifiers = StrictModifiers|CustomModifier;
+type ExtendedModifiers = StrictModifiers | CustomModifier;
 
 // Note: We could just use the Placement type from popper.js instead, which is a
 // union of string literals corresponding to the values in this enum, but having
@@ -175,8 +174,9 @@ export class Popup implements m.ClassComponent<PopupAttrs> {
         return {container: closestPopup ?? undefined};
       },
       onContentMount: (dom: HTMLElement) => {
-        const popupElement =
-            toHTMLElement(assertExists(findRef(dom, Popup.POPUP_REF)));
+        const popupElement = toHTMLElement(
+          assertExists(findRef(dom, Popup.POPUP_REF)),
+        );
         this.popupElement = popupElement;
         this.createOrUpdatePopper(attrs);
         document.addEventListener('mousedown', this.handleDocMouseDown);
@@ -205,14 +205,18 @@ export class Popup implements m.ClassComponent<PopupAttrs> {
     return m(
       Portal,
       portalAttrs,
-      m('.pf-popup',
+      m(
+        '.pf-popup',
         {
           class: classNames(
-            className, createNewGroup && Popup.POPUP_GROUP_CLASS),
+            className,
+            createNewGroup && Popup.POPUP_GROUP_CLASS,
+          ),
           ref: Popup.POPUP_REF,
         },
         showArrow && m('.pf-popup-arrow[data-popper-arrow]'),
-        m('.pf-popup-content', children)),
+        m('.pf-popup-content', children),
+      ),
     );
   }
 
@@ -241,19 +245,21 @@ export class Popup implements m.ClassComponent<PopupAttrs> {
 
     let matchWidthModifier: Modifier<'sameWidth', {}>[];
     if (matchWidth) {
-      matchWidthModifier = [{
-        name: 'sameWidth',
-        enabled: true,
-        phase: 'beforeWrite',
-        requires: ['computeStyles'],
-        fn: ({state}) => {
-          state.styles.popper.width = `${state.rects.reference.width}px`;
+      matchWidthModifier = [
+        {
+          name: 'sameWidth',
+          enabled: true,
+          phase: 'beforeWrite',
+          requires: ['computeStyles'],
+          fn: ({state}) => {
+            state.styles.popper.width = `${state.rects.reference.width}px`;
+          },
+          effect: ({state}) => {
+            const trigger = state.elements.reference as HTMLElement;
+            state.elements.popper.style.width = `${trigger.offsetWidth}px`;
+          },
         },
-        effect: ({state}) => {
-          const trigger = state.elements.reference as HTMLElement;
-          state.elements.popper.style.width = `${trigger.offsetWidth}px`;
-        },
-      }];
+      ];
     } else {
       matchWidthModifier = [];
     }
@@ -290,7 +296,10 @@ export class Popup implements m.ClassComponent<PopupAttrs> {
     } else {
       if (this.popupElement && this.triggerElement) {
         this.popper = createPopper<ExtendedModifiers>(
-          this.triggerElement, this.popupElement, options);
+          this.triggerElement,
+          this.popupElement,
+          options,
+        );
       }
     }
   }
@@ -310,8 +319,9 @@ export class Popup implements m.ClassComponent<PopupAttrs> {
 
   private handleDocKeyPress = (e: KeyboardEvent) => {
     // Close on escape keypress if we are in the toplevel group
-    const nextGroupElement =
-        this.popupElement?.querySelector(`.${Popup.POPUP_GROUP_CLASS}`);
+    const nextGroupElement = this.popupElement?.querySelector(
+      `.${Popup.POPUP_GROUP_CLASS}`,
+    );
     if (!nextGroupElement) {
       if (this.closeOnEscape && e.key === 'Escape') {
         this.closePopup();
@@ -324,8 +334,9 @@ export class Popup implements m.ClassComponent<PopupAttrs> {
     // - Is in the same group as this class
     // - Has the magic class
     const target = e.target as HTMLElement;
-    const childPopup =
-        this.popupElement?.querySelector(`.${Popup.POPUP_GROUP_CLASS}`);
+    const childPopup = this.popupElement?.querySelector(
+      `.${Popup.POPUP_GROUP_CLASS}`,
+    );
     if (childPopup) {
       if (childPopup.contains(target)) {
         return;
@@ -340,13 +351,12 @@ export class Popup implements m.ClassComponent<PopupAttrs> {
     if (this.isOpen) {
       this.isOpen = false;
       this.onChange(this.isOpen);
-      scheduleFullRedraw();
+      m.redraw();
     }
   }
 
   private togglePopup() {
     this.isOpen = !this.isOpen;
     this.onChange(this.isOpen);
-    scheduleFullRedraw();
   }
 }

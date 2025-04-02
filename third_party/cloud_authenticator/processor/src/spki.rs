@@ -17,6 +17,7 @@
 use crate::der;
 
 #[derive(Debug, PartialEq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum PublicKeyType {
     P256,
     RSA,
@@ -50,9 +51,9 @@ pub fn parse(input: &[u8]) -> Option<(PublicKeyType, &[u8])> {
     //    parameters              ANY DEFINED BY algorithm OPTIONAL
     // }
 
-    let (oid, algo_id) = der::next_tagged(algo_id, der::OBJECT_IDENTIFER)?;
+    let (oid, algo_id) = der::next_tagged(algo_id, der::OBJECT_IDENTIFIER)?;
     let key_type = if oid == EC_KEY {
-        let (curve, algo_id) = der::next_tagged(algo_id, der::OBJECT_IDENTIFER)?;
+        let (curve, algo_id) = der::next_tagged(algo_id, der::OBJECT_IDENTIFIER)?;
         if curve != P256 || !algo_id.is_empty() {
             return None;
         }

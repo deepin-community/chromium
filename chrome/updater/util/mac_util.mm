@@ -280,7 +280,8 @@ std::optional<base::FilePath> GetInstallDirectory(UpdaterScope scope) {
   std::optional<base::FilePath> path = GetLibraryFolderPath(scope);
   return path ? std::optional<base::FilePath>(
                     path->Append("Application Support")
-                        .Append(GetUpdaterFolderName()))
+                        .Append(COMPANY_SHORTNAME_STRING)
+                        .Append(PRODUCT_FULLNAME_STRING))
               : std::nullopt;
 }
 
@@ -368,6 +369,22 @@ bool MigrateLegacyUpdaters(
         register_callback) {
   return MigrateKeystoneApps(GetKeystoneFolderPath(scope).value(),
                              register_callback);
+}
+
+std::optional<base::FilePath> GetBundledEnterpriseCompanionExecutablePath(
+    UpdaterScope scope) {
+  std::optional<base::FilePath> path = GetUpdaterAppBundlePath(scope);
+  if (!path) {
+    return std::nullopt;
+  }
+  return path->Append(FILE_PATH_LITERAL("Contents"))
+      .Append(FILE_PATH_LITERAL("Helpers"))
+      .Append(base::StrCat({BROWSER_NAME_STRING, "EnterpriseCompanion",
+                            kExecutableSuffix, ".app"}))
+      .Append(FILE_PATH_LITERAL("Contents"))
+      .Append(FILE_PATH_LITERAL("MacOS"))
+      .AppendASCII(base::StrCat(
+          {BROWSER_NAME_STRING, "EnterpriseCompanion", kExecutableSuffix}));
 }
 
 }  // namespace updater

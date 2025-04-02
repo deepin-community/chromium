@@ -10,7 +10,7 @@
 
 #include "chrome/browser/safe_browsing/cloud_content_scanning/binary_fcm_service.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/binary_upload_service.h"
-#include "chrome/browser/safe_browsing/cloud_content_scanning/multipart_uploader.h"
+#include "chrome/browser/safe_browsing/cloud_content_scanning/connector_upload_request.h"
 #include "components/safe_browsing/core/browser/sync/safe_browsing_primary_account_token_fetcher.h"
 
 class Profile;
@@ -43,7 +43,7 @@ class CloudBinaryUploadService : public BinaryUploadService {
 
   // Indicates whether the DM token/Connector combination is allowed to upload
   // data.
-  using AuthorizationCallback = base::OnceCallback<void(bool)>;
+  using AuthorizationCallback = base::OnceCallback<void(Result)>;
   void IsAuthorized(const GURL& url,
                     bool per_profile_request,
                     AuthorizationCallback callback,
@@ -62,7 +62,7 @@ class CloudBinaryUploadService : public BinaryUploadService {
   void Shutdown() override;
 
   // Sets `can_upload_data_` for tests.
-  void SetAuthForTesting(const std::string& dm_token, bool authorized);
+  void SetAuthForTesting(const std::string& dm_token, Result auth_check_result);
 
   // Sets `token_fetcher_` for tests.
   void SetTokenFetcherForTesting(
@@ -72,8 +72,6 @@ class CloudBinaryUploadService : public BinaryUploadService {
   // different URL than scans for Advanced Protection users and Enhanced
   // Protection users.
   static GURL GetUploadUrl(bool is_consumer_scan_eligible);
-
-  static void RemoveFCMRetryDelaysForTesting();
 
  protected:
   void FinishRequest(Request* request,
@@ -121,12 +119,14 @@ class CloudBinaryUploadService : public BinaryUploadService {
 
   void MaybeFinishRequest(Request::Id request_id);
 
+  void FinishRequestWithIncompleteResponse(Request::Id request_id);
+
   void FinishIfActive(Request::Id request_id,
                       Result result,
                       enterprise_connectors::ContentAnalysisResponse response);
 
   void MaybeUploadForDeepScanningCallback(std::unique_ptr<Request> request,
-                                          bool authorized);
+                                          Result auth_check_result);
 
   // Callback once the response from the backend is received.
   void ValidateDataUploadRequestConnectorCallback(
@@ -156,15 +156,11 @@ class CloudBinaryUploadService : public BinaryUploadService {
   // possible.
   void PopRequestQueue();
 
-  // Called if the FCM connection isn't established to retry it. If it is
-  // established, `UploadForDeepScanning` is called.
-  void RetryFCMConnection(Request::Id request_id,
-                          int retry_count,
-                          base::TimeDelta next_backoff);
+  // Tries to connect to `binary_fcm_service_`. Regardless of the connection
+  // status, continues the upload of the scanning request.
+  void MaybeConnectToFCM(Request::Id request_id);
 
-  // This continues the upload of the scanning request after the
-  // `binary_fcm_service_` instance is known to be connected.
-  void OnFCMConnected(Request::Id request_id);
+  bool ResponseIsComplete(Request::Id request_id);
 
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
   std::unique_ptr<BinaryFCMService> binary_fcm_service_;
@@ -181,7 +177,7 @@ class CloudBinaryUploadService : public BinaryUploadService {
   base::flat_map<Request::Id, base::TimeTicks> start_times_;
   base::flat_map<Request::Id, std::unique_ptr<base::OneShotTimer>>
       active_timers_;
-  base::flat_map<Request::Id, std::unique_ptr<MultipartUploadRequest>>
+  base::flat_map<Request::Id, std::unique_ptr<ConnectorUploadRequest>>
       active_uploads_;
   base::flat_map<Request::Id, std::string> active_tokens_;
 
@@ -195,11 +191,12 @@ class CloudBinaryUploadService : public BinaryUploadService {
   // Indicates whether this DM token + Connector combination can be used to
   // upload data for enterprise requests. Advanced Protection scans are
   // validated using the user's Advanced Protection enrollment status.
-  base::flat_map<TokenAndConnector, bool> can_upload_enterprise_data_;
+  base::flat_map<TokenAndConnector, BinaryUploadService::Result>
+      can_upload_enterprise_data_;
 
   // Callbacks waiting on IsAuthorized request. These are organized by DM token
   // and Connector.
-  base::flat_map<TokenAndConnector, std::list<base::OnceCallback<void(bool)>>>
+  base::flat_map<TokenAndConnector, std::list<base::OnceCallback<void(Result)>>>
       authorization_callbacks_;
 
   // Indicates if this service is waiting on the backend to validate event

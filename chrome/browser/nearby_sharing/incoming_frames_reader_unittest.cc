@@ -9,8 +9,8 @@
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/time/time.h"
-#include "chrome/browser/nearby_sharing/fake_nearby_connection.h"
 #include "chrome/services/sharing/public/proto/wire_format.pb.h"
+#include "chromeos/ash/components/nearby/common/connections_manager/fake_nearby_connection.h"
 #include "chromeos/ash/services/nearby/public/cpp/mock_nearby_process_manager.h"
 #include "chromeos/ash/services/nearby/public/cpp/mock_nearby_sharing_decoder.h"
 #include "content/public/test/browser_task_environment.h"
@@ -28,8 +28,8 @@ std::vector<uint8_t> GetIntroductionFrame() {
   v1frame->mutable_introduction();
 
   std::vector<uint8_t> data;
-  data.resize(frame.ByteSize());
-  EXPECT_TRUE(frame.SerializeToArray(&data[0], frame.ByteSize()));
+  data.resize(frame.ByteSizeLong());
+  EXPECT_TRUE(frame.SerializeToArray(&data[0], frame.ByteSizeLong()));
 
   return data;
 }
@@ -40,8 +40,8 @@ std::vector<uint8_t> GetCancelFrame() {
   v1frame->set_type(sharing::nearby::V1Frame_FrameType_CANCEL);
 
   std::vector<uint8_t> data;
-  data.resize(frame.ByteSize());
-  EXPECT_TRUE(frame.SerializeToArray(&data[0], frame.ByteSize()));
+  data.resize(frame.ByteSizeLong());
+  EXPECT_TRUE(frame.SerializeToArray(&data[0], frame.ByteSizeLong()));
 
   return data;
 }

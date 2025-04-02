@@ -24,6 +24,7 @@
 #include "chrome/browser/profiles/profile_manager_observer.h"
 #include "chrome/browser/profiles/profile_observer.h"
 #include "chrome/browser/safe_browsing/phishy_interaction_tracker.h"
+#include "chrome/browser/safe_browsing/safe_browsing_pref_change_handler.h"
 #include "chrome/browser/safe_browsing/services_delegate.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/content/browser/safe_browsing_service_interface.h"
@@ -54,7 +55,6 @@ namespace network {
 namespace mojom {
 class NetworkContext;
 }
-class PendingSharedURLLoaderFactory;
 class SharedURLLoaderFactory;
 }  // namespace network
 
@@ -69,7 +69,6 @@ class SafeBrowsingPrivateApiUnitTest;
 }  // namespace extensions
 
 namespace safe_browsing {
-class VerdictCacheManager;
 #if BUILDFLAG(FULL_SAFE_BROWSING)
 class DownloadProtectionService;
 #endif
@@ -81,20 +80,24 @@ class TriggerManager;
 class HashRealTimeService;
 
 // Construction needs to happen on the main thread.
-// The SafeBrowsingService owns both the UI and Database managers which do
+// The SafeBrowsingServiceImpl owns both the UI and Database managers which do
 // the heavylifting of safebrowsing service. Both of these managers stay
-// alive until SafeBrowsingService is destroyed, however, they are disabled
+// alive until SafeBrowsingServiceImpl is destroyed, however, they are disabled
 // permanently when Shutdown method is called.
-class SafeBrowsingService : public SafeBrowsingServiceInterface,
-                            public ProfileManagerObserver,
-                            public ProfileObserver {
+class SafeBrowsingServiceImpl : public SafeBrowsingServiceInterface,
+                                public ProfileManagerObserver,
+                                public ProfileObserver {
  public:
-  SafeBrowsingService(const SafeBrowsingService&) = delete;
-  SafeBrowsingService& operator=(const SafeBrowsingService&) = delete;
+  SafeBrowsingServiceImpl(const SafeBrowsingServiceImpl&) = delete;
+  SafeBrowsingServiceImpl& operator=(const SafeBrowsingServiceImpl&) = delete;
 
   static base::FilePath GetCookieFilePathForTesting();
 
   static base::FilePath GetBaseFilename();
+
+  // Helper function to determine if a user meets the requirements to be shown
+  // a ESB promo.
+  static bool IsUserEligibleForESBPromo(Profile* profile);
 
   // Called on the UI thread to initialize the service.
   void Initialize();
@@ -124,8 +127,8 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   }
 
 #if BUILDFLAG(FULL_SAFE_BROWSING)
-  // The DownloadProtectionService is not valid after the SafeBrowsingService
-  // is destroyed.
+  // The DownloadProtectionService is not valid after the
+  // SafeBrowsingServiceImpl is destroyed.
   DownloadProtectionService* download_protection_service() const {
     return services_delegate_->GetDownloadService();
   }
@@ -138,20 +141,29 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   virtual scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory(
       content::BrowserContext* browser_context);
 
+  // Returns the minimum allowed timestamp for referrer chains. Used by the
+  // URL lookup service.
+  base::Time GetMinAllowedTimestampForReferrerChains(Profile* profile);
+
   // Flushes above two interfaces to avoid races in tests.
   void FlushNetworkInterfaceForTesting(
       content::BrowserContext* browser_context);
 
+  void SetURLLoaderFactoryForTesting(
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
+    url_loader_factory_for_testing_ = url_loader_factory;
+  }
+
   const scoped_refptr<SafeBrowsingUIManager>& ui_manager() const;
 
-  virtual const scoped_refptr<SafeBrowsingDatabaseManager>& database_manager()
-      const;
+  const scoped_refptr<SafeBrowsingDatabaseManager>& database_manager()
+      const override;
 
   ReferrerChainProvider* GetReferrerChainProviderFromBrowserContext(
       content::BrowserContext* browser_context) override;
 
 #if BUILDFLAG(IS_ANDROID)
-  LoginReputationClientRequest::ReferringAppInfo GetReferringAppInfo(
+  internal::ReferringAppInfo GetReferringAppInfo(
       content::WebContents* web_contents) override;
 #endif
 
@@ -189,9 +201,18 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
       const base::RepeatingClosure& callback);
 
 #if BUILDFLAG(FULL_SAFE_BROWSING)
-  // Sends download report to backend. Returns true if the report is sent
-  // successfully.
-  virtual bool SendDownloadReport(
+  // Sends download report to backend.
+  // TODO(crbug.com/355577227): Rename to MaybeSendDownloadReport.
+  virtual void SendDownloadReport(
+      download::DownloadItem* download,
+      ClientSafeBrowsingReportRequest::ReportType report_type,
+      bool did_proceed,
+      std::optional<bool> show_download_in_folder);
+
+  // Persists download report on disk and sends it to backend on next startup.
+  // TODO(crbug.com/355577227): Rename to
+  // MaybePersistDownloadReportAndSendOnNextStartup.
+  virtual void PersistDownloadReportAndSendOnNextStartup(
       download::DownloadItem* download,
       ClientSafeBrowsingReportRequest::ReportType report_type,
       bool did_proceed,
@@ -226,14 +247,20 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   // override it.
   virtual V4ProtocolConfig GetV4ProtocolConfig() const;
 
-  // Get the cache manager by profile.
-  VerdictCacheManager* GetVerdictCacheManager(Profile* profile) const;
+  // Report the external app redirect to Safe Browsing if the following
+  // conditions are met:
+  // - User is opted in to ESB and not Incognito
+  // - The user has not redirected to this app recently
+  // - Neither the current page nor the destination app are allowlisted.
+  void ReportExternalAppRedirect(content::WebContents* web_contents,
+                                 std::string_view app_name,
+                                 std::string_view uri) override;
 
  protected:
   // Creates the safe browsing service.  Need to initialize before using.
-  SafeBrowsingService();
+  SafeBrowsingServiceImpl();
 
-  ~SafeBrowsingService() override;
+  ~SafeBrowsingServiceImpl() override;
 
   virtual SafeBrowsingUIManager* CreateUIManager();
 
@@ -247,7 +274,7 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   friend class SafeBrowsingServiceFactoryImpl;
   friend struct content::BrowserThread::DeleteOnThread<
       content::BrowserThread::UI>;
-  friend class base::DeleteHelper<SafeBrowsingService>;
+  friend class base::DeleteHelper<SafeBrowsingServiceImpl>;
   friend class SafeBrowsingBlockingPageTestBase;
   friend class SafeBrowsingBlockingQuietPageTest;
   friend class extensions::SafeBrowsingPrivateApiUnitTest;
@@ -258,30 +285,39 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   friend class V4SafeBrowsingServiceTest;
   friend class SendNotificationsAcceptedTest;
 
+  FRIEND_TEST_ALL_PREFIXES(
+      SafeBrowsingServiceTest,
+      SaveExtendedReportingPrefValueOnProfileAddedFeatureFlagEnabled);
+  FRIEND_TEST_ALL_PREFIXES(
+      SafeBrowsingServiceTest,
+      SaveExtendedReportingPrefValueOnProfileAddedFeatureFlagDisabled);
+  FRIEND_TEST_ALL_PREFIXES(SafeBrowsingServiceTest,
+                           TestMinAllowedTimeForReferrerChains);
+  FRIEND_TEST_ALL_PREFIXES(
+      SafeBrowsingServiceTest,
+      TestMinAllowedTimeForReferrerChains_EsbEnabledOnStartup);
+  FRIEND_TEST_ALL_PREFIXES(
+      SafeBrowsingServiceTest,
+      TestMinAllowedTimeForReferrerChains_MbbEnabledOnStartup);
+  FRIEND_TEST_ALL_PREFIXES(
+      SafeBrowsingServiceTest,
+      TestMinAllowedTimeForReferrerChains_MultipleProfiles);
+  FRIEND_TEST_ALL_PREFIXES(SafeBrowsingServiceTest,
+                           EnhancedProtectionPrefChange_SingleProfile);
+  FRIEND_TEST_ALL_PREFIXES(
+      SafeBrowsingServiceTest,
+      EnhancedProtectionPrefChange_SupportsMultipleProfiles);
+
   void SetDatabaseManagerForTest(SafeBrowsingDatabaseManager* database_manager);
-
-  // Called to initialize objects that are used on the io_thread. This may be
-  // called multiple times during the life of the SafeBrowsingService.
-  // |sb_url_loader_factory| is a SharedURLLoaderFactory attached to the Safe
-  // Browsing NetworkContexts, and |browser_url_loader_factory| is attached to
-  // the global browser process.
-  void StartOnIOThread(std::unique_ptr<network::PendingSharedURLLoaderFactory>
-                           browser_url_loader_factory);
-
-  // Called to stop or shutdown operations on the io_thread. This may be called
-  // multiple times to stop during the life of the SafeBrowsingService. If
-  // shutdown is true, then the operations on the io thread are shutdown
-  // permanently and cannot be restarted.
-  void StopOnIOThread(bool shutdown);
 
   // Start up SafeBrowsing objects. This can be called at browser start, or when
   // the user checks the "Enable SafeBrowsing" option in the Advanced options
   // UI.
   void Start();
 
-  // Stops the SafeBrowsingService. This can be called when the safe browsing
-  // preference is disabled. When shutdown is true, operation is permanently
-  // shutdown and cannot be restarted.
+  // Stops the SafeBrowsingServiceImpl. This can be called when the safe
+  // browsing preference is disabled. When shutdown is true, operation is
+  // permanently shutdown and cannot be restarted.
   void Stop(bool shutdown);
 
   // ProfileManagerObserver:
@@ -294,9 +330,22 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   // Creates services for |profile|, which may be normal or off the record.
   void CreateServicesForProfile(Profile* profile);
 
+  // Refreshes the state (calls RefreshState()), updates the min allowed time
+  // for referrer chains, and potentially shows a toast about Enhanced
+  // Protection setting changes when its preference value updates.
+  void EnhancedProtectionPrefChange(Profile* profile);
+
+  // Maybe show a toast about Enhanced Protection setting changes. Called when
+  // its preference value updates.
+  void MaybeShowEnhancedProtectionSettingChangeToast(Profile* profile);
+
   // Checks if any profile is currently using the safe browsing service, and
   // starts or stops the service accordingly.
   void RefreshState();
+
+  // Updates the minimum allowed timestamp for referrer chains based on pref
+  // changes.
+  void UpdateMinAllowedTimeForReferrerChains(Profile* profile);
 
   void CreateTriggerManager();
 
@@ -322,6 +371,12 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
     url_is_allowlisted_for_testing_ = true;
   }
 
+  void MaybeSendExternalAppRedirectReport(
+      Profile* profile,
+      const std::string& app_name,
+      std::unique_ptr<ClientSafeBrowsingReportRequest> report,
+      bool should_send);
+
   std::unique_ptr<ProxyConfigMonitor> proxy_config_monitor_;
 
   // Whether SafeBrowsing Extended Reporting is enabled by the current set of
@@ -331,8 +386,8 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   // Whether the service has been shutdown.
   bool shutdown_;
 
-  // Whether the service is running. 'enabled_' is used by SafeBrowsingService
-  // on the IO thread during normal operations.
+  // Whether the service is running. 'enabled_' is used by
+  // SafeBrowsingServiceImpl on the IO thread during normal operations.
   bool enabled_;
 
   // Whether SafeBrowsing is enabled by the current set of profiles.
@@ -350,6 +405,10 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   std::map<PrefService*, std::unique_ptr<PrefChangeRegistrar>>
       user_population_prefs_;
 
+  // Maps each profile to the time that real-time URL lookups are enabled.
+  std::map<Profile*, std::optional<base::Time>>
+      min_allowed_time_for_referrer_chains_;
+
   // Callbacks when SafeBrowsing state might have changed.
   // Should only be accessed on the UI thread.
   base::RepeatingClosureList state_callback_list_;
@@ -364,6 +423,24 @@ class SafeBrowsingService : public SafeBrowsingServiceInterface,
   std::unique_ptr<TriggerManager> trigger_manager_;
 
   bool url_is_allowlisted_for_testing_ = false;
+
+  scoped_refptr<network::SharedURLLoaderFactory>
+      url_loader_factory_for_testing_;
+
+  // Manages the logic for handling preference changes, including displaying
+  // specific UI elements in response to certain preference changes.
+  std::map<Profile*, std::unique_ptr<SafeBrowsingPrefChangeHandler>>
+      pref_change_handlers_map_;
+};
+
+// TODO(crbug.com/41437292): Remove this once dependencies are using the
+// SafeBrowsingServiceInterface.
+class SafeBrowsingService : public SafeBrowsingServiceImpl {
+ public:
+  SafeBrowsingService() = default;
+
+ protected:
+  ~SafeBrowsingService() override = default;
 };
 
 SafeBrowsingServiceFactory* GetSafeBrowsingServiceFactory();

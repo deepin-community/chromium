@@ -21,6 +21,7 @@ android_library("net_java") {
     "java/src/org/chromium/net/MimeTypeFilter.java",
     "java/src/org/chromium/net/NetStringUtil.java",
     "java/src/org/chromium/net/NetworkActiveNotifier.java",
+    "java/src/org/chromium/net/NetworkCapabilitiesWrapper.java",
     "java/src/org/chromium/net/NetworkChangeNotifier.java",
     "java/src/org/chromium/net/NetworkChangeNotifierAutoDetect.java",
     "java/src/org/chromium/net/NetworkTrafficAnnotationTag.java",
@@ -33,11 +34,14 @@ android_library("net_java") {
   deps = [
     ":net_thread_stats_uid_java",
     "//base:base_java",
+    "//base:flagged_apis_java",
+    "//base:service_loader_java",
     "//build/android:build_java",
     "//third_party/android_deps:com_google_code_findbugs_jsr305_java",
     "//third_party/androidx:androidx_annotation_annotation_java",
     "//third_party/jni_zero:jni_zero_java",
   ]
+
   srcjar_deps = [
     ":net_android_java_enums_srcjar",
     ":net_errors_java",
@@ -102,17 +106,17 @@ android_library("net_java_test_support") {
 
 generate_jni("net_test_support_provider_jni") {
   testonly = true
-  sources = [
-    "../test/android/javatests/src/org/chromium/net/test/DummySpnegoAuthenticator.java",
-    "../test/android/javatests/src/org/chromium/net/test/EmbeddedTestServerImpl.java",
-  ]
+  sources = [ "../test/android/javatests/src/org/chromium/net/test/EmbeddedTestServerImpl.java" ]
+}
+
+generate_jni("dummy_spnego_authenticator_jni") {
+  testonly = true
+  sources = [ "../test/android/javatests/src/org/chromium/net/test/DummySpnegoAuthenticator.java" ]
 }
 
 android_library("net_test_support_provider_java") {
   testonly = true
   sources = [
-    "../test/android/javatests/src/org/chromium/net/test/DummySpnegoAuthenticator.java",
-    "../test/android/javatests/src/org/chromium/net/test/DummySpnegoAuthenticatorService.java",
     "../test/android/javatests/src/org/chromium/net/test/EmbeddedTestServerImpl.java",
     "../test/android/javatests/src/org/chromium/net/test/EmbeddedTestServerService.java",
   ]
@@ -120,6 +124,24 @@ android_library("net_test_support_provider_java") {
 
   deps = [
     ":embedded_test_server_aidl_java",
+    ":net_java",
+    "//base:base_java",
+    "//base:base_java_url_utils_for_test",
+    "//third_party/jni_zero:jni_zero_java",
+  ]
+
+  data_deps = [ "//net:test_support" ]
+}
+
+android_library("dummy_spnego_authenticator_java") {
+  testonly = true
+  sources = [
+    "../test/android/javatests/src/org/chromium/net/test/DummySpnegoAuthenticator.java",
+    "../test/android/javatests/src/org/chromium/net/test/DummySpnegoAuthenticatorService.java",
+  ]
+  srcjar_deps = [ ":dummy_spnego_authenticator_jni" ]
+
+  deps = [
     ":net_java",
     "//base:base_java",
     "//base:base_java_url_utils_for_test",
@@ -217,6 +239,7 @@ android_library("net_tests_java") {
     "//base:base_java_test_support",
     "//third_party/android_sdk:android_test_mock_java",
     "//third_party/androidx:androidx_test_monitor_java",
+    "//third_party/androidx:androidx_test_rules_java",
     "//third_party/androidx:androidx_test_runner_java",
     "//third_party/jni_zero:jni_zero_java",
     "//third_party/junit",

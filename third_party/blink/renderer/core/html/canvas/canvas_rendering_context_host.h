@@ -18,21 +18,22 @@
 #include "third_party/blink/renderer/platform/graphics/canvas_resource_host.h"
 #include "third_party/blink/renderer/platform/graphics/canvas_resource_provider.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/text/text_direction.h"
 #include "ui/gfx/geometry/size.h"
-
-class SkColorInfo;
 
 namespace blink {
 
 class CanvasRenderingContext;
 class CanvasResource;
 class CanvasResourceDispatcher;
+class ComputedStyle;
 class FontSelector;
 class KURL;
 class StaticBitmapImage;
 
 class CORE_EXPORT CanvasRenderingContextHost : public CanvasResourceHost,
                                                public CanvasImageSource,
+                                               public ImageBitmapSource,
                                                public GarbageCollectedMixin {
  public:
   enum class HostType {
@@ -71,6 +72,10 @@ class CORE_EXPORT CanvasRenderingContextHost : public CanvasResourceHost,
   virtual bool IsWebGLBlocked() const = 0;
   virtual void SetContextCreationWasBlocked() {}
 
+  // The ComputedStyle argument is optional. Use it if you already have the
+  // computed style for the host. If nullptr is passed, the style will be
+  // computed within the method.
+  virtual TextDirection GetTextDirection(const ComputedStyle*) = 0;
   virtual FontSelector* GetFontSelector() = 0;
 
   virtual bool ShouldAccelerate2dContext() const = 0;
@@ -101,12 +106,28 @@ class CORE_EXPORT CanvasRenderingContextHost : public CanvasResourceHost,
   bool IsRenderingContext2D() const;
   bool IsImageBitmapRenderingContext() const;
 
-  // Returns an SkColorInfo that best represents the canvas rendering context's
-  // contents.
-  SkColorInfo GetRenderingContextSkColorInfo() const;
+  SkAlphaType GetRenderingContextAlphaType() const;
+  SkColorType GetRenderingContextSkColorType() const;
+  viz::SharedImageFormat GetRenderingContextFormat() const;
+  sk_sp<SkColorSpace> GetRenderingContextSkColorSpace() const;
+  gfx::ColorSpace GetRenderingContextColorSpace() const;
 
   // blink::CanvasImageSource
   bool IsOffscreenCanvas() const override;
+
+  // ImageBitmapSource implementation
+  ImageBitmapSourceStatus CheckUsability() const override;
+
+  // This method attempts to ensure that the canvas' resource exists on the GPU.
+  // A HTMLCanvasElement can downgrade itself from GPU to CPU when readback
+  // occurs too frequently, so a canvas may exist on the CPU even if the browser
+  // is normally GPU-capable.
+  // Returns true if the canvas resources live on the GPU. If the canvas needed
+  // to be migrated off of the CPU, the canvas resource provider and canvas 2D
+  // layer bridge will be destroyed and recreated; when this occurs, any
+  // existing pointers to these objects will be invalidated. If the canvas
+  // resource provider did not exist at all, it may be created.
+  virtual bool EnableAcceleration() = 0;
 
  protected:
   ~CanvasRenderingContextHost() override = default;
@@ -126,6 +147,8 @@ class CORE_EXPORT CanvasRenderingContextHost : public CanvasResourceHost,
   IdentifiableToken IdentifiabilityInputDigest(
       const CanvasRenderingContext* const context) const;
 
+  // `did_fail_to_create_resource_provider_` prevents repeated attempts in
+  // allocating resources after the first attempt failed.
   bool did_fail_to_create_resource_provider_ = false;
   bool did_record_canvas_size_to_uma_ = false;
   HostType host_type_ = HostType::kNone;

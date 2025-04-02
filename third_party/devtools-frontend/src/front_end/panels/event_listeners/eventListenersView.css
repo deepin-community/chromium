@@ -5,11 +5,11 @@
  */
 
 .tree-outline-disclosure li {
-  padding: 2px 0 0 5px;
+  padding: 0 0 0 5px;
   overflow: hidden;
   display: flex;
-  min-height: 17px;
-  align-items: baseline;
+  min-height: var(--sys-size-8);
+  align-items: center;
 }
 
 .tree-outline-disclosure {
@@ -33,6 +33,13 @@
 
 .event-listener-details {
   display: flex;
+  min-height: var(--sys-size-8);
+  align-items: center;
+  gap: var(--sys-size-2);
+
+  devtools-button {
+    height: var(--sys-size-8);
+  }
 }
 
 .event-listener-tree-subtitle {

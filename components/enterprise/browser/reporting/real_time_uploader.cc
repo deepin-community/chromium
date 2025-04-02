@@ -43,7 +43,6 @@ void RealTimeUploader::Upload(
 
   if (!report_queue_) {
     NOTREACHED();
-    return;
   }
 
   report_queue_->Enqueue(

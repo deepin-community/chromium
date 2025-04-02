@@ -4,6 +4,7 @@
 
 #include "ui/display/screen.h"
 
+#include <optional>
 #include <utility>
 
 #include "base/check.h"
@@ -85,14 +86,14 @@ void Screen::SetDisplayForNewWindows(int64_t display_id) {
   display_id_for_new_windows_ = display_id;
 }
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX)
 Screen::ScreenSaverSuspender::~ScreenSaverSuspender() = default;
 
 std::unique_ptr<Screen::ScreenSaverSuspender> Screen::SuspendScreenSaver() {
   NOTIMPLEMENTED_LOG_ONCE();
   return nullptr;
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_LINUX)
+#endif  // BUILDFLAG(IS_LINUX)
 
 bool Screen::IsScreenSaverActive() const {
   NOTIMPLEMENTED_LOG_ONCE();
@@ -141,6 +142,23 @@ std::string Screen::GetCurrentWorkspace() {
 base::Value::List Screen::GetGpuExtraInfo(
     const gfx::GpuExtraInfo& gpu_extra_info) {
   return base::Value::List();
+}
+
+// TODO(nickdiego): GetDisplayNearestWindow is supposed to always return a valid
+// display per its description, though there are call-sites arguably handling
+// this case, so keep it here for now and revisit later.
+std::optional<float> Screen::GetPreferredScaleFactorForWindow(
+    gfx::NativeWindow window) const {
+  const auto nearest_display = GetDisplayNearestWindow(window);
+  if (nearest_display.is_valid()) {
+    return nearest_display.device_scale_factor();
+  }
+  return std::nullopt;
+}
+
+std::optional<float> Screen::GetPreferredScaleFactorForView(
+    gfx::NativeView view) const {
+  return GetPreferredScaleFactorForWindow(GetWindowForView(view));
 }
 
 #if BUILDFLAG(IS_CHROMEOS)

@@ -255,6 +255,12 @@
   gap: 12px;
 }
 
+.actions .separator {
+  width: 1px;
+  height: 24px;
+  background-color: var(--sys-color-divider);
+}
+
 .is-recording .header-title::before {
   background: var(--sys-color-error-bright);
 }
@@ -294,12 +300,9 @@
   align-items: center;
 }
 
-.editable-setting devtools-select-menu {
-  height: 32px;
-}
-
 .editable-setting .devtools-text-input {
   width: fit-content;
+  height: var(--sys-size-9);
 }
 
 .wrapping-label {

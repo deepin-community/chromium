@@ -29,10 +29,6 @@ WorkerOrWorkletDevToolsAgentHost::WorkerOrWorkletDevToolsAgentHost(
       name_(name),
       destroyed_callback_(std::move(destroyed_callback)) {
   DCHECK(!devtools_worker_token.is_empty());
-  // TODO(crbug.com/906991): Remove AddRef() and Release() once
-  // PlzDedicatedWorker is enabled and the code for non-PlzDedicatedWorker is
-  // deleted. Worker agent hosts will be retained by the Worker DevTools manager
-  // instead.
   AddRef();  // Self keep-alive while the worker agent is alive.
 }
 

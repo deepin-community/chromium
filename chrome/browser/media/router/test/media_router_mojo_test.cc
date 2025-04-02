@@ -56,9 +56,9 @@ class SinkResponseCallbackHandler {
 
 }  // namespace
 
-MockMediaRouteProvider::MockMediaRouteProvider() {}
+MockMediaRouteProvider::MockMediaRouteProvider() = default;
 
-MockMediaRouteProvider::~MockMediaRouteProvider() {}
+MockMediaRouteProvider::~MockMediaRouteProvider() = default;
 
 void MockMediaRouteProvider::RouteRequestSuccess(RouteCallback& cb) const {
   DCHECK(route_);
@@ -89,7 +89,7 @@ MockMediaStatusObserver::MockMediaStatusObserver(
     mojo::PendingReceiver<mojom::MediaStatusObserver> receiver)
     : receiver_(this, std::move(receiver)) {}
 
-MockMediaStatusObserver::~MockMediaStatusObserver() {}
+MockMediaStatusObserver::~MockMediaStatusObserver() = default;
 
 MockMediaController::MockMediaController() = default;
 
@@ -259,7 +259,7 @@ void MediaRouterMojoTest::TestSendRouteMessage() {
 void MediaRouterMojoTest::TestSendRouteBinaryMessage() {
   ProvideTestRoute(mojom::MediaRouteProviderId::CAST, kRouteId);
   auto expected_binary_data = std::make_unique<std::vector<uint8_t>>(
-      kBinaryMessage, kBinaryMessage + std::size(kBinaryMessage));
+      std::begin(kBinaryMessage), std::end(kBinaryMessage));
   EXPECT_CALL(mock_cast_provider_, SendRouteBinaryMessage(kRouteId, _))
       .WillOnce([](const MediaRoute::Id& route_id,
                    const std::vector<uint8_t>& data) {

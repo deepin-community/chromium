@@ -9,7 +9,6 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/enterprise/connectors/connectors_prefs.h"
 #include "chrome/browser/enterprise/connectors/device_trust/common/common_types.h"
 #include "chrome/browser/enterprise/connectors/device_trust/common/device_trust_constants.h"
 #include "chrome/browser/enterprise/connectors/device_trust/common/metrics_utils.h"
@@ -21,6 +20,7 @@
 #include "components/device_signals/core/browser/pref_names.h"
 #include "components/device_signals/core/browser/user_permission_service.h"
 #include "components/device_signals/core/common/signals_features.h"
+#include "components/enterprise/connectors/core/connectors_prefs.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_prefs/user_prefs.h"
 #include "content/public/browser/browser_context.h"
@@ -216,9 +216,8 @@ DeviceTrustNavigationThrottle::AddHeadersIfNeeded() {
   // Get challenge.
   const net::HttpResponseHeaders* headers =
       navigation_handle()->GetResponseHeaders();
-  std::string challenge;
-  if (headers->GetNormalizedHeader(kVerifiedAccessChallengeHeader,
-                                   &challenge)) {
+  if (std::optional<std::string> challenge =
+          headers->GetNormalizedHeader(kVerifiedAccessChallengeHeader)) {
     LogAttestationFunnelStep(DTAttestationFunnelStep::kChallengeReceived);
 
     // Create callback for `ReplyChallengeResponseAndResume` which will
@@ -249,7 +248,7 @@ DeviceTrustNavigationThrottle::AddHeadersIfNeeded() {
                     challenge, levels, std::move(resume_navigation_callback));
               }
             },
-            weak_ptr_factory_.GetWeakPtr(), challenge, levels,
+            weak_ptr_factory_.GetWeakPtr(), *challenge, levels,
             std::move(resume_navigation_callback)));
 
     base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(

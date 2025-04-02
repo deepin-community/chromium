@@ -9,9 +9,11 @@
 #include "base/functional/callback_forward.h"
 #include "base/strings/strcat.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "chrome/browser/signin/signin_browser_test_base.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
+#include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/profiles/profile_management_step_controller.h"
 #include "chrome/browser/ui/views/profiles/profile_picker_view_test_utils.h"
 #include "chrome/browser/ui/views/profiles/profiles_pixel_test_utils.h"
@@ -24,7 +26,7 @@
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/views/widget/any_widget_observer.h"
 
-#if !BUILDFLAG(ENABLE_DICE_SUPPORT) && !BUILDFLAG(IS_CHROMEOS_LACROS)
+#if !BUILDFLAG(ENABLE_DICE_SUPPORT)
 #error Platform not supported
 #endif
 
@@ -53,9 +55,7 @@ const ManagedUserNoticeTestParam kWindowTestParams[] = {
     {.pixel_test_param = {.test_suffix = "Rtl",
                           .use_right_to_left_language = true}},
     {.pixel_test_param = {.test_suffix = "SmallWindow",
-                          .use_small_window = true}},
-    {.pixel_test_param = {.test_suffix = "CR2023",
-                          .use_chrome_refresh_2023_style = true}},
+                          .window_size = PixelTestParam::kSmallWindowSize}},
 };
 
 const ManagedUserNoticeTestParam kDialogTestParams[] = {
@@ -69,8 +69,6 @@ const ManagedUserNoticeTestParam kDialogTestParams[] = {
     {.pixel_test_param = {.test_suffix = "Rtl",
                           .use_right_to_left_language = true},
      .show_link_data_checkbox = true},
-    {.pixel_test_param = {.test_suffix = "CR2023",
-                          .use_chrome_refresh_2023_style = true}},
 };
 
 // Creates a step to represent the managed-user-profile-notice
@@ -99,7 +97,7 @@ class ManagedUserNoticeStepControllerForTest
             weak_ptr_factory_.GetWeakPtr(), std::move(step_shown_callback)));
   }
 
-  void OnNavigateBackRequested() override { NOTREACHED_NORETURN(); }
+  void OnNavigateBackRequested() override { NOTREACHED(); }
 
   void OnManagedUserNoticeLoaded(
       StepSwitchFinishedCallback step_shown_callback) {
@@ -111,9 +109,13 @@ class ManagedUserNoticeStepControllerForTest
     managed_user_notice_ui->Initialize(
         /*browser=*/nullptr,
         ManagedUserProfileNoticeUI::ScreenType::kEntepriseAccountSyncEnabled,
-        *account_info_, /*profile_creation_required_by_policy=*/false,
-        /*show_link_data_option=*/false,
-        /*proceed_callback*/ base::DoNothing());
+        std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
+            *account_info_, /*is_oidc_account=*/false,
+            /*profile_creation_required_by_policy=*/false,
+            /*show_link_data_option=*/false,
+            /*process_user_choice_callback=*/
+            signin::SigninChoiceCallback(base::DoNothing()),
+            /*done_callback=*/base::DoNothing()));
 
     if (step_shown_callback) {
       std::move(step_shown_callback).Run(/*success=*/true);
@@ -134,7 +136,10 @@ class ManagedUserNoticeUIWindowPixelTest
       public testing::WithParamInterface<ManagedUserNoticeTestParam> {
  public:
   ManagedUserNoticeUIWindowPixelTest()
-      : ProfilesPixelTestBaseT<UiBrowserTest>(GetParam().pixel_test_param) {}
+      : ProfilesPixelTestBaseT<UiBrowserTest>(GetParam().pixel_test_param) {
+    feature_list_.InitAndDisableFeature(
+        features::kEnterpriseUpdatedProfileCreationScreen);
+  }
 
   void ShowUi(const std::string& name) override {
     ui::ScopedAnimationDurationScaleMode disable_animation(
@@ -154,10 +159,7 @@ class ManagedUserNoticeUIWindowPixelTest
               return std::make_unique<ManagedUserNoticeStepControllerForTest>(
                   host, browser()->profile(), account_info);
             }));
-    profile_picker_view_->ShowAndWait(
-        GetParam().pixel_test_param.use_small_window
-            ? std::optional<gfx::Size>(gfx::Size(750, 590))
-            : std::nullopt);
+    profile_picker_view_->ShowAndWait(GetParam().pixel_test_param.window_size);
   }
 
   bool VerifyUi() override {
@@ -181,6 +183,7 @@ class ManagedUserNoticeUIWindowPixelTest
     return profile_picker_view_->GetWidget();
   }
 
+  base::test::ScopedFeatureList feature_list_;
   raw_ptr<ProfileManagementStepTestView, DanglingUntriaged>
       profile_picker_view_;
 };
@@ -208,6 +211,8 @@ class ManagedUserNoticeUIDialogPixelTest
  public:
   ManagedUserNoticeUIDialogPixelTest()
       : ProfilesPixelTestBaseT<DialogBrowserTest>(GetParam().pixel_test_param) {
+    feature_list_.InitAndDisableFeature(
+        features::kEnterpriseUpdatedProfileCreationScreen);
   }
 
   ~ManagedUserNoticeUIDialogPixelTest() override = default;
@@ -233,12 +238,20 @@ class ManagedUserNoticeUIDialogPixelTest
 
     auto* controller = browser()->signin_view_controller();
     controller->ShowModalManagedUserNoticeDialog(
-        account_info, GetParam().profile_creation_required_by_policy,
-        GetParam().show_link_data_checkbox, base::DoNothing());
+        std::make_unique<signin::EnterpriseProfileCreationDialogParams>(
+            account_info, /*is_oidc_account=*/false,
+            GetParam().profile_creation_required_by_policy,
+            GetParam().show_link_data_checkbox,
+            /*process_user_choice_callback=*/
+            signin::SigninChoiceCallback(base::DoNothing()),
+            /*done_callback=*/base::DoNothing()));
 
     widget_waiter.WaitIfNeededAndGet();
     observer.Wait();
   }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_P(ManagedUserNoticeUIDialogPixelTest,

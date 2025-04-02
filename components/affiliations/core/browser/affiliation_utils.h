@@ -87,7 +87,9 @@ class FacetURI {
 
   // As a light-weight std::string wrapper, allow copy and assign.
   FacetURI(const FacetURI&) = default;
+  FacetURI(FacetURI&&) = default;
   FacetURI& operator=(const FacetURI&) = default;
+  FacetURI& operator=(FacetURI&&) = default;
 
   friend std::weak_ordering operator<=>(const FacetURI& lhs,
                                         const FacetURI& rhs) {
@@ -255,6 +257,15 @@ bool IsValidAndroidFacetURI(const std::string& uri);
 // schema (e.g. "android://"), empty string is returned.
 std::string GetExtendedTopLevelDomain(
     const GURL& url,
+    const base::flat_set<std::string>& psl_extensions);
+
+// Two URLs are considered an Extended Public Suffix Domain match if they have
+// the same extended top level domain (See `GetExtendedTopLevelDomain`). The
+// `psl_extensions` list is used to calculate the appropriate top domain. If one
+// or both arguments do not describe valid URLs, returns false.
+bool IsExtendedPublicSuffixDomainMatch(
+    const GURL& url1,
+    const GURL& url2,
     const base::flat_set<std::string>& psl_extensions);
 
 // For logging use only.

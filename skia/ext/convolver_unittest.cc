@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "skia/ext/convolver.h"
 
 #include <stdint.h>
@@ -9,6 +14,7 @@
 #include <time.h>
 
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <vector>
 
@@ -106,7 +112,7 @@ TEST(Convolver, Halve) {
   output.resize(dest_byte_count);
 
   // First fill the array with a bunch of random data.
-  base::RandBytes(input.data(), input.size());
+  base::RandBytes(input);
 
   // Compute the filters.
   ConvolutionFilter1D filter_x, filter_y;
@@ -310,8 +316,13 @@ TEST(Convolver, VerifySIMDEdgeCases) {
 // Verify that lage upscales/downscales produce the same result
 // with and without SIMD.
 TEST(Convolver, VerifySIMDPrecision) {
-  int source_sizes[][2] = { {1920, 1080}, {1377, 523}, {325, 241} };
-  int dest_sizes[][2] = { {1280, 1024}, {177, 123} };
+  auto source_sizes = std::to_array<std::array<int, 2>>({
+      {1920, 1080},
+      {1377, 523},
+      {325, 241},
+  });
+  auto dest_sizes =
+      std::to_array<std::array<int, 2>>({{1280, 1024}, {177, 123}});
 
   srand(static_cast<unsigned int>(time(0)));
 

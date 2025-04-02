@@ -7,7 +7,6 @@
 #include <stdint.h>
 
 #include <memory>
-#include <optional>
 #include <utility>
 
 #include "base/command_line.h"
@@ -301,9 +300,11 @@ void BrowserCompositorIOS::InvalidateLocalSurfaceIdOnEviction() {
   dfh_local_surface_id_allocator_.Invalidate();
 }
 
-std::vector<viz::SurfaceId>
+viz::FrameEvictorClient::EvictIds
 BrowserCompositorIOS::CollectSurfaceIdsForEviction() {
-  return client_->CollectSurfaceIdsForEviction();
+  viz::FrameEvictorClient::EvictIds ids;
+  ids.embedded_ids = client_->CollectSurfaceIdsForEviction();
+  return ids;
 }
 
 bool BrowserCompositorIOS::ShouldShowStaleContentOnEviction() {
@@ -317,6 +318,10 @@ void BrowserCompositorIOS::DidNavigateMainFramePreCommit() {
 void BrowserCompositorIOS::DidEnterBackForwardCache() {
   dfh_local_surface_id_allocator_.GenerateId();
   delegated_frame_host_->DidEnterBackForwardCache();
+}
+
+void BrowserCompositorIOS::ActivatedOrEvictedFromBackForwardCache() {
+  delegated_frame_host_->ActivatedOrEvictedFromBackForwardCache();
 }
 
 void BrowserCompositorIOS::DidNavigate() {

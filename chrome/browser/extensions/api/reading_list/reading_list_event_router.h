@@ -13,8 +13,6 @@
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_event_histogram_value.h"
 
-class ProfileKeyedServiceFactory;
-
 namespace extensions {
 
 // The ReadingListEventRouter listens for reading list events and notifies
@@ -27,10 +25,6 @@ class ReadingListEventRouter : public KeyedService,
   ReadingListEventRouter& operator=(const ReadingListEventRouter&) = delete;
   ~ReadingListEventRouter() override;
 
-  static ReadingListEventRouter* Get(content::BrowserContext* browser_context);
-
-  static ProfileKeyedServiceFactory* GetFactoryInstance();
-
  private:
   // ReadingListModelObserver:
   void ReadingListModelLoaded(const ReadingListModel* model) override {}
@@ -42,8 +36,8 @@ class ReadingListEventRouter : public KeyedService,
   void ReadingListDidUpdateEntry(const ReadingListModel* model,
                                  const GURL& url) override;
 
-  // TODO(crbug/1424750): Remove when MoveEntry is replaced with UpdateEntry
-  // Called when the read status of an entry is changed.
+  // TODO(crbug.com/40260548): Remove when MoveEntry is replaced with
+  // UpdateEntry Called when the read status of an entry is changed.
   void ReadingListDidMoveEntry(const ReadingListModel* model,
                                const GURL& url) override;
 

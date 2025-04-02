@@ -18,8 +18,8 @@
 #include "core/fpdfapi/parser/cpdf_reference.h"
 #include "core/fpdfapi/parser/cpdf_string.h"
 #include "core/fpdfapi/parser/cpdf_test_document.h"
+#include "core/fxcrt/check.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/base/check.h"
 
 namespace {
 
@@ -229,7 +229,7 @@ TEST_F(DocumentTest, IsValidPageObject) {
   EXPECT_TRUE(CPDF_Document::IsValidPageObject(dict_type_name_page.Get()));
 
   auto dict_type_string_page = pdfium::MakeRetain<CPDF_Dictionary>();
-  dict_type_string_page->SetNewFor<CPDF_String>("Type", "Page", false);
+  dict_type_string_page->SetNewFor<CPDF_String>("Type", "Page");
   document.AddIndirectObject(dict_type_string_page);
   EXPECT_FALSE(CPDF_Document::IsValidPageObject(dict_type_string_page.Get()));
 
@@ -246,8 +246,8 @@ TEST_F(DocumentTest, UseCachedPageObjNumIfHaveNotPagesDict) {
   // ObjNum can be added in CPDF_DataAvail::IsPageAvail(), and PagesDict may not
   // exist in this case, e.g. when hint table is used to page check in
   // CPDF_DataAvail.
-  constexpr int kPageCount = 100;
-  constexpr int kTestPageNum = 33;
+  static constexpr int kPageCount = 100;
+  static constexpr int kTestPageNum = 33;
 
   auto linearization_dict = pdfium::MakeRetain<CPDF_Dictionary>();
   CPDF_TestDocumentAllowSetParser document;

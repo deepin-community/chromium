@@ -86,7 +86,9 @@ class SigninManager : public KeyedService,
  private:
   // Updates the cached version of unconsented primary account and notifies the
   // observers if there is any change.
-  void UpdateUnconsentedPrimaryAccount();
+  void UpdateUnconsentedPrimaryAccount(
+      signin_metrics::ProfileSignout source =
+          signin_metrics::ProfileSignout::kSigninManagerUpdateUPA);
 
   // Computes and returns the unconsented primary account (UPA).
   // - If a primary account with sync consent exists, the UPA is equal to it.
@@ -121,7 +123,9 @@ class SigninManager : public KeyedService,
       const GoogleServiceAuthError& error) override;
   void OnErrorStateOfRefreshTokenUpdatedForAccount(
       const CoreAccountInfo& account_info,
-      const GoogleServiceAuthError& error) override;
+      const GoogleServiceAuthError& error,
+      signin_metrics::SourceForRefreshTokenOperation token_operation_source)
+      override;
 
   void OnSigninAllowedPrefChanged();
 

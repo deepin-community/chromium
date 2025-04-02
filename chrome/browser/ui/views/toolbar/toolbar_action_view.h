@@ -66,9 +66,7 @@ class ToolbarActionView : public views::MenuButton,
   content::WebContents* GetCurrentWebContents() const override;
   void UpdateState() override;
 
-  ToolbarActionViewController* view_controller() {
-    return view_controller_;
-  }
+  ToolbarActionViewController* view_controller() { return view_controller_; }
 
   // Returns button icon so it can be accessed during tests.
   gfx::ImageSkia GetIconForTest();
@@ -80,7 +78,8 @@ class ToolbarActionView : public views::MenuButton,
   friend class ToolbarActionHoverCardBubbleViewUITest;
 
   // views::MenuButton:
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   void OnMouseReleased(const ui::MouseEvent& event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;

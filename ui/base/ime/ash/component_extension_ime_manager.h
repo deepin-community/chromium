@@ -15,7 +15,9 @@
 #include "ui/base/ime/ash/component_extension_ime_manager_delegate.h"
 #include "ui/base/ime/ash/input_method_descriptor.h"
 
-class Profile;
+namespace content {
+class BrowserContext;
+}
 
 namespace ash {
 
@@ -39,8 +41,8 @@ struct COMPONENT_EXPORT(UI_BASE_IME_ASH) ComponentExtensionIME {
   ComponentExtensionIME();
   ComponentExtensionIME(const ComponentExtensionIME& other);
   ~ComponentExtensionIME();
-  std::string id;  // extension id.
-  std::string manifest;  // the contents of manifest.json
+  std::string id;           // extension id.
+  std::string manifest;     // the contents of manifest.json
   std::string description;  // description of extension.
   GURL options_page_url;
   base::FilePath path;
@@ -66,7 +68,7 @@ class COMPONENT_EXPORT(UI_BASE_IME_ASH) ComponentExtensionIMEManager {
   // already loaded or there is not any IME extension found for the
   // |input_method_id|.
   bool LoadComponentExtensionIME(
-      Profile* profile,
+      content::BrowserContext* profile,
       const std::string& input_method_id,
       std::set<std::string>* extension_loaded = nullptr);
 

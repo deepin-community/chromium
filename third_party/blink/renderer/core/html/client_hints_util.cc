@@ -83,8 +83,7 @@ void UpdateWindowPermissionsPolicyWithDelegationSupportForClientHints(
         allow_list.MatchesOpaqueSrc());
     container_policy.push_back(declaration);
   }
-  auto new_policy = PermissionsPolicy::CopyStateFrom(current_policy);
-  new_policy->OverwriteHeaderPolicyForClientHints(container_policy);
+  auto new_policy = current_policy->WithClientHints(container_policy);
 
   // Update third-party delegation permissions for each client hint.
   local_dom_window->GetSecurityContext().SetPermissionsPolicy(
@@ -102,7 +101,7 @@ void UpdateIFrameContainerPolicyWithDelegationSupportForClientHints(
   // To avoid the following section from being consistently O(n^2) we need to
   // break the container_policy vector into a map. We keep only the first policy
   // seen for each feature per PermissionsPolicy::InheritedValueForFeature.
-  std::map<mojom::blink::PermissionsPolicyFeature,
+  std::map<network::mojom::PermissionsPolicyFeature,
            ParsedPermissionsPolicyDeclaration>
       feature_to_container_policy;
   for (const auto& candidate_policy : container_policy) {

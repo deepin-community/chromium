@@ -146,7 +146,7 @@ inline void DefaultLogHandler(LogLevel level, const char* filename, int line,
   __android_log_write(android_log_level, "libprotobuf-native",
                       ostr.str().c_str());
   // Also output to std::cerr.
-  fprintf(stderr, "%s", ostr.str().c_str());
+  fprintf(stderr, "%s\n", ostr.str().c_str());
   fflush(stderr);
 
   // Indicate termination if needed.
@@ -298,15 +298,15 @@ void DoNothing() {}
 // TODO(xiaofeng): PROTOBUF_LITTLE_ENDIAN is unfortunately defined in
 // google/protobuf/io/coded_stream.h and therefore can not be used here.
 // Maybe move that macro definition here in the future.
-uint32 ghtonl(uint32 x) {
+uint32_t ghtonl(uint32_t x) {
   union {
-    uint32 result;
-    uint8 result_array[4];
+    uint32_t result;
+    uint8_t result_array[4];
   };
-  result_array[0] = static_cast<uint8>(x >> 24);
-  result_array[1] = static_cast<uint8>((x >> 16) & 0xFF);
-  result_array[2] = static_cast<uint8>((x >> 8) & 0xFF);
-  result_array[3] = static_cast<uint8>(x & 0xFF);
+  result_array[0] = static_cast<uint8_t>(x >> 24);
+  result_array[1] = static_cast<uint8_t>((x >> 16) & 0xFF);
+  result_array[2] = static_cast<uint8_t>((x >> 8) & 0xFF);
+  result_array[3] = static_cast<uint8_t>(x & 0xFF);
   return result;
 }
 

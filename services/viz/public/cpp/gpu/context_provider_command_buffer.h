@@ -74,7 +74,6 @@ class ContextProviderCommandBuffer
       scoped_refptr<gpu::GpuChannelHost> channel,
       int32_t stream_id,
       gpu::SchedulingPriority stream_priority,
-      gpu::SurfaceHandle surface_handle,
       const GURL& active_url,
       bool automatic_flushes,
       bool support_locking,
@@ -137,7 +136,6 @@ class ContextProviderCommandBuffer
 
   const int32_t stream_id_;
   const gpu::SchedulingPriority stream_priority_;
-  const gpu::SurfaceHandle surface_handle_;
   const GURL active_url_;
   const bool automatic_flushes_;
   const bool support_locking_;
@@ -198,7 +196,7 @@ class ContextProviderCommandBuffer
 
   // Shared memory mapper used by command buffer proxies created from this
   // provider when creating shared memory mappings.
-  // TODO(crbug.com/1321521) remove this member again once users of the command
+  // TODO(crbug.com/40837434) remove this member again once users of the command
   // buffer proxy can specify the mapper for each mapping individually.
   raw_ptr<base::SharedMemoryMapper> buffer_mapper_ = nullptr;
 };

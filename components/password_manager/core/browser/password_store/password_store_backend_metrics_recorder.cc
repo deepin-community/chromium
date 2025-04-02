@@ -29,7 +29,6 @@ bool HasRunToCompletion(
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 }  // namespace
@@ -230,7 +229,6 @@ std::string PasswordStoreBackendMetricsRecorder::GetStoreInfix() const {
       return base::JoinString({*backend_infix_, "Local"}, ".");
     default:
       NOTREACHED();
-      return "";
   }
 }
 

@@ -12,14 +12,13 @@
 #include "build/build_config.h"
 #include "chrome/browser/extensions/activity_log/activity_log.h"
 #include "chrome/browser/extensions/api/bookmark_manager_private/bookmark_manager_private_api.h"
-#include "chrome/browser/extensions/api/declarative_content/chrome_content_rules_registry.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/extensions/install_observer.h"
 #include "chrome/browser/extensions/install_tracker.h"
 #include "chrome/browser/extensions/install_tracker_factory.h"
-#include "chrome/browser/extensions/site_permissions_helper.h"
+#include "chrome/browser/extensions/permissions/site_permissions_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_tab_helper_factory.h"
 #include "chrome/browser/shell_integration.h"
@@ -43,6 +42,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
 #include "extensions/browser/api/declarative/rules_registry_service.h"
+#include "extensions/browser/api/declarative_content/content_rules_registry.h"
 #include "extensions/browser/api/declarative_net_request/web_contents_helper.h"
 #include "extensions/browser/disable_reason.h"
 #include "extensions/browser/extension_prefs.h"
@@ -52,10 +52,10 @@
 #include "extensions/browser/image_loader.h"
 #include "extensions/browser/permissions_manager.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_icon_set.h"
 #include "extensions/common/extension_resource.h"
 #include "extensions/common/extension_urls.h"
 #include "extensions/common/feature_switch.h"
+#include "extensions/common/icons/extension_icon_set.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_handlers/icons_handler.h"
 #include "extensions/common/permissions/api_permission.h"
@@ -99,8 +99,9 @@ TabHelper::TabHelper(content::WebContents* web_contents)
       content::WebContentsUserData<TabHelper>(*web_contents),
       profile_(Profile::FromBrowserContext(web_contents->GetBrowserContext())),
       extension_app_(nullptr),
-      script_executor_(new ScriptExecutor(web_contents)),
-      extension_action_runner_(new ExtensionActionRunner(web_contents)),
+      script_executor_(std::make_unique<ScriptExecutor>(web_contents)),
+      extension_action_runner_(
+          std::make_unique<ExtensionActionRunner>(web_contents)),
       declarative_net_request_helper_(web_contents) {
   // The ActiveTabPermissionManager requires a session ID; ensure this
   // WebContents has one.
@@ -133,9 +134,8 @@ void TabHelper::SetExtensionApp(const Extension* extension) {
     return;
   }
 
-  if (extension) {
-    DCHECK(extension->is_app());
-  }
+  DCHECK(!extension || extension->is_app());
+
   extension_app_ = extension;
 
   UpdateExtensionAppIcon(extension_app_);
@@ -157,8 +157,9 @@ void TabHelper::SetExtensionApp(const Extension* extension) {
 
 void TabHelper::SetExtensionAppById(const ExtensionId& extension_app_id) {
   const Extension* extension = GetExtension(extension_app_id);
-  if (extension)
+  if (extension) {
     SetExtensionApp(extension);
+  }
 }
 
 ExtensionId TabHelper::GetExtensionAppId() const {
@@ -166,8 +167,9 @@ ExtensionId TabHelper::GetExtensionAppId() const {
 }
 
 SkBitmap* TabHelper::GetExtensionAppIcon() {
-  if (extension_app_icon_.empty())
+  if (extension_app_icon_.empty()) {
     return nullptr;
+  }
 
   return &extension_app_icon_;
 }
@@ -178,7 +180,7 @@ void TabHelper::SetReloadRequired(
     case PermissionsManager::UserSiteSetting::kGrantAllExtensions: {
       // Granting access to all extensions is allowed iff feature is
       // enabled, and it shouldn't be enabled anywhere where this is called.
-      NOTREACHED_NORETURN();
+      NOTREACHED();
     }
     case PermissionsManager::UserSiteSetting::kBlockAllExtensions: {
       // A reload is required if any extension that had site access will lose
@@ -187,7 +189,7 @@ void TabHelper::SetReloadRequired(
       SitePermissionsHelper permissions_helper(profile_);
       const ExtensionSet& extensions =
           ExtensionRegistry::Get(profile_)->enabled_extensions();
-      reload_required_ = base::ranges::any_of(
+      reload_required_ = std::ranges::any_of(
           extensions, [&permissions_helper,
                        web_contents](scoped_refptr<const Extension> extension) {
             return permissions_helper.GetSiteInteraction(*extension,
@@ -210,17 +212,6 @@ void TabHelper::SetReloadRequired(
 
 bool TabHelper::IsReloadRequired() {
   return reload_required_;
-}
-
-bool TabHelper::HasExtensionDismissedRequests(const ExtensionId& extension_id) {
-  return dismissed_extensions_.contains(extension_id);
-}
-
-void TabHelper::DismissExtensionRequests(const ExtensionId& extension_id) {
-  dismissed_extensions_.insert(extension_id);
-  PermissionsManager::Get(profile_)->NotifyExtensionDismissedRequests(
-      extension_id,
-      web_contents()->GetPrimaryMainFrame()->GetLastCommittedOrigin());
 }
 
 void TabHelper::OnWatchedPageChanged(
@@ -262,8 +253,9 @@ void TabHelper::RenderFrameCreated(content::RenderFrameHost* host) {
 void TabHelper::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   if (!navigation_handle->HasCommitted() ||
-      !navigation_handle->IsInPrimaryMainFrame())
+      !navigation_handle->IsInPrimaryMainFrame()) {
     return;
+  }
 
   InvokeForContentRulesRegistries(
       [this, navigation_handle](ContentRulesRegistry* registry) {
@@ -293,15 +285,6 @@ void TabHelper::DidFinishNavigation(
   // Reset the `reload_required_` data member, since a page navigation acts as a
   // page refresh.
   reload_required_ = false;
-
-  // Only clear the dismissed extensions for cross-origin navigations.
-  if (!navigation_handle->IsSameOrigin()) {
-    ClearDismissedExtensions();
-  }
-}
-
-void TabHelper::ClearDismissedExtensions() {
-  dismissed_extensions_.clear();
 }
 
 void TabHelper::DidCloneToNewWebContents(WebContents* old_web_contents,
@@ -321,12 +304,12 @@ void TabHelper::WebContentsDestroyed() {
   });
 
   reload_required_ = false;
-  ClearDismissedExtensions();
 }
 
 const Extension* TabHelper::GetExtension(const ExtensionId& extension_app_id) {
-  if (extension_app_id.empty())
+  if (extension_app_id.empty()) {
     return nullptr;
+  }
 
   content::BrowserContext* context = web_contents()->GetBrowserContext();
   return ExtensionRegistry::Get(context)->enabled_extensions().GetByID(
@@ -345,7 +328,7 @@ void TabHelper::UpdateExtensionAppIcon(const Extension* extension) {
         extension,
         IconsInfo::GetIconResource(extension,
                                    extension_misc::EXTENSION_ICON_SMALL,
-                                   ExtensionIconSet::MATCH_BIGGER),
+                                   ExtensionIconSet::Match::kBigger),
         gfx::Size(extension_misc::EXTENSION_ICON_SMALL,
                   extension_misc::EXTENSION_ICON_SMALL),
         base::BindOnce(&TabHelper::OnImageLoaded,
@@ -382,10 +365,13 @@ void TabHelper::OnExtensionUnloaded(content::BrowserContext* browser_context,
   // side effects of loading/unloading the extension.
   web_contents()->GetController().GetBackForwardCache().Flush();
 
-  if (!extension_app_)
+  if (!extension_app_) {
     return;
-  if (extension == extension_app_)
+  }
+
+  if (extension == extension_app_) {
     SetExtensionApp(nullptr);
+  }
 
   // Technically, the refresh is no longer needed if the unloaded extension was
   // the only one causing `refresh_required`. However, we would need to track

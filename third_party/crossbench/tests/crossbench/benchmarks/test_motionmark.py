@@ -8,15 +8,16 @@ import csv
 from typing import Optional, Type
 from unittest import mock
 
-from crossbench.benchmarks.motionmark.motionmark_1 import (MotionMark1Benchmark,
-                                                           MotionMark1Probe,
-                                                           MotionMark1Story)
+from crossbench.benchmarks.motionmark.motionmark_1 import (
+    MotionMark1Benchmark, MotionMark1Probe, MotionMark1ProbeContext,
+    MotionMark1Story)
 from crossbench.benchmarks.motionmark.motionmark_1_2 import (
-    MotionMark12Benchmark, MotionMark12Probe, MotionMark12Story)
+    MotionMark12Benchmark, MotionMark12Probe, MotionMark12ProbeContext,
+    MotionMark12Story)
 from crossbench.benchmarks.motionmark.motionmark_1_3 import (
-    MotionMark13Benchmark, MotionMark13Probe, MotionMark13Story)
-from crossbench.env import (HostEnvironment, HostEnvironmentConfig,
-                            ValidationMode)
+    MotionMark13Benchmark, MotionMark13Probe, MotionMark13ProbeContext,
+    MotionMark13Story)
+from crossbench.env import EnvironmentConfig, HostEnvironment, ValidationMode
 from crossbench.runner.runner import Runner
 from tests import test_helper
 from tests.crossbench.benchmarks import helper
@@ -38,6 +39,11 @@ class MotionMark1BaseTestCase(
   @property
   @abc.abstractmethod
   def probe_cls(self) -> Type[MotionMark1Probe]:
+    pass
+
+  @property
+  @abc.abstractmethod
+  def probe_context_cls(self) -> Type[MotionMark1ProbeContext]:
     pass
 
 
@@ -104,42 +110,44 @@ class MotionMark1BaseTestCase(
     self._test_run()
     for browser in self.browsers:
       urls = self.filter_splashscreen_urls(browser.url_list)
-      self.assertIn(self.story_cls.URL, urls)
+      self.assertIn(f"{self.story_cls.URL}/developer.html", urls)
       self.assertNotIn(self.story_cls.URL_LOCAL, urls)
+      self.assertNotIn(f"{self.story_cls.URL_LOCAL}/developer.html", urls)
 
   def test_run_custom_url(self):
-    custom_url = "http://test.example.com/speedometer"
+    custom_url = "http://test.example.com/motionmark"
     self._test_run(custom_url)
     for browser in self.browsers:
       urls = self.filter_splashscreen_urls(browser.url_list)
-      self.assertIn(custom_url, urls)
+      self.assertIn(f"{custom_url}/developer.html", urls)
       self.assertNotIn(self.story_cls.URL, urls)
       self.assertNotIn(self.story_cls.URL_LOCAL, urls)
 
   def _test_run(self, custom_url: Optional[str] = None, throw: bool = False):
-    stories = self.story_cls.from_names(['Multiply'], url=custom_url)
+    stories = self.story_cls.from_names(["Multiply"], url=custom_url)
     repetitions = 3
     # The order should match Runner.get_runs
     for _ in range(repetitions):
       for _ in stories:
-        js_side_effects = [
-            True,  # Page is ready
-            1,  # NOF enabled benchmarks
-            None,  # Start running benchmark
-            True,  # Wait until done
-            self.EXAMPLE_PROBE_DATA
-        ]
         for browser in self.browsers:
-          browser.js_side_effects += js_side_effects
+          # Page is ready
+          browser.expect_js(result=True)
+          # NOF enabled benchmarks
+          browser.expect_js(result=1)
+          # Start running benchmark
+          browser.expect_js()
+          # Wait until done
+          browser.expect_js(result=True)
+          browser.expect_js(result=self.EXAMPLE_PROBE_DATA)
     for browser in self.browsers:
-      browser.js_side_effect = copy.deepcopy(browser.js_side_effects)
+      browser.expected_js = copy.deepcopy(browser.expected_js)
     benchmark = self.benchmark_cls(stories, custom_url=custom_url)
     self.assertTrue(len(benchmark.describe()) > 0)
     runner = Runner(
         self.out_dir,
         self.browsers,
         benchmark,
-        env_config=HostEnvironmentConfig(),
+        env_config=EnvironmentConfig(),
         env_validation_mode=ValidationMode.SKIP,
         platform=self.platform,
         repetitions=repetitions,
@@ -152,19 +160,24 @@ class MotionMark1BaseTestCase(
     for browser in self.browsers:
       urls = self.filter_splashscreen_urls(browser.url_list)
       self.assertEqual(len(urls), repetitions)
-      self.assertIn(self.probe_cls.JS, browser.js_list)
+      self.assertTrue(browser.was_js_invoked(self.probe_context_cls.JS))
     with (self.out_dir /
           f"{self.probe_cls.NAME}.csv").open(encoding="utf-8") as f:
       csv_data = list(csv.DictReader(f, delimiter="\t"))
-    self.assertListEqual(list(csv_data[0].keys()), ["label", "dev", "stable"])
-    self.assertDictEqual(csv_data[1], {
-        "label": "version",
-        "dev": "102.22.33.44",
-        "stable": "100.22.33.44",
-    })
+    self.assertListEqual(
+        list(csv_data[0].keys()), ["label", "", "dev", "stable"])
+    self.assertDictEqual(
+        csv_data[1],
+        {
+            "label": "version",
+            "dev": "102.22.33.44",
+            "stable": "100.22.33.44",
+            # One padding element (after "label"):
+            "": "",
+        })
 
 
-class MotionMark12TestCse(MotionMark1BaseTestCase):
+class MotionMark12TestCase(MotionMark1BaseTestCase):
 
   @property
   def benchmark_cls(self):
@@ -178,8 +191,12 @@ class MotionMark12TestCse(MotionMark1BaseTestCase):
   def probe_cls(self):
     return MotionMark12Probe
 
+  @property
+  def probe_context_cls(self):
+    return MotionMark12ProbeContext
 
-class MotionMark13TestCse(MotionMark1BaseTestCase):
+
+class MotionMark13TestCase(MotionMark1BaseTestCase):
 
   @property
   def benchmark_cls(self):
@@ -192,6 +209,10 @@ class MotionMark13TestCse(MotionMark1BaseTestCase):
   @property
   def probe_cls(self):
     return MotionMark13Probe
+
+  @property
+  def probe_context_cls(self):
+    return MotionMark13ProbeContext
 
 
 del MotionMark1BaseTestCase

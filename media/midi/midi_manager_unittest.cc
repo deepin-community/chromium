@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -274,10 +275,12 @@ TEST_F(MidiManagerTest, StartMultipleSessions) {
 
 TEST_F(MidiManagerTest, TooManyPendingSessions) {
   // Push as many client requests for starting session as possible.
-  std::unique_ptr<base::test::TestFuture<void>>
-      test_futures[MidiManager::kMaxPendingClientCount];
-  std::unique_ptr<FakeMidiManagerClient>
-      many_existing_clients[MidiManager::kMaxPendingClientCount];
+  std::array<std::unique_ptr<base::test::TestFuture<void>>,
+             MidiManager::kMaxPendingClientCount>
+      test_futures;
+  std::array<std::unique_ptr<FakeMidiManagerClient>,
+             MidiManager::kMaxPendingClientCount>
+      many_existing_clients;
   test_futures[0] = std::make_unique<base::test::TestFuture<void>>();
   many_existing_clients[0] =
       std::make_unique<FakeMidiManagerClient>(test_futures[0]->GetCallback());

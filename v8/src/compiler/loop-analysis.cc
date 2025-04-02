@@ -4,14 +4,13 @@
 
 #include "src/compiler/loop-analysis.h"
 
-#include "src/base/v8-fallthrough.h"
 #include "src/codegen/tick-counter.h"
 #include "src/compiler/all-nodes.h"
 #include "src/compiler/common-operator.h"
-#include "src/compiler/graph.h"
 #include "src/compiler/node-marker.h"
 #include "src/compiler/node-properties.h"
 #include "src/compiler/node.h"
+#include "src/compiler/turbofan-graph.h"
 #include "src/zone/zone.h"
 
 namespace v8 {
@@ -660,7 +659,7 @@ ZoneUnorderedSet<Node*>* LoopFinder::FindSmallInnermostLoopFromHeader(
         // Rationale for PrepareForGetCodeunit: this internal operation is
         // specifically designed for being hoisted out of loops.
         has_instruction_worth_peeling = true;
-        V8_FALLTHROUGH;
+        [[fallthrough]];
       default:
         ENQUEUE_USES(use, true)
         break;

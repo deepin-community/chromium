@@ -9,9 +9,9 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/containers/flat_map.h"
-#include "base/strings/string_piece.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
@@ -27,7 +27,7 @@ class BookmarkModel;
 // BookmarkNode ---------------------------------------------------------------
 
 // BookmarkNode contains information about a starred entry: title, URL, favicon,
-// id and type. BookmarkNodes are returned from BookmarkModel.
+// ID and type. BookmarkNodes are returned from BookmarkModel.
 class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
  public:
   enum Type {
@@ -62,16 +62,23 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
   // BookmarkModel::SetTitle(..) should be used instead.
   void SetTitle(const std::u16string& title) override;
 
-  // Returns an unique id for this node.
+  // Returns an unique ID for this node.
   // For bookmark nodes that are managed by the bookmark model, the IDs are
   // persisted across sessions.
+  //
+  // IDs are unique across both local and account storages.
   int64_t id() const { return id_; }
   void set_id(int64_t id) { id_ = id; }
 
   // Returns this node's UUID, which is guaranteed to be valid.
   // For bookmark nodes that are managed by the bookmark model, the UUIDs are
   // persisted across sessions and stable throughout the lifetime of the
-  // bookmark.
+  // bookmark, with the exception of rare cases where moving a bookmark would
+  // otherwise produce a UUID collision (when moved from local to account or
+  // the other way round).
+  //
+  // UUIDs are unique across each individual storage (local or account), but not
+  // across both. See `BookmarkModel::GetNodeByUuid()` for details.
   const base::Uuid& uuid() const { return uuid_; }
 
   const GURL& url() const { return url_; }
@@ -124,7 +131,7 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
   // TitledUrlNode interface methods.
   const std::u16string& GetTitledUrlNodeTitle() const override;
   const GURL& GetTitledUrlNodeUrl() const override;
-  std::vector<base::StringPiece16> GetTitledUrlNodeAncestorTitles()
+  std::vector<std::u16string_view> GetTitledUrlNodeAncestorTitles()
       const override;
 
   // Returns the last time the bookmark was opened. This is only maintained
@@ -143,6 +150,10 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
 
  private:
   friend class BookmarkModel;
+
+  // Reassignment of UUIDs, used to avoid UUID collisions when a bookmark is
+  // moved.
+  void SetNewRandomUuid() { uuid_ = base::Uuid::GenerateRandomV4(); }
 
   // Called when the favicon becomes invalid.
   void InvalidateFavicon();
@@ -171,12 +182,11 @@ class BookmarkNode : public ui::TreeNode<BookmarkNode>, public TitledUrlNode {
   // The unique identifier for this node.
   int64_t id_;
 
-  // The UUID for this node. A BookmarkNode UUID is immutable and differs from
-  // the `id_` in that it is consistent across different clients and
-  // stable throughout the lifetime of the bookmark, with the exception of nodes
-  // added to the Managed Bookmarks folder, whose UUIDs are re-assigned at
-  // start-up every time.
-  const base::Uuid uuid_;
+  // The UUID for this node. A BookmarkNode UUID is generally immutable (barring
+  // advanced scenarios) and differs from the `id_` in that it is consistent
+  // across different clients. For managed bookmarks, the UUID is not actually
+  // stable and UUIDs are re-assigned at start-up every time.
+  base::Uuid uuid_;
 
   // The URL of this node. BookmarkModel maintains maps off this URL, so changes
   // to the URL must be done through the BookmarkModel.

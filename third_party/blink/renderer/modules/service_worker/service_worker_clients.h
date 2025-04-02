@@ -13,6 +13,7 @@ namespace blink {
 
 class ScriptState;
 class ServiceWorkerClient;
+class ServiceWorkerWindowClient;
 
 class ServiceWorkerClients final : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
@@ -23,12 +24,14 @@ class ServiceWorkerClients final : public ScriptWrappable {
   ServiceWorkerClients();
 
   // Clients.idl
-  ScriptPromise get(ScriptState*, const String& id);
-  ScriptPromiseTyped<IDLSequence<ServiceWorkerClient>> matchAll(
+  ScriptPromise<ServiceWorkerClient> get(ScriptState*, const String& id);
+  ScriptPromise<IDLSequence<ServiceWorkerClient>> matchAll(
       ScriptState*,
       const ClientQueryOptions*);
-  ScriptPromise openWindow(ScriptState*, const String& url);
-  ScriptPromise claim(ScriptState*);
+  ScriptPromise<IDLNullable<ServiceWorkerWindowClient>> openWindow(
+      ScriptState*,
+      const String& url);
+  ScriptPromise<IDLUndefined> claim(ScriptState*);
 };
 
 }  // namespace blink

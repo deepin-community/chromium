@@ -24,6 +24,7 @@
 #include "net/base/net_export.h"
 #include "net/base/privacy_mode.h"
 #include "net/cookies/cookie_inclusion_status.h"
+#include "net/cookies/cookie_util.h"
 #include "net/first_party_sets/first_party_set_metadata.h"
 #include "net/first_party_sets/first_party_sets_cache_filter.h"
 #include "net/http/http_request_info.h"
@@ -60,6 +61,20 @@ class NET_EXPORT_PRIVATE URLRequestHttpJob : public URLRequestJob {
   void SetResponseHeadersCallback(ResponseHeadersCallback callback) override;
   void SetIsSharedDictionaryReadAllowedCallback(
       base::RepeatingCallback<bool()> callback) override;
+
+  // An enumeration of the results of a request with respect to IP Protection.
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  enum class IpProtectionJobResult {
+    // Request was not IP Protected.
+    kProtectionNotAttempted = 0,
+    // Request was IP Protected and carried via IP Protection proxies or, if
+    // the direct-only parameter is true, made directly.
+    kProtectionSuccess = 1,
+    // Request was IP Protected, but fell back to direct.
+    kDirectFallback = 2,
+    kMaxValue = kDirectFallback,
+  };
 
  protected:
   URLRequestHttpJob(URLRequest* request,
@@ -125,6 +140,11 @@ class NET_EXPORT_PRIVATE URLRequestHttpJob : public URLRequestJob {
       CookieAccessResultList& excluded_cookies) const;
   void SaveCookiesAndNotifyHeadersComplete(int result);
 
+#if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+  // Process the DBSC header, if one exists.
+  void ProcessDeviceBoundSessionsHeader();
+#endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
+
   // Processes the Strict-Transport-Security header, if one exists.
   void ProcessStrictTransportSecurityHeader();
 
@@ -141,6 +161,8 @@ class NET_EXPORT_PRIVATE URLRequestHttpJob : public URLRequestJob {
   int NotifyConnectedCallback(const TransportInfo& info,
                               CompletionOnceCallback callback);
 
+  void RestartTransaction();
+  void RestartTransactionForRefresh();
   void RestartTransactionWithAuth(const AuthCredentials& credentials);
 
   // Overridden from URLRequestJob:
@@ -167,8 +189,13 @@ class NET_EXPORT_PRIVATE URLRequestHttpJob : public URLRequestJob {
   int ReadRawData(IOBuffer* buf, int buf_size) override;
   int64_t GetTotalReceivedBytes() const override;
   int64_t GetTotalSentBytes() const override;
+  int64_t GetReceivedBodyBytes() const override;
   void DoneReading() override;
   void DoneReadingRedirectResponse() override;
+  void DoneReadingRetryResponse() override;
+  bool NeedsRetryWithStorageAccess() override;
+  void SetSharedDictionaryGetter(
+      SharedDictionaryGetter shared_dictionary_getter) override;
 
   IPEndPoint GetResponseRemoteEndpoint() const override;
   void NotifyURLRequestDestroyed() override;

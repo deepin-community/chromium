@@ -5,6 +5,7 @@
 #include "components/metrics/machine_id_provider.h"
 
 #include <windows.h>
+
 #include <stdint.h>
 #include <winioctl.h>
 
@@ -34,17 +35,11 @@ std::string MachineIdProvider::GetMachineId() {
   // This is fine as we do not support migrating Chrome installs to new drives.
   base::FilePath executable_path;
 
-  if (!base::PathService::Get(base::FILE_EXE, &executable_path)) {
-    NOTREACHED();
-    return std::string();
-  }
+  CHECK(base::PathService::Get(base::FILE_EXE, &executable_path));
 
   std::vector<base::FilePath::StringType> path_components =
       executable_path.GetComponents();
-  if (path_components.empty()) {
-    NOTREACHED();
-    return std::string();
-  }
+  CHECK(!path_components.empty());
   base::FilePath::StringType drive_name = L"\\\\.\\" + path_components[0];
 
   base::win::ScopedHandle drive_handle(

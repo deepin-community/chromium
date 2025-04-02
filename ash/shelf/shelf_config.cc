@@ -212,36 +212,11 @@ void ShelfConfig::OnSessionStateChanged(session_manager::SessionState state) {
   UpdateConfig(is_app_list_visible_, /*tablet_mode_changed=*/false);
 }
 
-void ShelfConfig::OnDisplayTabletStateChanged(display::TabletState state) {
-  switch (state) {
-    case display::TabletState::kInClamshellMode:
-      break;
-    case display::TabletState::kEnteringTabletMode:
-      // Update the shelf config at the "starting" stage of the tablet mode
-      // transition, so that the shelf bounds are set and remains stable during
-      // the transition animation. Otherwise, updating the shelf bounds during
-      // the animation will lead to work-area bounds changes which lead to many
-      // re-layouts, hurting the animation's smoothness.
-      // https://crbug.com/1044316.
-      DCHECK(!in_tablet_mode_);
-      in_tablet_mode_ = true;
-
-      UpdateConfig(is_app_list_visible_, /*tablet_mode_changed=*/true);
-      break;
-    case display::TabletState::kInTabletMode:
-      break;
-    case display::TabletState::kExitingTabletMode:
-      // Many events can lead to UpdateConfig being called as a result of
-      // kInClamshellMode event, therefore we need to listen to the "ending"
-      // stage rather than the "ended", so `in_tablet_mode_` gets updated
-      // correctly, and the shelf bounds are stabilized early so as not to have
-      // multiple unnecessary work-area bounds changes.
-      in_tablet_mode_ = false;
-
-      UpdateConfig(is_app_list_visible_, /*tablet_mode_changed=*/true);
-
-      has_shown_elevated_app_bar_ = std::nullopt;
-      break;
+void ShelfConfig::UpdateForTabletMode(bool in_tablet_mode) {
+  in_tablet_mode_ = in_tablet_mode;
+  UpdateConfig(is_app_list_visible_, /*tablet_mode_changed=*/true);
+  if (!in_tablet_mode_) {
+    has_shown_elevated_app_bar_ = std::nullopt;
   }
 }
 
@@ -466,54 +441,40 @@ SkColor ShelfConfig::GetShelfControlButtonColor(
     return is_in_app_ ? SK_ColorTRANSPARENT : GetDefaultShelfColor(widget);
   }
   return widget->GetColorProvider()->GetColor(
-      chromeos::features::IsJellyEnabled()
-          ? static_cast<ui::ColorId>(cros_tokens::kCrosSysSystemOnBase)
-          : kColorAshControlBackgroundColorInactive);
+      cros_tokens::kCrosSysSystemOnBase);
 }
 
 SkColor ShelfConfig::GetMaximizedShelfColor(const views::Widget* widget) const {
-  if (!chromeos::features::IsJellyEnabled()) {
-    return SkColorSetA(GetDefaultShelfColor(widget), 0xFF);  // 100% opacity
-  }
   return widget->GetColorProvider()->GetColor(cros_tokens::kCrosSysSystemBase);
 }
 
 ui::ColorId ShelfConfig::GetShelfBaseLayerColorId() const {
-  if (!chromeos::features::IsJellyEnabled()) {
-    if (!in_tablet_mode_) {
-      return kColorAshShieldAndBase80;
-    }
-
-    if (!is_in_app_) {
-      return kColorAshShieldAndBase60;
-    }
-
-    return DarkLightModeControllerImpl::Get()->IsDarkModeEnabled()
-               ? kColorAshShieldAndBase90
-               : kColorAshShieldAndBaseOpaque;
-  }
-
   if (in_tablet_mode_ && is_in_app_) {
     // In tablet mode with an app, we use the same opaque color as maximized.
     return cros_tokens::kCrosSysSystemBase;
   }
 
-  return cros_tokens::kCrosSysSystemBaseElevated;
+  return chromeos::features::IsSystemBlurEnabled()
+             ? cros_tokens::kCrosSysSystemBaseElevated
+             : cros_tokens::kCrosSysSystemBaseElevatedOpaque;
 }
 
 SkColor ShelfConfig::GetDefaultShelfColor(const views::Widget* widget) const {
   DCHECK(widget);
 
   const auto* color_provider = widget->GetColorProvider();
-  if (!features::IsBackgroundBlurEnabled())
+  if (!features::IsBackgroundBlurEnabled()) {
     return color_provider->GetColor(kColorAshShieldAndBase90);
+  }
 
   return color_provider->GetColor(GetShelfBaseLayerColorId());
 }
 
 int ShelfConfig::GetShelfControlButtonBlurRadius() const {
-  if (features::IsBackgroundBlurEnabled() && in_tablet_mode_ && !is_in_app_)
+  if (features::IsBackgroundBlurEnabled() && in_tablet_mode_ && !is_in_app_ &&
+      chromeos::features::IsSystemBlurEnabled()) {
     return shelf_blur_radius_;
+  }
   return 0;
 }
 
@@ -571,10 +532,8 @@ int ShelfConfig::GetMinimumInlineAppBarSize() const {
 
 void ShelfConfig::UpdateShowElevatedAppBar(
     const gfx::Size& inline_app_bar_size) {
-  if (features::IsShelfStackedHotseatEnabled()) {
     elevate_tablet_mode_app_bar_ =
         inline_app_bar_size.width() < GetMinimumInlineAppBarSize();
-  }
 }
 
 void ShelfConfig::UpdateConfigForAccessibilityState() {

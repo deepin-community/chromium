@@ -46,12 +46,12 @@ class RapidKeySequenceRecorderTest : public AshTestBase {
   base::TimeTicks GetNowTimestamp() { return task_environment()->NowTicks(); }
 
   const ui::KeyEvent LeftShiftKeyEvent() {
-    return ui::KeyEvent(ui::ET_KEY_PRESSED, ui::VKEY_LSHIFT,
+    return ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_LSHIFT,
                         ui::DomCode::SHIFT_LEFT, ui::EF_NONE,
                         GetNowTimestamp());
   }
   const ui::KeyEvent RightShiftKeyEvent() {
-    return ui::KeyEvent(ui::ET_KEY_PRESSED, ui::VKEY_RSHIFT,
+    return ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_RSHIFT,
                         ui::DomCode::SHIFT_RIGHT, ui::EF_NONE,
                         GetNowTimestamp());
   }
@@ -94,6 +94,39 @@ TEST_F(RapidKeySequenceRecorderTest, RightShiftTappedTwice) {
       1);
   histogram_tester_->ExpectTotalCount(
       "ChromeOS.Inputs.DoubleTapRightShiftDuration", 1);
+  // Left shift metric should not be recorded.
+  histogram_tester_->ExpectTotalCount(
+      "ChromeOS.Inputs.DoubleTapLeftShiftDuration", 0);
+}
+
+TEST_F(RapidKeySequenceRecorderTest, RightShiftOtherKeyPressedTogether) {
+  const auto press_other_key_event =
+      ui::KeyEvent(ui::EventType::kKeyPressed, ui::VKEY_A, ui::DomCode::US_A,
+                   ui::EF_NONE, GetNowTimestamp());
+  const auto release_other_key_event =
+      ui::KeyEvent(ui::EventType::kKeyReleased, ui::VKEY_A, ui::DomCode::US_A,
+                   ui::EF_NONE, GetNowTimestamp());
+  const auto release_shift_key_event =
+      ui::KeyEvent(ui::EventType::kKeyReleased, ui::VKEY_RSHIFT,
+                   ui::DomCode::SHIFT_RIGHT, ui::EF_NONE, GetNowTimestamp());
+
+  rapid_key_sequence_recorder_->OnPrerewriteKeyInputEvent(
+      press_other_key_event);
+  AdvanceClock(base::Milliseconds(50));
+  rapid_key_sequence_recorder_->OnPrerewriteKeyInputEvent(RightShiftKeyEvent());
+  AdvanceClock(base::Milliseconds(50));
+  rapid_key_sequence_recorder_->OnPrerewriteKeyInputEvent(
+      release_other_key_event);
+  AdvanceClock(base::Milliseconds(50));
+  rapid_key_sequence_recorder_->OnPrerewriteKeyInputEvent(
+      release_shift_key_event);
+  rapid_key_sequence_recorder_->OnPrerewriteKeyInputEvent(RightShiftKeyEvent());
+  AdvanceClock(base::Milliseconds(50));
+  rapid_key_sequence_recorder_->OnPrerewriteKeyInputEvent(
+      release_shift_key_event);
+  // Right shift metric should not be recorded.
+  histogram_tester_->ExpectTotalCount(
+      "ChromeOS.Inputs.DoubleTapRightShiftDuration", 0);
   // Left shift metric should not be recorded.
   histogram_tester_->ExpectTotalCount(
       "ChromeOS.Inputs.DoubleTapLeftShiftDuration", 0);
@@ -264,7 +297,7 @@ TEST_F(RapidKeySequenceRecorderTest, StartWithShiftThenWaitThenThreeShifts) {
 }
 
 TEST_F(RapidKeySequenceRecorderTest, OtherKeys) {
-  ui::KeyEvent alpha_key_no_modifier(ui::ET_KEY_PRESSED, ui::VKEY_C,
+  ui::KeyEvent alpha_key_no_modifier(ui::EventType::kKeyPressed, ui::VKEY_C,
                                      ui::EF_NONE, GetNowTimestamp());
   // Other key, then left shift
   rapid_key_sequence_recorder_->OnPrerewriteKeyInputEvent(
@@ -318,7 +351,7 @@ TEST_F(RapidKeySequenceRecorderTest, OtherKeys) {
 }
 
 TEST_F(RapidKeySequenceRecorderTest, ShiftAndOtherModifiers) {
-  ui::KeyEvent ctrl_shift_t(ui::ET_KEY_PRESSED, ui::VKEY_T,
+  ui::KeyEvent ctrl_shift_t(ui::EventType::kKeyPressed, ui::VKEY_T,
                             ui::EF_SHIFT_DOWN | ui::EF_CONTROL_DOWN,
                             GetNowTimestamp());
 
@@ -334,8 +367,8 @@ TEST_F(RapidKeySequenceRecorderTest, ShiftAndOtherModifiers) {
 }
 
 TEST_F(RapidKeySequenceRecorderTest, ShiftAndAlpha) {
-  ui::KeyEvent shift_t(ui::ET_KEY_PRESSED, ui::VKEY_T, ui::EF_SHIFT_DOWN,
-                       GetNowTimestamp());
+  ui::KeyEvent shift_t(ui::EventType::kKeyPressed, ui::VKEY_T,
+                       ui::EF_SHIFT_DOWN, GetNowTimestamp());
 
   rapid_key_sequence_recorder_->OnPrerewriteKeyInputEvent(shift_t);
   AdvanceClock(base::Milliseconds(50));
@@ -349,9 +382,9 @@ TEST_F(RapidKeySequenceRecorderTest, ShiftAndAlpha) {
 }
 
 TEST_F(RapidKeySequenceRecorderTest, UnknownKeyAndShift) {
-  ui::KeyEvent non_keypress_with_shift(ui::ET_KEY_PRESSED, ui::VKEY_UNKNOWN,
-                                       ui::DomCode::NONE, ui::EF_SHIFT_DOWN,
-                                       GetNowTimestamp());
+  ui::KeyEvent non_keypress_with_shift(ui::EventType::kKeyPressed,
+                                       ui::VKEY_UNKNOWN, ui::DomCode::NONE,
+                                       ui::EF_SHIFT_DOWN, GetNowTimestamp());
 
   rapid_key_sequence_recorder_->OnPrerewriteKeyInputEvent(
       non_keypress_with_shift);

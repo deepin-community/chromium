@@ -13,7 +13,7 @@
 #include "base/scoped_observation.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
-#include "chrome/browser/ui/ash/system_tray_client_impl.h"
+#include "chrome/browser/ui/ash/system/system_tray_client_impl.h"
 #include "chrome/browser/ui/views/relaunch_notification/relaunch_required_timer.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/session_manager/session_manager_types.h"
@@ -62,8 +62,9 @@ void RelaunchNotificationControllerPlatformImpl::CloseRelaunchNotification() {
 
 void RelaunchNotificationControllerPlatformImpl::SetDeadline(
     base::Time deadline) {
-  if (relaunch_required_timer_)
+  if (relaunch_required_timer_) {
     relaunch_required_timer_->SetDeadline(deadline);
+  }
 }
 
 void RelaunchNotificationControllerPlatformImpl::
@@ -127,10 +128,12 @@ bool RelaunchNotificationControllerPlatformImpl::CanScheduleReboot() {
 }
 
 void RelaunchNotificationControllerPlatformImpl::StartObserving() {
-  if (!display_observation_.IsObserving())
+  if (!display_observation_.IsObserving()) {
     display_observation_.Observe(ash::Shell::Get()->display_configurator());
-  if (!session_observation_.IsObserving())
+  }
+  if (!session_observation_.IsObserving()) {
     session_observation_.Observe(session_manager::SessionManager::Get());
+  }
 }
 
 void RelaunchNotificationControllerPlatformImpl::StopObserving() {

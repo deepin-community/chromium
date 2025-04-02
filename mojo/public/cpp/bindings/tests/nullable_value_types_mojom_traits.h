@@ -7,7 +7,7 @@
 
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "mojo/public/cpp/bindings/tests/nullable_value_types_enums.h"
-#include "mojo/public/interfaces/bindings/tests/nullable_value_types.mojom.h"
+#include "mojo/public/interfaces/bindings/tests/nullable_value_types.test-mojom.h"
 
 namespace mojo {
 
@@ -25,7 +25,6 @@ struct EnumTraits<test::nullable_value_types::mojom::TypemappedEnum,
     }
 
     NOTREACHED();
-    return MojomType::kMinValue;
   }
 
   static bool FromMojom(MojomType in, CppType* out) {

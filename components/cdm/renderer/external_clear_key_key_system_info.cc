@@ -72,7 +72,6 @@ bool ExternalClearKeyKeySystemInfo::IsSupportedInitDataType(
       return false;
   }
   NOTREACHED();
-  return false;
 }
 
 std::optional<media::EmeConfig>
@@ -86,7 +85,6 @@ ExternalClearKeyKeySystemInfo::GetEncryptionSchemeConfigRule(
       break;
   }
   NOTREACHED();
-  return media::EmeConfig::UnsupportedRule();
 }
 
 media::SupportedCodecs ExternalClearKeyKeySystemInfo::GetSupportedCodecs()

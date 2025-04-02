@@ -53,6 +53,7 @@ class NATIVE_THEME_EXPORT NativeThemeAura : public NativeThemeBase {
       Part direction,
       State state,
       ColorScheme color_scheme,
+      bool in_forced_colors,
       const ScrollbarArrowExtraParams& extra_params) const override;
   void PaintScrollbarTrack(cc::PaintCanvas* canvas,
                            const ColorProvider* color_provider,
@@ -60,7 +61,8 @@ class NATIVE_THEME_EXPORT NativeThemeAura : public NativeThemeBase {
                            State state,
                            const ScrollbarTrackExtraParams& extra_params,
                            const gfx::Rect& rect,
-                           ColorScheme color_scheme) const override;
+                           ColorScheme color_scheme,
+                           bool in_forced_colors) const override;
   void PaintScrollbarThumb(cc::PaintCanvas* canvas,
                            const ColorProvider* color_provider,
                            Part part,
@@ -68,6 +70,11 @@ class NATIVE_THEME_EXPORT NativeThemeAura : public NativeThemeBase {
                            const gfx::Rect& rect,
                            const ScrollbarThumbExtraParams& extra_params,
                            ColorScheme color_scheme) const override;
+  gfx::Insets GetScrollbarSolidColorThumbInsets(Part part) const override;
+  SkColor4f GetScrollbarThumbColor(
+      const ui::ColorProvider& color_provider,
+      State state,
+      const ScrollbarThumbExtraParams& extra) const override;
   void PaintScrollbarCorner(cc::PaintCanvas* canvas,
                             const ColorProvider* color_provider,
                             State state,
@@ -77,6 +84,7 @@ class NATIVE_THEME_EXPORT NativeThemeAura : public NativeThemeBase {
   gfx::Size GetPartSize(Part part,
                         State state,
                         const ExtraParams& extra) const override;
+  float GetContrastRatioForState(State state, Part part) const override;
   bool SupportsNinePatch(Part part) const override;
   gfx::Size GetNinePatchCanvasSize(Part part) const override;
   gfx::Rect GetNinePatchAperture(Part part) const override;
@@ -89,8 +97,6 @@ class NATIVE_THEME_EXPORT NativeThemeAura : public NativeThemeBase {
                                      const SkScalar lower_right_radius,
                                      const SkScalar lower_left_radius,
                                      const cc::PaintFlags& flags);
-
-  bool use_overlay_scrollbars_;
 
   // Used to notify the web native theme of changes to dark mode, high
   // contrast, preferred color scheme, and preferred contrast.

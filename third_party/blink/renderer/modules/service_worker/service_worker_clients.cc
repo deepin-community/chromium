@@ -25,20 +25,21 @@ namespace blink {
 
 namespace {
 
-mojom::ServiceWorkerClientType GetClientType(const String& type) {
-  if (type == "window")
-    return mojom::ServiceWorkerClientType::kWindow;
-  if (type == "worker")
-    return mojom::ServiceWorkerClientType::kDedicatedWorker;
-  if (type == "sharedworker")
-    return mojom::ServiceWorkerClientType::kSharedWorker;
-  if (type == "all")
-    return mojom::ServiceWorkerClientType::kAll;
+mojom::blink::ServiceWorkerClientType GetClientType(V8ClientType::Enum type) {
+  switch (type) {
+    case V8ClientType::Enum::kWindow:
+      return mojom::blink::ServiceWorkerClientType::kWindow;
+    case V8ClientType::Enum::kWorker:
+      return mojom::blink::ServiceWorkerClientType::kDedicatedWorker;
+    case V8ClientType::Enum::kSharedworker:
+      return mojom::blink::ServiceWorkerClientType::kSharedWorker;
+    case V8ClientType::Enum::kAll:
+      return mojom::blink::ServiceWorkerClientType::kAll;
+  }
   NOTREACHED();
-  return mojom::ServiceWorkerClientType::kWindow;
 }
 
-void DidGetClient(ScriptPromiseResolver* resolver,
+void DidGetClient(ScriptPromiseResolver<ServiceWorkerClient>* resolver,
                   mojom::blink::ServiceWorkerClientInfoPtr info) {
   if (!resolver->GetExecutionContext() ||
       resolver->GetExecutionContext()->IsContextDestroyed()) {
@@ -52,21 +53,20 @@ void DidGetClient(ScriptPromiseResolver* resolver,
   }
   ServiceWorkerClient* client = nullptr;
   switch (info->client_type) {
-    case mojom::ServiceWorkerClientType::kWindow:
+    case mojom::blink::ServiceWorkerClientType::kWindow:
       client = MakeGarbageCollected<ServiceWorkerWindowClient>(*info);
       break;
-    case mojom::ServiceWorkerClientType::kDedicatedWorker:
-    case mojom::ServiceWorkerClientType::kSharedWorker:
+    case mojom::blink::ServiceWorkerClientType::kDedicatedWorker:
+    case mojom::blink::ServiceWorkerClientType::kSharedWorker:
       client = MakeGarbageCollected<ServiceWorkerClient>(*info);
       break;
-    case mojom::ServiceWorkerClientType::kAll:
+    case mojom::blink::ServiceWorkerClientType::kAll:
       NOTREACHED();
-      return;
   }
   resolver->Resolve(client);
 }
 
-void DidClaim(ScriptPromiseResolver* resolver,
+void DidClaim(ScriptPromiseResolver<IDLUndefined>* resolver,
               mojom::blink::ServiceWorkerErrorType error,
               const String& error_msg) {
   if (!resolver->GetExecutionContext() ||
@@ -85,7 +85,7 @@ void DidClaim(ScriptPromiseResolver* resolver,
 }
 
 void DidGetClients(
-    ScriptPromiseResolverTyped<IDLSequence<ServiceWorkerClient>>* resolver,
+    ScriptPromiseResolver<IDLSequence<ServiceWorkerClient>>* resolver,
     Vector<mojom::blink::ServiceWorkerClientInfoPtr> infos) {
   if (!resolver->GetExecutionContext() ||
       resolver->GetExecutionContext()->IsContextDestroyed()) {
@@ -110,58 +110,65 @@ ServiceWorkerClients* ServiceWorkerClients::Create() {
 
 ServiceWorkerClients::ServiceWorkerClients() = default;
 
-ScriptPromise ServiceWorkerClients::get(ScriptState* script_state,
-                                        const String& id) {
+ScriptPromise<ServiceWorkerClient> ServiceWorkerClients::get(
+    ScriptState* script_state,
+    const String& id) {
   ServiceWorkerGlobalScope* global_scope =
       To<ServiceWorkerGlobalScope>(ExecutionContext::From(script_state));
   // TODO(jungkees): May be null due to worker termination:
   // http://crbug.com/413518.
   if (!global_scope)
-    return ScriptPromise();
+    return EmptyPromise();
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<ServiceWorkerClient>>(
+          script_state);
   global_scope->GetServiceWorkerHost()->GetClient(
       id, WTF::BindOnce(&DidGetClient, WrapPersistent(resolver)));
   return resolver->Promise();
 }
 
-ScriptPromiseTyped<IDLSequence<ServiceWorkerClient>>
-ServiceWorkerClients::matchAll(ScriptState* script_state,
-                               const ClientQueryOptions* options) {
+ScriptPromise<IDLSequence<ServiceWorkerClient>> ServiceWorkerClients::matchAll(
+    ScriptState* script_state,
+    const ClientQueryOptions* options) {
   ServiceWorkerGlobalScope* global_scope =
       To<ServiceWorkerGlobalScope>(ExecutionContext::From(script_state));
   // FIXME: May be null due to worker termination: http://crbug.com/413518.
   if (!global_scope)
-    return ScriptPromiseTyped<IDLSequence<ServiceWorkerClient>>();
+    return ScriptPromise<IDLSequence<ServiceWorkerClient>>();
 
   auto* resolver = MakeGarbageCollected<
-      ScriptPromiseResolverTyped<IDLSequence<ServiceWorkerClient>>>(
-      script_state);
+      ScriptPromiseResolver<IDLSequence<ServiceWorkerClient>>>(script_state);
   global_scope->GetServiceWorkerHost()->GetClients(
       mojom::blink::ServiceWorkerClientQueryOptions::New(
-          options->includeUncontrolled(), GetClientType(options->type())),
+          options->includeUncontrolled(),
+          GetClientType(options->type().AsEnum())),
       WTF::BindOnce(&DidGetClients, WrapPersistent(resolver)));
   return resolver->Promise();
 }
 
-ScriptPromise ServiceWorkerClients::claim(ScriptState* script_state) {
+ScriptPromise<IDLUndefined> ServiceWorkerClients::claim(
+    ScriptState* script_state) {
   ServiceWorkerGlobalScope* global_scope =
       To<ServiceWorkerGlobalScope>(ExecutionContext::From(script_state));
 
   // FIXME: May be null due to worker termination: http://crbug.com/413518.
   if (!global_scope)
-    return ScriptPromise();
+    return EmptyPromise();
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLUndefined>>(script_state);
   global_scope->GetServiceWorkerHost()->ClaimClients(
       WTF::BindOnce(&DidClaim, WrapPersistent(resolver)));
   return resolver->Promise();
 }
 
-ScriptPromise ServiceWorkerClients::openWindow(ScriptState* script_state,
-                                               const String& url) {
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
-  ScriptPromise promise = resolver->Promise();
+ScriptPromise<IDLNullable<ServiceWorkerWindowClient>>
+ServiceWorkerClients::openWindow(ScriptState* script_state, const String& url) {
+  auto* resolver = MakeGarbageCollected<
+      ScriptPromiseResolver<IDLNullable<ServiceWorkerWindowClient>>>(
+      script_state);
+  auto promise = resolver->Promise();
   ServiceWorkerGlobalScope* global_scope =
       To<ServiceWorkerGlobalScope>(ExecutionContext::From(script_state));
 

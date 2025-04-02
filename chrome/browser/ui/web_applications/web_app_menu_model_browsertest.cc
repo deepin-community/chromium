@@ -2,18 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/web_applications/web_app_menu_model.h"
+
 #include <algorithm>
 #include <vector>
 
-#include "base/test/scoped_feature_list.h"
-#include "build/chromeos_buildflags.h"
+#include "ash/constants/web_app_id_constants.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
-#include "chrome/browser/ui/web_applications/web_app_controller_browsertest.h"
-#include "chrome/browser/ui/web_applications/web_app_menu_model.h"
+#include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/browser/web_applications/test/prevent_close_test_base.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
-#include "chrome/browser/web_applications/web_app_id_constants.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/test/browser_test.h"
@@ -21,15 +20,13 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/models/menu_model.h"
-#include "ui/base/ui_base_features.h"
 #include "url/gurl.h"
 
 namespace web_app {
 
-class TestWebAppMenuModelCR2023 : public WebAppControllerBrowserTest {
+class TestWebAppMenuModelCR2023 : public WebAppBrowserTestBase {
  public:
-  TestWebAppMenuModelCR2023()
-      : WebAppControllerBrowserTest({features::kChromeRefresh2023}, {}) {}
+  TestWebAppMenuModelCR2023() : WebAppBrowserTestBase({}, {}) {}
 
   TestWebAppMenuModelCR2023(const TestWebAppMenuModelCR2023&) = delete;
   TestWebAppMenuModelCR2023& operator=(const TestWebAppMenuModelCR2023&) =
@@ -128,13 +125,13 @@ using WebAppModelMenuPreventCloseTest = PreventCloseTestBase;
 
 IN_PROC_BROWSER_TEST_F(WebAppModelMenuPreventCloseTest,
                        PreventCloseEnforedByPolicy) {
-  InstallPWA(GURL(kCalculatorAppUrl), web_app::kCalculatorAppId);
-  SetPoliciesAndWaitUntilInstalled(web_app::kCalculatorAppId,
+  InstallPWA(GURL(kCalculatorAppUrl), ash::kCalculatorAppId);
+  SetPoliciesAndWaitUntilInstalled(ash::kCalculatorAppId,
                                    kPreventCloseEnabledForCalculator,
                                    kCalculatorForceInstalled);
 
   Browser* const browser =
-      LaunchPWA(web_app::kCalculatorAppId, /*launch_in_window=*/true);
+      LaunchPWA(ash::kCalculatorAppId, /*launch_in_window=*/true);
   ASSERT_TRUE(browser);
 
   {

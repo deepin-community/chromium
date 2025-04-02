@@ -7,13 +7,13 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <string>
 #include <vector>
 
 #include "base/strings/string_split.h"
 #include "ui/accessibility/ax_action_handler_registry.h"
 #include "ui/accessibility/ax_base_export.h"
+#include "ui/accessibility/ax_constants.mojom.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/gfx/geometry/rect.h"
@@ -60,13 +60,14 @@ struct AX_BASE_EXPORT AXTreeData {
   // (selection end). If the offset could correspond to a position on two
   // different lines, sel_upstream_affinity means the cursor is on the first
   // line, otherwise it's on the second line.
-  // Most use cases will want to use ui::OwnerTree::GetUnignoredSelection.
+  // Most use cases will want to use OwnerTree::GetUnignoredSelection.
   bool sel_is_backward = false;
   AXNodeID sel_anchor_object_id = kInvalidAXNodeID;
-  int32_t sel_anchor_offset = -1;
+  // kNoSelectionOffset indicates there is no selection.
+  int32_t sel_anchor_offset = ax::mojom::kNoSelectionOffset;
   ax::mojom::TextAffinity sel_anchor_affinity;
   AXNodeID sel_focus_object_id = kInvalidAXNodeID;
-  int32_t sel_focus_offset = -1;
+  int32_t sel_focus_offset = ax::mojom::kNoSelectionOffset;
   ax::mojom::TextAffinity sel_focus_affinity;
 
   // The node that's used as the root scroller. On some platforms

@@ -15,6 +15,7 @@
 #include "chrome/browser/signin/account_consistency_mode_manager.h"
 #include "chrome/browser/signin/chrome_signin_client_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
+#include "components/pref_registry/pref_registry_syncable.h"
 #include "components/signin/core/browser/account_reconcilor.h"
 #include "components/signin/core/browser/account_reconcilor_delegate.h"
 #include "components/signin/core/browser/mirror_account_reconcilor_delegate.h"
@@ -32,7 +33,6 @@
 #include "chrome/browser/ash/account_manager/account_manager_util.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
-#include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/user_manager/user_manager.h"
@@ -78,7 +78,6 @@ class ChromeOSLimitedAccessAccountReconcilorDelegate
         return base::Seconds(60);
       default:
         NOTREACHED();
-        return MirrorAccountReconcilorDelegate::GetReconcileTimeout();
     }
   }
 
@@ -121,9 +120,7 @@ AccountReconcilorFactory::AccountReconcilorFactory()
           "AccountReconcilor",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kOriginalOnly)
-              // TODO(crbug.com/1418376): Check if this service is needed in
-              // Guest mode.
-              .WithGuest(ProfileSelection::kOriginalOnly)
+              .WithGuest(ProfileSelection::kNone)
               .Build()) {
   DependsOn(ChromeSigninClientFactory::GetInstance());
   DependsOn(IdentityManagerFactory::GetInstance());
@@ -143,7 +140,8 @@ AccountReconcilorFactory* AccountReconcilorFactory::GetInstance() {
   return instance.get();
 }
 
-KeyedService* AccountReconcilorFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+AccountReconcilorFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
   Profile* profile = Profile::FromBrowserContext(context);
   signin::IdentityManager* identity_manager =
@@ -151,14 +149,16 @@ KeyedService* AccountReconcilorFactory::BuildServiceInstanceFor(
   SigninClient* signin_client =
       ChromeSigninClientFactory::GetForProfile(profile);
 #if BUILDFLAG(IS_CHROMEOS)
-  AccountReconcilor* reconcilor = new AccountReconcilor(
-      identity_manager, signin_client,
-      ::GetAccountManagerFacade(profile->GetPath().value()),
-      CreateAccountReconcilorDelegate(profile));
+  std::unique_ptr<AccountReconcilor> reconcilor =
+      std::make_unique<AccountReconcilor>(
+          identity_manager, signin_client,
+          ::GetAccountManagerFacade(profile->GetPath().value()),
+          CreateAccountReconcilorDelegate(profile));
 #else
-  AccountReconcilor* reconcilor =
-      new AccountReconcilor(identity_manager, signin_client,
-                            CreateAccountReconcilorDelegate(profile));
+  std::unique_ptr<AccountReconcilor> reconcilor =
+      std::make_unique<AccountReconcilor>(
+          identity_manager, signin_client,
+          CreateAccountReconcilorDelegate(profile));
 #endif  // BUILDFLAG(IS_CHROMEOS)
   reconcilor->Initialize(true /* start_reconcile_if_tokens_available */);
   return reconcilor;
@@ -170,6 +170,7 @@ void AccountReconcilorFactory::RegisterProfilePrefs(
   registry->RegisterBooleanPref(prefs::kForceLogoutUnauthenticatedUserEnabled,
                                 false);
 #endif
+  AccountReconcilor::RegisterProfilePrefs(registry);
 }
 
 // static
@@ -220,10 +221,8 @@ AccountReconcilorFactory::CreateAccountReconcilorDelegate(Profile* profile) {
           ChromeSigninClientFactory::GetForProfile(profile));
 #else
       NOTREACHED();
-      return nullptr;
 #endif
   }
 
   NOTREACHED();
-  return nullptr;
 }

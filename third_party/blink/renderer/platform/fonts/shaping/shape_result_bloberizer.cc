@@ -2,12 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result_bloberizer.h"
 
 #include <hb.h>
 
+#include <algorithm>
+
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "third_party/blink/renderer/platform/fonts/font.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/caching_word_shaper.h"
 #include "third_party/blink/renderer/platform/fonts/shaping/shape_result.h"
@@ -17,17 +23,6 @@
 #include "third_party/blink/renderer/platform/text/text_run.h"
 
 namespace blink {
-
-namespace {
-template <typename T, size_t E>
-std::ostream& operator<<(std::ostream& out, const base::span<T, E>& c) {
-#if DCHECK_IS_ON()
-  for (auto&& e : c)
-    out << e << " ";
-#endif
-  return out;
-}
-}  // namespace
 
 ShapeResultBloberizer::ShapeResultBloberizer(
     const FontDescription& font_description,
@@ -68,7 +63,7 @@ void ShapeResultBloberizer::SetText(const StringView& text,
     cluster_ends_.Shrink(0);
   }
 
-  DVLOG(4) << "   Cluster ends: " << base::make_span(cluster_ends_);
+  DVLOG(4) << "   Cluster ends: " << base::span(cluster_ends_);
 
   cluster_ends_offset_ = from;
   current_text_ = text;
@@ -90,12 +85,11 @@ void ShapeResultBloberizer::CommitText() {
   DCHECK(!current_text_.IsNull());
 
   DVLOG(4) << "   CommitText from: " << from << " to: " << to;
-  DVLOG(4) << "   CommitText glyphs: "
-           << base::make_span(
-                  pending_glyphs_.end() - current_character_indexes_.size(),
-                  pending_glyphs_.end());
+  DVLOG(4)
+      << "   CommitText glyphs: "
+      << base::span(pending_glyphs_).last(current_character_indexes_.size());
   DVLOG(4) << "   CommitText cluster starts: "
-           << base::make_span(current_character_indexes_);
+           << base::span(current_character_indexes_);
 
   wtf_size_t pending_utf8_original_size = pending_utf8_.size();
   wtf_size_t pending_utf8_character_indexes_original_size =
@@ -142,13 +136,11 @@ void ShapeResultBloberizer::CommitText() {
 
   DVLOG(4) << "  CommitText appended UTF-8: \""
            << std::string(&pending_utf8_[pending_utf8_original_size],
-                          pending_utf8_.end())
+                          pending_utf8_.data() + pending_utf8_.size())
            << "\"";
   DVLOG(4) << "  CommitText UTF-8 indexes: "
-           << base::make_span(
-                  &pending_utf8_character_indexes_
-                      [pending_utf8_character_indexes_original_size],
-                  pending_utf8_character_indexes_.end());
+           << base::span(pending_utf8_character_indexes_)
+                  .subspan(pending_utf8_character_indexes_original_size);
 }
 
 void ShapeResultBloberizer::CommitPendingRun() {
@@ -162,8 +154,9 @@ void ShapeResultBloberizer::CommitPendingRun() {
     builder_rotation_ = pending_canvas_rotation_;
   }
 
-  if (UNLIKELY(!current_character_indexes_.empty()))
+  if (!current_character_indexes_.empty()) [[unlikely]] {
     CommitText();
+  }
 
   SkFont run_font =
       pending_font_data_->PlatformData().CreateSkFont(&font_description_);
@@ -188,20 +181,19 @@ void ShapeResultBloberizer::CommitPendingRun() {
   if (text_size) {
     DVLOG(4) << "  CommitPendingRun text: \""
              << std::string(pending_utf8_.begin(), pending_utf8_.end()) << "\"";
-    DVLOG(4) << "  CommitPendingRun glyphs: "
-             << base::make_span(pending_glyphs_);
+    DVLOG(4) << "  CommitPendingRun glyphs: " << base::span(pending_glyphs_);
     DVLOG(4) << "  CommitPendingRun indexes: "
-             << base::make_span(pending_utf8_character_indexes_);
+             << base::span(pending_utf8_character_indexes_);
     DCHECK_EQ(pending_utf8_character_indexes_.size(), run_size);
-    base::ranges::copy(pending_utf8_character_indexes_, buffer.clusters);
-    base::ranges::copy(pending_utf8_, buffer.utf8text);
+    std::ranges::copy(pending_utf8_character_indexes_, buffer.clusters);
+    std::ranges::copy(pending_utf8_, buffer.utf8text);
 
     pending_utf8_.Shrink(0);
     pending_utf8_character_indexes_.Shrink(0);
   }
 
-  base::ranges::copy(pending_glyphs_, buffer.glyphs);
-  base::ranges::copy(pending_offsets_, buffer.pos);
+  std::ranges::copy(pending_glyphs_, buffer.glyphs);
+  std::ranges::copy(pending_offsets_, buffer.pos);
   pending_glyphs_.Shrink(0);
   pending_offsets_.Shrink(0);
 }
@@ -409,9 +401,9 @@ class ClusterStarts {
 
   void Finish(unsigned from, unsigned to) {
     std::sort(cluster_starts_.begin(), cluster_starts_.end());
-    DCHECK_EQ(base::ranges::adjacent_find(cluster_starts_),
+    DCHECK_EQ(std::ranges::adjacent_find(cluster_starts_),
               cluster_starts_.end());
-    DVLOG(4) << "  Cluster starts: " << base::make_span(cluster_starts_);
+    DVLOG(4) << "  Cluster starts: " << base::span(cluster_starts_);
     if (!cluster_starts_.empty()) {
       // 'from' may point inside a cluster; the least seen index may be larger.
       DCHECK_LE(from, *cluster_starts_.begin());
@@ -450,7 +442,7 @@ ShapeResultBloberizer::FillGlyphs::FillGlyphs(
   float advance = 0;
   auto results = result_buffer.results_;
 
-  if (UNLIKELY(type_ == Type::kEmitText)) {
+  if (type_ == Type::kEmitText) [[unlikely]] {
     unsigned word_offset = 0;
     ClusterStarts cluster_starts;
     for (const auto& word_result : results) {
@@ -492,8 +484,9 @@ ShapeResultBloberizer::FillGlyphs::FillGlyphs(
     }
   }
 
-  if (UNLIKELY(type_ == Type::kEmitText))
+  if (type_ == Type::kEmitText) [[unlikely]] {
     CommitText();
+  }
 
   advance_ = advance;
 }
@@ -522,7 +515,7 @@ ShapeResultBloberizer::FillGlyphsNG::FillGlyphsNG(
 
   DVLOG(4) << "FillGlyphsNG slow path";
   unsigned run_offset = 0;
-  if (UNLIKELY(type_ == Type::kEmitText)) {
+  if (type_ == Type::kEmitText) [[unlikely]] {
     ClusterStarts cluster_starts;
     result->ForEachGlyph(initial_advance, from, to, run_offset,
                          ClusterStarts::Accumulate,
@@ -536,10 +529,12 @@ ShapeResultBloberizer::FillGlyphsNG::FillGlyphsNG(
       result->ForEachGlyph(initial_advance, from, to, run_offset,
                            AddGlyphToBloberizer, static_cast<void*>(&context));
 
-  if (UNLIKELY(type_ == Type::kEmitText))
+  if (type_ == Type::kEmitText) [[unlikely]] {
     CommitText();
+  }
 }
 
+// This function is not used if TextCombineEmphasisNG flag is enabled.
 ShapeResultBloberizer::FillTextEmphasisGlyphs::FillTextEmphasisGlyphs(
     const FontDescription& font_description,
     const TextRunPaintInfo& run_info,

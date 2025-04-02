@@ -26,7 +26,6 @@ std::string GetDigestString(const std::string& key,
   std::vector<uint8_t> digest(hmac.DigestLength());
   if (!hmac.Init(key) || !hmac.Sign(message, &digest[0], digest.size())) {
     NOTREACHED();
-    return std::string();
   }
   return base::HexEncode(digest);
 }

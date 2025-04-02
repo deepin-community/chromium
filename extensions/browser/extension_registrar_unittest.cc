@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <optional>
+
 #include "base/location.h"
 #include "base/task/sequenced_task_runner.h"
 #include "build/chromeos_buildflags.h"
@@ -21,19 +22,16 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "ash/constants/ash_features.h"
+#if BUILDFLAG(IS_CHROMEOS)
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ash/crosapi/browser_util.h"
 #include "chrome/common/pref_names.h"  // nogncheck
-#include "chromeos/ash/components/standalone_browser/feature_refs.h"
-#include "chromeos/ash/components/standalone_browser/lacros_availability.h"
 #include "components/account_id/account_id.h"  // nogncheck
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/testing_pref_service.h"
 #include "components/user_manager/fake_user_manager.h"
 #include "components/user_manager/scoped_user_manager.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace extensions {
 
@@ -67,6 +65,7 @@ class TestExtensionRegistrarDelegate : public ExtensionRegistrar::Delegate {
   ~TestExtensionRegistrarDelegate() override = default;
 
   // ExtensionRegistrar::Delegate:
+  MOCK_METHOD1(CanAddExtension, bool(const Extension*));
   MOCK_METHOD2(PreAddExtension,
                void(const Extension* extension,
                     const Extension* old_extension));
@@ -74,10 +73,19 @@ class TestExtensionRegistrarDelegate : public ExtensionRegistrar::Delegate {
                void(scoped_refptr<const Extension> extension));
   MOCK_METHOD1(PostDeactivateExtension,
                void(scoped_refptr<const Extension> extension));
+  MOCK_METHOD1(PreUninstallExtension,
+               void(scoped_refptr<const Extension> extension));
+  MOCK_METHOD2(PostUninstallExtension,
+               void(scoped_refptr<const Extension> extension,
+                    base::OnceClosure done_callback));
+  MOCK_METHOD1(PostNotifyUninstallExtension,
+               void(scoped_refptr<const Extension> extension));
   MOCK_METHOD3(LoadExtensionForReload,
                void(const ExtensionId& extension_id,
                     const base::FilePath& path,
                     LoadErrorBehavior load_error_behavior));
+  MOCK_METHOD2(ShowExtensionDisabledError, void(const Extension*, bool));
+  MOCK_METHOD0(FinishDelayedInstallationsIfAny, void());
   MOCK_METHOD1(CanEnableExtension, bool(const Extension* extension));
   MOCK_METHOD1(CanDisableExtension, bool(const Extension* extension));
   MOCK_METHOD1(ShouldBlockExtension, bool(const Extension* extension));
@@ -101,6 +109,8 @@ class ExtensionRegistrarTest : public ExtensionsTest {
     registrar_.emplace(browser_context(), delegate());
 
     // Mock defaults.
+    ON_CALL(delegate_, CanAddExtension(extension_.get()))
+        .WillByDefault(Return(true));
     ON_CALL(delegate_, CanEnableExtension(extension_.get()))
         .WillByDefault(Return(true));
     ON_CALL(delegate_, CanDisableExtension(extension_.get()))
@@ -137,9 +147,9 @@ class ExtensionRegistrarTest : public ExtensionsTest {
     ExpectInSet(ExtensionRegistry::ENABLED);
     EXPECT_TRUE(IsExtensionReady());
 
-    EXPECT_EQ(disable_reason::DISABLE_NONE,
-              ExtensionPrefs::Get(browser_context())
-                  ->GetDisableReasons(extension()->id()));
+    EXPECT_TRUE(ExtensionPrefs::Get(browser_context())
+                    ->GetDisableReasons(extension()->id())
+                    .empty());
 
     VerifyMock();
   }
@@ -149,7 +159,7 @@ class ExtensionRegistrarTest : public ExtensionsTest {
     SCOPED_TRACE("AddDisabledExtension");
     ExtensionPrefs::Get(browser_context())
         ->SetExtensionDisabled(extension_->id(),
-                               disable_reason::DISABLE_USER_ACTION);
+                               {disable_reason::DISABLE_USER_ACTION});
     registrar_->AddExtension(extension_);
     ExpectInSet(ExtensionRegistry::DISABLED);
     EXPECT_FALSE(IsExtensionReady());
@@ -256,23 +266,6 @@ class ExtensionRegistrarTest : public ExtensionsTest {
     EXPECT_FALSE(IsExtensionReady());
   }
 
-  void TryDisablingNotAshKeeplistedExtension(bool expect_extension_disabled) {
-    if (expect_extension_disabled)
-      EXPECT_CALL(delegate_, PostDeactivateExtension(extension_));
-
-    // Disable extension because it is not in the ash keep list.
-    registrar_->DisableExtension(extension_->id(),
-                                 disable_reason::DISABLE_NOT_ASH_KEEPLISTED);
-
-    ExtensionRegistry::IncludeFlag include_flag =
-        expect_extension_disabled ? ExtensionRegistry::DISABLED
-                                  : ExtensionRegistry::ENABLED;
-    ExpectInSet(include_flag);
-    EXPECT_NE(IsExtensionReady(), expect_extension_disabled);
-
-    VerifyMock();
-  }
-
   void TerminateExtension() {
     SCOPED_TRACE("TerminateExtension");
     EXPECT_CALL(delegate_, PostDeactivateExtension(extension_));
@@ -302,9 +295,9 @@ class ExtensionRegistrarTest : public ExtensionsTest {
     // ExtensionRegistrar should have disabled the extension in preparation for
     // a reload.
     ExpectInSet(ExtensionRegistry::DISABLED);
-    EXPECT_EQ(disable_reason::DISABLE_RELOAD,
-              ExtensionPrefs::Get(browser_context())
-                  ->GetDisableReasons(extension()->id()));
+    EXPECT_THAT(ExtensionPrefs::Get(browser_context())
+                    ->GetDisableReasons(extension()->id()),
+                testing::UnorderedElementsAre(disable_reason::DISABLE_RELOAD));
   }
 
   // Directs ExtensionRegistrar to reload the terminated extension and verifies
@@ -322,9 +315,9 @@ class ExtensionRegistrarTest : public ExtensionsTest {
     ExpectInSet(ExtensionRegistry::TERMINATED);
     // Unlike when reloading an enabled extension, the extension hasn't been
     // disabled and shouldn't have the DISABLE_RELOAD disable reason.
-    EXPECT_EQ(disable_reason::DISABLE_NONE,
-              ExtensionPrefs::Get(browser_context())
-                  ->GetDisableReasons(extension()->id()));
+    EXPECT_TRUE(ExtensionPrefs::Get(browser_context())
+                    ->GetDisableReasons(extension()->id())
+                    .empty());
   }
 
   // Verifies that the extension is in the given set in the ExtensionRegistry
@@ -533,71 +526,5 @@ TEST_F(ExtensionRegistrarTest, ReloadTerminatedExtension) {
   // it's disabled.
   AddEnabledExtension();
 }
-
-// Test that an extension which is not controlled (e.g. by policy) and which is
-// not on the ash keep-list can be disabled.
-TEST_F(ExtensionRegistrarTest, DisableNotAshKeeplistedExtension) {
-  ON_CALL(*delegate(), CanDisableExtension(extension().get()))
-      .WillByDefault(Return(true));
-  AddEnabledExtension();
-
-  TryDisablingNotAshKeeplistedExtension(/* expect_extension_disabled= */ true);
-}
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-// Test that a controlled extension that is not on the ash keep-list can be
-// disabled if ash is disabled.
-TEST_F(ExtensionRegistrarTest,
-       DisableNotAshKeeplistedForceInstalledExtensionIfAshDisabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures(ash::standalone_browser::GetFeatureRefs(), {});
-  auto fake_user_manager = std::make_unique<user_manager::FakeUserManager>();
-  auto* primary_user =
-      fake_user_manager->AddUser(AccountId::FromUserEmail("test@test"));
-  fake_user_manager->UserLoggedIn(primary_user->GetAccountId(),
-                                  primary_user->username_hash(),
-                                  /*browser_restart=*/false,
-                                  /*is_child=*/false);
-  auto scoped_user_manager = std::make_unique<user_manager::ScopedUserManager>(
-      std::move(fake_user_manager));
-
-  static_cast<TestingPrefServiceSimple*>(pref_service())
-      ->registry()
-      ->RegisterIntegerPref(
-          prefs::kLacrosLaunchSwitch,
-          static_cast<int>(
-              ash::standalone_browser::LacrosAvailability::kLacrosOnly));
-  EXPECT_FALSE(crosapi::browser_util::IsAshWebBrowserEnabled());
-
-  // Prevent the extension from being disabled (by the user).
-  ON_CALL(*delegate(), CanDisableExtension(extension().get()))
-      .WillByDefault(Return(false));
-  AddEnabledExtension();
-
-  TryDisablingNotAshKeeplistedExtension(/* expect_extension_disabled= */ true);
-}
-
-// Test that a controlled extension that is not on the ash keep-list cannot be
-// disabled if ash is still enabled.
-TEST_F(ExtensionRegistrarTest,
-       NotDisableNotAshKeeplistedForceInstalledExtensionIfAshEnabled) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitWithFeatures({}, ash::standalone_browser::GetFeatureRefs());
-  static_cast<TestingPrefServiceSimple*>(pref_service())
-      ->registry()
-      ->RegisterIntegerPref(
-          prefs::kLacrosLaunchSwitch,
-          static_cast<int>(
-              ash::standalone_browser::LacrosAvailability::kLacrosOnly));
-  EXPECT_TRUE(crosapi::browser_util::IsAshWebBrowserEnabled());
-
-  // Prevent the extension from being disabled (by the user).
-  ON_CALL(*delegate(), CanDisableExtension(extension().get()))
-      .WillByDefault(Return(false));
-  AddEnabledExtension();
-
-  TryDisablingNotAshKeeplistedExtension(/* expect_extension_disabled= */ false);
-}
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 }  // namespace extensions

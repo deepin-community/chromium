@@ -191,10 +191,7 @@ class MockDriveFsConnection : public DriveFsConnection,
   }
 
  private:
-  mojom::DriveFs* GetForwardingInterface() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  mojom::DriveFs* GetForwardingInterface() override { NOTREACHED(); }
 
   raw_ptr<mojom::DriveFsDelegate, DanglingUntriaged> delegate_ = nullptr;
   base::OnceClosure on_disconnected_;
@@ -255,6 +252,9 @@ class DriveFsSessionForTest : public DriveFsSession {
       mojom::DriveFsDelegate::GetMachineRootIDCallback callback) override {}
   void PersistMachineRootID(const std::string& id) override {}
   void OnMirrorSyncingStatusUpdate(mojom::SyncingStatusPtr status) override {}
+  void OnNotificationReceived(
+      mojom::DriveFsNotificationPtr notification) override {}
+  void OnMirrorSyncError(mojom::MirrorSyncErrorListPtr error_list) override {}
 };
 
 class DriveFsSessionTest : public ::testing::Test,

@@ -6,10 +6,6 @@
 #include <optional>
 #include <string_view>
 
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/session/arc_session_runner.h"
-#include "ash/components/arc/test/arc_util_test_support.h"
-#include "ash/components/arc/test/fake_arc_session.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/constants/ash_switches.h"
@@ -19,6 +15,7 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -44,9 +41,10 @@
 #include "chrome/browser/ash/login/test/oobe_screen_exit_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_screens_utils.h"
+#include "chrome/browser/ash/login/test/scoped_policy_update.h"
 #include "chrome/browser/ash/login/test/test_predicate_waiter.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
+#include "chrome/browser/ash/policy/enrollment/auto_enrollment_controller.h"
 #include "chrome/browser/ash/policy/enrollment/auto_enrollment_type_checker.h"
 #include "chrome/browser/ash/policy/enrollment/psm/rlwe_test_support.h"
 #include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
@@ -55,6 +53,8 @@
 #include "chrome/browser/extensions/api/quick_unlock_private/quick_unlock_private_api.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
+#include "chrome/browser/ui/webui/ash/login/ai_intro_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/app_downloading_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/assistant_optin_flow_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/choobe_screen_handler.h"
@@ -62,6 +62,7 @@
 #include "chrome/browser/ui/webui/ash/login/display_size_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_info_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
+#include "chrome/browser/ui/webui/ash/login/gemini_intro_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/gesture_navigation_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/marketing_opt_in_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/password_selection_screen_handler.h"
@@ -76,11 +77,17 @@
 #include "chrome/test/base/fake_gaia_mixin.h"
 #include "chromeos/ash/components/assistant/buildflags.h"
 #include "chromeos/ash/components/attestation/stub_attestation_features.h"
+#include "chromeos/ash/components/dbus/attestation/attestation_client.h"
 #include "chromeos/ash/components/dbus/constants/attestation_constants.h"
 #include "chromeos/ash/components/dbus/update_engine/update_engine_client.h"
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
+#include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
+#include "components/policy/core/common/policy_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_utils.h"
@@ -281,6 +288,29 @@ void HandleAppDownloadingScreen() {
 
   OobeScreenExitWaiter(AppDownloadingScreenView::kScreenId).Wait();
   LOG(INFO) << "OobeInteractiveUITest: 'app-downloading' screen done.";
+}
+
+// Waits for AiIntroScreen to be shown and clicks next to go to the next screen.
+void HandleAiIntroScreen() {
+  OobeScreenWaiter(AiIntroScreenView::kScreenId).Wait();
+  LOG(INFO) << "OobeInteractiveUITest: Switched to 'ai-intro' screen.";
+
+  test::OobeJS().TapOnPathAsync({"ai-intro", "nextButton"});
+
+  OobeScreenExitWaiter(AiIntroScreenView::kScreenId).Wait();
+  LOG(INFO) << "OobeInteractiveUITest: 'ai-intro' screen done.";
+}
+
+// Waits for GeminiIntroScreen to be shown and clicks next to go to the next
+// screen.
+void HandleGeminiIntroScreen() {
+  OobeScreenWaiter(GeminiIntroScreenView::kScreenId).Wait();
+  LOG(INFO) << "OobeInteractiveUITest: Switched to 'gemini-intro' screen.";
+
+  test::OobeJS().TapOnPathAsync({"gemini-intro", "nextButton"});
+
+  OobeScreenExitWaiter(GeminiIntroScreenView::kScreenId).Wait();
+  LOG(INFO) << "OobeInteractiveUITest: 'gemini-intro' screen done.";
 }
 
 // Waits for AssistantOptInFlowScreen to be shown, skips the opt-in, and waits
@@ -495,8 +525,9 @@ class NativeWindowVisibilityObserver : public aura::WindowObserver {
   }
 
   void OnWindowVisibilityChanged(aura::Window* window, bool visible) override {
-    if (visible)
+    if (visible) {
       was_visible_ = visible;
+    }
   }
 
   bool was_visible() { return was_visible_; }
@@ -529,13 +560,15 @@ class NativeWindowVisibilityBrowserMainExtraParts
   // ChromeBrowserMainExtraParts:
   void PostProfileInit(Profile* profile, bool is_initial_profile) override {
     // The setup below is intended to run for only the initial profile.
-    if (!is_initial_profile)
+    if (!is_initial_profile) {
       return;
+    }
 
     gfx::NativeWindow window =
         LoginDisplayHost::default_host()->GetNativeWindow();
-    if (window)
+    if (window) {
       observer_->Observe(window);
+    }
   }
 
  private:
@@ -551,11 +584,11 @@ class OobeEndToEndTestSetupMixin : public InProcessBrowserTestMixin {
     ArcState arc_state;
 
     std::string ToString() const {
-      return std::string("{is_tablet: ") + (is_tablet ? "true" : "false") +
+      return std::string("{is_tablet: ") + base::ToString(is_tablet) +
              ", is_quick_unlock_enabled: " +
-             (is_quick_unlock_enabled ? "true" : "false") +
+             base::ToString(is_quick_unlock_enabled) +
              ", hide_shelf_controls_in_tablet_mode: " +
-             (hide_shelf_controls_in_tablet_mode ? "true" : "false") +
+             base::ToString(hide_shelf_controls_in_tablet_mode) +
              ", arc_state: " + ArcStateToString(arc_state) + "}";
     }
   };
@@ -567,7 +600,10 @@ class OobeEndToEndTestSetupMixin : public InProcessBrowserTestMixin {
     std::tie(params_.is_tablet, params_.is_quick_unlock_enabled,
              params_.hide_shelf_controls_in_tablet_mode, params_.arc_state) =
         parameters;
-    std::vector<base::test::FeatureRef> enabled_features;
+    std::vector<base::test::FeatureRef> enabled_features = {
+        ash::features::kFeatureManagementOobeAiIntro,
+        ash::features::kFeatureManagementOobeGeminiIntro,
+    };
     std::vector<base::test::FeatureRef> disabled_features;
     if (params_.hide_shelf_controls_in_tablet_mode) {
       enabled_features.push_back(features::kHideShelfControlsInTabletMode);
@@ -601,6 +637,13 @@ class OobeEndToEndTestSetupMixin : public InProcessBrowserTestMixin {
     if (params_.arc_state != ArcState::kNotAvailable) {
       arc::SetArcAvailableCommandLineForTesting(command_line);
     }
+
+    // This will change the verification key to be used by the
+    // CloudPolicyValidator. It will allow for the policy provided by the
+    // PolicyBuilder to pass the signature validation.
+    command_line->AppendSwitchASCII(
+        policy::switches::kPolicyVerificationKey,
+        policy::PolicyBuilder::GetEncodedPolicyVerificationKey());
   }
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -619,8 +662,9 @@ class OobeEndToEndTestSetupMixin : public InProcessBrowserTestMixin {
   }
 
   void SetUpOnMainThread() override {
-    if (params_.is_tablet)
+    if (params_.is_tablet) {
       ShellTestApi().SetTabletModeEnabledForTest(true);
+    }
 
     if (params_.arc_state != ArcState::kNotAvailable) {
       // Init ArcSessionManager for testing.
@@ -671,6 +715,11 @@ class OobeInteractiveUITest : public OobeBaseTest,
   ~OobeInteractiveUITest() override = default;
 
   // OobeBaseTest:
+  void SetUpOnMainThread() override {
+    OobeBaseTest::SetUpOnMainThread();
+    fake_gaia_.SetupFakeGaiaForLoginWithDefaults();
+  }
+
   void TearDownOnMainThread() override {
     // If the login display is still showing, exit gracefully.
     if (LoginDisplayHost::default_host()) {
@@ -682,8 +731,9 @@ class OobeInteractiveUITest : public OobeBaseTest,
   }
 
   void WaitForLoginDisplayHostShutdown() {
-    if (!LoginDisplayHost::default_host())
+    if (!LoginDisplayHost::default_host()) {
       return;
+    }
 
     LOG(INFO) << "OobeInteractiveUITest: Waiting for LoginDisplayHost to "
                  "shut down.";
@@ -766,9 +816,7 @@ void OobeInteractiveUITest::PerformSessionSignInSteps() {
   RunSyncConsentScreenChecks();
   test::ExitScreenSyncConsent();
 
-  if (ash::features::AreLocalPasswordsEnabledForConsumers()) {
-    HandlePasswordSelectionScreen();
-  }
+  HandlePasswordSelectionScreen();
 
   if (test_setup()->is_quick_unlock_enabled()) {
     test::WaitForFingerprintScreen();
@@ -786,6 +834,12 @@ void OobeInteractiveUITest::PerformSessionSignInSteps() {
     HandleRecommendAppsScreen();
     HandleAppDownloadingScreen();
   }
+
+  if (ash::features::IsOobeAiIntroEnabled()) {
+    HandleAiIntroScreen();
+  }
+
+  HandleGeminiIntroScreen();
 
   if (!features::IsOobeSkipAssistantEnabled()) {
     HandleAssistantOptInScreen();
@@ -875,6 +929,10 @@ class OobeZeroTouchInteractiveUITest : public OobeInteractiveUITest {
     command_line->AppendSwitchASCII(
         switches::kEnterpriseEnableInitialEnrollment,
         policy::AutoEnrollmentTypeChecker::kInitialEnrollmentAlways);
+    // TODO(b/353731379): Remove when removing legacy state determination code.
+    command_line->AppendSwitchASCII(
+        switches::kEnterpriseEnableUnifiedStateDetermination,
+        policy::AutoEnrollmentTypeChecker::kUnifiedStateDeterminationNever);
   }
 
   void ZeroTouchEndToEnd();
@@ -887,6 +945,7 @@ class OobeZeroTouchInteractiveUITest : public OobeInteractiveUITest {
 };
 
 void OobeZeroTouchInteractiveUITest::ZeroTouchEndToEnd() {
+  base::ScopedAllowBlockingForTesting allow_io;
   test::SetFakeTouchpadDevice();
   policy_test_server_mixin_.SetupZeroTouchForcedEnrollment();
 
@@ -948,7 +1007,7 @@ class PublicSessionOobeTest : public MixinBasedInProcessBrowserTest,
         observer_(std::make_unique<NativeWindowVisibilityObserver>()) {
     // Prevents Chrome from starting to quit right after login display is
     // finalized.
-    login_manager_.set_should_launch_browser(true);
+    login_manager_.SetShouldLaunchBrowser(true);
   }
 
   ~PublicSessionOobeTest() override = default;
@@ -1067,7 +1126,7 @@ class EphemeralUserOobeTest : public OobeBaseTest,
                               public ::testing::WithParamInterface<
                                   std::tuple<bool, bool, bool, ArcState>> {
  public:
-  EphemeralUserOobeTest() { login_manager_.set_should_launch_browser(true); }
+  EphemeralUserOobeTest() { login_manager_.SetShouldLaunchBrowser(true); }
   ~EphemeralUserOobeTest() override = default;
 
   // OobeBaseTest:
@@ -1080,6 +1139,11 @@ class EphemeralUserOobeTest : public OobeBaseTest,
     device_policy_update.reset();
 
     OobeBaseTest::SetUpInProcessBrowserTestFixture();
+  }
+
+  void SetUpOnMainThread() override {
+    OobeBaseTest::SetUpOnMainThread();
+    fake_gaia_.SetupFakeGaiaForLoginWithDefaults();
   }
 
   void WaitForActiveSession() { login_manager_.WaitForActiveSession(); }
@@ -1101,16 +1165,9 @@ class EphemeralUserOobeTest : public OobeBaseTest,
       &mixin_host_, DeviceStateMixin::State::OOBE_COMPLETED_CLOUD_ENROLLED};
 };
 
-// TODO(crbug.com/1396268): Flaky on Linux Chrome OS ASan LSan and dbg.
-// Re-enable this test.
-#if BUILDFLAG(IS_CHROMEOS) && (defined(ADDRESS_SANITIZER) || !defined(NDEBUG))
-#define MAYBE_RegularEphemeralUser DISABLED_RegularEphemeralUser
-#else
-#define MAYBE_RegularEphemeralUser RegularEphemeralUser
-#endif
 // In this test we login as a regular user, which means it is not affilated
 // with the domain of the device. Thus we still need a consent from user.
-IN_PROC_BROWSER_TEST_P(EphemeralUserOobeTest, MAYBE_RegularEphemeralUser) {
+IN_PROC_BROWSER_TEST_P(EphemeralUserOobeTest, RegularEphemeralUser) {
   LoginDisplayHost::default_host()->GetWizardContext()->is_branded_build = true;
 
   WaitForGaiaSignInScreen();
@@ -1128,6 +1185,12 @@ IN_PROC_BROWSER_TEST_P(EphemeralUserOobeTest, MAYBE_RegularEphemeralUser) {
     HandleRecommendAppsScreen();
     HandleAppDownloadingScreen();
   }
+
+  if (ash::features::IsOobeAiIntroEnabled()) {
+    HandleAiIntroScreen();
+  }
+
+  HandleGeminiIntroScreen();
 
   HandleThemeSelectionScreen();
   WaitForActiveSession();
@@ -1169,6 +1232,13 @@ class OobeFlexInteractiveUITest
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitch(switches::kTpmIsDynamic);
     OobeBaseTest::SetUpCommandLine(command_line);
+
+    // This will change the verification key to be used by the
+    // CloudPolicyValidator. It will allow for the policy provided by the
+    // PolicyBuilder to pass the signature validation.
+    command_line->AppendSwitchASCII(
+        policy::switches::kPolicyVerificationKey,
+        policy::PolicyBuilder::GetEncodedPolicyVerificationKey());
   }
 
   test::EnrollmentUIMixin enrollment_ui_{&mixin_host_};

@@ -5,6 +5,7 @@
 #include "components/metrics/clean_exit_beacon.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <utility>
 
@@ -30,13 +31,13 @@
 
 #if BUILDFLAG(IS_WIN)
 #include <windows.h>
+
 #include "base/strings/string_util_win.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/win/registry.h"
 #endif
 
 namespace metrics {
-
 namespace {
 
 using ::variations::prefs::kVariationsCrashStreak;
@@ -89,6 +90,8 @@ void MaybeIncrementCrashStreak(bool did_previous_session_exit_cleanly,
                                base::Value* beacon_file_contents,
                                PrefService* local_state) {
   int num_crashes;
+  int local_state_num_crashes = local_state->GetInteger(kVariationsCrashStreak);
+
   if (beacon_file_contents) {
     std::optional<int> crash_streak =
         beacon_file_contents->GetDict().FindInt(kVariationsCrashStreak);
@@ -96,10 +99,13 @@ void MaybeIncrementCrashStreak(bool did_previous_session_exit_cleanly,
     // MaybeGetFileContents().
     DCHECK(crash_streak);
     num_crashes = crash_streak.value();
+    base::UmaHistogramCounts100(
+        "Variations.SafeMode.CrashStreakDiscrepancy",
+        std::abs(local_state_num_crashes - num_crashes));
   } else {
-    // TODO(crbug/1341087): Consider not falling back to Local State for clients
-    // on platforms that support the beacon file.
-    num_crashes = local_state->GetInteger(kVariationsCrashStreak);
+    // TODO(crbug.com/40850830): Consider not falling back to Local State for
+    // clients on platforms that support the beacon file.
+    num_crashes = local_state_num_crashes;
   }
 
   if (!did_previous_session_exit_cleanly) {
@@ -132,13 +138,10 @@ void MaybeIncrementCrashStreak(bool did_previous_session_exit_cleanly,
     // For platforms that do not use the beacon file, the crash streak is
     // scheduled to be written to disk later on in startup. At the latest, this
     // is done when a Local State write is scheduled via WriteBeaconFile(). A
-    // write is not scheduled here for three reasons.
+    // write is not scheduled here for two reasons.
     //
     // 1. It is an expensive operation.
-    // 2. Android WebLayer (one of the two platforms that does not use the
-    //    beacon file) did not appear to benefit from scheduling the write. See
-    //    crbug/1341850 for details.
-    // 3. Android WebView (the other beacon-file-less platform) has its own
+    // 2. Android WebView (which does not use the beacon file) has its own
     //    Variations Safe Mode mechanism and does not need the crash streak.
     local_state->SetInteger(kVariationsCrashStreak, num_crashes);
   }
@@ -257,7 +260,7 @@ bool CleanExitBeacon::DidPreviousSessionExitCleanly(
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_IOS)
 
 #if BUILDFLAG(IS_IOS)
-  // TODO(crbug/1231106): For the time being, this is a no-op; i.e.,
+  // TODO(crbug.com/40190558): For the time being, this is a no-op; i.e.,
   // ShouldUseUserDefaultsBeacon() always returns false.
   if (ShouldUseUserDefaultsBeacon())
     return backup_beacon_value.value_or(true);
@@ -301,8 +304,8 @@ void CleanExitBeacon::WriteBeaconValue(bool exited_cleanly,
     DCHECK(!exited_cleanly);
     WriteBeaconFile(exited_cleanly);
   } else {
-    // TODO(crbug/1341864): Stop updating |kStabilityExitedCleanly| on platforms
-    // that support the beacon file.
+    // TODO(crbug.com/40851383): Stop updating |kStabilityExitedCleanly| on
+    // platforms that support the beacon file.
     local_state_->SetBoolean(prefs::kStabilityExitedCleanly, exited_cleanly);
     if (IsBeaconFileSupported()) {
       WriteBeaconFile(exited_cleanly);

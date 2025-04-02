@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ash/wm/overview/overview_controller.h"
 
 #include <memory>
@@ -19,6 +24,8 @@
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
+#include "ash/wallpaper/views/wallpaper_view.h"
+#include "ash/wallpaper/views/wallpaper_widget_controller.h"
 #include "ash/wm/desks/desks_controller.h"
 #include "ash/wm/desks/desks_test_util.h"
 #include "ash/wm/overview/overview_metrics.h"
@@ -32,6 +39,7 @@
 #include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/window_types.h"
@@ -191,7 +199,11 @@ void WaitForShowAnimation(aura::Window* window) {
 
 }  // namespace
 
-using OverviewControllerTest = AshTestBase;
+class OverviewControllerTest : public AshTestBase {
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_{
+      chromeos::features::kOverviewSessionInitOptimizations};
+};
 
 // Tests that press the overview key in keyboard when a window is being dragged
 // in clamshell mode should not toggle overview.
@@ -766,7 +778,7 @@ class OverviewVirtualKeyboardTest : public OverviewControllerTest {
     keyboard::test::WaitUntilLoaded();
 
     keyboard_ui_controller()->GetKeyboardWindow()->SetBounds(
-        keyboard::KeyboardBoundsFromRootBounds(
+        keyboard::test::KeyboardBoundsFromRootBounds(
             Shell::GetPrimaryRootWindow()->bounds(), 100));
     // Wait for keyboard window to load.
     base::RunLoop().RunUntilIdle();
@@ -779,21 +791,21 @@ class OverviewVirtualKeyboardTest : public OverviewControllerTest {
 
 TEST_F(OverviewVirtualKeyboardTest, ToggleOverviewModeHidesVirtualKeyboard) {
   keyboard_ui_controller()->ShowKeyboard(false /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   EnterOverview();
 
   // Timeout failure here if the keyboard does not hide.
-  keyboard::WaitUntilHidden();
+  keyboard::test::WaitUntilHidden();
 }
 
 TEST_F(OverviewVirtualKeyboardTest,
        ToggleOverviewModeDoesNotHideLockedVirtualKeyboard) {
   keyboard_ui_controller()->ShowKeyboard(true /* locked */);
-  ASSERT_TRUE(keyboard::WaitUntilShown());
+  ASSERT_TRUE(keyboard::test::WaitUntilShown());
 
   EnterOverview();
-  EXPECT_FALSE(keyboard::IsKeyboardHiding());
+  EXPECT_FALSE(keyboard::test::IsKeyboardHiding());
 }
 
 // Tests that frame throttling starts and ends accordingly when overview starts
@@ -810,14 +822,15 @@ TEST_F(OverviewControllerTest, FrameThrottling) {
   std::unique_ptr<aura::Window>
       created_windows[browser_window_count + arc_window_count];
   for (int i = 0; i < browser_window_count; ++i) {
-    created_windows[i] = CreateAppWindow(gfx::Rect(), AppType::BROWSER);
+    created_windows[i] =
+        CreateAppWindow(gfx::Rect(), chromeos::AppType::BROWSER);
     created_windows[i]->SetEmbedFrameSinkId(ids[i]);
   }
 
   std::vector<aura::Window*> arc_windows(arc_window_count, nullptr);
   for (int i = 0; i < arc_window_count; ++i) {
     created_windows[i + browser_window_count] =
-        CreateAppWindow(gfx::Rect(), AppType::ARC_APP);
+        CreateAppWindow(gfx::Rect(), chromeos::AppType::ARC_APP);
     arc_windows[i] = created_windows[i + browser_window_count].get();
   }
 
@@ -834,6 +847,57 @@ TEST_F(OverviewControllerTest, FrameThrottling) {
   EXPECT_TRUE(frame_throttling_controller->GetFrameSinkIdsToThrottle().empty());
 
   frame_throttling_controller->RemoveArcObserver(&observer);
+}
+
+// Tests that Ash.Overview.DeskCount metric is recorded.
+TEST_F(OverviewControllerTest, RecordsDeskCountMetric) {
+  base::HistogramTester histogram_tester;
+  EnterOverview();
+  ExitOverview();
+  histogram_tester.ExpectUniqueSample("Ash.Overview.DeskCount", 1, 1);
+
+  DesksController::Get()->NewDesk(DesksCreationRemovalSource::kKeyboard);
+  ASSERT_EQ(2u, DesksController::Get()->desks().size());
+  EnterOverview();
+  ExitOverview();
+  histogram_tester.ExpectBucketCount("Ash.Overview.DeskCount", 1, 1);
+  histogram_tester.ExpectBucketCount("Ash.Overview.DeskCount", 2, 1);
+}
+
+class OverviewEnterFromWallpaperTest : public OverviewControllerTest {
+ public:
+  OverviewEnterFromWallpaperTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {features::kEnterOverviewFromWallpaper}, {});
+  }
+  ~OverviewEnterFromWallpaperTest() override = default;
+
+  WallpaperView* wallpaper_view() {
+    return Shell::Get()
+        ->GetPrimaryRootWindowController()
+        ->wallpaper_widget_controller()
+        ->wallpaper_view();
+  }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+// Tests that the user can enter/exit overview by clicking on the wallpaper.
+TEST_F(OverviewEnterFromWallpaperTest,
+       OverviewEnterExitClamshellFromWallpaper) {
+  std::unique_ptr<aura::Window> window1(
+      CreateTestWindowInShellWithBounds(gfx::Rect(400, 400)));
+
+  ASSERT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
+
+  GetEventGenerator()->set_current_screen_location(
+      wallpaper_view()->GetBoundsInScreen().right_center());
+  GetEventGenerator()->ClickLeftButton();
+  ASSERT_TRUE(Shell::Get()->overview_controller()->InOverviewSession());
+
+  GetEventGenerator()->ClickLeftButton();
+  ASSERT_FALSE(Shell::Get()->overview_controller()->InOverviewSession());
 }
 
 }  // namespace ash

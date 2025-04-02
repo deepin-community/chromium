@@ -31,7 +31,6 @@ const char* LogSeverityToString(logging::LogSeverity level) {
   }
 
   NOTREACHED();
-  return "Unknown Log Severity";
 }
 
 }  // namespace

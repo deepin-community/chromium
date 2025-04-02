@@ -33,13 +33,14 @@
 
 #include "libavutil/internal.h"
 #include "libavutil/imgutils.h"
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/lfg.h"
 #include "libavutil/random_seed.h"
 
 #include "avfilter.h"
 #include "drawutils.h"
-#include "internal.h"
+#include "filters.h"
 #include "formats.h"
 #include "textutils.h"
 #include "video.h"
@@ -158,16 +159,16 @@ typedef struct QREncodeContext {
     { "case_sensitive", "generate code which is case sensitive", OFFSET(case_sensitive), AV_OPT_TYPE_BOOL,   {.i64 = 1},      0,    1, FLAGS }, \
     { "cs",             "generate code which is case sensitive", OFFSET(case_sensitive), AV_OPT_TYPE_BOOL,   {.i64 = 1},      0,    1, FLAGS }, \
                                                                         \
-    { "level", "error correction level, lowest is L", OFFSET(level), AV_OPT_TYPE_INT, { .i64 = AVCOL_SPC_UNSPECIFIED }, 0, QR_ECLEVEL_H, .flags = FLAGS, "level"}, \
-    { "l",     "error correction level, lowest is L", OFFSET(level), AV_OPT_TYPE_INT, { .i64 = AVCOL_SPC_UNSPECIFIED }, 0, QR_ECLEVEL_H, .flags = FLAGS, "level"}, \
-    { "L",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = QR_ECLEVEL_L }, 0, 0, FLAGS, "level" }, \
-    { "M",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = QR_ECLEVEL_M }, 0, 0, FLAGS, "level" }, \
-    { "Q",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = QR_ECLEVEL_Q }, 0, 0, FLAGS, "level" }, \
-    { "H",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = QR_ECLEVEL_H }, 0, 0, FLAGS, "level" }, \
+    { "level", "error correction level, lowest is L", OFFSET(level), AV_OPT_TYPE_INT, { .i64 = AVCOL_SPC_UNSPECIFIED }, 0, QR_ECLEVEL_H, .flags = FLAGS, .unit = "level"}, \
+    { "l",     "error correction level, lowest is L", OFFSET(level), AV_OPT_TYPE_INT, { .i64 = AVCOL_SPC_UNSPECIFIED }, 0, QR_ECLEVEL_H, .flags = FLAGS, .unit = "level"}, \
+    { "L",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = QR_ECLEVEL_L }, 0, 0, FLAGS, .unit = "level" }, \
+    { "M",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = QR_ECLEVEL_M }, 0, 0, FLAGS, .unit = "level" }, \
+    { "Q",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = QR_ECLEVEL_Q }, 0, 0, FLAGS, .unit = "level" }, \
+    { "H",     NULL, 0, AV_OPT_TYPE_CONST, { .i64 = QR_ECLEVEL_H }, 0, 0, FLAGS, .unit = "level" }, \
                                                                         \
-    {"expansion", "set the expansion mode", OFFSET(expansion), AV_OPT_TYPE_INT, {.i64=EXPANSION_NORMAL}, 0, 2, FLAGS, "expansion"}, \
-    {"none",     "set no expansion",     OFFSET(expansion), AV_OPT_TYPE_CONST, {.i64 = EXPANSION_NONE},     0, 0, FLAGS, "expansion"}, \
-    {"normal",   "set normal expansion", OFFSET(expansion), AV_OPT_TYPE_CONST, {.i64 = EXPANSION_NORMAL},   0, 0, FLAGS, "expansion"}, \
+    {"expansion", "set the expansion mode", OFFSET(expansion), AV_OPT_TYPE_INT, {.i64=EXPANSION_NORMAL}, 0, 2, FLAGS, .unit = "expansion"}, \
+    {"none",     "set no expansion",     OFFSET(expansion), AV_OPT_TYPE_CONST, {.i64 = EXPANSION_NONE},     0, 0, FLAGS, .unit = "expansion"}, \
+    {"normal",   "set normal expansion", OFFSET(expansion), AV_OPT_TYPE_CONST, {.i64 = EXPANSION_NORMAL},   0, 0, FLAGS, .unit = "expansion"}, \
                                                                         \
     { "foreground_color", "set QR foreground color", OFFSET(foreground_color), AV_OPT_TYPE_COLOR, {.str = "black"}, 0, 0, FLAGS }, \
     { "fc",               "set QR foreground color", OFFSET(foreground_color), AV_OPT_TYPE_COLOR, {.str = "black"}, 0, 0, FLAGS }, \
@@ -283,7 +284,7 @@ static int func_eval_expr_formatted(void *ctx, AVBPrint *bp, const char *functio
                                         argv[1][0], positions);
 }
 
-static FFExpandTextFunction expand_text_functions[] = {
+static const FFExpandTextFunction expand_text_functions[] = {
     { "expr",            1, 1, func_eval_expr },
     { "e",               1, 1, func_eval_expr },
     { "expr_formatted",  2, 3, func_eval_expr_formatted },
@@ -585,6 +586,7 @@ AVFILTER_DEFINE_CLASS(qrencodesrc);
 
 static int qrencodesrc_config_props(AVFilterLink *outlink)
 {
+    FilterLink *l = ff_filter_link(outlink);
     AVFilterContext *ctx = outlink->src;
     QREncodeContext *qr = ctx->priv;
     int ret;
@@ -638,13 +640,13 @@ static int qrencodesrc_config_props(AVFilterLink *outlink)
     ff_draw_color(&qr->draw, &qr->draw_foreground_color, (const uint8_t *)&qr->foreground_color);
     ff_draw_color(&qr->draw, &qr->draw_background_color, (const uint8_t *)&qr->background_color);
 
-    ff_draw_init(&qr->draw0, outlink->format, FF_DRAW_PROCESS_ALPHA);
+    ff_draw_init2(&qr->draw0, outlink->format, outlink->colorspace, outlink->color_range, FF_DRAW_PROCESS_ALPHA);
     ff_draw_color(&qr->draw0, &qr->draw0_background_color, (const uint8_t *)&qr->background_color);
 
     outlink->w = qr->rendered_padded_qrcode_width;
     outlink->h = qr->rendered_padded_qrcode_width;
     outlink->time_base = av_inv_q(qr->frame_rate);
-    outlink->frame_rate = qr->frame_rate;
+    l->frame_rate = qr->frame_rate;
 
     return 0;
 }
@@ -669,7 +671,9 @@ static int request_frame(AVFilterLink *outlink)
     return ff_filter_frame(outlink, frame);
 }
 
-static int qrencodesrc_query_formats(AVFilterContext *ctx)
+static int qrencodesrc_query_formats(const AVFilterContext *ctx,
+                                     AVFilterFormatsConfig **cfg_in,
+                                     AVFilterFormatsConfig **cfg_out)
 {
     enum AVPixelFormat pix_fmt;
     FFDrawContext draw;
@@ -684,7 +688,7 @@ static int qrencodesrc_query_formats(AVFilterContext *ctx)
             (ret = ff_add_format(&fmts, pix_fmt)) < 0)
             return ret;
 
-    return ff_set_common_formats(ctx, fmts);
+    return ff_set_common_formats2(ctx, cfg_in, cfg_out, fmts);
 }
 
 static const AVFilterPad qrencodesrc_outputs[] = {
@@ -705,7 +709,7 @@ const AVFilter ff_vsrc_qrencodesrc = {
     .uninit        = uninit,
     .inputs        = NULL,
     FILTER_OUTPUTS(qrencodesrc_outputs),
-    FILTER_QUERY_FUNC(qrencodesrc_query_formats),
+    FILTER_QUERY_FUNC2(qrencodesrc_query_formats),
 };
 
 #endif // CONFIG_QRENCODESRC_FILTER
@@ -730,7 +734,8 @@ static int qrencode_config_input(AVFilterLink *inlink)
 
     qr->is_source = 0;
 
-    ff_draw_init(&qr->draw, inlink->format, FF_DRAW_PROCESS_ALPHA);
+    ff_draw_init2(&qr->draw, inlink->format, inlink->colorspace, inlink->color_range,
+                  FF_DRAW_PROCESS_ALPHA);
 
     V(W) = V(main_w) = inlink->w;
     V(H) = V(main_h) = inlink->h;
@@ -759,7 +764,8 @@ static int qrencode_config_input(AVFilterLink *inlink)
     PARSE_EXPR(rendered_qrcode_width);
     PARSE_EXPR(rendered_padded_qrcode_width);
 
-    ff_draw_init(&qr->draw, inlink->format, FF_DRAW_PROCESS_ALPHA);
+    ff_draw_init2(&qr->draw, inlink->format, inlink->colorspace, inlink->color_range,
+                  FF_DRAW_PROCESS_ALPHA);
     ff_draw_color(&qr->draw, &qr->draw_foreground_color, (const uint8_t *)&qr->foreground_color);
     ff_draw_color(&qr->draw, &qr->draw_background_color, (const uint8_t *)&qr->background_color);
 
@@ -768,19 +774,22 @@ static int qrencode_config_input(AVFilterLink *inlink)
     return 0;
 }
 
-static int qrencode_query_formats(AVFilterContext *ctx)
+static int qrencode_query_formats(const AVFilterContext *ctx,
+                                  AVFilterFormatsConfig **cfg_in,
+                                  AVFilterFormatsConfig **cfg_out)
 {
-    return ff_set_common_formats(ctx, ff_draw_supported_pixel_formats(0));
+    return ff_set_common_formats2(ctx, cfg_in, cfg_out, ff_draw_supported_pixel_formats(0));
 }
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 {
+    FilterLink *inl = ff_filter_link(inlink);
     AVFilterContext *ctx = inlink->dst;
     AVFilterLink *outlink = ctx->outputs[0];
     QREncodeContext *qr = ctx->priv;
     int ret;
 
-    V(n) = inlink->frame_count_out;
+    V(n) = inl->frame_count_out;
     V(t) = frame->pts == AV_NOPTS_VALUE ?
         NAN : frame->pts * av_q2d(inlink->time_base);
     V(pict_type) = frame->pict_type;
@@ -813,7 +822,7 @@ const AVFilter ff_vf_qrencode = {
     .uninit        = uninit,
     FILTER_INPUTS(avfilter_vf_qrencode_inputs),
     FILTER_OUTPUTS(ff_video_default_filterpad),
-    FILTER_QUERY_FUNC(qrencode_query_formats),
+    FILTER_QUERY_FUNC2(qrencode_query_formats),
     .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC,
 };
 

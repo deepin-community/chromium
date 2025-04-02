@@ -42,17 +42,15 @@ static constexpr uint32_t kMaxDescriptorsPerPool = 512;
 
 // static
 Ref<DescriptorSetAllocator> DescriptorSetAllocator::Create(
-    BindGroupLayout* layout,
+    DeviceBase* device,
     absl::flat_hash_map<VkDescriptorType, uint32_t> descriptorCountPerType) {
-    return AcquireRef(new DescriptorSetAllocator(layout, descriptorCountPerType));
+    return AcquireRef(new DescriptorSetAllocator(device, descriptorCountPerType));
 }
 
 DescriptorSetAllocator::DescriptorSetAllocator(
-    BindGroupLayout* layout,
+    DeviceBase* device,
     absl::flat_hash_map<VkDescriptorType, uint32_t> descriptorCountPerType)
-    : ObjectBase(layout->GetDevice()), mLayout(layout) {
-    DAWN_ASSERT(layout != nullptr);
-
+    : ObjectBase(device) {
     // Compute the total number of descriptors for this layout.
     uint32_t totalDescriptorCount = 0;
     mPoolSizes.reserve(descriptorCountPerType.size());
@@ -95,9 +93,11 @@ DescriptorSetAllocator::~DescriptorSetAllocator() {
     }
 }
 
-ResultOrError<DescriptorSetAllocation> DescriptorSetAllocator::Allocate() {
+ResultOrError<DescriptorSetAllocation> DescriptorSetAllocator::Allocate(BindGroupLayout* layout) {
+    Mutex::AutoLock lock(&mMutex);
+
     if (mAvailableDescriptorPoolIndices.empty()) {
-        DAWN_TRY(AllocateDescriptorPool());
+        DAWN_TRY(AllocateDescriptorPool(layout));
     }
 
     DAWN_ASSERT(!mAvailableDescriptorPoolIndices.empty());
@@ -118,26 +118,41 @@ ResultOrError<DescriptorSetAllocation> DescriptorSetAllocator::Allocate() {
 }
 
 void DescriptorSetAllocator::Deallocate(DescriptorSetAllocation* allocationInfo) {
-    DAWN_ASSERT(allocationInfo != nullptr);
-    DAWN_ASSERT(allocationInfo->set != VK_NULL_HANDLE);
-
-    // We can't reuse the descriptor set right away because the Vulkan spec says in the
-    // documentation for vkCmdBindDescriptorSets that the set may be consumed any time between
-    // host execution of the command and the end of the draw/dispatch.
+    bool enqueueDeferredDeallocation = false;
     Device* device = ToBackend(GetDevice());
-    const ExecutionSerial serial = device->GetQueue()->GetPendingCommandSerial();
-    mPendingDeallocations.Enqueue({allocationInfo->poolIndex, allocationInfo->setIndex}, serial);
 
-    if (mLastDeallocationSerial != serial) {
-        device->EnqueueDeferredDeallocation(this);
-        mLastDeallocationSerial = serial;
+    {
+        Mutex::AutoLock lock(&mMutex);
+
+        DAWN_ASSERT(allocationInfo != nullptr);
+        DAWN_ASSERT(allocationInfo->set != VK_NULL_HANDLE);
+
+        // We can't reuse the descriptor set right away because the Vulkan spec says in the
+        // documentation for vkCmdBindDescriptorSets that the set may be consumed any time between
+        // host execution of the command and the end of the draw/dispatch.
+        const ExecutionSerial serial = device->GetQueue()->GetPendingCommandSerial();
+        mPendingDeallocations.Enqueue({allocationInfo->poolIndex, allocationInfo->setIndex},
+                                      serial);
+
+        if (mLastDeallocationSerial != serial) {
+            enqueueDeferredDeallocation = true;
+            mLastDeallocationSerial = serial;
+        }
+
+        // Clear the content of allocation so that use after frees are more visible.
+        *allocationInfo = {};
     }
 
-    // Clear the content of allocation so that use after frees are more visible.
-    *allocationInfo = {};
+    if (enqueueDeferredDeallocation) {
+        // Release lock before calling EnqueueDeferredDeallocation() to avoid lock acquisition
+        // order inversion with lock used there.
+        device->EnqueueDeferredDeallocation(this);
+    }
 }
 
 void DescriptorSetAllocator::FinishDeallocation(ExecutionSerial completedSerial) {
+    Mutex::AutoLock lock(&mMutex);
+
     for (const Deallocation& dealloc : mPendingDeallocations.IterateUpTo(completedSerial)) {
         DAWN_ASSERT(dealloc.poolIndex < mDescriptorPools.size());
 
@@ -150,7 +165,7 @@ void DescriptorSetAllocator::FinishDeallocation(ExecutionSerial completedSerial)
     mPendingDeallocations.ClearUpTo(completedSerial);
 }
 
-MaybeError DescriptorSetAllocator::AllocateDescriptorPool() {
+MaybeError DescriptorSetAllocator::AllocateDescriptorPool(BindGroupLayout* layout) {
     VkDescriptorPoolCreateInfo createInfo;
     createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     createInfo.pNext = nullptr;
@@ -166,7 +181,7 @@ MaybeError DescriptorSetAllocator::AllocateDescriptorPool() {
                                                             nullptr, &*descriptorPool),
                             "CreateDescriptorPool"));
 
-    std::vector<VkDescriptorSetLayout> layouts(mMaxSets, mLayout->GetHandle());
+    std::vector<VkDescriptorSetLayout> layouts(mMaxSets, layout->GetHandle());
 
     VkDescriptorSetAllocateInfo allocateInfo;
     allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;

@@ -47,7 +47,8 @@ const BasicShape* GetBasicShape(const CSSProperty& property,
       // Path and Ray shapes are handled by PathInterpolationType and
       // RayInterpolationType.
       if (shape.GetType() == BasicShape::kStylePathType ||
-          shape.GetType() == BasicShape::kStyleRayType) {
+          shape.GetType() == BasicShape::kStyleRayType ||
+          shape.GetType() == BasicShape::kStyleShapeType) {
         return nullptr;
       }
 
@@ -61,8 +62,11 @@ const BasicShape* GetBasicShape(const CSSProperty& property,
       auto* shape = clip_path_operation->GetBasicShape();
 
       // Path shape is handled by PathInterpolationType.
-      if (shape->GetType() == BasicShape::kStylePathType)
+      // Shape is handled by ShapeInterpolationType
+      if (shape->GetType() == BasicShape::kStylePathType ||
+          shape->GetType() == BasicShape::kStyleShapeType) {
         return nullptr;
+      }
 
       return shape;
     }
@@ -70,7 +74,6 @@ const BasicShape* GetBasicShape(const CSSProperty& property,
       return style.ObjectViewBox();
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -121,7 +124,8 @@ InterpolationValue CSSBasicShapeInterpolationType::MaybeConvertNeutral(
       const_cast<NonInterpolableValue*>(
           underlying.non_interpolable_value.get());
   conversion_checkers.push_back(
-      std::make_unique<UnderlyingCompatibilityChecker>(non_interpolable_value));
+      MakeGarbageCollected<UnderlyingCompatibilityChecker>(
+          non_interpolable_value));
   return InterpolationValue(
       basic_shape_interpolation_functions::CreateNeutralValue(
           *underlying.non_interpolable_value),
@@ -134,7 +138,7 @@ InterpolationValue CSSBasicShapeInterpolationType::MaybeConvertInitial(
   return basic_shape_interpolation_functions::MaybeConvertBasicShape(
       GetBasicShape(CssProperty(),
                     state.GetDocument().GetStyleResolver().InitialStyle()),
-      1);
+      CssProperty(), 1);
 }
 
 InterpolationValue CSSBasicShapeInterpolationType::MaybeConvertInherit(
@@ -142,27 +146,29 @@ InterpolationValue CSSBasicShapeInterpolationType::MaybeConvertInherit(
     ConversionCheckers& conversion_checkers) const {
   const BasicShape* shape = GetBasicShape(CssProperty(), *state.ParentStyle());
   conversion_checkers.push_back(
-      std::make_unique<InheritedShapeChecker>(CssProperty(), shape));
+      MakeGarbageCollected<InheritedShapeChecker>(CssProperty(), shape));
   return basic_shape_interpolation_functions::MaybeConvertBasicShape(
-      shape, state.ParentStyle()->EffectiveZoom());
+      shape, CssProperty(), state.ParentStyle()->EffectiveZoom());
 }
 
 InterpolationValue CSSBasicShapeInterpolationType::MaybeConvertValue(
     const CSSValue& value,
     const StyleResolverState*,
     ConversionCheckers&) const {
-  if (!value.IsBaseValueList())
-    return basic_shape_interpolation_functions::MaybeConvertCSSValue(value);
+  if (!value.IsBaseValueList()) {
+    return basic_shape_interpolation_functions::MaybeConvertCSSValue(
+        value, CssProperty());
+  }
 
   const auto& list = To<CSSValueList>(value);
-  // Path and Ray shapes are handled by PathInterpolationType and
-  // RayInterpolationType.
+  // Path, Shape and Ray shapes are handled by PathInterpolationType,
+  // ShapeInterpolationType and RayInterpolationType.
   if (!list.First().IsBasicShapeValue() || list.First().IsRayValue() ||
-      list.First().IsPathValue()) {
+      list.First().IsPathValue() || list.First().IsShapeValue()) {
     return nullptr;
   }
   return basic_shape_interpolation_functions::MaybeConvertCSSValue(
-      list.Item(0));
+      list.Item(0), CssProperty());
 }
 
 PairwiseInterpolationValue CSSBasicShapeInterpolationType::MaybeMergeSingles(
@@ -180,7 +186,8 @@ InterpolationValue
 CSSBasicShapeInterpolationType::MaybeConvertStandardPropertyUnderlyingValue(
     const ComputedStyle& style) const {
   return basic_shape_interpolation_functions::MaybeConvertBasicShape(
-      GetBasicShape(CssProperty(), style), style.EffectiveZoom());
+      GetBasicShape(CssProperty(), style), CssProperty(),
+      style.EffectiveZoom());
 }
 
 void CSSBasicShapeInterpolationType::Composite(
@@ -229,7 +236,6 @@ void CSSBasicShapeInterpolationType::ApplyStandardPropertyValue(
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 

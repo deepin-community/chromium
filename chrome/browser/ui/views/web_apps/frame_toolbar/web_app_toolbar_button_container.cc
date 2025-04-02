@@ -6,7 +6,6 @@
 
 #include "base/time/time.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/download/bubble/download_bubble_prefs.h"
 #include "chrome/browser/ui/browser_command_controller.h"
 #include "chrome/browser/ui/browser_content_setting_bubble_model_delegate.h"
@@ -32,9 +31,13 @@
 #include "ui/views/layout/flex_layout.h"
 #include "ui/views/window/hit_test_utils.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ui/ash/system_web_apps/system_web_app_ui_utils.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/experiences/system_web_apps/types/system_web_app_delegate.h"
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/web_applications/os_integration/mac/app_shim_registry.h"
+#endif
 
 namespace {
 
@@ -62,6 +65,13 @@ WebAppToolbarButtonContainer::WebAppToolbarButtonContainer(
       toolbar_button_provider_(toolbar_button_provider),
       page_action_icon_controller_(
           std::make_unique<PageActionIconController>()) {
+#if BUILDFLAG(IS_MAC)
+  app_shim_registry_observation_ =
+      AppShimRegistry::Get()->RegisterAppChangedCallback(
+          base::BindRepeating(&WebAppToolbarButtonContainer::AppShimChanged,
+                              base::Unretained(this)));
+#endif
+
   views::FlexLayout* const layout =
       SetLayoutManager(std::make_unique<views::FlexLayout>());
   layout->SetOrientation(views::LayoutOrientation::kHorizontal)
@@ -90,13 +100,13 @@ WebAppToolbarButtonContainer::WebAppToolbarButtonContainer(
         std::make_unique<WebAppOriginText>(browser_view_->browser()));
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (app_controller->system_app()) {
     system_app_accessible_name_ =
         AddChildView(std::make_unique<SystemAppAccessibleName>(
             app_controller->GetAppShortName()));
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   if (app_controller->AppUsesWindowControlsOverlay()) {
     window_controls_overlay_toggle_button_ = AddChildView(
@@ -110,8 +120,9 @@ WebAppToolbarButtonContainer::WebAppToolbarButtonContainer(
   }
 
   if (app_controller->HasTitlebarContentSettings()) {
-    content_settings_container_ = AddChildView(
-        std::make_unique<WebAppContentSettingsContainer>(this, this));
+    content_settings_container_ =
+        AddChildView(std::make_unique<WebAppContentSettingsContainer>(
+            browser_view_->browser(), this, this));
     views::SetHitTestComponent(content_settings_container_,
                                static_cast<int>(HTCLIENT));
   }
@@ -132,22 +143,26 @@ WebAppToolbarButtonContainer::WebAppToolbarButtonContainer(
   page_action_icon_controller_->Init(params, this);
 
   bool create_extensions_container = true;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Do not create the extensions or browser actions container if it is a
-  // System Web App.
-  create_extensions_container = !ash::IsSystemWebApp(browser_view_->browser());
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+  auto display_mode =
+      base::FeatureList::IsEnabled(features::kDesktopPWAsElidedExtensionsMenu)
+          ? ExtensionsToolbarContainer::DisplayMode::kAutoHide
+          : ExtensionsToolbarContainer::DisplayMode::kCompact;
+#if BUILDFLAG(IS_CHROMEOS)
+  // Let the system web app decide if it needs to show the extensions container.
+  // Use compact display mode because we do not render the app menu for system
+  // web apps.
+  if (app_controller->system_app()) {
+    create_extensions_container =
+        app_controller->system_app()->ShouldHaveExtensionsContainerInToolbar();
+    display_mode = ExtensionsToolbarContainer::DisplayMode::kCompact;
+  }
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   if (create_extensions_container) {
     // Extensions toolbar area with pinned extensions is lower priority than,
     // for example, the menu button or other toolbar buttons, and pinned
     // extensions should hide before other toolbar buttons.
     constexpr int kLowPriorityFlexOrder = 2;
-
-    auto display_mode =
-        base::FeatureList::IsEnabled(features::kDesktopPWAsElidedExtensionsMenu)
-            ? ExtensionsToolbarContainer::DisplayMode::kAutoHide
-            : ExtensionsToolbarContainer::DisplayMode::kCompact;
     extensions_container_ =
         AddChildView(std::make_unique<ExtensionsToolbarContainer>(
             browser_view_->browser(), display_mode));
@@ -181,6 +196,7 @@ WebAppToolbarButtonContainer::WebAppToolbarButtonContainer(
     avatar_button_->SetID(VIEW_ID_AVATAR_BUTTON);
     ConfigureWebAppToolbarButton(avatar_button_, toolbar_button_provider_);
     views::SetHitTestComponent(avatar_button_, static_cast<int>(HTCLIENT));
+    avatar_button_->SetVisible(app_controller->IsProfileMenuButtonVisible());
   }
 #endif
 
@@ -231,7 +247,7 @@ void WebAppToolbarButtonContainer::SetColors(SkColor foreground_color,
 views::FlexRule WebAppToolbarButtonContainer::GetFlexRule() const {
   // Prefer height consistency over accommodating edge case icons that may
   // bump up the container height (e.g. extension action icons with badges).
-  // TODO(https://crbug.com/889745): Fix the inconsistent icon sizes found in
+  // TODO(crbug.com/41417506): Fix the inconsistent icon sizes found in
   // the right-hand container and turn this into a DCHECK that the container
   // height is the same as the app menu button height.
   const auto* const layout =
@@ -365,6 +381,19 @@ void WebAppToolbarButtonContainer::AddedToWidget() {
         &WebAppToolbarButtonContainer::StartTitlebarAnimation);
   }
 }
+
+#if BUILDFLAG(IS_MAC)
+void WebAppToolbarButtonContainer::AppShimChanged(
+    const webapps::AppId& changed_app_id) {
+  const auto* app_controller = browser_view_->browser()->app_controller();
+  if (changed_app_id != app_controller->app_id()) {
+    return;
+  }
+  if (avatar_button_) {
+    avatar_button_->SetVisible(app_controller->IsProfileMenuButtonVisible());
+  }
+}
+#endif
 
 BEGIN_METADATA(WebAppToolbarButtonContainer)
 ADD_READONLY_PROPERTY_METADATA(bool, Animate)

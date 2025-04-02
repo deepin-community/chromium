@@ -11,6 +11,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_base.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
@@ -22,29 +23,33 @@
 #include "chrome/browser/ash/file_manager/file_manager_test_util.h"
 #include "chrome/browser/ash/file_manager/mount_test_util.h"
 #include "chrome/browser/ash/file_manager/volume_manager.h"
-#include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/system_web_apps/system_web_app_manager.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/ui/ash/cast_config_controller_media_router.h"
+#include "chrome/browser/ui/ash/cast_config/cast_config_controller_media_router.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #include "components/media_router/browser/test/mock_media_router.h"
 #include "components/session_manager/core/session_manager.h"
+#include "components/user_manager/test_helper.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "content/public/test/file_system_chooser_test_helpers.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/extension_host_test_helper.h"
+#include "extensions/browser/process_manager.h"
 #include "extensions/common/mojom/view_type.mojom.h"
 #include "extensions/test/result_catcher.h"
 #include "google_apis/common/test_util.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "storage/browser/file_system/external_mount_points.h"
 #include "ui/shell_dialogs/select_file_dialog_factory.h"
 #include "ui/shell_dialogs/select_file_policy.h"
@@ -85,7 +90,7 @@ constexpr char kTestFileContent[] = "This is some test content.";
 // User account email and directory hash for secondary account for multi-profile
 // sensitive test cases.
 constexpr char kSecondProfileAccount[] = "profile2@test.com";
-constexpr char kSecondProfileGiaId[] = "9876543210";
+constexpr GaiaId::Literal kSecondProfileGaiaId("9876543210");
 constexpr char kSecondProfileHash[] = "fileBrowserApiTestProfile2";
 
 // Waits for a WebContents of the background page of the extension under test
@@ -422,9 +427,7 @@ class DriveFileSystemExtensionApiTest : public FileSystemExtensionApiTestBase {
   drive::DriveIntegrationService* CreateDriveIntegrationService(
       Profile* profile) {
     // Ignore signin and lock screen apps profile.
-    if (profile->GetPath() == ash::ProfileHelper::GetSigninProfileDir() ||
-        profile->GetPath() ==
-            ash::ProfileHelper::GetLockScreenAppProfilePath()) {
+    if (ash::IsSigninBrowserContext(profile)) {
       return nullptr;
     }
 
@@ -464,16 +467,29 @@ class MultiProfileDriveFileSystemExtensionApiTest
                                     "false");
   }
 
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    InProcessBrowserTest::SetUpLocalStatePrefService(local_state);
+
+    // Register persisted users.
+    user_manager::TestHelper::RegisterPersistedUser(
+        *local_state,
+        AccountId::FromUserEmailGaiaId("testuser@gmail.com", GaiaId("123456")));
+    user_manager::TestHelper::RegisterPersistedUser(
+        *local_state, AccountId::FromUserEmailGaiaId(kSecondProfileAccount,
+                                                     kSecondProfileGaiaId));
+  }
+
   void SetUpOnMainThread() override {
+    // Set up the secondary user session.
     base::FilePath user_data_directory;
     base::PathService::Get(chrome::DIR_USER_DATA, &user_data_directory);
     session_manager::SessionManager::Get()->CreateSession(
         AccountId::FromUserEmailGaiaId(kSecondProfileAccount,
-                                       kSecondProfileGiaId),
+                                       kSecondProfileGaiaId),
         kSecondProfileHash, false);
-    // Set up the secondary profile.
-    base::FilePath profile_dir = user_data_directory.Append(
-        ash::ProfileHelper::GetUserProfileDir(kSecondProfileHash).BaseName());
+    base::FilePath profile_dir = user_data_directory.AppendASCII(
+        ash::BrowserContextHelper::GetUserBrowserContextDirName(
+            kSecondProfileHash));
     second_profile_ =
         g_browser_process->profile_manager()->GetProfile(profile_dir);
 
@@ -503,9 +519,7 @@ class MultiProfileDriveFileSystemExtensionApiTest
   drive::DriveIntegrationService* CreateDriveIntegrationService(
       Profile* profile) {
     // Ignore signin and lock screen apps profile.
-    if (profile->GetPath() == ash::ProfileHelper::GetSigninProfileDir() ||
-        profile->GetPath() ==
-            ash::ProfileHelper::GetLockScreenAppProfilePath()) {
+    if (ash::IsSigninBrowserContext(profile)) {
       return nullptr;
     }
 
@@ -589,9 +603,7 @@ class LocalAndDriveFileSystemExtensionApiTest
   drive::DriveIntegrationService* CreateDriveIntegrationService(
       Profile* profile) {
     // Ignore signin and lock screen apps profile.
-    if (profile->GetPath() == ash::ProfileHelper::GetSigninProfileDir() ||
-        profile->GetPath() ==
-            ash::ProfileHelper::GetLockScreenAppProfilePath()) {
+    if (ash::IsSigninBrowserContext(profile)) {
       return nullptr;
     }
 
@@ -628,7 +640,7 @@ class LocalAndDriveFileSystemExtensionApiTest
 class FileSystemExtensionApiTestWithApps
     : public LocalFileSystemExtensionApiTest {
  public:
-  FileSystemExtensionApiTestWithApps() {}
+  FileSystemExtensionApiTestWithApps() = default;
 
   // FileManagerPrivateApiTest:
   void SetUpOnMainThread() override {

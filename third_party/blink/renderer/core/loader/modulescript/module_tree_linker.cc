@@ -97,7 +97,6 @@ const char* ModuleTreeLinker::StateToString(ModuleTreeLinker::State state) {
       return "Finished";
   }
   NOTREACHED();
-  return "";
 }
 #endif
 
@@ -127,7 +126,6 @@ void ModuleTreeLinker::AdvanceState(State new_state) {
       break;
     case State::kFinished:
       NOTREACHED();
-      break;
   }
 
   state_ = new_state;
@@ -208,7 +206,7 @@ void ModuleTreeLinker::FetchRoot(const KURL& original_url,
   // « url ».</spec>
   visited_set_.insert(std::make_pair(url, module_type));
 
-  // <spec label="fetch-a-module-script-tree" step="1">Fetch a single module
+  // <spec label="fetch-a-module-script-tree" step="4">Fetch a single module
   // script given url, settings object, "script", options, settings object,
   // "client", and with the top-level module fetch flag set. ...</spec>
   //
@@ -231,6 +229,10 @@ void ModuleTreeLinker::FetchRoot(const KURL& original_url,
                                    destination_, options, referrer,
                                    TextPosition::MinimumPosition());
   ++num_incomplete_fetches_;
+
+  // <spec label="fetch-a-module-script-tree" step="2">Fetch a single module
+  // script given...
+  // </spec>
   modulator_->FetchSingle(request, fetch_client_settings_object_fetcher_.Get(),
                           ModuleGraphLevel::kTopLevelModuleFetch,
                           custom_fetch_type_, this);
@@ -264,11 +266,13 @@ void ModuleTreeLinker::FetchRootInline(
   result_ = module_script;
   AdvanceState(State::kFetchingDependencies);
 
-  // <spec step="3">Let visited set be an empty set.</spec>
+  // <spec step="1">Let script be the result of creating a JavaScript module
+  // script using sourceText, settingsObject, baseURL, options, and
+  // importMap.</spec>
   //
-  // |visited_set_| is initialized to an empty set in ctor.
+  // The script was already created as part of ScriptLoader::PrepareScript.
 
-  // <spec step="4">Fetch the descendants of and instantiate script, ...</spec>
+  // <spec step="2">Fetch the descendants of and link script, ...</spec>
   modulator_->TaskRunner()->PostTask(
       FROM_HERE,
       WTF::BindOnce(&ModuleTreeLinker::FetchDescendants, WrapPersistent(this),
@@ -423,33 +427,32 @@ void ModuleTreeLinker::FetchDescendants(const ModuleScript* module_script) {
     return;
   }
 
-  // <spec step="6">Let options be the descendant script fetch options for
-  // module script's fetch options.</spec>
-  //
-  // <spec
-  // href="https://html.spec.whatwg.org/C/#descendant-script-fetch-options"> For
-  // any given script fetch options options, the descendant script fetch options
-  // are a new script fetch options whose items all have the same values, except
-  // for the integrity metadata, which is instead the empty string.</spec>
-  //
-  // <spec
-  // href="https://wicg.github.io/priority-hints/#script">
-  // descendant scripts get "auto" fetchpriority (only the main script resource
-  // is affected by Priority Hints).
-  ScriptFetchOptions options(module_script->FetchOptions().Nonce(),
-                             IntegrityMetadataSet(), String(),
-                             module_script->FetchOptions().ParserState(),
-                             module_script->FetchOptions().CredentialsMode(),
-                             module_script->FetchOptions().GetReferrerPolicy(),
-                             mojom::blink::FetchPriorityHint::kAuto,
-                             RenderBlockingBehavior::kNonBlocking);
-
   // <spec step="8">For each moduleRequest in moduleRequests, ...</spec>
   //
   // <spec step="8">... These invocations of the internal module script graph
   // fetching procedure should be performed in parallel to each other.
   // ...</spec>
   for (const auto& module_request : module_requests) {
+    // <spec
+    // href="https://html.spec.whatwg.org/C/#descendant-script-fetch-options">
+    // For any given script fetch options options, the descendant script fetch
+    // options are a new script fetch options whose items all have the same
+    // values, except for the integrity metadata, which is instead the empty
+    // string.</spec>
+    //
+    // <spec
+    // href="https://wicg.github.io/priority-hints/#script">
+    // descendant scripts get "auto" fetchpriority (only the main script
+    // resource is affected by Priority Hints).
+    ScriptFetchOptions options(
+        module_script->FetchOptions().Nonce(),
+        modulator_->GetIntegrityMetadata(module_request.url),
+        modulator_->GetIntegrityMetadataString(module_request.url),
+        module_script->FetchOptions().ParserState(),
+        module_script->FetchOptions().CredentialsMode(),
+        module_script->FetchOptions().GetReferrerPolicy(),
+        mojom::blink::FetchPriorityHint::kAuto,
+        RenderBlockingBehavior::kNonBlocking);
     // <spec step="8">... perform the internal module script graph fetching
     // procedure given moduleRequest, fetch client settings object, destination,
     // options, module script's settings object, visited set, and module
@@ -495,7 +498,7 @@ void ModuleTreeLinker::FinalizeFetchDescendantsForOneModuleScript() {
 }
 
 // <specdef
-// href="https://html.spec.whatwg.org/C/#fetch-the-descendants-of-and-instantiate-a-module-script">
+// href="https://html.spec.whatwg.org/C/#fetch-the-descendants-of-and-link-a-module-script">
 void ModuleTreeLinker::Instantiate() {
   // [nospec] Abort the steps if the browsing context is discarded.
   if (!modulator_->HasValidContext()) {

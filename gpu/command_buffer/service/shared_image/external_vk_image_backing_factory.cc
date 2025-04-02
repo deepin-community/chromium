@@ -4,14 +4,15 @@
 
 #include "gpu/command_buffer/service/shared_image/external_vk_image_backing_factory.h"
 
+#include "base/feature_list.h"
 #include "build/build_config.h"
 #include "components/viz/common/gpu/vulkan_context_provider.h"
 #include "components/viz/common/resources/shared_image_format.h"
-#include "components/viz/common/resources/shared_image_format_utils.h"
 #include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/shared_image/external_vk_image_backing.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_format_service_utils.h"
 #include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
+#include "gpu/config/gpu_finch_features.h"
 #include "gpu/vulkan/vulkan_command_buffer.h"
 #include "gpu/vulkan/vulkan_command_pool.h"
 #include "gpu/vulkan/vulkan_device_queue.h"
@@ -25,6 +26,31 @@
 namespace gpu {
 
 namespace {
+
+// Serves as killswitch for rolling out restriction of SCANOUT support to
+// Fuchsia.
+// TODO(crbug.com/330865436): Eliminate post safe-rollout.
+BASE_FEATURE(kRestrictExternalVkImageBackingScanoutSupportToFuchsia,
+             "RestrictExternalVkImageBackingScanoutSupportToFuchsia",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+// Determines whether SCANOUT support can be restricted to Fuchsia.
+// TODO(crbug.com/330865436): Eliminate once killswitches checked within this
+// function roll out safely.
+bool RestrictScanoutSupportToFuchsia() {
+#if BUILDFLAG(IS_OZONE)
+  // On Ozone, this requires that we are computing SCANOUT support in
+  // SharedImageCapabilities by overlays being supported rather than the
+  // too-generous native pixmaps being supported.
+  if (!base::FeatureList::IsEnabled(
+          features::kSharedImageSupportScanoutOnOzoneOnlyIfOverlaysSupported)) {
+    return false;
+  }
+#endif
+
+  return base::FeatureList::IsEnabled(
+      kRestrictExternalVkImageBackingScanoutSupportToFuchsia);
+}
 
 VkImageUsageFlags GetMaximalImageUsageFlags(
     VkFormatFeatureFlags feature_flags) {
@@ -82,16 +108,12 @@ base::flat_map<VkFormat, VkImageUsageFlags> CreateImageUsageCache(
     add_to_cache_if_supported(format);
   }
 
-  for (auto format : viz::LegacyMultiPlaneFormat::kAll) {
-    add_to_cache_if_supported(format);
-  }
-
   return image_usage_cache;
 }
 
 bool IsFormatSupported(viz::SharedImageFormat format,
                        gfx::GpuMemoryBufferType gmb_type,
-                       uint32_t usage) {
+                       gpu::SharedImageUsageSet usage) {
   // Accessing via GL does not work with external sampling. Also, see
   // https://crbug.com/1394888.
   // NOTE: At the current time this check is elided on Fuchsia as there is no
@@ -101,11 +123,11 @@ bool IsFormatSupported(viz::SharedImageFormat format,
   // on Skia to do YUV/RGB conversion using Vulkan before accessing textures via
   // GL (implemented by setting VideoFrame's MailboxHolder::texture_target to
   // zero on Fuchsia and checking it everywhere necessary).
-  // TODO(crbug.com/1310026): Enable ImageBackingOzone to be used for all planes
-  // in Fuchsia and enable this check for Fuchsia.
+  // TODO(crbug.com/40219694): Enable ImageBackingOzone to be used for all
+  // planes in Fuchsia and enable this check for Fuchsia.
 #if !BUILDFLAG(IS_FUCHSIA)
   if (HasGLES2ReadOrWriteUsage(usage)) {
-    if (format.IsLegacyMultiplanar() || format.PrefersExternalSampler()) {
+    if (format.PrefersExternalSampler()) {
       return false;
     }
   }
@@ -144,25 +166,38 @@ bool IsFormatSupported(viz::SharedImageFormat format,
   return true;
 }
 
-}  // namespace
-
-constexpr uint32_t kSupportedUsage =
+SharedImageUsageSet SupportedUsage() {
+  SharedImageUsageSet supported_usage =
 #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DAWN)
-    SHARED_IMAGE_USAGE_WEBGPU_READ | SHARED_IMAGE_USAGE_WEBGPU_WRITE |
-    SHARED_IMAGE_USAGE_WEBGPU_SWAP_CHAIN_TEXTURE |
-    SHARED_IMAGE_USAGE_WEBGPU_STORAGE_TEXTURE |
+      SHARED_IMAGE_USAGE_WEBGPU_READ | SHARED_IMAGE_USAGE_WEBGPU_WRITE |
+      SHARED_IMAGE_USAGE_WEBGPU_SWAP_CHAIN_TEXTURE |
+      SHARED_IMAGE_USAGE_WEBGPU_STORAGE_TEXTURE |
 #endif
-    SHARED_IMAGE_USAGE_GLES2_READ | SHARED_IMAGE_USAGE_GLES2_WRITE |
-    SHARED_IMAGE_USAGE_GLES2_FRAMEBUFFER_HINT |
-    SHARED_IMAGE_USAGE_DISPLAY_WRITE | SHARED_IMAGE_USAGE_DISPLAY_READ |
-    SHARED_IMAGE_USAGE_RASTER_READ | SHARED_IMAGE_USAGE_RASTER_WRITE |
-    SHARED_IMAGE_USAGE_OOP_RASTERIZATION | SHARED_IMAGE_USAGE_SCANOUT |
-    SHARED_IMAGE_USAGE_VIDEO_DECODE | SHARED_IMAGE_USAGE_HIGH_PERFORMANCE_GPU |
-    SHARED_IMAGE_USAGE_CPU_UPLOAD | SHARED_IMAGE_USAGE_CPU_WRITE;
+      SHARED_IMAGE_USAGE_GLES2_READ | SHARED_IMAGE_USAGE_GLES2_WRITE |
+      SHARED_IMAGE_USAGE_GLES2_FOR_RASTER_ONLY |
+      SHARED_IMAGE_USAGE_DISPLAY_WRITE | SHARED_IMAGE_USAGE_DISPLAY_READ |
+      SHARED_IMAGE_USAGE_RASTER_READ | SHARED_IMAGE_USAGE_RASTER_WRITE |
+      SHARED_IMAGE_USAGE_RASTER_OVER_GLES2_ONLY |
+      SHARED_IMAGE_USAGE_OOP_RASTERIZATION | SHARED_IMAGE_USAGE_VIDEO_DECODE |
+      SHARED_IMAGE_USAGE_HIGH_PERFORMANCE_GPU | SHARED_IMAGE_USAGE_CPU_UPLOAD |
+      SHARED_IMAGE_USAGE_CPU_WRITE_ONLY;
+
+  if (RestrictScanoutSupportToFuchsia()) {
+#if BUILDFLAG(IS_FUCHSIA)
+    supported_usage |= SHARED_IMAGE_USAGE_SCANOUT;
+#endif
+  } else {
+    supported_usage |= SHARED_IMAGE_USAGE_SCANOUT;
+  }
+
+  return supported_usage;
+}
+
+}  // namespace
 
 ExternalVkImageBackingFactory::ExternalVkImageBackingFactory(
     scoped_refptr<SharedContextState> context_state)
-    : SharedImageBackingFactory(kSupportedUsage),
+    : SharedImageBackingFactory(SupportedUsage()),
       context_state_(std::move(context_state)),
       command_pool_(context_state_->vk_context_provider()
                         ->GetDeviceQueue()
@@ -190,14 +225,14 @@ ExternalVkImageBackingFactory::CreateSharedImage(
     const gfx::ColorSpace& color_space,
     GrSurfaceOrigin surface_origin,
     SkAlphaType alpha_type,
-    uint32_t usage,
+    SharedImageUsageSet usage,
     std::string debug_label,
     bool is_thread_safe) {
-  DCHECK(!is_thread_safe);
+  CHECK(!is_thread_safe);
   return ExternalVkImageBacking::Create(
       context_state_, command_pool_.get(), mailbox, format, size, color_space,
-      surface_origin, alpha_type, usage, std::move(debug_label),
-      image_usage_cache_, base::span<const uint8_t>());
+      surface_origin, alpha_type, SharedImageUsageSet(usage),
+      std::move(debug_label), image_usage_cache_, base::span<const uint8_t>());
 }
 
 std::unique_ptr<SharedImageBacking>
@@ -208,13 +243,15 @@ ExternalVkImageBackingFactory::CreateSharedImage(
     const gfx::ColorSpace& color_space,
     GrSurfaceOrigin surface_origin,
     SkAlphaType alpha_type,
-    uint32_t usage,
+    SharedImageUsageSet usage,
     std::string debug_label,
+    bool is_thread_safe,
     base::span<const uint8_t> pixel_data) {
+  CHECK(!is_thread_safe);
   return ExternalVkImageBacking::Create(
       context_state_, command_pool_.get(), mailbox, format, size, color_space,
-      surface_origin, alpha_type, usage, std::move(debug_label),
-      image_usage_cache_, pixel_data);
+      surface_origin, alpha_type, SharedImageUsageSet(usage),
+      std::move(debug_label), image_usage_cache_, pixel_data);
 }
 
 std::unique_ptr<SharedImageBacking>
@@ -225,7 +262,7 @@ ExternalVkImageBackingFactory::CreateSharedImage(
     const gfx::ColorSpace& color_space,
     GrSurfaceOrigin surface_origin,
     SkAlphaType alpha_type,
-    uint32_t usage,
+    SharedImageUsageSet usage,
     std::string debug_label,
     gfx::GpuMemoryBufferHandle handle) {
   CHECK(CanImportGpuMemoryBuffer(handle.type));
@@ -238,35 +275,13 @@ ExternalVkImageBackingFactory::CreateSharedImage(
 std::unique_ptr<SharedImageBacking>
 ExternalVkImageBackingFactory::CreateSharedImage(
     const Mailbox& mailbox,
-    gfx::GpuMemoryBufferHandle handle,
-    gfx::BufferFormat buffer_format,
-    gfx::BufferPlane plane,
-    const gfx::Size& size,
-    const gfx::ColorSpace& color_space,
-    GrSurfaceOrigin surface_origin,
-    SkAlphaType alpha_type,
-    uint32_t usage,
-    std::string debug_label) {
-  if (plane != gfx::BufferPlane::DEFAULT) {
-    LOG(ERROR) << "Invalid plane";
-    return nullptr;
-  }
-  return CreateSharedImage(mailbox,
-                           viz::GetSinglePlaneSharedImageFormat(buffer_format),
-                           size, color_space, surface_origin, alpha_type, usage,
-                           std::move(debug_label), std::move(handle));
-}
-
-std::unique_ptr<SharedImageBacking>
-ExternalVkImageBackingFactory::CreateSharedImage(
-    const Mailbox& mailbox,
     viz::SharedImageFormat format,
     SurfaceHandle surface_handle,
     const gfx::Size& size,
     const gfx::ColorSpace& color_space,
     GrSurfaceOrigin surface_origin,
     SkAlphaType alpha_type,
-    uint32_t usage,
+    SharedImageUsageSet usage,
     std::string debug_label,
     bool is_thread_safe,
     gfx::BufferUsage buffer_usage) {
@@ -281,7 +296,6 @@ ExternalVkImageBackingFactory::CreateSharedImage(
   // A CPU mappable backing of this type can only be requested for OZONE
   // platforms.
   NOTREACHED();
-  return nullptr;
 #endif  // BUILDFLAG(IS_OZONE)
 }
 
@@ -294,7 +308,7 @@ bool ExternalVkImageBackingFactory::CanImportGpuMemoryBuffer(
 }
 
 bool ExternalVkImageBackingFactory::IsSupported(
-    uint32_t usage,
+    SharedImageUsageSet usage,
     viz::SharedImageFormat format,
     const gfx::Size& size,
     bool thread_safe,
@@ -306,7 +320,7 @@ bool ExternalVkImageBackingFactory::IsSupported(
   }
 
   if (gmb_type == gfx::EMPTY_BUFFER) {
-    if (usage & SHARED_IMAGE_USAGE_CPU_WRITE) {
+    if (usage.Has(SHARED_IMAGE_USAGE_CPU_WRITE_ONLY)) {
       // Only CPU writable when the client provides a NativePixmap.
       return false;
     }
@@ -322,15 +336,11 @@ bool ExternalVkImageBackingFactory::IsSupported(
     return false;
   }
 
-#if BUILDFLAG(IS_ANDROID)
-  // Scanout on Android requires explicit fence synchronization which is only
-  // supported by the interop factory.
-  if (usage & SHARED_IMAGE_USAGE_SCANOUT) {
-    return false;
-  }
-#endif
-
   return true;
+}
+
+SharedImageBackingType ExternalVkImageBackingFactory::GetBackingType() {
+  return SharedImageBackingType::kExternalVkImage;
 }
 
 }  // namespace gpu

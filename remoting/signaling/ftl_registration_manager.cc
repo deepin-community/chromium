@@ -4,6 +4,7 @@
 
 #include "remoting/signaling/ftl_registration_manager.h"
 
+#include <array>
 #include <utility>
 
 #include "base/functional/callback.h"
@@ -24,18 +25,16 @@ namespace remoting {
 
 namespace {
 
-constexpr remoting::ftl::ChromotingCapability::Feature
-    kChromotingCapabilities[] = {
-        remoting::ftl::ChromotingCapability_Feature_SERIALIZED_XMPP_SIGNALING};
-constexpr size_t kChromotingCapabilityCount =
-    sizeof(kChromotingCapabilities) /
-    sizeof(ftl::ChromotingCapability::Feature);
+constexpr auto kChromotingCapabilities =
+    std::to_array<remoting::ftl::ChromotingCapability::Feature>({
+        remoting::ftl::ChromotingCapability_Feature_SERIALIZED_XMPP_SIGNALING,
+    });
 
-constexpr remoting::ftl::FtlCapability::Feature kFtlCapabilities[] = {
-    remoting::ftl::FtlCapability_Feature_RECEIVE_CALLS_FROM_GAIA,
-    remoting::ftl::FtlCapability_Feature_GAIA_REACHABLE};
-constexpr size_t kFtlCapabilityCount =
-    sizeof(kFtlCapabilities) / sizeof(ftl::FtlCapability::Feature);
+constexpr auto kFtlCapabilities =
+    std::to_array<remoting::ftl::FtlCapability::Feature>({
+        remoting::ftl::FtlCapability_Feature_RECEIVE_CALLS_FROM_GAIA,
+        remoting::ftl::FtlCapability_Feature_GAIA_REACHABLE,
+    });
 
 constexpr base::TimeDelta kRefreshBufferTime = base::Hours(1);
 
@@ -176,12 +175,12 @@ void FtlRegistrationManager::DoSignInGaia(DoneCallback on_done) {
   *request.mutable_register_data()->mutable_device_id() =
       device_id_provider_->GetDeviceId();
 
-  for (size_t i = 0; i < kChromotingCapabilityCount; i++) {
-    request.mutable_register_data()->add_caps(kChromotingCapabilities[i]);
+  for (const auto& capability : kChromotingCapabilities) {
+    request.mutable_register_data()->add_caps(capability);
   }
 
-  for (size_t i = 0; i < kFtlCapabilityCount; i++) {
-    request.mutable_register_data()->add_caps(kFtlCapabilities[i]);
+  for (const auto& capability : kFtlCapabilities) {
+    request.mutable_register_data()->add_caps(capability);
   }
 
   registration_client_->SignInGaia(

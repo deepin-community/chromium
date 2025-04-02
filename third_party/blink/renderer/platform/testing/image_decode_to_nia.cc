@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 // This program converts an image from stdin (e.g. a JPEG, PNG, etc.) to stdout
 // (in the NIA/NIE format, a trivial image file format).
 //
@@ -159,10 +164,10 @@ int main(int argc, char* argv[]) {
   }
   static constexpr bool data_complete = true;
   std::unique_ptr<blink::ImageDecoder> decoder = blink::ImageDecoder::Create(
-      WTF::SharedBuffer::Create(src.data(), src.size()), data_complete,
+      WTF::SharedBuffer::Create(src), data_complete,
       blink::ImageDecoder::kAlphaNotPremultiplied,
       blink::ImageDecoder::kDefaultBitDepth, blink::ColorBehavior::kIgnore,
-      blink::Platform::GetMaxDecodedImageBytes());
+      cc::AuxImage::kDefault, blink::Platform::GetMaxDecodedImageBytes());
 
   const size_t frame_count = decoder->FrameCount();
   if (frame_count == 0) {

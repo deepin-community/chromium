@@ -187,10 +187,9 @@ class PROTOBUF_EXPORT MessageLite {
   Arena* GetArena() const { return _internal_metadata_.user_arena(); }
 
   // Clear all fields of the message and set them to their default values.
-  // Clear() avoids freeing memory, assuming that any memory allocated
-  // to hold parts of the message will be needed again to hold the next
-  // message.  If you actually want to free the memory used by a Message,
-  // you must delete it.
+  // Clear() assumes that any memory allocated to hold parts of the message
+  // will likely be needed again, so the memory used may not be freed.
+  // To ensure that all memory used by a Message is freed, you must delete it.
   virtual void Clear() = 0;
 
   // Quickly check if all required fields have values set.
@@ -378,8 +377,9 @@ class PROTOBUF_EXPORT MessageLite {
   virtual size_t ByteSizeLong() const = 0;
 
   // Legacy ByteSize() API.
-  PROTOBUF_DEPRECATED_MSG("Please use ByteSizeLong() instead")
-  int ByteSize() const { return internal::ToIntSize(ByteSizeLong()); }
+  [[deprecated("Please use ByteSizeLong() instead")]] int ByteSize() const {
+    return internal::ToIntSize(ByteSizeLong());
+  }
 
   // Serializes the message without recomputing the size.  The message must not
   // have changed since the last call to ByteSize(), and the value returned by
@@ -439,6 +439,10 @@ class PROTOBUF_EXPORT MessageLite {
   // Returns the arena, used for allocating internal objects(e.g., child
   // messages, etc), or owning incoming objects (e.g., set allocated).
   Arena* GetArenaForAllocation() const { return _internal_metadata_.arena(); }
+
+  // Returns true if this message is enabled for message-owned arena (MOA)
+  // trials. No lite messages are eligible for MOA.
+  static bool InMoaTrial() { return false; }
 
   internal::InternalMetadata _internal_metadata_;
 

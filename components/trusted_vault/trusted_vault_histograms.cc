@@ -22,6 +22,10 @@ std::string GetTrustedVaultURLFetchReasonSuffix(
       return std::string();
     case TrustedVaultURLFetchReasonForUMA::kRegisterDevice:
       return "RegisterDevice";
+    case TrustedVaultURLFetchReasonForUMA::kRegisterLockScreenKnowledgeFactor:
+      return "RegisterLockScreenKnowledgeFactor";
+    case TrustedVaultURLFetchReasonForUMA::kRegisterGpmPin:
+      return "RegisterGooglePasswordManagerPIN";
     case TrustedVaultURLFetchReasonForUMA::
         kRegisterUnspecifiedAuthenticationFactor:
       return "RegisterUnspecifiedAuthenticationFactor";
@@ -32,9 +36,11 @@ std::string GetTrustedVaultURLFetchReasonSuffix(
     case TrustedVaultURLFetchReasonForUMA::
         kDownloadAuthenticationFactorsRegistrationState:
       return "DownloadAuthenticationFactorsRegistrationState";
+    case TrustedVaultURLFetchReasonForUMA::kRegisterICloudKeychain:
+      return "RegisterICloudKeychain";
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 std::string GetRecoveryKeyStoreURLFetchReasonSuffix(
@@ -44,7 +50,7 @@ std::string GetRecoveryKeyStoreURLFetchReasonSuffix(
       return "UpdateRecoveryKeyStore";
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 }  // namespace
@@ -69,30 +75,39 @@ SecurityDomainIdOrInvalidForUma GetSecurityDomainIdOrInvalidForUma(
     case SecurityDomainId::kPasskeys:
       return SecurityDomainIdOrInvalidForUma::kPasskeys;
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 void RecordTrustedVaultHintDegradedRecoverabilityChangedReason(
     TrustedVaultHintDegradedRecoverabilityChangedReasonForUMA
         hint_degraded_recoverability_changed_reason) {
-  // TODO(crbug.com/1423343): eventually histograms under
-  // components/trusted_vault should start using their own prefix instead of
-  // "Sync." and migrated to the dedicated histograms.xml file.
   base::UmaHistogramEnumeration(
-      "Sync.TrustedVaultHintDegradedRecoverabilityChangedReason2",
+      "TrustedVault.TrustedVaultHintDegradedRecoverabilityChangedReason",
       hint_degraded_recoverability_changed_reason);
 }
 
 void RecordTrustedVaultDeviceRegistrationState(
+  TrustedVaultDeviceRegistrationStateForUMA registration_state) {
+  RecordTrustedVaultDeviceRegistrationState(
+      SecurityDomainId::kChromeSync, registration_state);
+}
+
+void RecordTrustedVaultDeviceRegistrationState(
+    SecurityDomainId security_domain_id,
     TrustedVaultDeviceRegistrationStateForUMA registration_state) {
-  base::UmaHistogramEnumeration("Sync.TrustedVaultDeviceRegistrationState",
-                                registration_state);
+  base::UmaHistogramEnumeration(
+      "TrustedVault.DeviceRegistrationState." +
+          GetSecurityDomainNameForUma(security_domain_id),
+      registration_state);
 }
 
 void RecordTrustedVaultDeviceRegistrationOutcome(
+    SecurityDomainId security_domain_id,
     TrustedVaultDeviceRegistrationOutcomeForUMA registration_outcome) {
-  base::UmaHistogramEnumeration("Sync.TrustedVaultDeviceRegistrationOutcome",
-                                registration_outcome);
+  base::UmaHistogramEnumeration(
+      "TrustedVault.DeviceRegistrationOutcome." +
+          GetSecurityDomainNameForUma(security_domain_id),
+      registration_outcome);
 }
 
 void RecordTrustedVaultURLFetchResponse(SecurityDomainId security_domain_id,
@@ -146,17 +161,25 @@ void RecordRecoveryKeyStoreURLFetchResponse(
 }
 
 void RecordTrustedVaultDownloadKeysStatus(
-    TrustedVaultDownloadKeysStatusForUMA status,
-    bool also_log_with_v1_suffix) {
-  base::UmaHistogramEnumeration("Sync.TrustedVaultDownloadKeysStatus", status);
-  if (also_log_with_v1_suffix) {
-    base::UmaHistogramEnumeration("Sync.TrustedVaultDownloadKeysStatusV1",
-                                  status);
-  }
+    SecurityDomainId security_domain_id,
+    TrustedVaultDownloadKeysStatusForUMA status) {
+  base::UmaHistogramEnumeration(
+      "TrustedVault.DownloadKeysStatus." +
+          GetSecurityDomainNameForUma(security_domain_id),
+      status);
 }
 
-void RecordTrustedVaultFileReadStatus(TrustedVaultFileReadStatusForUMA status) {
-  base::UmaHistogramEnumeration("Sync.TrustedVaultFileReadStatus", status);
+void RecordTrustedVaultDownloadKeysStatus(
+    TrustedVaultDownloadKeysStatusForUMA status) {
+  RecordTrustedVaultDownloadKeysStatus(SecurityDomainId::kChromeSync, status);
+}
+
+void RecordTrustedVaultFileReadStatus(SecurityDomainId security_domain_id,
+                                      TrustedVaultFileReadStatusForUMA status) {
+  base::UmaHistogramEnumeration(
+      "TrustedVault.FileReadStatus." +
+          GetSecurityDomainNameForUma(security_domain_id),
+      status);
 }
 
 void RecordTrustedVaultSetEncryptionKeysForSecurityDomain(

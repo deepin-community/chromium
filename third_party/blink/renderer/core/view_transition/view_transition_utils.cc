@@ -4,9 +4,9 @@
 
 #include "third_party/blink/renderer/core/view_transition/view_transition_utils.h"
 
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
+#include "third_party/blink/renderer/core/style/computed_style_constants.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition.h"
 #include "third_party/blink/renderer/core/view_transition/view_transition_supplement.h"
 
@@ -23,6 +23,26 @@ ViewTransition* ViewTransitionUtils::GetTransition(const Document& document) {
     return nullptr;
   }
   return transition;
+}
+
+// static
+ViewTransition* ViewTransitionUtils::GetIncomingCrossDocumentTransition(
+    const Document& document) {
+  if (auto* transition = GetTransition(document);
+      transition && transition->IsForNavigationOnNewDocument()) {
+    return transition;
+  }
+  return nullptr;
+}
+
+// static
+ViewTransition* ViewTransitionUtils::GetOutgoingCrossDocumentTransition(
+    const Document& document) {
+  if (auto* transition = GetTransition(document);
+      transition && transition->IsForNavigationSnapshot()) {
+    return transition;
+  }
+  return nullptr;
 }
 
 // static
@@ -66,27 +86,6 @@ bool ViewTransitionUtils::IsViewTransitionRoot(const LayoutObject& object) {
 }
 
 // static
-bool ViewTransitionUtils::IsViewTransitionParticipant(
-    const LayoutObject& object) {
-  // Special case LayoutView to check the supplement directly.
-  if (IsA<LayoutView>(object)) {
-    return IsViewTransitionParticipantFromSupplement(object);
-  }
-
-  if (const Element* element = DynamicTo<Element>(object.GetNode())) {
-    if (const ComputedStyle* style = element->GetComputedStyle()) {
-      DCHECK_EQ(style->ElementIsViewTransitionParticipant(),
-                IsViewTransitionElementExcludingRootFromSupplement(*element))
-          << object.DebugName();
-      return style->ElementIsViewTransitionParticipant();
-    }
-  }
-
-  DCHECK(!IsViewTransitionParticipantFromSupplement(object));
-  return false;
-}
-
-// static
 bool ViewTransitionUtils::IsViewTransitionElementExcludingRootFromSupplement(
     const Element& element) {
   ViewTransition* transition = GetTransition(element.GetDocument());
@@ -98,6 +97,14 @@ bool ViewTransitionUtils::IsViewTransitionParticipantFromSupplement(
     const LayoutObject& object) {
   ViewTransition* transition = GetTransition(object.GetDocument());
   return transition && transition->IsRepresentedViaPseudoElements(object);
+}
+
+// static
+bool ViewTransitionUtils::
+    ShouldDelegateEffectsAndBoxDecorationsToViewTransitionGroup(
+        const LayoutObject& object) {
+  return UseLayeredCapture(object.StyleRef()) &&
+         IsViewTransitionParticipantFromSupplement(object);
 }
 
 }  // namespace blink

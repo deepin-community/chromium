@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
-#include "base/strings/string_piece.h"
+#include "components/autofill/core/browser/country_type.h"
 #include "components/autofill/core/browser/data_model/autofill_i18n_parsing_expression_components.h"
 #include "components/autofill/core/browser/field_types.h"
 
@@ -173,7 +173,7 @@ class AddressComponent {
   // Compares the values and verification statuses with |other| recursively
   // down the tree. Returns true iff all values and verification statuses of
   // this node and its subtree and |other| with its subtree are the same.
-  bool SameAs(const AddressComponent& other) const;
+  virtual bool SameAs(const AddressComponent& other) const;
 
   // Copies the values and verification statuses from |other| recursively down
   // the tree.
@@ -181,11 +181,6 @@ class AddressComponent {
 
   // Returns the autofill storage type stored in |storage_type_|.
   FieldType GetStorageType() const;
-
-  // Returns the type to be used instead of `field_type` when this type does
-  // not contain information. It is assumed that `field_type` is a supported
-  // type of the node,
-  FieldType GetFallbackType(FieldType field_type) const;
 
   // Returns the string representation of |storage_type_|.
   std::string GetStorageTypeName() const;
@@ -199,6 +194,15 @@ class AddressComponent {
   // Returns a constant reference to |value_.value()|. If the value is not
   // assigned, an empty string is returned.
   const std::u16string& GetValue() const;
+
+  // Formats `value` to be used for comparison.
+  // In the default implementation this is `value` normalized but this function
+  // can be overridden in subclasses to apply further operations on `value`.
+  // `other` represents the component we are comparing with and is required
+  // for consistent rewriting rules.
+  virtual std::u16string GetValueForComparison(
+      const std::u16string& value,
+      const AddressComponent& other) const;
 
   // Returns a canonicalized version of the value or std::nullopt if
   // canonicalization is not possible or not implemented.
@@ -218,7 +222,7 @@ class AddressComponent {
 
   // Wrapper function around
   // SetValueForTypeIfPossible(/*invalidate_child_nodes=*/true);
-  // TODO(1440504): Remove and merge with SetValueForType.
+  // TODO(crbug.com/40266145): Remove and merge with SetValueForType.
   bool SetValueForTypeAndResetSubstructure(FieldType field_type,
                                            const std::u16string& value,
                                            const VerificationStatus& status);
@@ -241,11 +245,6 @@ class AddressComponent {
   // Convenience method to get the verification status of `field_type`.
   // Returns |VerificationStatus::kNoStatus| if `field_type` is not supported.
   VerificationStatus GetVerificationStatusForType(FieldType field_type) const;
-
-  // Convenience method to get the fallback type of a specific node whose
-  // supported type include `field_type`. Returns `field_type` in case it could
-  // not find a `field_type` node.
-  FieldType GetFallbackTypeForType(FieldType field_type) const;
 
   // Returns true if the |value| and |verification_status| were successfully
   // unset for |type|.
@@ -334,6 +333,12 @@ class AddressComponent {
   // Returns a constant vector of pointers to the child nodes of the component.
   const SubcomponentsList& Subcomponents() const { return subcomponents_; }
 
+  // Returns a constant vector of pointers to the synthesized child nodes of the
+  // component.
+  const SubcomponentsList& SynthesizedSubcomponents() const {
+    return synthesized_subcomponents_;
+  }
+
   // Returns a pointer to the parent node.
   AddressComponent* Parent() const { return parent_; }
 
@@ -359,7 +364,11 @@ class AddressComponent {
   // country set, the other should assume the non-empty one while merging. This
   // is required to do consistent address rewriting.
   // Returns the common country to be used.
-  std::u16string GetCommonCountry(const AddressComponent& other) const;
+  AddressCountryCode GetCommonCountry(const AddressComponent& other) const;
+
+  // If the tree this node is part of contains country code information, this
+  // function retrieves it. Otherwise it returns an empty country code.
+  AddressCountryCode GetCountryCode() const;
 
   // Deletes the stored structure and returns true if |IsStructureValid()|
   // returns false.
@@ -463,15 +472,6 @@ class AddressComponent {
   // |other| represents the component we are comparing with and is required
   // for consistent rewriting rules.
   std::u16string GetValueForComparison(const AddressComponent& other) const;
-
-  // Formats `value` to be used for comparison.
-  // In the default implementation this is `value` normalized but this function
-  // can be overridden in subclasses to apply further operations on `value`.
-  // `other` represents the component we are comparing with and is required
-  // for consistent rewriting rules.
-  virtual std::u16string GetValueForComparison(
-      const std::u16string& value,
-      const AddressComponent& other) const;
 
   // Returns true if the merging of two token identical values should give
   // precedence to the newer value.

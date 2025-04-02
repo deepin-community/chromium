@@ -12,6 +12,7 @@
 #include "ui/aura/window_delegate.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/hit_test.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/ozone_buildflags.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
@@ -39,8 +40,9 @@ WindowEventFilterLinux::~WindowEventFilterLinux() {
 void WindowEventFilterLinux::HandleLocatedEventWithHitTest(
     int hit_test,
     ui::LocatedEvent* event) {
-  if (event->type() != ui::ET_MOUSE_PRESSED)
+  if (event->type() != ui::EventType::kMousePressed) {
     return;
+  }
 
   if (event->IsMouseEvent() &&
       HandleMouseEventWithHitTest(hit_test, event->AsMouseEvent())) {
@@ -124,11 +126,13 @@ void WindowEventFilterLinux::OnClickedCaption(ui::MouseEvent* event,
     case ui::LinuxUi::WindowFrameAction::kMenu:
       views::Widget* widget =
           views::Widget::GetWidgetForNativeView(content_window);
-      if (!widget)
+      if (!widget) {
         break;
+      }
       views::View* view = widget->GetContentsView();
-      if (!view || !view->context_menu_controller())
+      if (!view || !view->context_menu_controller()) {
         break;
+      }
       // Controller requires locations to be in DIP, while |this| receives the
       // location in px.
       gfx::PointF location = desktop_window_tree_host_->GetRootTransform()
@@ -136,7 +140,8 @@ void WindowEventFilterLinux::OnClickedCaption(ui::MouseEvent* event,
                                  .value_or(event->location_f());
       gfx::Point location_in_screen = gfx::ToRoundedPoint(location);
       views::View::ConvertPointToScreen(view, &location_in_screen);
-      view->ShowContextMenu(location_in_screen, ui::MENU_SOURCE_MOUSE);
+      view->ShowContextMenu(location_in_screen,
+                            ui::mojom::MenuSourceType::kMouse);
       event->SetHandled();
       break;
   }
@@ -145,8 +150,9 @@ void WindowEventFilterLinux::OnClickedCaption(ui::MouseEvent* event,
 void WindowEventFilterLinux::OnClickedMaximizeButton(ui::MouseEvent* event) {
   auto* content_window = desktop_window_tree_host_->GetContentWindow();
   views::Widget* widget = views::Widget::GetWidgetForNativeView(content_window);
-  if (!widget)
+  if (!widget) {
     return;
+  }
 
   gfx::Rect display_work_area = display::Screen::GetScreen()
                                     ->GetDisplayNearestWindow(content_window)
@@ -171,10 +177,11 @@ void WindowEventFilterLinux::MaybeToggleMaximizedState(aura::Window* window) {
     return;
   }
 
-  if (desktop_window_tree_host_->IsMaximized())
+  if (desktop_window_tree_host_->IsMaximized()) {
     desktop_window_tree_host_->Restore();
-  else
+  } else {
     desktop_window_tree_host_->Maximize();
+  }
 }
 
 void WindowEventFilterLinux::LowerWindow() {
@@ -186,14 +193,17 @@ void WindowEventFilterLinux::LowerWindow() {
 void WindowEventFilterLinux::MaybeDispatchHostWindowDragMovement(
     int hittest,
     ui::LocatedEvent* event) {
-  if (!event->IsMouseEvent() && !event->IsGestureEvent())
+  if (!event->IsMouseEvent() && !event->IsGestureEvent()) {
     return;
+  }
 
-  if (event->IsMouseEvent() && !event->AsMouseEvent()->IsLeftMouseButton())
+  if (event->IsMouseEvent() && !event->AsMouseEvent()->IsLeftMouseButton()) {
     return;
+  }
 
-  if (!handler_ || !ui::CanPerformDragOrResize(hittest))
+  if (!handler_ || !ui::CanPerformDragOrResize(hittest)) {
     return;
+  }
 
   // Some platforms (eg X11) may require last pointer location not in the
   // local surface coordinates, but rather in the screen coordinates for
@@ -208,8 +218,9 @@ void WindowEventFilterLinux::MaybeDispatchHostWindowDragMovement(
   // it'd prevent the Gesture{Provider,Detector} machirery to get triggered,
   // breaking gestures including tapping, double tapping, show press and
   // long press.
-  if (event->IsMouseEvent())
+  if (event->IsMouseEvent()) {
     event->StopPropagation();
+  }
 }
 
 void WindowEventFilterLinux::OnGestureEvent(ui::GestureEvent* event) {
@@ -220,7 +231,7 @@ void WindowEventFilterLinux::OnGestureEvent(ui::GestureEvent* event) {
           : HTNOWHERE;
 
   // Double tap to maximize.
-  if (event->type() == ui::ET_GESTURE_TAP) {
+  if (event->type() == ui::EventType::kGestureTap) {
     int previous_click_component = click_component_;
     click_component_ = hit_test_code;
 
@@ -235,8 +246,9 @@ void WindowEventFilterLinux::OnGestureEvent(ui::GestureEvent* event) {
   }
 
   // Interactive window move.
-  if (event->type() == ui::ET_GESTURE_SCROLL_BEGIN)
+  if (event->type() == ui::EventType::kGestureScrollBegin) {
     MaybeDispatchHostWindowDragMovement(hit_test_code, event);
+  }
 }
 
 }  // namespace views

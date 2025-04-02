@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ash/webui/os_feedback_ui/os_feedback_ui.h"
 
 #include <memory>
@@ -22,10 +27,10 @@
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
-#include "ui/resources/grit/webui_resources.h"
 #include "ui/web_dialogs/web_dialog_ui.h"
 #include "ui/webui/color_change_listener/color_change_handler.h"
 #include "ui/webui/mojo_web_ui_controller.h"
+#include "ui/webui/resources/grit/webui_resources.h"
 #include "ui/webui/webui_allowlist.h"
 
 namespace ash {
@@ -119,6 +124,7 @@ void AddLocalizedStrings(content::WebUIDataSource* source) {
       {"bluetoothLogsMessage", IDS_FEEDBACK_TOOL_BLUETOOTH_LOGS_MESSAGE},
       {"wifiDebugLogsInfo", IDS_FEEDBACK_TOOL_WIFI_DEBUG_LOGS_CHECKBOX},
       {"wifiDebugLogsMessage", IDS_FEEDBACK_TOOL_WIFI_DEBUG_LOGS_MESSAGE},
+      {"wifiDebugLogsTitle", IDS_FEEDBACK_TOOL_WIFI_DEBUG_LOGS_TITLE},
       {"linkCrossDeviceDogfoodFeedbackInfo",
        IDS_FEEDBACK_TOOL_LINK_CROSS_DEVICE_DOGFOOD_FEEDBACK_INFO},
       {"linkCrossDeviceDogfoodFeedbackMessage",
@@ -160,13 +166,12 @@ OSFeedbackUI::OSFeedbackUI(
       "script-src chrome://resources chrome://webui-test 'self';");
   ash::EnableTrustedTypesCSP(source);
 
-  const auto resources =
-      base::make_span(kAshOsFeedbackResources, kAshOsFeedbackResourcesSize);
-  SetUpWebUIDataSource(source, resources, IDR_ASH_OS_FEEDBACK_INDEX_HTML);
+  SetUpWebUIDataSource(source, kAshOsFeedbackResources,
+                       IDR_ASH_OS_FEEDBACK_INDEX_HTML);
   AddLocalizedStrings(source);
 
   // Register common permissions for chrome-untrusted:// pages.
-  // TODO(https://crbug.com/1113568): Remove this after common permissions are
+  // TODO(crbug.com/40710326): Remove this after common permissions are
   // granted by default.
   auto* webui_allowlist = WebUIAllowlist::GetOrCreate(browser_context);
   const url::Origin untrusted_origin =

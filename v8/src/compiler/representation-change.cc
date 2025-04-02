@@ -224,6 +224,7 @@ Node* RepresentationChanger::GetRepresentationFor(
       DCHECK_EQ(TypeCheckKind::kNone, use_info.type_check());
       return GetFloat32RepresentationFor(node, output_rep, output_type,
                                          use_info.truncation());
+    case MachineRepresentation::kFloat16:
     case MachineRepresentation::kFloat64:
       DCHECK(use_info.type_check() == TypeCheckKind::kNone ||
              use_info.type_check() == TypeCheckKind::kNumber ||
@@ -253,6 +254,7 @@ Node* RepresentationChanger::GetRepresentationFor(
     case MachineRepresentation::kCompressed:
     case MachineRepresentation::kCompressedPointer:
     case MachineRepresentation::kSandboxedPointer:
+    case MachineRepresentation::kProtectedPointer:
     case MachineRepresentation::kIndirectPointer:
     case MachineRepresentation::kMapWord:
       UNREACHABLE();
@@ -570,6 +572,10 @@ Node* RepresentationChanger::GetTaggedRepresentationFor(
       // Either the output is uint32 or the uses only care about the
       // low 32 bits (so we can pick uint32 safely).
       op = simplified()->ChangeUint32ToTagged();
+    } else if (node->op()->opcode() ==
+               IrOpcode::kTruncateFloat64ToFloat16RawBits) {
+      // Handled in DoFloat16RawBitsToNumber. Case For Float16
+      op = simplified()->ChangeUint32ToTagged();
     } else {
       return TypeError(node, output_rep, output_type,
                        MachineRepresentation::kTagged);
@@ -728,6 +734,7 @@ Node* RepresentationChanger::GetFloat64RepresentationFor(
         break;
     }
   }
+
   // Select the correct X -> Float64 operator.
   const Operator* op = nullptr;
   if (output_type.Is(Type::None())) {
@@ -746,6 +753,9 @@ Node* RepresentationChanger::GetFloat64RepresentationFor(
       // Either the output is uint32 or the uses only care about the
       // low 32 bits (so we can pick uint32 safely).
       op = machine()->ChangeUint32ToFloat64();
+    } else if (output_rep == MachineRepresentation::kWord16) {
+      // Handled in DoFloat16RawBitsToNumber. Case For Float16
+      return node;
     }
   } else if (output_rep == MachineRepresentation::kBit) {
     CHECK(output_type.Is(Type::Boolean()));
@@ -1014,6 +1024,11 @@ Node* RepresentationChanger::GetWord32RepresentationFor(
       return TypeError(node, output_rep, output_type,
                        MachineRepresentation::kWord32);
     }
+  } else if (output_rep == MachineRepresentation::kFloat16) {
+    if (output_type.Is(Type::NumberOrOddball())) {
+      op = node->op();
+      node = node->InputAt(0);
+    }
   }
 
   if (op == nullptr) {
@@ -1139,7 +1154,7 @@ Node* RepresentationChanger::GetWord64RepresentationFor(
     case IrOpcode::kHeapConstant: {
       HeapObjectMatcher m(node);
       if (m.HasResolvedValue() && m.Ref(broker_).IsBigInt() &&
-          use_info.truncation().IsUsedAsWord64()) {
+          (Is64() && use_info.truncation().IsUsedAsWord64())) {
         BigIntRef bigint = m.Ref(broker_).AsBigInt();
         return InsertTypeOverrideForVerifier(
             NodeProperties::GetType(node),
@@ -1246,7 +1261,7 @@ Node* RepresentationChanger::GetWord64RepresentationFor(
                        MachineRepresentation::kWord64);
     }
   } else if (IsAnyTagged(output_rep) &&
-             ((use_info.truncation().IsUsedAsWord64() &&
+             ((Is64() && use_info.truncation().IsUsedAsWord64() &&
                (use_info.type_check() == TypeCheckKind::kBigInt ||
                 output_type.Is(Type::BigInt()))) ||
               use_info.type_check() == TypeCheckKind::kBigInt64)) {

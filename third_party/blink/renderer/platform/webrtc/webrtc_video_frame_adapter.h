@@ -8,7 +8,6 @@
 #include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
@@ -21,6 +20,7 @@
 #include "media/video/gpu_video_accelerator_factories.h"
 #include "media/video/renderable_gpu_memory_buffer_video_frame_pool.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
+#include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 #include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/api/video/video_frame_buffer.h"
@@ -45,11 +45,25 @@ namespace blink {
 //
 // WebRtcVideoFrameAdapter keeps track of which crops and scales were
 // hard-applied during its lifetime.
-class PLATFORM_EXPORT WebRtcVideoFrameAdapter
+
+class PLATFORM_EXPORT WebRtcVideoFrameAdapterInterface
     : public webrtc::VideoFrameBuffer {
  public:
+  virtual scoped_refptr<media::VideoFrame> getMediaVideoFrame() const = 0;
+
+  // Regardless of the pixel format used internally, kNative is returned
+  // indicating that GetMappedFrameBuffer() or ToI420() is required to obtain
+  // the pixels.
+  webrtc::VideoFrameBuffer::Type type() const override {
+    return webrtc::VideoFrameBuffer::Type::kNative;
+  }
+};
+
+class PLATFORM_EXPORT WebRtcVideoFrameAdapter
+    : public WebRtcVideoFrameAdapterInterface {
+ public:
   class PLATFORM_EXPORT SharedResources
-      : public base::RefCountedThreadSafe<SharedResources> {
+      : public ThreadSafeRefCounted<SharedResources> {
    public:
     explicit SharedResources(
         media::GpuVideoAcceleratorFactories* gpu_factories);
@@ -93,7 +107,7 @@ class PLATFORM_EXPORT WebRtcVideoFrameAdapter
     media::VideoCaptureFeedback GetFeedback();
 
    protected:
-    friend class base::RefCountedThreadSafe<SharedResources>;
+    friend class ThreadSafeRefCounted<SharedResources>;
     virtual ~SharedResources();
 
    private:
@@ -108,8 +122,7 @@ class PLATFORM_EXPORT WebRtcVideoFrameAdapter
     scoped_refptr<viz::RasterContextProvider> raster_context_provider_
         GUARDED_BY(context_provider_lock_);
 
-    raw_ptr<media::GpuVideoAcceleratorFactories, ExperimentalRenderer>
-        gpu_factories_;
+    raw_ptr<media::GpuVideoAcceleratorFactories> gpu_factories_;
 
     // Handles frame conversions. Maintains an internal scratch space buffer.
     media::VideoFrameConverter frame_converter_;
@@ -143,17 +156,13 @@ class PLATFORM_EXPORT WebRtcVideoFrameAdapter
   // Implements a soft-applied "view" of the parent WebRtcVideoFrameAdapter. Its
   // size only gets hard-applied if GetMappedFrameBuffer() or ToI420() is
   // called, in which case the result is cached inside the parent.
-  class ScaledBuffer : public webrtc::VideoFrameBuffer {
+  class ScaledBuffer : public WebRtcVideoFrameAdapterInterface {
    public:
     ScaledBuffer(scoped_refptr<WebRtcVideoFrameAdapter> parent,
                  ScaledBufferSize size);
 
-    // Regardless of the pixel format used internally, kNative is returned
-    // indicating that GetMappedFrameBuffer() or ToI420() is required to obtain
-    // the pixels.
-    webrtc::VideoFrameBuffer::Type type() const override {
-      return webrtc::VideoFrameBuffer::Type::kNative;
-    }
+    scoped_refptr<media::VideoFrame> getMediaVideoFrame() const override;
+
     int width() const override { return size_.natural_size.width(); }
     int height() const override { return size_.natural_size.height(); }
 
@@ -175,6 +184,8 @@ class PLATFORM_EXPORT WebRtcVideoFrameAdapter
         int scaled_width,
         int scaled_height) override;
 
+    std::string storage_representation() const override;
+
     const ScaledBufferSize& size() const { return size_; }
 
    private:
@@ -187,14 +198,10 @@ class PLATFORM_EXPORT WebRtcVideoFrameAdapter
       scoped_refptr<media::VideoFrame> frame,
       scoped_refptr<SharedResources> shared_resources);
 
-  scoped_refptr<media::VideoFrame> getMediaVideoFrame() const { return frame_; }
-
-  // Regardless of the pixel format used internally, kNative is returned
-  // indicating that GetMappedFrameBuffer() or ToI420() is required to obtain
-  // the pixels.
-  webrtc::VideoFrameBuffer::Type type() const override {
-    return webrtc::VideoFrameBuffer::Type::kNative;
+  scoped_refptr<media::VideoFrame> getMediaVideoFrame() const override {
+    return frame_;
   }
+
   int width() const override { return frame_->natural_size().width(); }
   int height() const override { return frame_->natural_size().height(); }
 
@@ -218,6 +225,8 @@ class PLATFORM_EXPORT WebRtcVideoFrameAdapter
   // null is returned.
   scoped_refptr<media::VideoFrame> GetAdaptedVideoBufferForTesting(
       const ScaledBufferSize& size);
+
+  std::string storage_representation() const override;
 
  protected:
   ~WebRtcVideoFrameAdapter() override;

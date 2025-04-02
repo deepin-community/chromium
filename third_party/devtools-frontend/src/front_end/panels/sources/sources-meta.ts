@@ -143,7 +143,7 @@ const UIStrings = {
   /**
    *@description Title of an action in the sources tool to close all
    */
-  closeAll: 'Close All',
+  closeAll: 'Close all',
   /**
    *@description Text in the Shortcuts page to explain a keyboard shortcut (jump to previous editing location in text editor)
    */
@@ -275,6 +275,18 @@ const UIStrings = {
    */
   doNotDetectIndentation: 'Do not detect indentation',
   /**
+   *@description Title of a setting under Sources category that can be invoked through the Command Menu.
+   *This setting turns on the automatic formatting of source files in the Sources panel that are detected
+   *to be minified.
+   */
+  automaticallyPrettyPrintMinifiedSources: 'Automatically pretty print minified sources',
+  /**
+   *@description Title of a setting under Sources category that can be invoked through the Command Menu.
+   *This setting turns off the automatic formatting of source files in the Sources panel that are detected
+   *to be minified.
+   */
+  doNotAutomaticallyPrettyPrintMinifiedSources: 'Do not automatically pretty print minified sources',
+  /**
    *@description Text for autocompletion
    */
   autocompletion: 'Autocompletion',
@@ -286,6 +298,18 @@ const UIStrings = {
    *@description Title of a setting under the Sources category that can be invoked through the Command Menu
    */
   disableAutocompletion: 'Disable autocompletion',
+  /**
+   *@description Title of a setting under the Sources category in Settings
+   */
+  bracketClosing: 'Auto closing brackets',
+  /**
+   *@description Title of a setting under the Sources category that can be invoked through the Command Menu
+   */
+  enableBracketClosing: 'Enable auto closing brackets',
+  /**
+   *@description Title of a setting under the Sources category that can be invoked through the Command Menu
+   */
+  disableBracketClosing: 'Disable auto closing brackets',
   /**
    *@description Title of a setting under the Sources category in Settings
    */
@@ -370,15 +394,15 @@ const UIStrings = {
   /**
    *@description Title of a setting under the Sources category in Settings
    */
-  wasmAutoStepping: 'When debugging wasm with debug information, do not pause on wasm bytecode if possible',
+  wasmAutoStepping: 'When debugging Wasm with debug information, do not pause on wasm bytecode if possible',
   /**
    *@description Title of a setting under the Sources category in Settings
    */
-  enableWasmAutoStepping: 'Enable wasm auto-stepping',
+  enableWasmAutoStepping: 'Enable Wasm auto-stepping',
   /**
    *@description Title of a setting under the Sources category in Settings
    */
-  disableWasmAutoStepping: 'Disable wasm auto-stepping',
+  disableWasmAutoStepping: 'Disable Wasm auto-stepping',
 
   /**
    *@description Text for command prefix of go to a given line or symbol
@@ -393,6 +417,10 @@ const UIStrings = {
    */
   symbol: 'Symbol',
   /**
+   *@description Text for help title of go to symbol menu
+   */
+  goToSymbol: 'Go to symbol',
+  /**
    *@description Text for command prefix of open a file
    */
   open: 'Open',
@@ -401,8 +429,12 @@ const UIStrings = {
    */
   file: 'File',
   /**
+   *@description Text for help title of open file menu
+   */
+  openFile: 'Open file',
+  /**
    * @description  Title of a setting under the Sources category in Settings. If this option is off,
-   * the sources panel will not be automatically be focsed whenever the application hits a breakpoint
+   * the sources panel will not be automatically be focused whenever the application hits a breakpoint
    * and comes to a halt.
    */
   disableAutoFocusOnDebuggerPaused: 'Do not focus Sources panel when triggering a breakpoint',
@@ -600,7 +632,7 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+\\',
     },
     {
@@ -616,7 +648,7 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+\\',
     },
   ],
@@ -644,11 +676,11 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+\'',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+\'',
     },
   ],
@@ -675,11 +707,11 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+;',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+;',
     },
   ],
@@ -728,11 +760,11 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Shift+Ctrl+;',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Shift+Meta+;',
     },
   ],
@@ -752,11 +784,11 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+Enter',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Enter',
     },
   ],
@@ -787,11 +819,11 @@ UI.ActionRegistration.registerActionExtension({
   ],
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+F8',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+F8',
     },
   ],
@@ -810,11 +842,11 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+Shift+A',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Shift+A',
     },
   ],
@@ -833,11 +865,11 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+Shift+E',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Shift+E',
     },
   ],
@@ -867,11 +899,11 @@ UI.ActionRegistration.registerActionExtension({
   title: i18nLazyString(UIStrings.rename),
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'F2',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Enter',
     },
   ],
@@ -885,6 +917,22 @@ UI.ActionRegistration.registerActionExtension({
     return new Sources.SourcesView.ActionDelegate();
   },
   title: i18nLazyString(UIStrings.closeAll),
+  bindings: [
+    {
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
+      shortcut: 'Ctrl+K W',
+      keybindSets: [
+        UI.ActionRegistration.KeybindSet.VS_CODE,
+      ],
+    },
+    {
+      platform: UI.ActionRegistration.Platforms.MAC,
+      shortcut: 'Meta+K W',
+      keybindSets: [
+        UI.ActionRegistration.KeybindSet.VS_CODE,
+      ],
+    },
+  ],
 });
 
 UI.ActionRegistration.registerActionExtension({
@@ -945,7 +993,7 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Windows,
+      platform: UI.ActionRegistration.Platforms.WINDOWS,
       shortcut: 'Ctrl+F4',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
@@ -967,7 +1015,7 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+PageDown',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -975,7 +1023,7 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+PageDown',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -998,7 +1046,7 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+PageUp',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -1006,7 +1054,7 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+PageUp',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -1051,7 +1099,7 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+Shift+o',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -1059,7 +1107,7 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Shift+o',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -1067,14 +1115,14 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+T',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+T',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
@@ -1095,14 +1143,14 @@ UI.ActionRegistration.registerActionExtension({
   title: i18nLazyString(UIStrings.toggleBreakpoint),
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+b',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+b',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -1123,11 +1171,11 @@ UI.ActionRegistration.registerActionExtension({
   title: i18nLazyString(UIStrings.toggleBreakpointEnabled),
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+Shift+b',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Shift+b',
     },
   ],
@@ -1139,11 +1187,11 @@ UI.ActionRegistration.registerActionExtension({
   title: i18nLazyString(UIStrings.toggleBreakpointInputWindow),
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+Alt+b',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Alt+b',
     },
   ],
@@ -1162,7 +1210,7 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+s',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -1170,7 +1218,7 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+s',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -1193,22 +1241,22 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+Shift+s',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Alt+s',
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+K S',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Alt+S',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
@@ -1286,14 +1334,14 @@ UI.ActionRegistration.registerActionExtension({
   category: UI.ActionRegistration.ActionCategory.SOURCES,
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Alt+F',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+Shift+F',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
@@ -1301,21 +1349,21 @@ UI.ActionRegistration.registerActionExtension({
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+Shift+J',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Shift+F',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Shift+J',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
@@ -1394,28 +1442,28 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+Shift+y',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Shift+y',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.DEVTOOLS_DEFAULT,
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+b',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
       ],
     },
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Meta+b',
       keybindSets: [
         UI.ActionRegistration.KeybindSet.VS_CODE,
@@ -1437,11 +1485,11 @@ UI.ActionRegistration.registerActionExtension({
   },
   bindings: [
     {
-      platform: UI.ActionRegistration.Platforms.WindowsLinux,
+      platform: UI.ActionRegistration.Platforms.WINDOWS_LINUX,
       shortcut: 'Ctrl+Shift+h',
     },
     {
-      platform: UI.ActionRegistration.Platforms.Mac,
+      platform: UI.ActionRegistration.Platforms.MAC,
       shortcut: 'Meta+Shift+h',
     },
   ],
@@ -1461,7 +1509,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.searchInAnonymousAndContent),
   settingName: 'search-in-anonymous-and-content-scripts',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1480,7 +1528,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.automaticallyRevealFilesIn),
   settingName: 'auto-reveal-in-navigator',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1499,7 +1547,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.javaScriptSourceMaps),
   settingName: 'js-source-maps-enabled',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1518,7 +1566,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.tabMovesFocus),
   settingName: 'text-editor-tab-moves-focus',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1537,7 +1585,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.detectIndentation),
   settingName: 'text-editor-auto-detect-indent',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1556,7 +1604,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.autocompletion),
   settingName: 'text-editor-autocompletion',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1569,6 +1617,25 @@ Common.Settings.registerSettingExtension({
     {
       value: false,
       title: i18nLazyString(UIStrings.disableAutocompletion),
+    },
+  ],
+});
+
+Common.Settings.registerSettingExtension({
+  category: Common.Settings.SettingCategory.SOURCES,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
+  title: i18nLazyString(UIStrings.bracketClosing),
+  settingName: 'text-editor-bracket-closing',
+  settingType: Common.Settings.SettingType.BOOLEAN,
+  defaultValue: true,
+  options: [
+    {
+      value: true,
+      title: i18nLazyString(UIStrings.enableBracketClosing),
+    },
+    {
+      value: false,
+      title: i18nLazyString(UIStrings.disableBracketClosing),
     },
   ],
 });
@@ -1593,7 +1660,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.codeFolding),
   settingName: 'text-editor-code-folding',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1612,7 +1679,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.showWhitespaceCharacters),
   settingName: 'show-whitespaces-in-editor',
   settingType: Common.Settings.SettingType.ENUM,
@@ -1638,7 +1705,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.displayVariableValuesInlineWhile),
   settingName: 'inline-variable-values',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1657,7 +1724,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.enableAutoFocusOnDebuggerPaused),
   settingName: 'auto-focus-on-debugger-paused-enabled',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1676,7 +1743,26 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
+  title: i18nLazyString(UIStrings.automaticallyPrettyPrintMinifiedSources),
+  settingName: 'auto-pretty-print-minified',
+  settingType: Common.Settings.SettingType.BOOLEAN,
+  defaultValue: true,
+  options: [
+    {
+      value: true,
+      title: i18nLazyString(UIStrings.automaticallyPrettyPrintMinifiedSources),
+    },
+    {
+      value: false,
+      title: i18nLazyString(UIStrings.doNotAutomaticallyPrettyPrintMinifiedSources),
+    },
+  ],
+});
+
+Common.Settings.registerSettingExtension({
+  category: Common.Settings.SettingCategory.SOURCES,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.cssSourceMaps),
   settingName: 'css-source-maps-enabled',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1695,7 +1781,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Synced,
+  storageType: Common.Settings.SettingStorageType.SYNCED,
   title: i18nLazyString(UIStrings.allowScrollingPastEndOfFile),
   settingName: 'allow-scroll-past-eof',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1714,7 +1800,7 @@ Common.Settings.registerSettingExtension({
 
 Common.Settings.registerSettingExtension({
   category: Common.Settings.SettingCategory.SOURCES,
-  storageType: Common.Settings.SettingStorageType.Local,
+  storageType: Common.Settings.SettingStorageType.LOCAL,
   title: i18nLazyString(UIStrings.wasmAutoStepping),
   settingName: 'wasm-auto-stepping',
   settingType: Common.Settings.SettingType.BOOLEAN,
@@ -1891,7 +1977,6 @@ UI.Toolbar.registerToolbarItem({
   actionId: 'sources.add-folder-to-workspace',
   location: UI.Toolbar.ToolbarItemLocation.FILES_NAVIGATION_TOOLBAR,
   label: i18nLazyString(UIStrings.addFolder),
-  showLabel: true,
   loadItem: undefined,
   order: undefined,
   separator: undefined,
@@ -1942,11 +2027,11 @@ UI.ContextMenu.registerItem({
 QuickOpen.FilteredListWidget.registerProvider({
   prefix: '@',
   iconName: 'symbol',
-  iconWidth: '16px',
   async provider() {
     const Sources = await loadSourcesModule();
     return new Sources.OutlineQuickOpen.OutlineQuickOpen();
   },
+  helpTitle: i18nLazyString(UIStrings.goToSymbol),
   titlePrefix: i18nLazyString(UIStrings.goTo),
   titleSuggestion: i18nLazyString(UIStrings.symbol),
 });
@@ -1954,11 +2039,11 @@ QuickOpen.FilteredListWidget.registerProvider({
 QuickOpen.FilteredListWidget.registerProvider({
   prefix: ':',
   iconName: 'colon',
-  iconWidth: '20px',
   async provider() {
     const Sources = await loadSourcesModule();
     return new Sources.GoToLineQuickOpen.GoToLineQuickOpen();
   },
+  helpTitle: i18nLazyString(UIStrings.goToLine),
   titlePrefix: i18nLazyString(UIStrings.goTo),
   titleSuggestion: i18nLazyString(UIStrings.line),
 });
@@ -1966,11 +2051,11 @@ QuickOpen.FilteredListWidget.registerProvider({
 QuickOpen.FilteredListWidget.registerProvider({
   prefix: '',
   iconName: 'document',
-  iconWidth: '16px',
   async provider() {
     const Sources = await loadSourcesModule();
     return new Sources.OpenFileQuickOpen.OpenFileQuickOpen();
   },
+  helpTitle: i18nLazyString(UIStrings.openFile),
   titlePrefix: i18nLazyString(UIStrings.open),
   titleSuggestion: i18nLazyString(UIStrings.file),
 });

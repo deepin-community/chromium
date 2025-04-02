@@ -1,16 +1,16 @@
-/* Copyright (c) 2014, Google Inc.
- *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE. */
+// Copyright 2014 The BoringSSL Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <algorithm>
 #include <string>
@@ -24,6 +24,7 @@
 #include <openssl/mem.h>
 
 #include "../internal.h"
+#include "../test/file_util.h"
 #include "../test/test_util.h"
 
 #if !defined(OPENSSL_WINDOWS)
@@ -36,6 +37,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #else
+#include <fcntl.h>
 #include <io.h>
 OPENSSL_MSVC_PRAGMA(warning(push, 3))
 #include <winsock2.h>
@@ -43,11 +45,15 @@ OPENSSL_MSVC_PRAGMA(warning(push, 3))
 OPENSSL_MSVC_PRAGMA(warning(pop))
 #endif
 
+namespace {
+
 #if !defined(OPENSSL_WINDOWS)
 using Socket = int;
 #define INVALID_SOCKET (-1)
 static int closesocket(int sock) { return close(sock); }
 static std::string LastSocketError() { return strerror(errno); }
+static const int kOpenReadOnlyBinary = O_RDONLY;
+static const int kOpenReadOnlyText = O_RDONLY;
 #else
 using Socket = SOCKET;
 static std::string LastSocketError() {
@@ -55,6 +61,8 @@ static std::string LastSocketError() {
   snprintf(buf, sizeof(buf), "%d", WSAGetLastError());
   return buf;
 }
+static const int kOpenReadOnlyBinary = _O_RDONLY | _O_BINARY;
+static const int kOpenReadOnlyText = O_RDONLY | _O_TEXT;
 #endif
 
 class OwnedSocket {
@@ -348,8 +356,7 @@ TEST(BIOTest, Printf) {
     const uint8_t *contents;
     size_t len;
     ASSERT_TRUE(BIO_mem_contents(bio.get(), &contents, &len));
-    EXPECT_EQ("test " + in,
-              std::string(reinterpret_cast<const char *>(contents), len));
+    EXPECT_EQ("test " + in, bssl::BytesAsStringView(bssl::Span(contents, len)));
 
     ASSERT_TRUE(BIO_reset(bio.get()));
   }
@@ -605,7 +612,7 @@ TEST(BIOTest, Gets) {
       // Empty BIO.
       {"", 256, ""},
   };
-  for (const auto& t : kGetsTests) {
+  for (const auto &t : kGetsTests) {
     SCOPED_TRACE(t.bio);
     SCOPED_TRACE(t.gets_len);
 
@@ -633,50 +640,60 @@ TEST(BIOTest, Gets) {
       check_bio_gets(bio.get());
     }
 
-    struct FileCloser {
-      void operator()(FILE *f) const { fclose(f); }
-    };
-    using ScopedFILE = std::unique_ptr<FILE, FileCloser>;
-    ScopedFILE file(tmpfile());
-#if defined(OPENSSL_ANDROID)
-    // On Android, when running from an APK, |tmpfile| does not work. See
-    // b/36991167#comment8.
-    if (!file) {
-      fprintf(stderr, "tmpfile failed: %s (%d). Skipping file-based tests.\n",
-              strerror(errno), errno);
-      continue;
-    }
-#else
-    ASSERT_TRUE(file);
-#endif
+    if (!bssl::SkipTempFileTests()) {
+      bssl::TemporaryFile file;
+      ASSERT_TRUE(file.Init(t.bio));
 
-    if (!t.bio.empty()) {
-      ASSERT_EQ(1u,
-                fwrite(t.bio.data(), t.bio.size(), /*nitems=*/1, file.get()));
-      ASSERT_EQ(0, fseek(file.get(), 0, SEEK_SET));
-    }
+      // TODO(crbug.com/boringssl/585): If the line has an embedded NUL, file
+      // BIOs do not currently report the answer correctly.
+      if (t.bio.find('\0') == std::string::npos) {
+        SCOPED_TRACE("file");
 
-    // TODO(crbug.com/boringssl/585): If the line has an embedded NUL, file
-    // BIOs do not currently report the answer correctly.
-    if (t.bio.find('\0') == std::string::npos) {
-      SCOPED_TRACE("file");
-      bssl::UniquePtr<BIO> bio(BIO_new_fp(file.get(), BIO_NOCLOSE));
-      ASSERT_TRUE(bio);
-      check_bio_gets(bio.get());
-    }
+        // Test |BIO_new_file|.
+        bssl::UniquePtr<BIO> bio(BIO_new_file(file.path().c_str(), "rb"));
+        ASSERT_TRUE(bio);
+        check_bio_gets(bio.get());
 
-    ASSERT_EQ(0, fseek(file.get(), 0, SEEK_SET));
+        // Test |BIO_read_filename|.
+        bio.reset(BIO_new(BIO_s_file()));
+        ASSERT_TRUE(bio);
+        ASSERT_TRUE(BIO_read_filename(bio.get(), file.path().c_str()));
+        check_bio_gets(bio.get());
 
-    {
-      SCOPED_TRACE("fd");
-#if defined(OPENSSL_WINDOWS)
-      int fd = _fileno(file.get());
-#else
-      int fd = fileno(file.get());
-#endif
-      bssl::UniquePtr<BIO> bio(BIO_new_fd(fd, BIO_NOCLOSE));
-      ASSERT_TRUE(bio);
-      check_bio_gets(bio.get());
+        // Test |BIO_NOCLOSE|.
+        bssl::ScopedFILE file_obj = file.Open("rb");
+        ASSERT_TRUE(file_obj);
+        bio.reset(BIO_new_fp(file_obj.get(), BIO_NOCLOSE));
+        ASSERT_TRUE(bio);
+        check_bio_gets(bio.get());
+
+        // Test |BIO_CLOSE|.
+        file_obj = file.Open("rb");
+        ASSERT_TRUE(file_obj);
+        bio.reset(BIO_new_fp(file_obj.get(), BIO_CLOSE));
+        ASSERT_TRUE(bio);
+        file_obj.release();  // |BIO_new_fp| took ownership on success.
+        check_bio_gets(bio.get());
+      }
+
+      {
+        SCOPED_TRACE("fd");
+
+        // Test |BIO_NOCLOSE|.
+        bssl::ScopedFD fd = file.OpenFD(kOpenReadOnlyBinary);
+        ASSERT_TRUE(fd.is_valid());
+        bssl::UniquePtr<BIO> bio(BIO_new_fd(fd.get(), BIO_NOCLOSE));
+        ASSERT_TRUE(bio);
+        check_bio_gets(bio.get());
+
+        // Test |BIO_CLOSE|.
+        fd = file.OpenFD(kOpenReadOnlyBinary);
+        ASSERT_TRUE(fd.is_valid());
+        bio.reset(BIO_new_fd(fd.get(), BIO_CLOSE));
+        ASSERT_TRUE(bio);
+        fd.release();  // |BIO_new_fd| took ownership on success.
+        check_bio_gets(bio.get());
+      }
     }
   }
 
@@ -687,6 +704,89 @@ TEST(BIOTest, Gets) {
   EXPECT_EQ(0, BIO_gets(bio.get(), &c, -1));
   EXPECT_EQ(0, BIO_gets(bio.get(), &c, 0));
   EXPECT_EQ(c, 'a');
+}
+
+// Test that, on Windows, file BIOs correctly handle text vs binary mode.
+TEST(BIOTest, FileMode) {
+  if (bssl::SkipTempFileTests()) {
+    GTEST_SKIP();
+  }
+
+  bssl::TemporaryFile temp;
+  ASSERT_TRUE(temp.Init("hello\r\nworld"));
+
+  auto expect_file_contents = [](BIO *bio, const std::string &str) {
+    // Read more than expected, to make sure we've reached the end of the file.
+    std::vector<char> buf(str.size() + 100);
+    int len = BIO_read(bio, buf.data(), static_cast<int>(buf.size()));
+    ASSERT_GT(len, 0);
+    EXPECT_EQ(Bytes(buf.data(), len), Bytes(str));
+  };
+  auto expect_binary_mode = [&](BIO *bio) {
+    expect_file_contents(bio, "hello\r\nworld");
+  };
+  auto expect_text_mode = [&](BIO *bio) {
+#if defined(OPENSSL_WINDOWS)
+    expect_file_contents(bio, "hello\nworld");
+#else
+    expect_file_contents(bio, "hello\r\nworld");
+#endif
+  };
+
+  // |BIO_read_filename| should open in binary mode.
+  bssl::UniquePtr<BIO> bio(BIO_new(BIO_s_file()));
+  ASSERT_TRUE(bio);
+  ASSERT_TRUE(BIO_read_filename(bio.get(), temp.path().c_str()));
+  expect_binary_mode(bio.get());
+
+  // |BIO_new_file| should use the specified mode.
+  bio.reset(BIO_new_file(temp.path().c_str(), "rb"));
+  ASSERT_TRUE(bio);
+  expect_binary_mode(bio.get());
+
+  bio.reset(BIO_new_file(temp.path().c_str(), "r"));
+  ASSERT_TRUE(bio);
+  expect_text_mode(bio.get());
+
+  // |BIO_new_fp| inherits the file's existing mode by default.
+  bssl::ScopedFILE file = temp.Open("rb");
+  ASSERT_TRUE(file);
+  bio.reset(BIO_new_fp(file.get(), BIO_NOCLOSE));
+  ASSERT_TRUE(bio);
+  expect_binary_mode(bio.get());
+
+  file = temp.Open("r");
+  ASSERT_TRUE(file);
+  bio.reset(BIO_new_fp(file.get(), BIO_NOCLOSE));
+  ASSERT_TRUE(bio);
+  expect_text_mode(bio.get());
+
+  // However, |BIO_FP_TEXT| changes the file to be text mode, no matter how it
+  // was opened.
+  file = temp.Open("rb");
+  ASSERT_TRUE(file);
+  bio.reset(BIO_new_fp(file.get(), BIO_NOCLOSE | BIO_FP_TEXT));
+  ASSERT_TRUE(bio);
+  expect_text_mode(bio.get());
+
+  file = temp.Open("r");
+  ASSERT_TRUE(file);
+  bio.reset(BIO_new_fp(file.get(), BIO_NOCLOSE | BIO_FP_TEXT));
+  ASSERT_TRUE(bio);
+  expect_text_mode(bio.get());
+
+  // |BIO_new_fd| inherits the FD's existing mode.
+  bssl::ScopedFD fd = temp.OpenFD(kOpenReadOnlyBinary);
+  ASSERT_TRUE(fd.is_valid());
+  bio.reset(BIO_new_fd(fd.get(), BIO_NOCLOSE));
+  ASSERT_TRUE(bio);
+  expect_binary_mode(bio.get());
+
+  fd = temp.OpenFD(kOpenReadOnlyText);
+  ASSERT_TRUE(fd.is_valid());
+  bio.reset(BIO_new_fd(fd.get(), BIO_NOCLOSE));
+  ASSERT_TRUE(bio);
+  expect_text_mode(bio.get());
 }
 
 // Run through the tests twice, swapping |bio1| and |bio2|, for symmetry.
@@ -778,10 +878,7 @@ TEST_P(BIOPairTest, TestPair) {
   // A closed write end may not be written to.
   EXPECT_EQ(0u, BIO_ctrl_get_write_guarantee(bio1));
   EXPECT_EQ(-1, BIO_write(bio1, "_____", 5));
-
-  uint32_t err = ERR_get_error();
-  EXPECT_EQ(ERR_LIB_BIO, ERR_GET_LIB(err));
-  EXPECT_EQ(BIO_R_BROKEN_PIPE, ERR_GET_REASON(err));
+  EXPECT_TRUE(ErrorEquals(ERR_get_error(), ERR_LIB_BIO, BIO_R_BROKEN_PIPE));
 
   // The other end is still functional.
   EXPECT_EQ(5, BIO_write(bio2, "12345", 5));
@@ -790,3 +887,5 @@ TEST_P(BIOPairTest, TestPair) {
 }
 
 INSTANTIATE_TEST_SUITE_P(All, BIOPairTest, testing::Values(false, true));
+
+}  // namespace

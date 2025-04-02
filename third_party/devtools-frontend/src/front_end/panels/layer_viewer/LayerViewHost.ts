@@ -5,7 +5,6 @@
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as SDK from '../../core/sdk/sdk.js';
-
 import type * as UI from '../../ui/legacy/legacy.js';
 
 const UIStrings = {
@@ -50,31 +49,31 @@ export class Selection {
 }
 
 export const enum Type {
-  Layer = 'Layer',
-  ScrollRect = 'ScrollRect',
-  Snapshot = 'Snapshot',
+  LAYER = 'Layer',
+  SCROLL_RECT = 'ScrollRect',
+  SNAPSHOT = 'Snapshot',
 }
 
 export class LayerSelection extends Selection {
   constructor(layer: SDK.LayerTreeBase.Layer) {
     console.assert(Boolean(layer), 'LayerSelection with empty layer');
-    super(Type.Layer, layer);
+    super(Type.LAYER, layer);
   }
 
   override isEqual(other: Selection): boolean {
-    return other.typeInternal === Type.Layer && other.layer().id() === this.layer().id();
+    return other.typeInternal === Type.LAYER && other.layer().id() === this.layer().id();
   }
 }
 
 export class ScrollRectSelection extends Selection {
   scrollRectIndex: number;
   constructor(layer: SDK.LayerTreeBase.Layer, scrollRectIndex: number) {
-    super(Type.ScrollRect, layer);
+    super(Type.SCROLL_RECT, layer);
     this.scrollRectIndex = scrollRectIndex;
   }
 
   override isEqual(other: Selection): boolean {
-    return other.typeInternal === Type.ScrollRect && this.layer().id() === other.layer().id() &&
+    return other.typeInternal === Type.SCROLL_RECT && this.layer().id() === other.layer().id() &&
         this.scrollRectIndex === (other as ScrollRectSelection).scrollRectIndex;
   }
 }
@@ -82,12 +81,12 @@ export class ScrollRectSelection extends Selection {
 export class SnapshotSelection extends Selection {
   private readonly snapshotInternal: SDK.PaintProfiler.SnapshotWithRect;
   constructor(layer: SDK.LayerTreeBase.Layer, snapshot: SDK.PaintProfiler.SnapshotWithRect) {
-    super(Type.Snapshot, layer);
+    super(Type.SNAPSHOT, layer);
     this.snapshotInternal = snapshot;
   }
 
   override isEqual(other: Selection): boolean {
-    return other.typeInternal === Type.Snapshot && this.layer().id() === other.layer().id() &&
+    return other.typeInternal === Type.SNAPSHOT && this.layer().id() === other.layer().id() &&
         this.snapshotInternal === (other as SnapshotSelection).snapshotInternal;
   }
 
@@ -170,9 +169,10 @@ export class LayerViewHost {
 
   showContextMenu(contextMenu: UI.ContextMenu.ContextMenu, selection: Selection|null): void {
     contextMenu.defaultSection().appendCheckboxItem(
-        i18nString(UIStrings.showInternalLayers), this.toggleShowInternalLayers.bind(this),
-        this.showInternalLayersSettingInternal.get(), undefined, undefined, undefined,
-        this.showInternalLayersSettingInternal.name);
+        i18nString(UIStrings.showInternalLayers), this.toggleShowInternalLayers.bind(this), {
+          checked: this.showInternalLayersSettingInternal.get(),
+          jslogContext: this.showInternalLayersSettingInternal.name,
+        });
     const node = selection && selection.layer() && selection.layer().nodeForSelfOrAncestor();
     if (node) {
       contextMenu.appendApplicableItems(node);

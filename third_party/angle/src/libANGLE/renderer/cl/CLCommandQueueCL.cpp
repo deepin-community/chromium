@@ -40,7 +40,7 @@ void CheckCreateEvent(cl_event nativeEvent, CLEventImpl::CreateFunc *createFunc)
 CLCommandQueueCL::CLCommandQueueCL(const cl::CommandQueue &commandQueue, cl_command_queue native)
     : CLCommandQueueImpl(commandQueue), mNative(native)
 {
-    if (commandQueue.getProperties().isSet(CL_QUEUE_ON_DEVICE))
+    if (commandQueue.getProperties().intersects(CL_QUEUE_ON_DEVICE))
     {
         commandQueue.getContext().getImpl<CLContextCL>().mData->mDeviceQueues.emplace(
             commandQueue.getNative());
@@ -49,7 +49,7 @@ CLCommandQueueCL::CLCommandQueueCL(const cl::CommandQueue &commandQueue, cl_comm
 
 CLCommandQueueCL::~CLCommandQueueCL()
 {
-    if (mCommandQueue.getProperties().isSet(CL_QUEUE_ON_DEVICE))
+    if (mCommandQueue.getProperties().intersects(CL_QUEUE_ON_DEVICE))
     {
         const size_t numRemoved =
             mCommandQueue.getContext().getImpl<CLContextCL>().mData->mDeviceQueues.erase(
@@ -475,7 +475,7 @@ angle::Result CLCommandQueueCL::enqueueMapImage(const cl::Image &image,
         imageSlicePitch, numEvents, nativeEventsPtr, nativeEventPtr, &errorCode);
     ANGLE_CL_TRY(errorCode);
 
-    // TODO(jplate) Remove workaround after bug is fixed http://anglebug.com/6066
+    // TODO(jplate) Remove workaround after bug is fixed http://anglebug.com/42264597
     if (imageSlicePitch != nullptr && (image.getType() == cl::MemObjectType::Image1D ||
                                        image.getType() == cl::MemObjectType::Image1D_Buffer ||
                                        image.getType() == cl::MemObjectType::Image2D))
@@ -533,10 +533,7 @@ angle::Result CLCommandQueueCL::enqueueMigrateMemObjects(const cl::MemoryPtrs &m
 }
 
 angle::Result CLCommandQueueCL::enqueueNDRangeKernel(const cl::Kernel &kernel,
-                                                     cl_uint workDim,
-                                                     const size_t *globalWorkOffset,
-                                                     const size_t *globalWorkSize,
-                                                     const size_t *localWorkSize,
+                                                     const cl::NDRange &ndrange,
                                                      const cl::EventPtrs &waitEvents,
                                                      CLEventImpl::CreateFunc *eventCreateFunc)
 {
@@ -546,10 +543,16 @@ angle::Result CLCommandQueueCL::enqueueNDRangeKernel(const cl::Kernel &kernel,
     const cl_event *const nativeEventsPtr    = nativeEvents.empty() ? nullptr : nativeEvents.data();
     cl_event nativeEvent                     = nullptr;
     cl_event *const nativeEventPtr           = eventCreateFunc != nullptr ? &nativeEvent : nullptr;
+    std::array<size_t, 3> globalWorkOffset{ndrange.globalWorkOffset[0], ndrange.globalWorkOffset[1],
+                                           ndrange.globalWorkOffset[2]};
+    std::array<size_t, 3> globalWorkSize{ndrange.globalWorkSize[0], ndrange.globalWorkSize[1],
+                                         ndrange.globalWorkSize[2]};
+    std::array<size_t, 3> localWorkSize{ndrange.localWorkSize[0], ndrange.localWorkSize[1],
+                                        ndrange.localWorkSize[2]};
 
     ANGLE_CL_TRY(mNative->getDispatch().clEnqueueNDRangeKernel(
-        mNative, nativeKernel, workDim, globalWorkOffset, globalWorkSize, localWorkSize, numEvents,
-        nativeEventsPtr, nativeEventPtr));
+        mNative, nativeKernel, ndrange.workDimensions, globalWorkOffset.data(),
+        globalWorkSize.data(), localWorkSize.data(), numEvents, nativeEventsPtr, nativeEventPtr));
 
     CheckCreateEvent(nativeEvent, eventCreateFunc);
     return angle::Result::Continue;

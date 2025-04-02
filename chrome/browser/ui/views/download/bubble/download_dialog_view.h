@@ -5,8 +5,9 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_DOWNLOAD_BUBBLE_DOWNLOAD_DIALOG_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_DOWNLOAD_BUBBLE_DOWNLOAD_DIALOG_VIEW_H_
 
+#include <string_view>
+
 #include "base/memory/weak_ptr.h"
-#include "base/strings/string_piece.h"
 #include "chrome/browser/ui/download/download_bubble_row_list_view_info.h"
 #include "chrome/browser/ui/views/download/bubble/download_bubble_primary_view.h"
 #include "chrome/browser/ui/views/download/bubble/download_bubble_row_list_view.h"
@@ -43,12 +44,8 @@ class DownloadDialogView : public DownloadBubblePrimaryView {
   // Returns the close button. The close button should be the initially focused
   // view to make it easier for the user to close the dialog.
   views::View* GetInitiallyFocusedView() override;
-  bool IsPartialView() const override;
 
  private:
-  // DownloadBubblePrimaryView
-  base::StringPiece GetVisibleTimeHistogramName() const override;
-
   void CloseBubble();
   void ShowAllDownloads();
   void AddHeader();

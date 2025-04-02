@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include "ash/constants/ash_features.h"
 #include "base/check_deref.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
@@ -125,22 +126,26 @@ SmbService::SmbService(Profile* profile,
     return;
   }
 
-  if (user->IsActiveDirectoryUser()) {
-    const std::string& account_id_guid = user->GetAccountId().GetObjGuid();
-    SetupKerberos(account_id_guid);
-    return;
-  }
-
   KerberosCredentialsManager* credentials_manager =
       KerberosCredentialsManagerFactory::GetExisting(profile);
   if (credentials_manager) {
+    if (!base::FeatureList::IsEnabled(features::kSmbproviderdOnDemand)) {
+      kerberos_credentials_updater_ =
+          std::make_unique<SmbKerberosCredentialsUpdater>(
+              credentials_manager,
+              base::BindRepeating(&SmbService::UpdateKerberosCredentials,
+                                  weak_ptr_factory_.GetWeakPtr()));
+      SetupKerberos(kerberos_credentials_updater_->active_account_name());
+      return;
+    }
+
+    // There is no need to call `UpdateKerberosCredentials`, which leads to the
+    // DBus method to set up Kerberos when `kSmbproviderdOnDemand` is enabled,
+    // since setting up Kerberos authentication is now implemented in smbfs and
+    // this path is unnecessary.
     kerberos_credentials_updater_ =
-        std::make_unique<SmbKerberosCredentialsUpdater>(
-            credentials_manager,
-            base::BindRepeating(&SmbService::UpdateKerberosCredentials,
-                                weak_ptr_factory_.GetWeakPtr()));
-    SetupKerberos(kerberos_credentials_updater_->active_account_name());
-    return;
+        std::make_unique<SmbKerberosCredentialsUpdater>(credentials_manager,
+                                                        base::DoNothing());
   }
 
   // Post a task to complete setup. This is to allow unit tests to perform
@@ -384,12 +389,7 @@ void SmbService::MountInternal(
     smbfs_options.password_salt = info.password_salt();
   }
   if (info.use_kerberos()) {
-    if (user->IsActiveDirectoryUser()) {
-      smbfs_options.kerberos_options =
-          std::make_optional<SmbFsShare::KerberosOptions>(
-              SmbFsShare::KerberosOptions::Source::kActiveDirectory,
-              user->GetAccountId().GetObjGuid());
-    } else if (kerberos_credentials_updater_) {
+    if (kerberos_credentials_updater_) {
       smbfs_options.kerberos_options =
           std::make_optional<SmbFsShare::KerberosOptions>(
               SmbFsShare::KerberosOptions::Source::kKerberos,

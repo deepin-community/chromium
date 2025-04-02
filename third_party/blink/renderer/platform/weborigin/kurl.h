@@ -29,7 +29,8 @@
 
 #include <iosfwd>
 #include <memory>
-#include "third_party/abseil-cpp/absl/base/attributes.h"
+
+#include "base/compiler_specific.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
@@ -121,15 +122,45 @@ class PLATFORM_EXPORT KURL {
   bool HasPath() const;
 
   // Returns true if you can set the host and port for the URL.
-  // Non-hierarchical URLs don't have a host and port. This is equivalent to
-  // GURL::IsStandard().
   //
   // Note: this returns true for "filesystem" and false for "blob" currently,
   // due to peculiarities of how schemes are registered in url/ -- neither
   // of these schemes can have hostnames on the outer URL.
-  bool CanSetHostOrPort() const { return IsHierarchical(); }
-  bool CanSetPathname() const { return IsHierarchical(); }
+  bool CanSetHostOrPort() const;
+  bool CanSetPathname() const;
+
+  // Return true if a host can be removed from the URL.
+  //
+  // URL Standard: https://url.spec.whatwg.org/#host-state
+  //
+  // > 3.2: Otherwise, if state override is given, buffer is the empty string,
+  // > and either url includes credentials or url’s port is non-null, return.
+  //
+  // Examples:
+  //
+  // Setting an empty host is allowed:
+  //
+  // > const url = new URL("git://h/")
+  // > url.host = "";
+  // > assertEquals(url.href, "git:///");
+  //
+  // Setting an empty host is disallowed:
+  //
+  // > const url = new URL("git://u@h/")
+  // > url.host = "";
+  // > assertEquals(url.href, "git://u@h/");
+  bool CanRemoveHost() const;
+
+  // Return true if this URL is hierarchical, which is equivalent to standard
+  // URLs.
+  //
+  // Important note: If kStandardCompliantNonSpecialSchemeURLParsing flag is
+  // enabled, returns true also for non-special URLs which don't have an opaque
+  // path.
   bool IsHierarchical() const;
+
+  // Return true if this URL is a standard URL.
+  bool IsStandard() const;
 
   // The returned `AtomicString` is guaranteed to consist of only ASCII
   // characters, but may be 8-bit or 16-bit.
@@ -138,8 +169,7 @@ class PLATFORM_EXPORT KURL {
   String ElidedString() const;
 
   String Protocol() const;
-  String Host() const;
-  StringView HostView() const ABSL_ATTRIBUTE_LIFETIME_BOUND;
+  StringView Host() const LIFETIME_BOUND;
 
   // Returns 0 when there is no port or the default port was specified, or the
   // URL is invalid.
@@ -148,16 +178,18 @@ class PLATFORM_EXPORT KURL {
   // will be rejected by the canonicalizer.
   uint16_t Port() const;
   bool HasPort() const;
-  String User() const;
-  String Pass() const;
-  String GetPath() const;
+  StringView User() const LIFETIME_BOUND;
+  StringView Pass() const LIFETIME_BOUND;
+  StringView GetPath() const LIFETIME_BOUND;
   // This method handles "parameters" separated by a semicolon.
-  String LastPathComponent() const;
-  String Query() const;
-  String FragmentIdentifier() const;
+  StringView LastPathComponent() const LIFETIME_BOUND;
+  StringView Query() const LIFETIME_BOUND;
+  StringView QueryWithLeadingQuestionMark() const LIFETIME_BOUND;
+  StringView FragmentIdentifier() const LIFETIME_BOUND;
+  StringView FragmentIdentifierWithLeadingNumberSign() const LIFETIME_BOUND;
   bool HasFragmentIdentifier() const;
 
-  String BaseAsString() const;
+  StringView BaseAsString() const LIFETIME_BOUND;
 
   // Returns true if the current URL's protocol is the same as the StringView
   // argument. The argument must be lower-case.
@@ -208,7 +240,6 @@ class PLATFORM_EXPORT KURL {
   unsigned PathAfterLastSlash() const;
 
   operator const String&() const { return GetString(); }
-  operator StringView() const { return StringView(GetString()); }
 
   const url::Parsed& GetParsed() const { return parsed_; }
 
@@ -251,6 +282,14 @@ class PLATFORM_EXPORT KURL {
 
   // Asserts that `string_` is an ASCII string in DCHECK builds.
   void AssertStringSpecIsASCII();
+
+  // URL Standard: https://url.spec.whatwg.org/#include-credentials
+  bool IncludesCredentials() const {
+    return !User().empty() || !Pass().empty();
+  }
+
+  // URL Standard: https://url.spec.whatwg.org/#url-opaque-path
+  bool HasOpaquePath() const { return parsed_.has_opaque_path; }
 
   bool is_valid_;
   bool protocol_is_in_http_family_;
@@ -308,10 +347,10 @@ using DecodeURLMode = url::DecodeURLMode;
 //
 // Caution: Specifying kUTF8OrIsomorphic to the second argument doesn't conform
 // to specifications in many cases.
-PLATFORM_EXPORT String DecodeURLEscapeSequences(const String&,
+PLATFORM_EXPORT String DecodeURLEscapeSequences(const StringView&,
                                                 DecodeURLMode mode);
 
-PLATFORM_EXPORT String EncodeWithURLEscapeSequences(const String&);
+PLATFORM_EXPORT String EncodeWithURLEscapeSequences(const StringView&);
 
 // Checks an arbitrary string for invalid escape sequences.
 //

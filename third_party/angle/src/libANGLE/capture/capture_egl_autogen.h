@@ -323,6 +323,12 @@ angle::CallCapture CaptureReleaseDeviceANGLE(egl::Thread *thread,
                                              bool isCallValid,
                                              egl::Device *devicePacked,
                                              EGLBoolean returnValue);
+angle::CallCapture CaptureLockVulkanQueueANGLE(egl::Thread *thread,
+                                               bool isCallValid,
+                                               egl::Display *dpyPacked);
+angle::CallCapture CaptureUnlockVulkanQueueANGLE(egl::Thread *thread,
+                                                 bool isCallValid,
+                                                 egl::Display *dpyPacked);
 angle::CallCapture CaptureAcquireExternalContextANGLE(egl::Thread *thread,
                                                       bool isCallValid,
                                                       egl::Display *dpyPacked,
@@ -347,6 +353,9 @@ angle::CallCapture CaptureCopyMetalSharedEventANGLE(egl::Thread *thread,
                                                     egl::Display *dpyPacked,
                                                     egl::SyncID syncPacked,
                                                     void *returnValue);
+angle::CallCapture CaptureSetValidationEnabledANGLE(egl::Thread *thread,
+                                                    bool isCallValid,
+                                                    EGLBoolean validationState);
 angle::CallCapture CaptureReleaseHighPowerGPUANGLE(egl::Thread *thread,
                                                    bool isCallValid,
                                                    egl::Display *dpyPacked,
@@ -498,6 +507,15 @@ angle::CallCapture CaptureGetPlatformDisplayEXT(egl::Thread *thread,
                                                 void *native_display,
                                                 const AttributeMap &attrib_listPacked,
                                                 EGLDisplay returnValue);
+angle::CallCapture CaptureQuerySupportedCompressionRatesEXT(egl::Thread *thread,
+                                                            bool isCallValid,
+                                                            egl::Display *dpyPacked,
+                                                            egl::Config *configPacked,
+                                                            const EGLAttrib *attrib_list,
+                                                            EGLint *rates,
+                                                            EGLint rate_size,
+                                                            EGLint *num_rates,
+                                                            EGLBoolean returnValue);
 angle::CallCapture CaptureDebugMessageControlKHR(egl::Thread *thread,
                                                  bool isCallValid,
                                                  EGLDEBUGPROCKHR callback,

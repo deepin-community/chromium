@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import {assertNotNullOrUndefined, enableExperiment, goToResource} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   assertIssueTitle,
   expandIssue,
@@ -13,9 +12,9 @@ import {
   waitForTableFromResourceSectionContents,
 } from '../helpers/issues-helpers.js';
 
-describe('Low contrast issues', async () => {
+describe('Low contrast issues', () => {
   it('should report low contrast issues', async () => {
-    await enableExperiment('contrastIssues');
+    await enableExperiment('contrast-issues');
     await goToResource('elements/low-contrast.html');
     await navigateToIssuesTab();
     await expandIssue();

@@ -35,7 +35,7 @@ bool AccountManagerUIImpl::IsDialogShown() {
 void AccountManagerUIImpl::ShowManageAccountsSettings() {
   chrome::SettingsWindowManager::GetInstance()->ShowOSSettings(
       ProfileManager::GetActiveUserProfile(),
-      chromeos::settings::mojom::kMyAccountsSubpagePath);
+      chromeos::settings::mojom::kPeopleSectionPath);
 }
 
 }  // namespace ash

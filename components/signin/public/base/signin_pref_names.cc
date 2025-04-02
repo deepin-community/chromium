@@ -4,11 +4,9 @@
 
 #include "components/signin/public/base/signin_pref_names.h"
 
-#include "build/chromeos_buildflags.h"
-
 namespace prefs {
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // A boolean pref - should unauthenticated user should be logged out
 // automatically. Default value is false.
 const char kForceLogoutUnauthenticatedUserEnabled[] =
@@ -18,14 +16,25 @@ const char kForceLogoutUnauthenticatedUserEnabled[] =
 // email to gaia id for the the profile.  See account_tracker_service.h
 // for possible values.
 const char kAccountIdMigrationState[] = "account_id_migration_state";
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // Name of the preference property that persists the account information
 // tracked by this signin.
 const char kAccountInfo[] = "account_info";
 
-// Boolean identifying whether reverse auto-login is enabled.
-const char kAutologinEnabled[] = "autologin.enabled";
+// Whether the "clear on exit" migration is complete.
+// If this preference is not true, then the user needs to be migrated.
+// If a user has set clear cookies on exit prior to the activation of
+// `switches:: kExplicitBrowserSigninUIOnDesktop` which changes the behavior of
+// signed in users, they will need to do a migration.
+// The user can be migrated in various ways:
+// - the first time they launch Chrome, if they don't use the cookie setting
+// - by changing the value of the setting when it has the new behavior
+// - by seeing a notice dialog if they close the browser while being in a state
+//   where the new cookie setting behavior makes a difference (signed in with
+//   Uno and non-syncing).
+const char kCookieClearOnExitMigrationNoticeComplete[] =
+    "signin.cookie_clear_on_exit_migration_notice_complete";
 
 // A hash of the GAIA accounts present in the content area. Order does not
 // affect the hash, but signed in/out status will. Stored as the Base64 string.
@@ -49,13 +58,6 @@ const char kGoogleServicesAccountId[] = "google.services.account_id";
 const char kGoogleServicesConsentedToSync[] =
     "google.services.consented_to_sync";
 
-// Similar to kGoogleServicesLastSyncingUsername, this is the corresponding
-// version of kGoogleServicesAccountId that is not cleared on signout.
-// DEPRECATED: this preference is deprecated and is always empty. It will be
-// removed once all users are migrated to `kGoogleServicesLastSyncingGaiaId`.
-const char kGoogleServicesLastSyncingAccountIdDeprecated[] =
-    "google.services.last_account_id";
-
 // Similar to `kGoogleServicesLastSyncingUsername` that is not cleared on
 // signout. Note this is always a Gaia ID, as opposed to
 // `kGoogleServicesAccountId` which may be an email.
@@ -68,6 +70,11 @@ const char kGoogleServicesLastSyncingGaiaId[] = "google.services.last_gaia_id";
 // last account should use `kGoogleServicesLastSyncingGaiaId` instead.
 const char kGoogleServicesLastSyncingUsername[] =
     "google.services.last_username";
+
+// Similar to kGoogleServicesLastSyncingUsername above but written for all
+// signed-in users, no matter whether they were syncing or not.
+const char kGoogleServicesLastSignedInUsername[] =
+    "google.services.last_signed_in_username";
 
 // Device id scoped to single signin. This device id will be regenerated if user
 // signs out and signs back in. When refresh token is requested for this user it
@@ -93,11 +100,6 @@ const char kGoogleServicesSyncingUsernameMigratedToSignedIn[] =
 const char kGoogleServicesUsernamePattern[] =
     "google.services.username_pattern";
 
-// List to keep track of emails for which the user has rejected one-click
-// sign-in.
-const char kReverseAutologinRejectedEmailList[] =
-    "reverse_autologin.rejected_email_list";
-
 // Boolean indicating if this profile was signed in with information from a
 // credential provider.
 const char kSignedInWithCredentialProvider[] =
@@ -106,13 +108,39 @@ const char kSignedInWithCredentialProvider[] =
 // Boolean which stores if the user is allowed to signin to chrome.
 const char kSigninAllowed[] = "signin.allowed";
 
-// Contains last |ListAccounts| data which corresponds to Gaia cookies.
+// Contains last |ListAccounts| data which corresponds to Gaia cookies encoded
+// in jspb.
 const char kGaiaCookieLastListAccountsData[] =
     "gaia_cookie.last_list_accounts_data";
 
-// List of patterns to determine the account visibility.
+// Contains last |ListAccounts| data which corresponds to Gaia cookies in
+// base64-encoded protobuf.
+const char kGaiaCookieLastListAccountsBinaryData[] =
+    "gaia_cookie.last_list_accounts_binary_data";
+
+// The timestamp when History Sync was last declined (in the opt-in screen or
+// in the settings).
+// This value is reset when the user opts in to History Sync.
+// TODO(b/344543852): This pref is not used on iOS. Migrate the equivalent iOS
+// pref to this one.
+const char kHistorySyncLastDeclinedTimestamp[] =
+    "signin.history_sync.last_declined_timestamp";
+
+// Number of times the user successively declined History Sync (in the opt-in
+// screen or in the settings).
+// This value is reset to zero when the user accepts History Sync.
+// TODO(b/344543852): This pref is not used on iOS. Migrate the equivalent iOS
+// pref to this one.
+const char kHistorySyncSuccessiveDeclineCount[] =
+    "signin.history_sync.successive_decline_count";
+
+#if BUILDFLAG(IS_IOS)
+// List of patterns to determine the account visibility, according to the
+// "RestrictAccountsToPatterns" policy. Note that the policy also exists on
+// Android, but has a separate implementation there which doesn't use this pref.
 const char kRestrictAccountsToPatterns[] =
     "signin.restrict_accounts_to_patterns";
+#endif  // BUILDFLAG(IS_IOS)
 
 // Boolean which indicates if the user is allowed to sign into Chrome on the
 // next startup.
@@ -146,6 +174,16 @@ const char kUserCloudSigninPolicyResponseFromPolicyTestPage[] =
 // Registers that the sign in occurred with an explicit user action.
 // Affected by all signin sources except when signing in to Chrome caused by a
 // web sign in or by an unknown source.
-const char kExplicitBrowserSignin[] = "signin.explicit_browser_signin";
+// Note: this pref is only recorded when the
+// `switches::kExplicitBrowserSigninUIOnDesktop` is enabled.
+const char kExplicitBrowserSignin[] =
+    "signin.signin_with_explicit_browser_signin_on";
+
+// Boolean indicating whether the Device Bound Session Credentials should be
+// enabled. Takes precedence over the "EnableBoundSessionCredentials" feature
+// flag state. The value is controlled by the BoundSessionCredentialsEnabled
+// policy. More details can be found at BoundSessionCredentialsEnabled.yaml.
+const char kBoundSessionCredentialsEnabled[] =
+    "signin.bound_session_credentials_enabled";
 
 }  // namespace prefs

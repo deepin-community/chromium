@@ -153,6 +153,7 @@ constexpr auto kGamepadInfo = base::MakeFixedFlatMap<
     {{0x054c, 0x0ba0}, kXInputTypeNone},
     {{0x054c, 0x0ce6}, kXInputTypeNone},
     {{0x054c, 0x0df2}, kXInputTypeNone},
+    {{0x054c, 0x0e5f}, kXInputTypeNone},
     // Elecom Co., Ltd
     {{0x056e, 0x2003}, kXInputTypeNone},
     {{0x056e, 0x2004}, kXInputTypeXbox360},
@@ -646,7 +647,7 @@ GamepadIdList& GamepadIdList::Get() {
 
 XInputType GamepadIdList::GetXInputType(uint16_t vendor_id,
                                         uint16_t product_id) const {
-  const auto* find_it = kGamepadInfo.find({vendor_id, product_id});
+  const auto find_it = kGamepadInfo.find({vendor_id, product_id});
   return find_it == kGamepadInfo.end() ? kXInputTypeNone : find_it->second;
 }
 

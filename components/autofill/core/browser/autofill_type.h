@@ -24,7 +24,7 @@ class AutofillType {
   // A collection of server prediction metadata related to a form field.
   // Its current intended use is solely for consumers outside of
   // components/autofill.
-  // TODO(crbug.com/1345089): Move all server prediction related information
+  // TODO(crbug.com/40232021): Move all server prediction related information
   // from `AutofillField` here, add it as a member to `AutofillType` and use it
   // inside `AutofillField`.
   struct ServerPrediction {
@@ -76,10 +76,10 @@ class AutofillType {
 
   // Maps `this` type to a field type that can be directly stored in an Autofill
   // data model (in the sense that it makes sense to call
-  // `AutofillDataModel::SetRawInfo()` with the returned field type as the first
-  // parameter).  Note that the returned type might not be exactly equivalent to
-  // `this` type.  For example, the HTML types 'country' and 'country-name' both
-  // map to ADDRESS_HOME_COUNTRY.
+  // `FormGroup::SetRawInfo()` with the returned field type as the
+  // first parameter).  Note that the returned type might not be exactly
+  // equivalent to `this` type.  For example, the HTML types 'country' and
+  // 'country-name' both map to ADDRESS_HOME_COUNTRY.
   FieldType GetStorableType() const;
 
   std::string_view ToStringView() const;

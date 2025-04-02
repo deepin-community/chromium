@@ -1468,8 +1468,6 @@ bool ExtensionDownloader::IterateFetchCredentialsAfterFailure(
     default:
       NOTREACHED();
   }
-  NOTREACHED();
-  return false;
 }
 
 void ExtensionDownloader::OnAccessTokenFetchComplete(

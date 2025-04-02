@@ -1,7 +1,7 @@
 // Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-#include "chrome/browser/extensions/api/enterprise_reporting_private/enterprise_reporting_private_api.h"
+#include <string_view>
 
 #include "base/command_line.h"
 #include "base/test/scoped_feature_list.h"
@@ -11,6 +11,7 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/enterprise/connectors/test/deep_scanning_test_utils.h"
 #include "chrome/browser/enterprise/util/managed_browser_utils.h"
+#include "chrome/browser/extensions/api/enterprise_reporting_private/enterprise_reporting_private_api.h"
 #include "chrome/browser/net/profile_network_context_service.h"
 #include "chrome/browser/net/profile_network_context_service_factory.h"
 #include "chrome/browser/policy/chrome_browser_policy_connector.h"
@@ -41,14 +42,15 @@
 #include "net/test/test_data_directory.h"
 
 #if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/policy/dm_token_utils.h"
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chrome/browser/ash/policy/core/user_cloud_policy_manager_ash.h"
 #include "chrome/browser/browser_process_platform_part.h"
+#include "chrome/browser/policy/dm_token_utils.h"
 #include "chromeos/dbus/constants/dbus_switches.h"
+#endif
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#include "components/device_signals/core/common/signals_features.h"
 #endif
 
 namespace enterprise_reporting_private =
@@ -110,8 +112,9 @@ class MockClientCertStore : public net::ClientCertStore {
   explicit MockClientCertStore(net::ClientCertIdentityList certs)
       : certs_(std::move(certs)) {}
 
-  void GetClientCerts(const net::SSLCertRequestInfo& cert_request_info,
-                      ClientCertListCallback callback) override {
+  void GetClientCerts(
+      scoped_refptr<const net::SSLCertRequestInfo> cert_request_info,
+      ClientCertListCallback callback) override {
     std::move(callback).Run(std::move(certs_));
   }
 
@@ -126,7 +129,7 @@ class MockClientCertStore : public net::ClientCertStore {
 class EnterpriseReportingPrivateGetContextInfoBaseBrowserTest
     : public InProcessBrowserTest {
  public:
-#if !BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(GOOGLE_CHROME_BRANDING) && !BUILDFLAG(IS_CHROMEOS)
   void SetUpDefaultCommandLine(base::CommandLine* command_line) override {
     InProcessBrowserTest::SetUpDefaultCommandLine(command_line);
     command_line->AppendSwitch(::switches::kEnableChromeBrowserCloudManagement);
@@ -175,7 +178,7 @@ class EnterpriseReportingPrivateGetContextInfoBrowserTest
         SetUpOnMainThread();
 
     if (browser_managed()) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       auto* browser_policy_manager = g_browser_process->platform_part()
                                          ->browser_policy_connector_ash()
                                          ->GetDeviceCloudPolicyManager();
@@ -193,7 +196,7 @@ class EnterpriseReportingPrivateGetContextInfoBrowserTest
     }
 
     if (profile_managed()) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       auto* profile_policy_manager =
           browser()->profile()->GetUserCloudPolicyManagerAsh();
       profile_policy_manager->core()->client()->SetupRegistration(
@@ -269,7 +272,7 @@ IN_PROC_BROWSER_TEST_P(
   EXPECT_EQ(site_isolation_enabled(), info->site_isolation_enabled);
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 class EnterpriseReportingPrivateGetContextInfoChromeOSFirewallTest
     : public EnterpriseReportingPrivateGetContextInfoBaseBrowserTest,
       public testing::WithParamInterface<bool> {
@@ -349,14 +352,8 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Bool());
 #endif
 
-// crbug.com/1230268 not working on Lacros.
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#define MAYBE_AffiliationIDs DISABLED_AffiliationIDs
-#else
-#define MAYBE_AffiliationIDs AffiliationIDs
-#endif
 IN_PROC_BROWSER_TEST_P(EnterpriseReportingPrivateGetContextInfoBrowserTest,
-                       MAYBE_AffiliationIDs) {
+                       AffiliationIDs) {
   auto function =
       base::MakeRefCounted<EnterpriseReportingPrivateGetContextInfoFunction>();
   auto context_info_value = api_test_utils::RunFunctionAndReturnSingleResult(
@@ -599,8 +596,18 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateGetContextInfoBaseBrowserTest,
   EXPECT_EQ("google", info->on_security_event_providers[0]);
 }
 
-class EnterpriseReportingPrivateGetCertificateTest : public policy::PolicyTest {
+class EnterpriseReportingPrivateGetCertificateTest
+    : public policy::PolicyTest,
+      public testing::WithParamInterface<bool> {
  public:
+  EnterpriseReportingPrivateGetCertificateTest() {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+    feature_list_.InitWithFeatureState(
+        enterprise_signals::features::kAllowClientCertificateReportingForUsers,
+        GetParam());
+#endif
+  }
+
   void SetUpOnMainThread() override {
     ProfileNetworkContextServiceFactory::GetForContext(browser()->profile())
         ->set_client_cert_store_factory_for_testing(base::BindRepeating(
@@ -609,7 +616,7 @@ class EnterpriseReportingPrivateGetCertificateTest : public policy::PolicyTest {
   }
 
   void SetPolicyValue(const std::string& policy_value) {
-    EXPECT_FALSE(chrome::enterprise_util::IsMachinePolicyPref(
+    EXPECT_FALSE(enterprise_util::IsMachinePolicyPref(
         prefs::kManagedAutoSelectCertificateForUrls));
 
     base::Value::List list;
@@ -622,8 +629,22 @@ class EnterpriseReportingPrivateGetCertificateTest : public policy::PolicyTest {
                  nullptr);
     UpdateProviderPolicy(policies);
 
-    EXPECT_TRUE(chrome::enterprise_util::IsMachinePolicyPref(
+    EXPECT_TRUE(enterprise_util::IsMachinePolicyPref(
         prefs::kManagedAutoSelectCertificateForUrls));
+  }
+
+  void SetUserPolicyValue(const std::string& policy_value) {
+    EXPECT_FALSE(enterprise_util::IsMachinePolicyPref(
+        prefs::kManagedAutoSelectCertificateForUrls));
+    base::Value::List list;
+    list.Append(policy_value);
+
+    policy::PolicyMap policies;
+    policies.Set(policy::key::kAutoSelectCertificateForUrls,
+                 policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+                 policy::POLICY_SOURCE_CLOUD, base::Value(std::move(list)),
+                 nullptr);
+    UpdateProviderPolicy(policies);
   }
 
   enterprise_reporting_private::Certificate GetCertificate() {
@@ -667,9 +688,10 @@ class EnterpriseReportingPrivateGetCertificateTest : public policy::PolicyTest {
   }
 
   std::vector<scoped_refptr<net::X509Certificate>> client_certs_;
+  base::test::ScopedFeatureList feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateGetCertificateTest,
+IN_PROC_BROWSER_TEST_P(EnterpriseReportingPrivateGetCertificateTest,
                        TestPolicyUnset) {
   auto cert = GetCertificate();
 
@@ -677,7 +699,7 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateGetCertificateTest,
             cert.status);
 }
 
-IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateGetCertificateTest,
+IN_PROC_BROWSER_TEST_P(EnterpriseReportingPrivateGetCertificateTest,
                        TestPolicySet) {
   constexpr char kPolicyValue[] = R"({
       "pattern": "https://www.example.com",
@@ -695,7 +717,7 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateGetCertificateTest,
   EXPECT_FALSE(cert.encoded_certificate.has_value());
 }
 
-IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateGetCertificateTest,
+IN_PROC_BROWSER_TEST_P(EnterpriseReportingPrivateGetCertificateTest,
                        TestPolicySetCertsPresentButNotMatching) {
   SetupDefaultClientCertList();
 
@@ -715,7 +737,7 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateGetCertificateTest,
   EXPECT_FALSE(cert.encoded_certificate.has_value());
 }
 
-IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateGetCertificateTest,
+IN_PROC_BROWSER_TEST_P(EnterpriseReportingPrivateGetCertificateTest,
                        TestPolicySetCertsPresentUrlNotMatching) {
   SetupDefaultClientCertList();
 
@@ -735,7 +757,7 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateGetCertificateTest,
   EXPECT_FALSE(cert.encoded_certificate.has_value());
 }
 
-IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateGetCertificateTest,
+IN_PROC_BROWSER_TEST_P(EnterpriseReportingPrivateGetCertificateTest,
                        TestPolicySetCertsPresentAndMatching) {
   SetupDefaultClientCertList();
 
@@ -754,11 +776,45 @@ IN_PROC_BROWSER_TEST_F(EnterpriseReportingPrivateGetCertificateTest,
   EXPECT_EQ(enterprise_reporting_private::CertificateStatus::kOk, cert.status);
   EXPECT_TRUE(cert.encoded_certificate.has_value());
 
-  base::StringPiece der_cert = net::x509_util::CryptoBufferAsStringPiece(
+  std::string_view der_cert = net::x509_util::CryptoBufferAsStringPiece(
       client_certs()[0]->cert_buffer());
   std::vector<uint8_t> expected_der_bytes(der_cert.begin(), der_cert.end());
 
   EXPECT_EQ(expected_der_bytes, *cert.encoded_certificate);
 }
+
+IN_PROC_BROWSER_TEST_P(EnterpriseReportingPrivateGetCertificateTest,
+                       TestUserPolicySetCertsPresentAndMatching) {
+  SetupDefaultClientCertList();
+
+  constexpr char kPolicyValue[] = R"({
+      "pattern": "https://www.example.com",
+      "filter": {
+        "ISSUER": {
+          "CN": "B CA"
+        }
+      }
+    })";
+  SetUserPolicyValue(kPolicyValue);
+
+  auto cert = GetCertificate();
+
+  EXPECT_EQ(enterprise_reporting_private::CertificateStatus::kOk, cert.status);
+  EXPECT_TRUE(cert.encoded_certificate.has_value());
+
+  std::string_view der_cert = net::x509_util::CryptoBufferAsStringPiece(
+      client_certs()[0]->cert_buffer());
+  std::vector<uint8_t> expected_der_bytes(der_cert.begin(), der_cert.end());
+
+  EXPECT_EQ(expected_der_bytes, *cert.encoded_certificate);
+}
+
+INSTANTIATE_TEST_SUITE_P(,
+                         EnterpriseReportingPrivateGetCertificateTest,
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+                         testing::Bool());
+#else
+                         testing::Values(false));
+#endif
 
 }  // namespace extensions

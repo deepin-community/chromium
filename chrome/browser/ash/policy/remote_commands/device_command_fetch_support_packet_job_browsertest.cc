@@ -19,7 +19,6 @@
 #include "base/values.h"
 #include "chrome/browser/ash/login/app_mode/test/kiosk_apps_mixin.h"
 #include "chrome/browser/ash/login/app_mode/test/kiosk_base_test.h"
-#include "chrome/browser/ash/login/app_mode/test/kiosk_test_helpers.h"
 #include "chrome/browser/ash/login/app_mode/test/managed_guest_session_test_helpers.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/session_manager_state_waiter.h"
@@ -49,6 +48,7 @@
 #include "content/public/browser/browser_main_parts.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -63,10 +63,10 @@ namespace policy {
 namespace {
 
 constexpr char kUnaffiliatedUser[] = "user@gmail.com";
-constexpr char kUnaffiliatedGaiaID[] = "11111";
+constexpr GaiaId::Literal kUnaffiliatedGaiaID("11111");
 
 constexpr char kAffiliatedUser[] = "user@example.com";
-constexpr char kAffiliatedGaiaID[] = "22222";
+constexpr GaiaId::Literal kAffiliatedGaiaID("22222");
 
 // Use a number larger than int32 to catch truncation errors.
 const int64_t kInitialCommandId = (1LL << 35) + 1;
@@ -156,8 +156,8 @@ class DeviceCommandFetchSupportPacketBrowserTestBase : public BaseBrowserTest {
     base::FilePath exported_file(event.upload_settings().origin_path());
     // Ensure that the resulting `exported_file` exist under target directory.
     EXPECT_EQ(exported_file.DirName(), target_dir());
-    EXPECT_TRUE(event.has_command_id());
-    EXPECT_EQ(event.command_id(), command_id);
+    EXPECT_TRUE(event.has_remote_command_details());
+    EXPECT_EQ(event.remote_command_details().command_id(), command_id);
 
     std::string expected_upload_parameters = test::GetExpectedUploadParameters(
         command_id, exported_file.BaseName().value());
@@ -177,8 +177,8 @@ class DeviceCommandFetchSupportPacketBrowserTestBase : public BaseBrowserTest {
                        enterprise_management::FetchSupportPacketResultNote::
                            WARNING_PII_NOT_ALLOWED));
     }
-    EXPECT_THAT(event.command_result_payload(),
-                IsJson(std::move(expected_payload)));
+    EXPECT_THAT(event.remote_command_details().command_result_payload(),
+                IsJson(expected_payload));
   }
 
   const base::HistogramTester& histogram_tester() { return histogram_tester_; }
@@ -254,16 +254,15 @@ class DeviceCommandFetchSupportPacketBrowserTestParameterized
   void LoginUserAndSetAffiliation(
       const ash::LoginManagerMixin::TestUserInfo& user,
       bool is_affiliated) {
-    login_manager_mixin_.LoginWithDefaultContext(
-        user, /*wait_for_profile_prepared=*/true);
+    login_manager_mixin_.LoginWithDefaultContext(user);
     login_manager_mixin_.WaitForActiveSession();
     // UserManager is initialized as ash::FakeChromeUserManager by the included
     // mixins so it's safe to cast.
     ash::FakeChromeUserManager* fake_user_manager =
         static_cast<ash::FakeChromeUserManager*>(
             user_manager::UserManager::Get());
-    fake_user_manager->SetUserAffiliationForTesting(user.account_id,
-                                                    is_affiliated);
+    fake_user_manager->SetUserPolicyStatus(user.account_id, /*is_managed=*/true,
+                                           is_affiliated);
   }
 
   void LaunchMGS() {
@@ -324,9 +323,7 @@ class DeviceCommandFetchSupportPacketBrowserTestManualKioskSession
     : public DeviceCommandFetchSupportPacketBrowserTestBase<
           ash::KioskBaseTest> {
  protected:
-  DeviceCommandFetchSupportPacketBrowserTestManualKioskSession() {
-    set_use_consumer_kiosk_mode(false);
-  }
+  DeviceCommandFetchSupportPacketBrowserTestManualKioskSession() = default;
 
   void SetLogUploadEnabledPolicy(bool enabled) {
     em::ChromeDeviceSettingsProto& proto(
@@ -399,10 +396,10 @@ IN_PROC_BROWSER_TEST_P(DeviceCommandFetchSupportPacketBrowserTestParameterized,
   // Check contents of the resulting file.
   {
     base::ScopedAllowBlockingForTesting allow_blocking_for_test;
-    int64_t file_size;
     base::FilePath exported_file(event.upload_settings().origin_path());
-    ASSERT_TRUE(base::GetFileSize(exported_file, &file_size));
-    EXPECT_GT(file_size, 0);
+    std::optional<int64_t> file_size = base::GetFileSize(exported_file);
+    ASSERT_TRUE(file_size.has_value());
+    EXPECT_GT(file_size.value(), 0);
   }
 
   histogram_tester().ExpectUniqueSample(
@@ -438,10 +435,10 @@ IN_PROC_BROWSER_TEST_P(DeviceCommandFetchSupportPacketBrowserTestParameterized,
   // Check contents of the resulting file.
   {
     base::ScopedAllowBlockingForTesting allow_blocking_for_test;
-    int64_t file_size;
     base::FilePath exported_file(event.upload_settings().origin_path());
-    ASSERT_TRUE(base::GetFileSize(exported_file, &file_size));
-    EXPECT_GT(file_size, 0);
+    std::optional<int64_t> file_size = base::GetFileSize(exported_file);
+    ASSERT_TRUE(file_size.has_value());
+    EXPECT_GT(file_size.value(), 0);
   }
 
   histogram_tester().ExpectUniqueSample(
@@ -476,10 +473,10 @@ IN_PROC_BROWSER_TEST_F(
   // Check contents of the resulting file.
   {
     base::ScopedAllowBlockingForTesting allow_blocking_for_test;
-    int64_t file_size;
     base::FilePath exported_file(event.upload_settings().origin_path());
-    ASSERT_TRUE(base::GetFileSize(exported_file, &file_size));
-    EXPECT_GT(file_size, 0);
+    std::optional<int64_t> file_size = base::GetFileSize(exported_file);
+    ASSERT_TRUE(file_size.has_value());
+    EXPECT_GT(file_size.value(), 0);
   }
 
   histogram_tester().ExpectUniqueSample(
@@ -516,10 +513,10 @@ IN_PROC_BROWSER_TEST_F(
   // Check contents of the resulting file.
   {
     base::ScopedAllowBlockingForTesting allow_blocking_for_test;
-    int64_t file_size;
     base::FilePath exported_file(event.upload_settings().origin_path());
-    ASSERT_TRUE(base::GetFileSize(exported_file, &file_size));
-    EXPECT_GT(file_size, 0);
+    std::optional<int64_t> file_size = base::GetFileSize(exported_file);
+    ASSERT_TRUE(file_size.has_value());
+    EXPECT_GT(file_size.value(), 0);
   }
 
   histogram_tester().ExpectUniqueSample(
@@ -532,8 +529,7 @@ IN_PROC_BROWSER_TEST_F(
     SuccessCommandRequestWithoutPii) {
   SetLogUploadEnabledPolicy(true);
 
-  StartAppLaunchFromLoginScreen(
-      ash::NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_ONLINE);
+  StartAppLaunchFromLoginScreen(NetworkStatus::kOnline);
   WaitForAppLaunchWithOptions(false /* check launch data */,
                               false /* terminate app */,
                               true /* keep app open */);
@@ -559,10 +555,10 @@ IN_PROC_BROWSER_TEST_F(
   // Check contents of the resulting file.
   {
     base::ScopedAllowBlockingForTesting allow_blocking_for_test;
-    int64_t file_size;
     base::FilePath exported_file(event.upload_settings().origin_path());
-    ASSERT_TRUE(base::GetFileSize(exported_file, &file_size));
-    EXPECT_GT(file_size, 0);
+    std::optional<int64_t> file_size = base::GetFileSize(exported_file);
+    ASSERT_TRUE(file_size.has_value());
+    EXPECT_GT(file_size.value(), 0);
   }
 
   histogram_tester().ExpectUniqueSample(
@@ -575,8 +571,7 @@ IN_PROC_BROWSER_TEST_F(
     SuccessCommandRequestWithPii) {
   SetLogUploadEnabledPolicy(true);
 
-  StartAppLaunchFromLoginScreen(
-      ash::NetworkPortalDetector::CAPTIVE_PORTAL_STATUS_ONLINE);
+  StartAppLaunchFromLoginScreen(NetworkStatus::kOnline);
   WaitForAppLaunchWithOptions(false /* check launch data */,
                               false /* terminate app */,
                               true /* keep app open */);
@@ -604,10 +599,10 @@ IN_PROC_BROWSER_TEST_F(
   // Check contents of the resulting file.
   {
     base::ScopedAllowBlockingForTesting allow_blocking_for_test;
-    int64_t file_size;
     base::FilePath exported_file(event.upload_settings().origin_path());
-    ASSERT_TRUE(base::GetFileSize(exported_file, &file_size));
-    EXPECT_GT(file_size, 0);
+    std::optional<int64_t> file_size = base::GetFileSize(exported_file);
+    ASSERT_TRUE(file_size.has_value());
+    EXPECT_GT(file_size.value(), 0);
   }
 
   histogram_tester().ExpectUniqueSample(

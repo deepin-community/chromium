@@ -75,7 +75,6 @@ void HostResolverMdnsListenerImpl::OnRecordUpdate(
     case DnsQueryType::UNSPECIFIED:
     case DnsQueryType::HTTPS:
       NOTREACHED();
-      break;
     case DnsQueryType::A:
     case DnsQueryType::AAAA:
       DCHECK_EQ(1u, parsed_entry.ip_endpoints().size());

@@ -25,6 +25,7 @@
 #include "components/download/public/common/download_item.h"
 #include "components/download/public/common/download_path_reservation_tracker.h"
 #include "components/download/public/common/download_target_info.h"
+#include "components/enterprise/buildflags/buildflags.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/content/common/proto/download_file_types.pb.h"
 #include "content/public/browser/download_manager.h"
@@ -98,6 +99,7 @@ class ChromeDownloadManagerDelegate
 
   // content::DownloadManagerDelegate
   void Shutdown() override;
+  void OnDownloadCanceledAtShutdown(download::DownloadItem* item) override;
   void GetNextId(content::DownloadIdCallback callback) override;
   bool DetermineDownloadTarget(
       download::DownloadItem* item,
@@ -111,6 +113,7 @@ class ChromeDownloadManagerDelegate
   bool ShouldOpenDownload(
       download::DownloadItem* item,
       content::DownloadOpenDelayedCallback callback) override;
+  bool ShouldObfuscateDownload(download::DownloadItem* item) override;
   bool InterceptDownloadIfApplicable(
       const GURL& url,
       const std::string& user_agent,
@@ -142,15 +145,21 @@ class ChromeDownloadManagerDelegate
       std::optional<url::Origin> request_initiator,
       bool from_download_cross_origin_redirect,
       bool content_initiated,
+      const std::string& mime_type,
+      std::optional<ui::PageTransition> page_transition,
       content::CheckDownloadAllowedCallback check_download_allowed_cb) override;
   download::QuarantineConnectionCallback GetQuarantineConnectionCallback()
       override;
+  std::unique_ptr<download::DownloadItemRenameHandler>
+  GetRenameHandlerForDownload(download::DownloadItem* download_item) override;
   void CheckSavePackageAllowed(
       download::DownloadItem* download_item,
       base::flat_map<base::FilePath, base::FilePath> save_package_files,
       content::SavePackageAllowedCallback callback) override;
 #if BUILDFLAG(IS_ANDROID)
   bool IsFromExternalApp(download::DownloadItem* item) override;
+  bool ShouldOpenPdfInline() override;
+  bool IsDownloadRestrictedByPolicy() override;
 #else
   void AttachExtraInfo(download::DownloadItem* item) override;
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -295,6 +304,13 @@ class ChromeDownloadManagerDelegate
   void ShouldCompleteDownloadInternal(uint32_t download_id,
                                       base::OnceClosure user_complete_callback);
 
+#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS)
+  // Called when obfuscated download files are deobfuscated.
+  void OnDeobfuscationComplete(
+      base::OnceClosure callback,
+      base::expected<void, enterprise_obfuscation::Error> deobfuscation_result);
+#endif
+
   // Sets the next download id based on download database records, and runs all
   // cached id callbacks.
   void SetNextId(uint32_t id);
@@ -308,8 +324,18 @@ class ChromeDownloadManagerDelegate
       download::DownloadTargetInfo target_info,
       safe_browsing::DownloadFileType::DangerLevel danger_level);
 
+  // Sends a download report when the dangerous download is opened. This action
+  // can be performed multiple times after the warning is bypassed, so this
+  // report can be sent multiple times for a single download.
   void MaybeSendDangerousDownloadOpenedReport(download::DownloadItem* download,
                                               bool show_download_in_folder);
+
+  // Sends a download report when the dangerous download is canceled
+  // automatically. This code path is NOT triggered if a user explicitly
+  // canceled the download.
+  void MaybeSendDangerousDownloadCanceledReport(
+      download::DownloadItem* download,
+      bool is_shutdown);
 
   void OnCheckDownloadAllowedComplete(
       content::CheckDownloadAllowedCallback check_download_allowed_cb,
@@ -341,6 +367,9 @@ class ChromeDownloadManagerDelegate
       DownloadTargetDeterminerDelegate::ConfirmationCallback callback,
       download::PathValidationResult result,
       const base::FilePath& target_path);
+  // Return true if the mime type is pdf and Chrome supports open this pdf.
+  bool IsPdfAndSupported(const std::string& mime_type,
+                         content::WebContents* web_contents);
 #endif
 
   raw_ptr<Profile, DanglingUntriaged> profile_;

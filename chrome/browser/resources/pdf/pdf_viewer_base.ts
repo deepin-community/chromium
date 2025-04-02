@@ -6,7 +6,7 @@ import {assert} from 'chrome://resources/js/assert.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
-import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
+import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
 
 import type {BrowserApi} from './browser_api.js';
 import {ZoomBehavior} from './browser_api.js';
@@ -21,7 +21,6 @@ import type {SerializedKeyEvent} from './pdf_scripting_api.js';
 import {LoadState} from './pdf_scripting_api.js';
 import type {DocumentDimensionsMessageData} from './pdf_viewer_utils.js';
 import {Viewport} from './viewport.js';
-import {ViewportScroller} from './viewport_scroller.js';
 import {ZoomManager} from './zoom_manager.js';
 
 /** @return Width of a scrollbar in pixels */
@@ -40,15 +39,12 @@ function getScrollbarWidth(): number {
 
 export type KeyEventData = MessageData&{keyEvent: SerializedKeyEvent};
 
-export abstract class PdfViewerBaseElement extends PolymerElement {
-  static get properties(): any {
+export abstract class PdfViewerBaseElement extends CrLitElement {
+  static override get properties() {
     return {
-      showErrorDialog: {
-        type: Boolean,
-        value: false,
-      },
-
-      strings: Object,
+      pdfCr23Enabled: {type: Boolean},
+      showErrorDialog: {type: Boolean},
+      strings: {type: Object},
     };
   }
 
@@ -59,11 +55,11 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
   protected lastViewportPosition: Point|null = null;
   protected originalUrl: string = '';
   protected paramsParser: OpenPdfParamsParser|null = null;
+  protected pdfCr23Enabled: boolean = false;
   protected pdfOopifEnabled: boolean = false;
-  showErrorDialog: boolean;
+  showErrorDialog: boolean = false;
   protected strings?: {[key: string]: string};
   protected tracker: EventTracker = new EventTracker();
-  protected viewportScroller: ViewportScroller|null = null;
   private delayedScriptingMessages_: MessageEvent[] = [];
   private initialLoadComplete_: boolean = false;
   private loaded_: PromiseResolver<void>|null = null;
@@ -157,6 +153,8 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
       content: HTMLElement) {
     this.browserApi = browserApi;
     this.originalUrl = this.browserApi!.getStreamInfo().originalUrl;
+    this.pdfCr23Enabled =
+        document.documentElement.hasAttribute('pdfCr23Enabled');
     this.pdfOopifEnabled =
         document.documentElement.hasAttribute('pdfOopifEnabled');
 
@@ -168,6 +166,7 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
         this.browserApi!.getDefaultZoom() :
         1.0;
 
+    assert(!this.viewport_);
     this.viewport_ = new Viewport(
         scroller, sizer, content, getScrollbarWidth(), defaultZoom);
     this.viewport_!.setViewportChangedCallback(() => this.viewportChanged_());
@@ -179,7 +178,6 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
     });
     this.viewport_!.setUserInitiatedCallback(
         userInitiated => this.setUserInitiated_(userInitiated));
-    window.addEventListener('beforeunload', () => this.resetTrackers_());
 
     // Handle scripting messages from outside the extension that wish to
     // interact with it. We also send a message indicating that extension has
@@ -231,10 +229,6 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
     this.browserApi!.addZoomEventListener(
         (zoom: number) => this.zoomManager_!.onBrowserZoomChange(zoom));
 
-    // TODO(crbug.com/1278476): Don't need this after Pepper plugin goes away.
-    this.viewportScroller =
-        new ViewportScroller(this.viewport_, this.plugin_, window);
-
     // Request translated strings.
     chrome.resourcesPrivate.getStrings(
         chrome.resourcesPrivate.Component.PDF,
@@ -259,7 +253,7 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
         this.viewport_!.setPosition(this.lastViewportPosition);
       }
       this.paramsParser!.getViewportFromUrlParams(this.originalUrl)
-          .then(params => this.handleUrlParams_(params));
+          .then(params => this.handleUrlParams(params));
       this.setLoadState(LoadState.SUCCESS);
       this.sendDocumentLoadedMessage();
       while (this.delayedScriptingMessages_.length > 0) {
@@ -322,12 +316,13 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
    * @return Whether the message was handled.
    */
   handleScriptingMessage(message: MessageEvent): boolean {
-    // TODO(crbug.com/1228987): Remove this message handler when a permanent
+    // TODO(crbug.com/40189769): Remove this message handler when a permanent
     // postMessage() bridge is implemented for the viewer.
     if (message.data.type === 'connect') {
       const token: string = message.data.token;
       if (token === this.browserApi!.getStreamInfo().streamUrl) {
-        PluginController.getInstance().bindMessageHandler(message.ports![0]);
+        assert(message.ports[0] !== undefined);
+        PluginController.getInstance().bindMessageHandler(message.ports[0]);
       } else {
         this.dispatchEvent(new CustomEvent('connection-denied-for-testing'));
       }
@@ -378,6 +373,13 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
   }
 
   /**
+   * @return True if OOPIF PDF is enabled, false otherwise.
+   */
+  get isPdfOopifEnabled(): boolean {
+    return this.pdfOopifEnabled;
+  }
+
+  /**
    * @return Resolved when the load state reaches LOADED, rejects on FAILED.
    *     Returns null if no promise has been created, which is the case for
    *     initial load of the PDF.
@@ -416,6 +418,10 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
     }
   }
 
+  getLoadSucceededForTesting(): boolean {
+    return this.loadState_ === LoadState.SUCCESS;
+  }
+
   /**
    * Load a dictionary of translated strings into the UI. Used as a callback for
    * chrome.resourcesPrivate.
@@ -442,7 +448,7 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
    * later actions can override the effects of previous actions.
    * @param params The open params passed in the URL.
    */
-  private handleUrlParams_(params: OpenPdfParams) {
+  handleUrlParams(params: OpenPdfParams) {
     assert(this.viewport_);
 
     if (params.zoom) {
@@ -465,7 +471,7 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
       this.viewport_.setFittingType(params.view, fittingTypeParams);
       this.forceFit(params.view);
       this.isUserInitiatedEvent = true;
-    } else if (!params.position && params.page) {
+    } else if (!params.position && params.page !== undefined) {
       // No fitting type provided, so just go to page.
       this.viewport_.goToPage(params.page);
     }
@@ -507,7 +513,7 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
       try {
         this.parentWindow_!.postMessage(message, targetOrigin);
       } catch (ok) {
-        // TODO(crbug.com/1004425): targetOrigin probably was rejected, such as
+        // TODO(crbug.com/40647731): targetOrigin probably was rejected, such as
         // a "data:" URL. This shouldn't cause this method to throw, though.
       }
     }
@@ -556,12 +562,5 @@ export abstract class PdfViewerBaseElement extends PolymerElement {
   protected rotateCounterclockwise() {
     record(UserAction.ROTATE);
     this.currentController!.rotateCounterclockwise();
-  }
-
-  private resetTrackers_() {
-    this.viewport_!.resetTracker();
-    if (this.tracker) {
-      this.tracker.removeAll();
-    }
   }
 }

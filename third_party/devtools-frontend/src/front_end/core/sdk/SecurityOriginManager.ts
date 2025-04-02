@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {Capability, type Target} from './Target.js';
 import {SDKModel} from './SDKModel.js';
+import {Capability, type Target} from './Target.js';
 
 export class SecurityOriginManager extends SDKModel<EventTypes> {
   #mainSecurityOriginInternal: string;
@@ -62,9 +62,11 @@ export class SecurityOriginManager extends SDKModel<EventTypes> {
 }
 
 export enum Events {
+  /* eslint-disable @typescript-eslint/naming-convention -- Used by web_tests. */
   SecurityOriginAdded = 'SecurityOriginAdded',
   SecurityOriginRemoved = 'SecurityOriginRemoved',
   MainSecurityOriginChanged = 'MainSecurityOriginChanged',
+  /* eslint-enable @typescript-eslint/naming-convention */
 }
 
 export interface MainSecurityOriginChangedEvent {
@@ -72,11 +74,11 @@ export interface MainSecurityOriginChangedEvent {
   unreachableMainSecurityOrigin: string|null;
 }
 
-export type EventTypes = {
-  [Events.SecurityOriginAdded]: string,
-  [Events.SecurityOriginRemoved]: string,
-  [Events.MainSecurityOriginChanged]: MainSecurityOriginChangedEvent,
-};
+export interface EventTypes {
+  [Events.SecurityOriginAdded]: string;
+  [Events.SecurityOriginRemoved]: string;
+  [Events.MainSecurityOriginChanged]: MainSecurityOriginChangedEvent;
+}
 
 // TODO(jarhar): this is the one of the two usages of Capability.None. Do something about it!
-SDKModel.register(SecurityOriginManager, {capabilities: Capability.None, autostart: false});
+SDKModel.register(SecurityOriginManager, {capabilities: Capability.NONE, autostart: false});

@@ -9,7 +9,6 @@
 
 #include "base/command_line.h"
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/no_destructor.h"
@@ -17,6 +16,7 @@
 #include "base/observer_list.h"
 #include "base/strings/string_split.h"
 #include "content/browser/devtools/auction_worklet_devtools_agent_host.h"
+#include "content/browser/devtools/dedicated_worker_devtools_agent_host.h"
 #include "content/browser/devtools/devtools_http_handler.h"
 #include "content/browser/devtools/devtools_manager.h"
 #include "content/browser/devtools/devtools_pipe_handler.h"
@@ -30,6 +30,7 @@
 #include "content/browser/devtools/shared_worker_devtools_agent_host.h"
 #include "content/browser/devtools/shared_worker_devtools_manager.h"
 #include "content/browser/devtools/web_contents_devtools_agent_host.h"
+#include "content/browser/devtools/worker_or_worklet_devtools_agent_host.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
@@ -40,9 +41,10 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 
 #if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
 #include <fcntl.h>
 #include <io.h>
-#include <windows.h>
 #endif
 
 namespace content {
@@ -178,8 +180,7 @@ DevToolsAgentHost::List DevToolsAgentHost::GetOrCreateAll() {
 
   SharedStorageWorkletDevToolsManager::GetInstance()->AddAllAgentHosts(&result);
 
-  // TODO(dgozman): we should add dedicated workers here, but clients are not
-  // ready.
+  DedicatedWorkerDevToolsAgentHost::AddAllAgentHosts(&result);
   RenderFrameDevToolsAgentHost::AddAllAgentHosts(&result);
   WebContentsDevToolsAgentHost::AddAllAgentHosts(&result);
 
@@ -291,17 +292,12 @@ DevToolsSession* DevToolsAgentHostImpl::SessionByClient(
 
 bool DevToolsAgentHostImpl::AttachInternal(
     std::unique_ptr<DevToolsSession> session_owned) {
-  return AttachInternal(std::move(session_owned), true);
-}
-
-bool DevToolsAgentHostImpl::AttachInternal(
-    std::unique_ptr<DevToolsSession> session_owned,
-    bool acquire_wake_lock) {
   scoped_refptr<DevToolsAgentHostImpl> protect(this);
   DevToolsSession* session = session_owned.get();
   session->SetAgentHost(this);
-  if (!AttachSession(session, acquire_wake_lock))
+  if (!AttachSession(session)) {
     return false;
+  }
   renderer_channel_.AttachSession(session);
   sessions_.push_back(session);
   DCHECK(!base::Contains(session_by_client_, session->GetClient()));
@@ -318,17 +314,7 @@ bool DevToolsAgentHostImpl::AttachClient(DevToolsAgentHostClient* client) {
   if (SessionByClient(client))
     return false;
   return AttachInternal(
-      std::make_unique<DevToolsSession>(client, GetSessionMode()),
-      /*acquire_wake_lock=*/true);
-}
-
-bool DevToolsAgentHostImpl::AttachClientWithoutWakeLock(
-    content::DevToolsAgentHostClient* client) {
-  if (SessionByClient(client))
-    return false;
-  return AttachInternal(
-      std::make_unique<DevToolsSession>(client, GetSessionMode()),
-      /*acquire_wake_lock=*/false);
+      std::make_unique<DevToolsSession>(client, GetSessionMode()));
 }
 
 bool DevToolsAgentHostImpl::DetachClient(DevToolsAgentHostClient* client) {
@@ -354,7 +340,7 @@ void DevToolsAgentHostImpl::DetachInternal(DevToolsSession* session) {
   DCHECK_EQ(session, session_owned.get());
   // Make sure we dispose session prior to reporting it to the host.
   session->Dispose();
-  base::Erase(sessions_, session);
+  std::erase(sessions_, session);
   session_by_client_.erase(session->GetClient());
   DetachSession(session);
   DevToolsManager* manager = DevToolsManager::GetInstance();
@@ -382,8 +368,7 @@ std::string DevToolsAgentHostImpl::CreateIOStreamFromData(
     scoped_refptr<base::RefCountedMemory> data) {
   scoped_refptr<DevToolsStreamFile> stream =
       DevToolsStreamFile::Create(GetIOContext(), true /* binary */);
-  std::string text(reinterpret_cast<const char*>(data->front()), data->size());
-  stream->Append(std::make_unique<std::string>(text));
+  stream->Append(std::make_unique<std::string>(base::as_string_view(*data)));
   return stream->handle();
 }
 
@@ -475,8 +460,7 @@ void DevToolsAgentHostImpl::ForceDetachRestrictedSessions(
   }
 }
 
-bool DevToolsAgentHostImpl::AttachSession(DevToolsSession* session,
-                                          bool acquire_wake_lock) {
+bool DevToolsAgentHostImpl::AttachSession(DevToolsSession* session) {
   return false;
 }
 

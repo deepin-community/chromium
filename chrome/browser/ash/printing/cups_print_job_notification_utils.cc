@@ -178,7 +178,6 @@ void UpdateNotificationTitle(message_center::Notification* notification,
       break;
     case CupsPrintJob::State::STATE_CANCELLED:
       NOTREACHED();
-      break;
     default:
       break;
   }
@@ -206,7 +205,6 @@ void UpdateNotificationIcon(message_center::Notification* notification,
       break;
     case CupsPrintJob::State::STATE_CANCELLED:
       NOTREACHED();
-      break;
     case CupsPrintJob::State::STATE_NONE:
       break;
   }
@@ -241,7 +239,6 @@ void UpdateNotificationBodyMessage(message_center::Notification* notification,
       return;
     case CupsPrintJob::State::STATE_CANCELLED:
       NOTREACHED();
-      return;
     case CupsPrintJob::State::STATE_NONE:
       return;
   }

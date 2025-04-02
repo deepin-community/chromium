@@ -11,7 +11,9 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/gfx/canvas.h"
 #include "ui/native_theme/native_theme.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/menu/menu_config.h"
+#include "ui/views/controls/menu/menu_controller.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "ui/display/win/dpi.h"
@@ -20,7 +22,7 @@
 namespace views {
 
 MenuSeparator::MenuSeparator(ui::MenuSeparatorType type) : type_(type) {
-  SetAccessibilityProperties(ax::mojom::Role::kSplitter);
+  GetViewAccessibility().SetRole(ax::mojom::Role::kSplitter);
 }
 
 void MenuSeparator::OnPaint(gfx::Canvas* canvas) {
@@ -32,8 +34,9 @@ void MenuSeparator::OnPaint(gfx::Canvas* canvas) {
 
   int y = 0;
   int separator_thickness = menu_config.separator_thickness;
-  if (type_ == ui::DOUBLE_SEPARATOR)
+  if (type_ == ui::DOUBLE_SEPARATOR) {
     separator_thickness = menu_config.double_separator_thickness;
+  }
   switch (type_) {
     case ui::LOWER_SEPARATOR:
       y = height() - separator_thickness;
@@ -60,6 +63,8 @@ void MenuSeparator::OnPaint(gfx::Canvas* canvas) {
 
   ui::NativeTheme::MenuSeparatorExtraParams menu_separator;
   menu_separator.paint_rect = &paint_rect;
+  menu_separator.color_id =
+      MenuController::GetActiveInstance()->GetSeparatorColorId();
   menu_separator.type = type_;
   GetNativeTheme()->Paint(canvas->sk_canvas(), GetColorProvider(),
                           ui::NativeTheme::kMenuPopupSeparator,
@@ -67,7 +72,8 @@ void MenuSeparator::OnPaint(gfx::Canvas* canvas) {
                           ui::NativeTheme::ExtraParams(menu_separator));
 }
 
-gfx::Size MenuSeparator::CalculatePreferredSize() const {
+gfx::Size MenuSeparator::CalculatePreferredSize(
+    const SizeBounds& /*available_size*/) const {
   const MenuConfig& menu_config = MenuConfig::instance();
   int height = menu_config.separator_height;
   switch (type_) {
@@ -99,8 +105,9 @@ ui::MenuSeparatorType MenuSeparator::GetType() const {
 }
 
 void MenuSeparator::SetType(ui::MenuSeparatorType type) {
-  if (type_ == type)
+  if (type_ == type) {
     return;
+  }
 
   type_ = type;
   OnPropertyChanged(&type_, kPropertyEffectsPreferredSizeChanged);

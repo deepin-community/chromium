@@ -68,17 +68,6 @@ class WebContentSettingsClient;
 class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
                                             public LoadingBehaviorObserver {
  public:
-  // Returns true if execution of scripts from the url are allowed. Compared to
-  // AllowScriptFromSource(), this method does not generate any
-  // notification to the `WebContentSettingsClient` that the execution of the
-  // script was blocked. This method should be called only when there is a need
-  // to check the settings, and where blocked setting doesn't really imply that
-  // JavaScript was blocked from being executed.
-  static bool AllowScriptFromSourceWithoutNotifying(
-      const KURL& url,
-      WebContentSettingsClient* settings_client,
-      Settings* settings);
-
   static ResourceFetcher* CreateFetcherForCommittedDocument(DocumentLoader&,
                                                             Document&);
   FrameFetchContext(DocumentLoader& document_loader,
@@ -105,16 +94,28 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
 
   void AddResourceTiming(mojom::blink::ResourceTimingInfoPtr,
                          const AtomicString& initiator_type) override;
-  bool AllowImage(bool images_enabled, const KURL&) const override;
+  bool AllowImage() const override;
 
-  void PopulateResourceRequest(ResourceType,
-                               const std::optional<float> resource_width,
-                               ResourceRequest&,
-                               const ResourceLoaderOptions&) override;
+  void PopulateResourceRequestBeforeCacheAccess(
+      const ResourceLoaderOptions& options,
+      ResourceRequest& request) override;
+
+  void WillSendRequest(ResourceRequest& resource_request) override;
+
+  void UpgradeResourceRequestForLoader(
+      ResourceType,
+      const std::optional<float> resource_width,
+      ResourceRequest&,
+      const ResourceLoaderOptions&) override;
+
+  bool StartSpeculativeImageDecode(Resource* resource,
+                                   base::OnceClosure callback) override;
 
   bool IsPrerendering() const override;
 
   bool DoesLCPPHaveAnyHintData() override;
+
+  bool DoesLCPPHaveLcpElementLocatorHintData() override;
 
   // Exposed for testing.
   void ModifyRequestForCSP(ResourceRequest&);
@@ -148,6 +149,10 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
 
   scoped_refptr<const SecurityOrigin> GetTopFrameOrigin() const override;
 
+  const Vector<KURL>& GetPotentiallyUnusedPreloads() const override;
+
+  void AddLcpPredictedCallback(base::OnceClosure callback) override;
+
  private:
   friend class FrameFetchContextTest;
 
@@ -163,7 +168,7 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
   // BaseFetchContext overrides:
   net::SiteForCookies GetSiteForCookies() const override;
   SubresourceFilter* GetSubresourceFilter() const override;
-  bool AllowScriptFromSource(const KURL&) const override;
+  bool AllowScript() const override;
   bool ShouldBlockRequestByInspector(const KURL&) const override;
   void DispatchDidBlockRequest(const ResourceRequest&,
                                const ResourceLoaderOptions&,
@@ -171,7 +176,7 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
                                ResourceType) const override;
   ContentSecurityPolicy* GetContentSecurityPolicyForWorld(
       const DOMWrapperWorld* world) const override;
-  bool IsSVGImageChromeClient() const override;
+  bool IsIsolatedSVGChromeClient() const override;
   void CountUsage(WebFeature) const override;
   void CountDeprecation(WebFeature) const override;
   bool ShouldBlockWebSocketByMixedContentCheck(const KURL&) const override;
@@ -195,22 +200,20 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
   String GetUserAgent() const;
   std::optional<UserAgentMetadata> GetUserAgentMetadata() const;
   const PermissionsPolicy* GetPermissionsPolicy() const override;
+  HashSet<HashAlgorithm> CSPHashesToReport() const override;
+  void AddCSPHashReport(
+      const String& url,
+      const HashMap<HashAlgorithm, String>& integrity_hashes) override;
   const ClientHintsPreferences GetClientHintsPreferences() const;
   float GetDevicePixelRatio() const;
   String GetReducedAcceptLanguage() const;
 
   enum class ClientHintsMode { kLegacy, kStandard };
-  bool ShouldSendClientHint(ClientHintsMode mode,
-                            const PermissionsPolicy*,
-                            const url::Origin& resource_origin,
-                            bool is_1p_origin,
-                            network::mojom::blink::WebClientHintsType,
-                            const ClientHintsPreferences&) const;
   void SetFirstPartyCookie(ResourceRequest&);
 
-  // Returns true if the origin of |url| is same as the origin of the top level
+  // Returns true if `resource_origin` is same as the origin of the top level
   // frame's main resource.
-  bool IsFirstPartyOrigin(const KURL& url) const;
+  bool IsFirstPartyOrigin(const SecurityOrigin* resource_origin) const;
 
   CoreProbeSink* Probe() const;
 
@@ -220,6 +223,10 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
 
   // Non-null only when detached.
   Member<FrozenState> frozen_state_;
+
+  // Serializing the brand major version list is expensive, so it's cached.
+  std::optional<UserAgentMetadata> last_ua_;
+  std::optional<AtomicString> last_ua_serialized_brand_major_version_list_;
 };
 
 }  // namespace blink

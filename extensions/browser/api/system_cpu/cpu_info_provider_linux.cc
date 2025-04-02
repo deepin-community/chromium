@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "extensions/browser/api/system_cpu/cpu_info_provider.h"
 
 #include <stdint.h>
@@ -58,7 +63,9 @@ bool CpuInfoProvider::QueryCpuTimePerProcessor(
                "cpu%" PRIu32 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64,
                &pindex, &user, &nice, &sys, &idle);
     if (vals != 5 || pindex >= infos->size()) {
-      NOTREACHED();
+      // TODO(b/326303922): This fires in internal integration tests, reevaluate
+      // whether this should be (and can be made) unreachable or handle it.
+      DUMP_WILL_BE_NOTREACHED();
       return false;
     }
 

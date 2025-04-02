@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ui/views/location_bar/intent_chip_button.h"
+
 #include <memory>
 #include <utility>
 
@@ -9,13 +11,14 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_forward.h"
 #include "base/scoped_observation.h"
+#include "base/strings/strcat.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/user_action_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/types/expected.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/apps/app_service/app_registry_cache_waiter.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
@@ -26,7 +29,6 @@
 #include "chrome/browser/ui/test/test_browser_ui.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
-#include "chrome/browser/ui/views/location_bar/intent_chip_button.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/test/web_app_navigation_browsertest.h"
@@ -52,16 +54,22 @@
 #include "chrome/browser/web_applications/web_app_provider.h"
 #endif
 
-class IntentChipButtonBrowserTest : public web_app::WebAppNavigationBrowserTest,
-                                    public testing::WithParamInterface<bool> {
+class IntentChipButtonBrowserTest
+    : public web_app::WebAppNavigationBrowserTest,
+      public testing::WithParamInterface<
+          apps::test::LinkCapturingFeatureVersion> {
  public:
   IntentChipButtonBrowserTest() {
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        apps::test::GetFeaturesToEnableLinkCapturingUX(
-            /*override_captures_by_default=*/GetParam()),
-        {});
+        apps::test::GetFeaturesToEnableLinkCapturingUX(GetParam()), {});
   }
-  bool LinkCapturingEnabledByDefault() const { return GetParam(); }
+  bool LinkCapturingEnabledByDefault() const {
+#if BUILDFLAG(IS_CHROMEOS)
+    return false;
+#else
+    return GetParam() == apps::test::LinkCapturingFeatureVersion::kV2DefaultOn;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  }
 
   void SetUpOnMainThread() override {
     web_app::WebAppNavigationBrowserTest::SetUpOnMainThread();
@@ -83,6 +91,13 @@ class IntentChipButtonBrowserTest : public web_app::WebAppNavigationBrowserTest,
         browser()->tab_strip_model()->GetActiveWebContents());
     tab_helper->SetIconUpdateCallbackForTesting(
         intent_picker_done.GetCallback());
+    // On Mac, updating the icon requires asynchronous work that is done on the
+    // threadpool (see `WebAppsIntentPickerDelegate::FindAllAppsForUrl()` for
+    // more information). Flushing the thread pool thus helps prevent flakiness
+    // in tests.
+#if BUILDFLAG(IS_MAC)
+    base::ThreadPoolInstance::Get()->FlushForTesting();
+#endif  // BUILDFLAG(IS_MAC)
     action();
     if (HasFailure()) {
       return testing::AssertionFailure();
@@ -114,7 +129,7 @@ class IntentChipButtonBrowserTest : public web_app::WebAppNavigationBrowserTest,
         nullptr, ui_test_utils::BrowserChangeObserver::ChangeType::kAdded);
 
     views::test::ButtonTestApi test_api(GetIntentChip());
-    ui::MouseEvent e(ui::ET_MOUSE_PRESSED, gfx::Point(), gfx::Point(),
+    ui::MouseEvent e(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
                      ui::EventTimeForNow(), 0, 0);
     test_api.NotifyClick(e);
 
@@ -134,9 +149,10 @@ class IntentChipButtonBrowserTest : public web_app::WebAppNavigationBrowserTest,
   // Installs a web app on the same host as InstallTestWebApp(), but with "/" as
   // a scope, so it overlaps with all URLs in the test app scope.
   void InstallOverlappingApp() {
-    auto web_app_info = std::make_unique<web_app::WebAppInstallInfo>();
     const char* app_host = GetAppUrlHost();
-    web_app_info->start_url = https_server().GetURL(app_host, "/");
+    auto web_app_info =
+        web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
+            https_server().GetURL(app_host, "/"));
     web_app_info->scope = https_server().GetURL(app_host, "/");
     web_app_info->title = base::UTF8ToUTF16(GetAppName());
     web_app_info->description = u"Test description";
@@ -194,33 +210,6 @@ IN_PROC_BROWSER_TEST_P(IntentChipButtonBrowserTest,
   EXPECT_FALSE(GetIntentChip()->GetVisible());
 }
 
-// TODO(crbug.com/1515480): This test is flaky on Mac.
-#if BUILDFLAG(IS_MAC)
-#define MAYBE_IconVisibilityAfterTabSwitching \
-  DISABLED_IconVisibilityAfterTabSwitching
-#else
-#define MAYBE_IconVisibilityAfterTabSwitching IconVisibilityAfterTabSwitching
-#endif
-IN_PROC_BROWSER_TEST_P(IntentChipButtonBrowserTest,
-                       MAYBE_IconVisibilityAfterTabSwitching) {
-  const GURL in_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
-  const GURL out_of_scope_url =
-      https_server().GetURL(GetAppUrlHost(), GetOutOfScopeUrlPath());
-
-  OmniboxChipButton* intent_chip_button = GetIntentChip();
-
-  OpenNewTab(in_scope_url);
-  EXPECT_TRUE(intent_chip_button->GetVisible());
-  OpenNewTab(out_of_scope_url);
-  EXPECT_FALSE(intent_chip_button->GetVisible());
-
-  chrome::SelectPreviousTab(browser());
-  EXPECT_TRUE(intent_chip_button->GetVisible());
-  chrome::SelectNextTab(browser());
-  EXPECT_FALSE(intent_chip_button->GetVisible());
-}
-
 IN_PROC_BROWSER_TEST_P(IntentChipButtonBrowserTest,
                        ShowsIntentChipExpandedForPreferredApp) {
   EXPECT_EQ(apps::test::EnableLinkCapturingByUser(profile(), test_web_app_id()),
@@ -273,67 +262,27 @@ IN_PROC_BROWSER_TEST_P(IntentChipButtonBrowserTest, OpensAppForPreferredApp) {
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-IN_PROC_BROWSER_TEST_P(IntentChipButtonBrowserTest, ShowsAppIconInChip) {
-  // With ChromeRefresh2023, the same icon is always shown in the chip and this
-  // test is no longer meaningful.
-  if (features::IsChromeRefresh2023()) {
-    GTEST_SKIP() << "With ChromeRefresh2023, the same icon is always shown in "
-                    "the chip and this test is no longer meaningful.";
-  }
-
-  InstallOverlappingApp();
-
-  const GURL root_url = https_server().GetURL(GetAppUrlHost(), "/");
-  const GURL overlapped_url =
-      https_server().GetURL(GetAppUrlHost(), GetInScopeUrlPath());
-  const GURL non_overlapped_url =
-      https_server().GetURL(GetAppUrlHost(), GetOutOfScopeUrlPath());
-
-  content::WebContents* web_contents =
-      browser()->tab_strip_model()->GetActiveWebContents();
-
-  NavigateAndWaitForIconUpdate(root_url);
-
-  auto icon1 =
-      GetIntentChip()->GetImage(views::Button::ButtonState::STATE_NORMAL);
-  ASSERT_FALSE(IntentPickerTabHelper::FromWebContents(web_contents)
-                   ->app_icon()
-                   .IsEmpty());
-
-  NavigateAndWaitForIconUpdate(non_overlapped_url);
-
-  // The chip should still be showing the same app icon.
-  auto icon2 =
-      GetIntentChip()->GetImage(views::Button::ButtonState::STATE_NORMAL);
-  ASSERT_TRUE(icon1.BackedBySameObjectAs(icon2));
-
-  NavigateAndWaitForIconUpdate(overlapped_url);
-
-  // Loading a URL with multiple apps available should switch to a generic icon.
-  auto icon3 =
-      GetIntentChip()->GetImage(views::Button::ButtonState::STATE_NORMAL);
-  ASSERT_FALSE(icon1.BackedBySameObjectAs(icon3));
-  ASSERT_TRUE(IntentPickerTabHelper::FromWebContents(web_contents)
-                  ->app_icon()
-                  .IsEmpty());
-}
-
-INSTANTIATE_TEST_SUITE_P(,
-                         IntentChipButtonBrowserTest,
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    IntentChipButtonBrowserTest,
 #if BUILDFLAG(IS_CHROMEOS)
-                         testing::Values(false),
+    testing::Values(apps::test::LinkCapturingFeatureVersion::kV1DefaultOff,
+                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOff)
 #else
-                         testing::Values(true, false),
-#endif
-                         [](const testing::TestParamInfo<bool>& info) {
-                           return info.param ? "DefaultOn" : "DefaultOff";
-                         });
+    testing::Values(apps::test::LinkCapturingFeatureVersion::kV2DefaultOff,
+                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOn)
+#endif  // BUILDFLAG(IS_CHROMEOS)
+        ,
+    apps::test::LinkCapturingVersionToString);
 
-class IntentChipButtonBrowserUiTest : public UiBrowserTest {
+class IntentChipButtonBrowserUiTest
+    : public UiBrowserTest,
+      public testing::WithParamInterface<
+          apps::test::LinkCapturingFeatureVersion> {
  public:
   IntentChipButtonBrowserUiTest() {
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        apps::test::GetFeaturesToEnableLinkCapturingUX(), {});
+        apps::test::GetFeaturesToEnableLinkCapturingUX(GetParam()), {});
   }
 
   // UiBrowserTest:
@@ -361,19 +310,34 @@ class IntentChipButtonBrowserUiTest : public UiBrowserTest {
 
     const auto* const test_info =
         testing::UnitTest::GetInstance()->current_test_info();
+    // Verify against the Skia gold result baseline from crrev.com/c/6092068.
+    // TODO(crbug.com/384567062): Support set_baseline() in UiBrowserTest.
+    const std::string screenshot_name = base::StrCat(
+        {test_info->test_suite_name(), "_", test_info->name(), "_6092068"});
     return VerifyPixelUi(location_bar, test_info->test_suite_name(),
-                         test_info->name()) != ui::test::ActionResult::kFailed;
+                         screenshot_name) != ui::test::ActionResult::kFailed;
   }
 
-  void WaitForUserDismissal() override {
-    // Consider closing the browser to be dismissal.
-    ui_test_utils::WaitForBrowserToClose();
-  }
+  void WaitForUserDismissal() override {}
 
  private:
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(IntentChipButtonBrowserUiTest, InvokeUi_default) {
+IN_PROC_BROWSER_TEST_P(IntentChipButtonBrowserUiTest, InvokeUi_default) {
   ShowAndVerifyUi();
 }
+
+// Only run this test once with the parameterization that should be the
+// "default" release for navigation capturing per OS.
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    IntentChipButtonBrowserUiTest,
+#if BUILDFLAG(IS_CHROMEOS)
+    testing::Values(apps::test::LinkCapturingFeatureVersion::kV1DefaultOff,
+                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOff)
+#else
+    testing::Values(apps::test::LinkCapturingFeatureVersion::kV2DefaultOn)
+#endif  // BUILDFLAG(IS_CHROMEOS)
+        ,
+    apps::test::LinkCapturingVersionToString);

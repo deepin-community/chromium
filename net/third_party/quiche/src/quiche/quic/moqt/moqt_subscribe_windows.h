@@ -9,91 +9,88 @@
 #include <optional>
 #include <vector>
 
-#include "absl/container/node_hash_map.h"
+#include "absl/container/btree_map.h"
 #include "quiche/quic/moqt/moqt_messages.h"
 #include "quiche/common/platform/api/quiche_export.h"
 #include "quiche/web_transport/web_transport.h"
 
 namespace moqt {
 
-// Classes to track subscriptions to local tracks: the sequence numbers
-// subscribed, the streams involved, and the subscribe IDs.
+// SubscribeWindow represents a window of objects for which an MoQT subscription
+// can be valid.
 class QUICHE_EXPORT SubscribeWindow {
  public:
-  // Creates a half-open window.
-  SubscribeWindow(uint64_t subscribe_id, uint64_t start_group,
-                  uint64_t start_object)
-      : subscribe_id_(subscribe_id), start_({start_group, start_object}) {}
+  // Creates a half-open window. |next_object| is the expected sequence number
+  // of the next published object on the track.
+  SubscribeWindow(uint64_t start_group, uint64_t start_object)
+      : SubscribeWindow(FullSequence(start_group, start_object), std::nullopt) {
+  }
 
   // Creates a closed window.
-  SubscribeWindow(uint64_t subscribe_id, uint64_t start_group,
-                  uint64_t start_object, uint64_t end_group,
-                  uint64_t end_object)
-      : subscribe_id_(subscribe_id),
-        start_({start_group, start_object}),
-        end_(FullSequence(end_group, end_object)) {}
+  SubscribeWindow(uint64_t start_group, uint64_t start_object,
+                  uint64_t end_group, uint64_t end_object)
+      : SubscribeWindow(FullSequence(start_group, start_object),
+                        FullSequence(end_group, end_object)) {}
 
-  uint64_t subscribe_id() const { return subscribe_id_; }
+  SubscribeWindow(FullSequence start, std::optional<FullSequence> end)
+      : start_(start), end_(end) {}
 
   bool InWindow(const FullSequence& seq) const;
+  const std::optional<FullSequence>& end() const { return end_; }
+  FullSequence start() const { return start_; }
 
-  // Returns the stream to send |sequence| on, if already opened.
-  std::optional<webtransport::StreamId> GetStreamForSequence(
-      FullSequence sequence,
-      MoqtForwardingPreference forwarding_preference) const;
-
-  // Records what stream is being used for a track, group, or object depending
-  // on |forwarding_preference|. Triggers QUIC_BUG if already assigned.
-  void AddStream(MoqtForwardingPreference forwarding_preference,
-                 uint64_t group_id, uint64_t object_id,
-                 webtransport::StreamId stream_id);
-
-  void RemoveStream(MoqtForwardingPreference forwarding_preference,
-                    uint64_t group_id, uint64_t object_id);
+  // Updates the subscription window. Returns true if the update is valid (in
+  // MoQT, subscription windows are only allowed to shrink, not to expand).
+  bool UpdateStartEnd(FullSequence start, std::optional<FullSequence> end);
 
  private:
-  struct GroupStreams {
-    std::optional<webtransport::StreamId> group_stream;
-    absl::flat_hash_map<uint64_t, webtransport::StreamId> object_streams;
-  };
-  const uint64_t subscribe_id_;
-  const FullSequence start_;
-  const std::optional<FullSequence> end_ = std::nullopt;
-  // Open streams for this subscription
-  std::optional<webtransport::StreamId> track_stream_;
-  absl::flat_hash_map<uint64_t, GroupStreams> group_streams_;
+  // The subgroups in these sequences have no meaning.
+  FullSequence start_;
+  std::optional<FullSequence> end_;
 };
 
-// Class to keep track of the sequence number blocks to which a peer is
-// subscribed.
-class QUICHE_EXPORT MoqtSubscribeWindows {
+// ReducedSequenceIndex represents an index object such that if two sequence
+// numbers are mapped to the same stream, they will be mapped to the same index.
+class ReducedSequenceIndex {
  public:
-  MoqtSubscribeWindows() {}
+  ReducedSequenceIndex(FullSequence sequence,
+                       MoqtForwardingPreference preference);
 
-  // Returns a vector of subscribe IDs that apply to the object. They will be in
-  // reverse order of the AddWindow calls.
-  std::vector<SubscribeWindow*> SequenceIsSubscribed(FullSequence sequence);
-
-  // |window| has already been converted into absolute sequence numbers. An
-  // optimization could consolidate overlapping subscribe windows.
-  void AddWindow(SubscribeWindow window) {
-    windows_.emplace(window.subscribe_id(), window);
+  bool operator==(const ReducedSequenceIndex& other) const {
+    return sequence_ == other.sequence_;
   }
-  void RemoveWindow(uint64_t subscribe_id) { windows_.erase(subscribe_id); }
+  bool operator!=(const ReducedSequenceIndex& other) const {
+    return sequence_ != other.sequence_;
+  }
+  FullSequence sequence() { return sequence_; }
 
-  bool IsEmpty() const { return windows_.empty(); }
-
-  SubscribeWindow* GetWindow(uint64_t subscribe_id) {
-    auto it = windows_.find(subscribe_id);
-    if (it == windows_.end()) {
-      return nullptr;
-    }
-    return &it->second;
+  template <typename H>
+  friend H AbslHashValue(H h, const ReducedSequenceIndex& m) {
+    return H::combine(std::move(h), m.sequence_);
   }
 
  private:
-  // Indexed by Subscribe ID.
-  absl::node_hash_map<uint64_t, SubscribeWindow> windows_;
+  FullSequence sequence_;
+};
+
+// A map of outgoing data streams indexed by object sequence numbers.
+class QUICHE_EXPORT SendStreamMap {
+ public:
+  explicit SendStreamMap(MoqtForwardingPreference forwarding_preference)
+      : forwarding_preference_(forwarding_preference) {}
+
+  std::optional<webtransport::StreamId> GetStreamForSequence(
+      FullSequence sequence) const;
+  void AddStream(FullSequence sequence, webtransport::StreamId stream_id);
+  void RemoveStream(FullSequence sequence, webtransport::StreamId stream_id);
+  std::vector<webtransport::StreamId> GetAllStreams() const;
+  std::vector<webtransport::StreamId> GetStreamsForGroup(
+      uint64_t group_id) const;
+
+ private:
+  using Group = absl::btree_map<uint64_t, webtransport::StreamId>;
+  absl::btree_map<uint64_t, Group> send_streams_;
+  MoqtForwardingPreference forwarding_preference_;
 };
 
 }  // namespace moqt

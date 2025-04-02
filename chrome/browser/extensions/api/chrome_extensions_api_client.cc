@@ -10,6 +10,7 @@
 #include "base/check.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
@@ -18,7 +19,6 @@
 #include "chrome/browser/extensions/api/chrome_device_permissions_prompt.h"
 #include "chrome/browser/extensions/api/declarative_content/chrome_content_rules_registry.h"
 #include "chrome/browser/extensions/api/declarative_content/default_content_predicate_evaluators.h"
-#include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
 #include "chrome/browser/extensions/api/feedback_private/chrome_feedback_private_delegate.h"
 #include "chrome/browser/extensions/api/file_system/chrome_file_system_delegate.h"
 #include "chrome/browser/extensions/api/file_system/consent_provider_impl.h"
@@ -27,6 +27,7 @@
 #include "chrome/browser/extensions/api/metrics_private/chrome_metrics_private_delegate.h"
 #include "chrome/browser/extensions/api/storage/managed_value_store_cache.h"
 #include "chrome/browser/extensions/api/storage/sync_value_store_cache.h"
+#include "chrome/browser/extensions/extension_action_dispatcher.h"
 #include "chrome/browser/extensions/extension_action_runner.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/system_display/display_info_provider.h"
@@ -40,6 +41,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search/instant_service.h"
 #include "chrome/browser/search/instant_service_factory.h"
+#include "chrome/browser/supervised_user/supervised_user_extensions_delegate_impl.h"
+#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
@@ -48,7 +51,6 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/signin/core/browser/signin_header_helper.h"
-#include "components/supervised_user/core/common/buildflags.h"
 #include "components/value_store/value_store_factory.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -72,19 +74,12 @@
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/settings/cros_settings.h"
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/extensions/api/file_handlers/non_native_file_system_delegate_chromeos.h"
 #include "chrome/browser/extensions/api/file_system/chrome_file_system_delegate_ash.h"
 #include "chrome/browser/extensions/api/media_perception_private/media_perception_api_delegate_chromeos.h"
 #include "chrome/browser/extensions/api/virtual_keyboard_private/chrome_virtual_keyboard_delegate.h"
-#endif
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chrome/browser/extensions/api/file_system/chrome_file_system_delegate_lacros.h"
-#include "chrome/browser/extensions/api/virtual_keyboard_private/lacros_virtual_keyboard_delegate.h"
-#include "chromeos/crosapi/mojom/device_settings_service.mojom.h"
-#include "chromeos/startup/browser_params_proxy.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -95,22 +90,18 @@
 #include "chrome/browser/printing/printing_init.h"
 #endif
 
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-#include "chrome/browser/supervised_user/supervised_user_extensions_delegate_impl.h"
-#include "chrome/browser/supervised_user/supervised_user_service_factory.h"
-#endif
-
 namespace extensions {
 
 ChromeExtensionsAPIClient::ChromeExtensionsAPIClient() = default;
 
-ChromeExtensionsAPIClient::~ChromeExtensionsAPIClient() {}
+ChromeExtensionsAPIClient::~ChromeExtensionsAPIClient() = default;
 
 void ChromeExtensionsAPIClient::AddAdditionalValueStoreCaches(
     content::BrowserContext* context,
     const scoped_refptr<value_store::ValueStoreFactory>& factory,
     SettingsChangedCallback observer,
-    std::map<settings_namespace::Namespace, ValueStoreCache*>* caches) {
+    std::map<settings_namespace::Namespace,
+             raw_ptr<ValueStoreCache, CtnExperimental>>* caches) {
   // Add support for chrome.storage.sync.
   (*caches)[settings_namespace::SYNC] =
       new SyncValueStoreCache(factory, observer, context->GetPath());
@@ -261,8 +252,8 @@ void ChromeExtensionsAPIClient::UpdateActionCount(
   if (ExtensionTabUtil::GetTabById(
           tab_id, context, true /* include_incognito */, &tab_contents) &&
       tab_contents) {
-    ExtensionActionAPI::Get(context)->NotifyChange(action, tab_contents,
-                                                   context);
+    ExtensionActionDispatcher::Get(context)->NotifyChange(action, tab_contents,
+                                                          context);
   }
 }
 
@@ -280,8 +271,8 @@ void ChromeExtensionsAPIClient::ClearActionCount(
           context, true /* include_incognito */);
 
   for (auto* active_contents : contents_to_notify) {
-    ExtensionActionAPI::Get(context)->NotifyChange(action, active_contents,
-                                                   context);
+    ExtensionActionDispatcher::Get(context)->NotifyChange(
+        action, active_contents, context);
   }
 }
 
@@ -363,7 +354,6 @@ ChromeExtensionsAPIClient::CreateDevicePermissionsPrompt(
 #if BUILDFLAG(IS_CHROMEOS)
 bool ChromeExtensionsAPIClient::ShouldAllowDetachingUsb(int vid,
                                                         int pid) const {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   const base::Value::List* policy_list;
   if (ash::CrosSettings::Get()->GetList(ash::kUsbDetachableAllowlist,
                                         &policy_list)) {
@@ -376,20 +366,7 @@ bool ChromeExtensionsAPIClient::ShouldAllowDetachingUsb(int vid,
       }
     }
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  const crosapi::mojom::DeviceSettings* device_settings =
-      chromeos::BrowserParamsProxy::Get()->DeviceSettings().get();
-  if (device_settings && device_settings->usb_detachable_allow_list) {
-    for (const auto& entry :
-         device_settings->usb_detachable_allow_list->usb_device_ids) {
-      if (entry->has_vendor_id && entry->vendor_id == vid &&
-          entry->has_product_id && entry->product_id == pid) {
-        return true;
-      }
-    }
-  }
-#endif
+
   return false;
 }
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -397,10 +374,8 @@ bool ChromeExtensionsAPIClient::ShouldAllowDetachingUsb(int vid,
 std::unique_ptr<VirtualKeyboardDelegate>
 ChromeExtensionsAPIClient::CreateVirtualKeyboardDelegate(
     content::BrowserContext* browser_context) const {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   return std::make_unique<ChromeVirtualKeyboardDelegate>(browser_context);
-#elif BUILDFLAG(IS_CHROMEOS_LACROS)
-  return std::make_unique<LacrosVirtualKeyboardDelegate>();
 #else
   return nullptr;
 #endif
@@ -414,12 +389,8 @@ ManagementAPIDelegate* ChromeExtensionsAPIClient::CreateManagementAPIDelegate()
 std::unique_ptr<SupervisedUserExtensionsDelegate>
 ChromeExtensionsAPIClient::CreateSupervisedUserExtensionsDelegate(
     content::BrowserContext* browser_context) const {
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
   return std::make_unique<SupervisedUserExtensionsDelegateImpl>(
       browser_context);
-#else
-  return nullptr;
-#endif
 }
 
 std::unique_ptr<DisplayInfoProvider>
@@ -435,10 +406,8 @@ MetricsPrivateDelegate* ChromeExtensionsAPIClient::GetMetricsPrivateDelegate() {
 }
 
 FileSystemDelegate* ChromeExtensionsAPIClient::GetFileSystemDelegate() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   using ChromeFileSystemDelegate_Use = ChromeFileSystemDelegateAsh;
-#elif BUILDFLAG(IS_CHROMEOS_LACROS)
-  using ChromeFileSystemDelegate_Use = ChromeFileSystemDelegateLacros;
 #else
   using ChromeFileSystemDelegate_Use = ChromeFileSystemDelegate;
 #endif
@@ -462,7 +431,7 @@ ChromeExtensionsAPIClient::GetFeedbackPrivateDelegate() {
   return feedback_private_delegate_.get();
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 MediaPerceptionAPIDelegate*
 ChromeExtensionsAPIClient::GetMediaPerceptionAPIDelegate() {
   if (!media_perception_api_delegate_) {
@@ -480,9 +449,7 @@ ChromeExtensionsAPIClient::GetNonNativeFileSystemDelegate() {
   }
   return non_native_file_system_delegate_.get();
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if BUILDFLAG(IS_CHROMEOS)
 void ChromeExtensionsAPIClient::SaveImageDataToClipboard(
     std::vector<uint8_t> image_data,
     api::clipboard::ImageType type,
@@ -511,9 +478,7 @@ ChromeExtensionsAPIClient::GetFactoryDependencies() {
   // clang-format off
   return {
       InstantServiceFactory::GetInstance(),
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
       SupervisedUserServiceFactory::GetInstance(),
-#endif
   };
   // clang-format on
 }

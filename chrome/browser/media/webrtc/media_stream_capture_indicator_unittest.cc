@@ -26,7 +26,7 @@ class LenientMockObserver : public MediaStreamCaptureIndicator::Observer {
   LenientMockObserver(const LenientMockObserver&) = delete;
   LenientMockObserver& operator=(const LenientMockObserver&) = delete;
 
-  ~LenientMockObserver() override {}
+  ~LenientMockObserver() override = default;
 
   // Helper functions used to set the expectations of the mock methods. This
   // allows passing function pointers to
@@ -96,8 +96,8 @@ typedef bool (MediaStreamCaptureIndicator::*AccessorMethod)(
 
 class MediaStreamCaptureIndicatorTest : public ChromeRenderViewHostTestHarness {
  public:
-  MediaStreamCaptureIndicatorTest() {}
-  ~MediaStreamCaptureIndicatorTest() override {}
+  MediaStreamCaptureIndicatorTest() = default;
+  ~MediaStreamCaptureIndicatorTest() override = default;
   MediaStreamCaptureIndicatorTest(const MediaStreamCaptureIndicatorTest&) =
       delete;
   MediaStreamCaptureIndicatorTest& operator=(
@@ -191,12 +191,13 @@ blink::mojom::StreamDevices CreateFakeDevice(
   if (param.display_media_info)
     device.display_media_info = param.display_media_info->Clone();
 
-  if (blink::IsAudioInputMediaType(param.stream_type))
+  if (blink::IsAudioInputMediaType(param.stream_type)) {
     fake_devices.audio_device = device;
-  else if (blink::IsVideoInputMediaType(param.stream_type))
+  } else if (blink::IsVideoInputMediaType(param.stream_type)) {
     fake_devices.video_device = device;
-  else
+  } else {
     NOTREACHED();
+  }
 
   return fake_devices;
 }
@@ -263,9 +264,7 @@ TEST_P(MediaStreamCaptureIndicatorObserverMethodTest, AddAndRemoveDevice) {
   ::testing::Mock::VerifyAndClear(observer());
 }
 
-// TODO(crbug.com/1479984): re-enable once the bug is fixed.
-TEST_P(MediaStreamCaptureIndicatorObserverMethodTest,
-       DISABLED_StopMediaCapturing) {
+TEST_P(MediaStreamCaptureIndicatorObserverMethodTest, StopMediaCapturing) {
   const ObserverMethodTestParam& param = GetParam();
   const auto media_tpy =
       MediaStreamCaptureIndicator::GetMediaType(param.stream_type);
@@ -339,11 +338,13 @@ TEST_P(MediaStreamCaptureIndicatorStreamTypeTest,
           /*requested_video_device_ids=*/{"fake_device"},
           blink::mojom::MediaStreamType::NO_SERVICE, video_stream_type,
           /*disable_local_echo=*/false,
-          /*request_pan_tilt_zoom_permission=*/false),
+          /*request_pan_tilt_zoom_permission=*/false,
+          /*captured_surface_control_active=*/false),
       source, content::DesktopMediaID(media_type, /*id=*/0),
       /*capture_audio=*/false, /*disable_local_echo=*/false,
       /*suppress_local_audio_playback=*/false,
-      /*display_notification=*/false, /*application_title=*/u"", devices);
+      /*display_notification=*/false, /*application_title=*/u"",
+      /*captured_surface_control_active=*/false, devices);
   ASSERT_EQ(devices.video_device->type, video_stream_type);
 
   (observer()->*(GetParam().observer_method))(source, 2);

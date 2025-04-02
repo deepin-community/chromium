@@ -5,18 +5,24 @@
 #include "content/services/auction_worklet/trusted_signals.h"
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
+#include "base/test/values_test_util.h"
+#include "content/common/features.h"
 #include "content/services/auction_worklet/auction_v8_helper.h"
 #include "content/services/auction_worklet/worklet_test_util.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
@@ -25,6 +31,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 #include "v8/include/v8-context.h"
 #include "v8/include/v8-forward.h"
 
@@ -62,7 +69,8 @@ const char kBaseBiddingJson[] = R"(
       "name1": {
         "priorityVector": {
           "foo": 1
-        }
+        },
+        "updateIfOlderThanMs": 3600000
       },
       "name2": {
         "priorityVector": {
@@ -79,6 +87,12 @@ const char kBaseBiddingJson[] = R"(
       },
       "name6\u2603": {
         "priorityVector": {"foo": 6}
+      },
+      "name7": {
+        "updateIfOlderThanMs": 7200000
+      },
+      "name8": {
+        "updateIfOlderThanMs": "10800000"
       }
     }
   }
@@ -154,6 +168,8 @@ class TrustedSignalsTest : public testing::Test {
  public:
   TrustedSignalsTest() {
     v8_helper_ = AuctionV8Helper::Create(AuctionV8Helper::CreateTaskRunner());
+    feature_list_.InitAndEnableFeature(
+        features::kInterestGroupUpdateIfOlderThan);
   }
 
   ~TrustedSignalsTest() override { task_environment_.RunUntilIdle(); }
@@ -225,16 +241,33 @@ class TrustedSignalsTest : public testing::Test {
       std::set<std::string> ad_component_render_urls,
       const std::string& hostname,
       std::optional<uint16_t> experiment_group_id) {
-    CHECK(!load_signals_run_loop_);
+    auto ads = CreateCreativeInfoSet(
+        std::vector<std::string>(render_urls.begin(), render_urls.end()));
+    auto ad_components = CreateCreativeInfoSet(std::vector<std::string>(
+        ad_component_render_urls.begin(), ad_component_render_urls.end()));
+    return FetchScoringSignals(std::move(ads), std::move(ad_components),
+                               hostname, experiment_group_id);
+  }
 
+  scoped_refptr<TrustedSignals::Result> FetchScoringSignals(
+      std::set<TrustedSignals::CreativeInfo> ads,
+      std::set<TrustedSignals::CreativeInfo> ad_components,
+      const std::string& hostname,
+      std::optional<uint16_t> experiment_group_id,
+      bool send_creative_scanning_metadata = false) {
+    base::HistogramTester histogram_tester;
+    CHECK(!load_signals_run_loop_);
     DCHECK(!load_signals_result_);
     auto scoring_signals = TrustedSignals::LoadScoringSignals(
         &url_loader_factory_, auction_network_events_handler_.CreateRemote(),
-        std::move(render_urls), std::move(ad_component_render_urls), hostname,
-        base_url_, experiment_group_id, v8_helper_,
+        std::move(ads), std::move(ad_components), hostname, base_url_,
+        experiment_group_id, send_creative_scanning_metadata, v8_helper_,
         base::BindOnce(&TrustedSignalsTest::LoadSignalsCallback,
                        base::Unretained(this)));
     WaitForLoadComplete();
+    histogram_tester.ExpectUniqueSample(
+        "Ads.InterestGroup.Auction.TrustedScoringSendCreativeScanningMetadata",
+        send_creative_scanning_metadata, /*expected_bucket_count=*/1);
     return std::move(load_signals_result_);
   }
 
@@ -269,8 +302,9 @@ class TrustedSignalsTest : public testing::Test {
           v8::Local<v8::Value> value = signals->GetBiddingSignals(
               v8_helper_.get(), context, trusted_bidding_signals_keys);
 
-          if (v8_helper_->ExtractJson(context, value, &result) !=
-              AuctionV8Helper::ExtractJsonResult::kSuccess) {
+          if (v8_helper_->ExtractJson(context, value,
+                                      /*script_timeout=*/nullptr, &result) !=
+              AuctionV8Helper::Result::kSuccess) {
             result = "JSON extraction failed.";
           }
           run_loop.Quit();
@@ -299,10 +333,13 @@ class TrustedSignalsTest : public testing::Test {
           v8::Context::Scope context_scope(context);
 
           v8::Local<v8::Value> value = signals->GetScoringSignals(
-              v8_helper_.get(), context, render_url, ad_component_render_urls);
+              v8_helper_.get(), context, render_url,
+              CreateMojoCreativeInfoWithoutOwnerVector(
+                  ad_component_render_urls));
 
-          if (v8_helper_->ExtractJson(context, value, &result) !=
-              AuctionV8Helper::ExtractJsonResult::kSuccess) {
+          if (v8_helper_->ExtractJson(context, value,
+                                      /*script_timeout=*/nullptr, &result) !=
+              AuctionV8Helper::Result::kSuccess) {
             result = "JSON extraction failed.";
           }
           run_loop.Quit();
@@ -345,6 +382,8 @@ class TrustedSignalsTest : public testing::Test {
 
   network::TestURLLoaderFactory url_loader_factory_;
   scoped_refptr<AuctionV8Helper> v8_helper_;
+
+  base::test::ScopedFeatureList feature_list_;
 };
 
 TEST_F(TrustedSignalsTest, BiddingSignalsNetworkError) {
@@ -530,7 +569,7 @@ TEST_F(TrustedSignalsTest, BiddingSignalsExpectedEntriesNotPresent) {
           R"({"foo":4,"bar":5})", {"name1"}, {"key1"}, kHostname);
   ASSERT_TRUE(signals);
   EXPECT_EQ(R"({"key1":null})", ExtractBiddingSignals(signals.get(), {"key1"}));
-  EXPECT_EQ(nullptr, signals->GetPriorityVector("name1"));
+  EXPECT_EQ(nullptr, signals->GetPerGroupData("name1"));
 }
 
 TEST_F(TrustedSignalsTest, ScoringSignalsExpectedEntriesNotPresent) {
@@ -580,10 +619,10 @@ TEST_F(TrustedSignalsTest, BiddingSignalsNestedEntriesNotObject) {
     EXPECT_EQ(R"({"length":null})",
               ExtractBiddingSignals(signals.get(), {"length"}));
 
-    EXPECT_EQ(nullptr, signals->GetPriorityVector("name1"));
+    EXPECT_EQ(nullptr, signals->GetPerGroupData("name1"));
     // These are important to check for the list case.
-    EXPECT_EQ(nullptr, signals->GetPriorityVector("0"));
-    EXPECT_EQ(nullptr, signals->GetPriorityVector("length"));
+    EXPECT_EQ(nullptr, signals->GetPerGroupData("0"));
+    EXPECT_EQ(nullptr, signals->GetPerGroupData("length"));
   }
 }
 
@@ -603,9 +642,10 @@ TEST_F(TrustedSignalsTest, BiddingSignalsInvalidPriorityVectors) {
           {"name1", "name2", "name3"}, {"key1"}, kHostname);
   ASSERT_TRUE(signals);
   EXPECT_EQ(R"({"key1":null})", ExtractBiddingSignals(signals.get(), {"key1"}));
-  EXPECT_EQ(nullptr, signals->GetPriorityVector("name1"));
-  EXPECT_EQ(nullptr, signals->GetPriorityVector("name2"));
-  const auto* priority_vector = signals->GetPriorityVector("name3");
+  EXPECT_EQ(nullptr, signals->GetPerGroupData("name1"));
+  EXPECT_EQ(nullptr, signals->GetPerGroupData("name2"));
+  const auto priority_vector =
+      signals->GetPerGroupData("name3")->priority_vector;
   ASSERT_TRUE(priority_vector);
   EXPECT_EQ((TrustedSignals::Result::PriorityVector{{"baz", -1}}),
             *priority_vector);
@@ -636,12 +676,26 @@ TEST_F(TrustedSignalsTest, BiddingSignalsKeyMissing) {
   scoped_refptr<TrustedSignals::Result> signals =
       FetchBiddingSignalsWithResponse(
           GURL("https://url.test/"
-               "?hostname=publisher&keys=key4&interestGroupNames=name4"),
-          kBaseBiddingJson, {"name4"}, {"key4"}, kHostname,
+               "?hostname=publisher&keys=key4&interestGroupNames=name4,name7,"
+               "name8"),
+          kBaseBiddingJson, {"name4", "name7", "name8"}, {"key4"}, kHostname,
           /*experiment_group_id=*/std::nullopt);
   ASSERT_TRUE(signals);
   EXPECT_EQ(R"({"key4":null})", ExtractBiddingSignals(signals.get(), {"key4"}));
-  EXPECT_EQ(nullptr, signals->GetPriorityVector("name4"));
+  EXPECT_EQ(nullptr, signals->GetPerGroupData("name4"));
+
+  const TrustedSignals::Result::PerGroupData* name7_per_group_data =
+      signals->GetPerGroupData("name7");
+  ASSERT_NE(name7_per_group_data, nullptr);
+  EXPECT_EQ(std::nullopt, name7_per_group_data->priority_vector);
+  EXPECT_EQ(base::Milliseconds(7200000),
+            name7_per_group_data->update_if_older_than);
+
+  const TrustedSignals::Result::PerGroupData* name8_per_group_data =
+      signals->GetPerGroupData("name8");
+  // Strings aren't valid values for updateIfOlderThanMs, and there's no
+  // priorityVector, so there's nothing to return.
+  ASSERT_EQ(name8_per_group_data, nullptr);
 }
 
 TEST_F(TrustedSignalsTest, BiddingSignalsKeyMissingNameInProto) {
@@ -656,7 +710,7 @@ TEST_F(TrustedSignalsTest, BiddingSignalsKeyMissingNameInProto) {
   ASSERT_TRUE(signals);
   EXPECT_EQ(R"({"valueOf":null})",
             ExtractBiddingSignals(signals.get(), {"valueOf"}));
-  EXPECT_EQ(nullptr, signals->GetPriorityVector("name4"));
+  EXPECT_EQ(nullptr, signals->GetPerGroupData("name4"));
 }
 
 TEST_F(TrustedSignalsTest, ScoringSignalsKeysMissing) {
@@ -690,10 +744,15 @@ TEST_F(TrustedSignalsTest, BiddingSignalsOneKey) {
           /*experiment_group_id=*/std::nullopt);
   ASSERT_TRUE(signals);
   EXPECT_EQ(R"({"key1":1})", ExtractBiddingSignals(signals.get(), {"key1"}));
-  const auto* priority_vector = signals->GetPriorityVector("name1");
+  const TrustedSignals::Result::PerGroupData* name1_per_group_data =
+      signals->GetPerGroupData("name1");
+  ASSERT_NE(name1_per_group_data, nullptr);
+  auto priority_vector = name1_per_group_data->priority_vector;
   ASSERT_TRUE(priority_vector);
   EXPECT_EQ((TrustedSignals::Result::PriorityVector{{"foo", 1}}),
             *priority_vector);
+  EXPECT_EQ(base::Milliseconds(3600000),
+            name1_per_group_data->update_if_older_than);
 
   // Wait until idle to ensure all requests have been observed within the
   // `auction_network_events_handler_`.
@@ -720,7 +779,7 @@ TEST_F(TrustedSignalsTest, BiddingSignalsOneKeyOldHeaderName) {
                           /*experiment_group_id=*/std::nullopt);
   ASSERT_TRUE(signals);
   EXPECT_EQ(R"({"key1":1})", ExtractBiddingSignals(signals.get(), {"key1"}));
-  const auto* priority_vector = signals->GetPriorityVector("name1");
+  auto priority_vector = signals->GetPerGroupData("name1")->priority_vector;
   ASSERT_TRUE(priority_vector);
   EXPECT_EQ((TrustedSignals::Result::PriorityVector{{"foo", 1}}),
             *priority_vector);
@@ -739,7 +798,8 @@ TEST_F(TrustedSignalsTest, BiddingSignalsOneKeyHeaderName) {
                           /*experiment_group_id=*/std::nullopt);
   ASSERT_TRUE(signals);
   EXPECT_EQ(R"({"key1":1})", ExtractBiddingSignals(signals.get(), {"key1"}));
-  const auto* priority_vector = signals->GetPriorityVector("name1");
+  const auto priority_vector =
+      signals->GetPerGroupData("name1")->priority_vector;
   ASSERT_TRUE(priority_vector);
   EXPECT_EQ((TrustedSignals::Result::PriorityVector{{"foo", 1}}),
             *priority_vector);
@@ -759,7 +819,8 @@ TEST_F(TrustedSignalsTest, BiddingSignalsOneKeyBothOldAndNewHeaderNames) {
                           /*experiment_group_id=*/std::nullopt);
   ASSERT_TRUE(signals);
   EXPECT_EQ(R"({"key1":1})", ExtractBiddingSignals(signals.get(), {"key1"}));
-  const auto* priority_vector = signals->GetPriorityVector("name1");
+  const auto priority_vector =
+      signals->GetPerGroupData("name1")->priority_vector;
   ASSERT_TRUE(priority_vector);
   EXPECT_EQ((TrustedSignals::Result::PriorityVector{{"foo", 1}}),
             *priority_vector);
@@ -813,20 +874,33 @@ TEST_F(TrustedSignalsTest, BiddingSignalsMultipleKeys) {
       R"({"key1":1,"key2":[2],"key3":null,"key5":"value5"})",
       ExtractBiddingSignals(signals.get(), {"key1", "key2", "key3", "key5"}));
 
-  const auto* priority_vector = signals->GetPriorityVector("name1");
+  const TrustedSignals::Result::PerGroupData* name1_per_group_data =
+      signals->GetPerGroupData("name1");
+  ASSERT_NE(name1_per_group_data, nullptr);
+  auto priority_vector = name1_per_group_data->priority_vector;
   ASSERT_TRUE(priority_vector);
   EXPECT_EQ((TrustedSignals::Result::PriorityVector{{"foo", 1}}),
             *priority_vector);
+  EXPECT_EQ(base::Milliseconds(3600000),
+            name1_per_group_data->update_if_older_than);
 
-  priority_vector = signals->GetPriorityVector("name2");
+  const TrustedSignals::Result::PerGroupData* name2_per_group_data =
+      signals->GetPerGroupData("name2");
+  ASSERT_NE(name2_per_group_data, nullptr);
+  priority_vector = name2_per_group_data->priority_vector;
   ASSERT_TRUE(priority_vector);
   EXPECT_EQ((TrustedSignals::Result::PriorityVector{
                 {"foo", 2}, {"bar", 3}, {"baz", -3.5}}),
             *priority_vector);
+  EXPECT_EQ(std::nullopt, name2_per_group_data->update_if_older_than);
 
-  priority_vector = signals->GetPriorityVector("name3");
+  const TrustedSignals::Result::PerGroupData* name3_per_group_data =
+      signals->GetPerGroupData("name3");
+  ASSERT_NE(name3_per_group_data, nullptr);
+  priority_vector = name3_per_group_data->priority_vector;
   ASSERT_TRUE(priority_vector);
   EXPECT_EQ(TrustedSignals::Result::PriorityVector(), *priority_vector);
+  EXPECT_EQ(std::nullopt, name3_per_group_data->update_if_older_than);
 }
 
 TEST_F(TrustedSignalsTest, ScoringSignalsMultipleUrls) {
@@ -1016,12 +1090,13 @@ TEST_F(TrustedSignalsTest, BiddingSignalsEscapeQueryParams) {
   EXPECT_EQ(R"({"key=7":7})", ExtractBiddingSignals(signals.get(), {"key=7"}));
   EXPECT_EQ(R"({"key,8":8})", ExtractBiddingSignals(signals.get(), {"key,8"}));
 
-  const auto* priority_vector = signals->GetPriorityVector("name 5");
+  auto priority_vector = signals->GetPerGroupData("name 5")->priority_vector;
   ASSERT_TRUE(priority_vector);
   EXPECT_EQ((TrustedSignals::Result::PriorityVector{{"foo", 5}}),
             *priority_vector);
 
-  priority_vector = signals->GetPriorityVector("name6\xE2\x98\x83");
+  priority_vector =
+      signals->GetPerGroupData("name6\xE2\x98\x83")->priority_vector;
   ASSERT_TRUE(priority_vector);
   EXPECT_EQ((TrustedSignals::Result::PriorityVector{{"foo", 6}}),
             *priority_vector);
@@ -1098,9 +1173,10 @@ TEST_F(TrustedSignalsTest, ScoringSignalsDeleteBeforeCallback) {
   base::WaitableEvent* event_handle = WedgeV8Thread(v8_helper_.get());
   auto scoring_signals = TrustedSignals::LoadScoringSignals(
       &url_loader_factory_, auction_network_events_handler_.CreateRemote(),
-      /*render_urls=*/{"http://foo.test/"},
-      /*ad_component_render_urls=*/{}, "publisher", base_url_,
-      /*experiment_group_id=*/std::nullopt, v8_helper_,
+      CreateCreativeInfoSet({"http://foo.test/"}),
+      /*ad_components=*/{}, "publisher", base_url_,
+      /*experiment_group_id=*/std::nullopt,
+      /*send_creative_scanning_metadata=*/false, v8_helper_,
       base::BindOnce([](scoped_refptr<TrustedSignals::Result> result,
                         std::optional<std::string> error_msg) {
         ADD_FAILURE() << "Callback should not be invoked since loader deleted";
@@ -1240,7 +1316,7 @@ TEST_F(TrustedSignalsTest, BiddingSignalsV1) {
       R"({"key1":1,"key2":[2],"key3":null,"key5":"value5"})",
       ExtractBiddingSignals(signals.get(), {"key1", "key2", "key3", "key5"}));
   // Format V1 doesn't support priority vectors.
-  EXPECT_EQ(nullptr, signals->GetPriorityVector("name1"));
+  EXPECT_EQ(nullptr, signals->GetPerGroupData("name1"));
 }
 
 TEST_F(TrustedSignalsTest, BiddingSignalsV1WithV1Header) {
@@ -1271,7 +1347,7 @@ TEST_F(TrustedSignalsTest, BiddingSignalsV1WithV1Header) {
       R"({"key1":1,"key2":[2],"key3":null,"key5":"value5"})",
       ExtractBiddingSignals(signals.get(), {"key1", "key2", "key3", "key5"}));
   // Format V1 doesn't support priority vectors.
-  EXPECT_EQ(nullptr, signals->GetPriorityVector("name1"));
+  EXPECT_EQ(nullptr, signals->GetPerGroupData("name1"));
 }
 
 // A V2 header with a V1 body treats all values as null (since it can't find
@@ -1287,7 +1363,7 @@ TEST_F(TrustedSignalsTest, BiddingSignalsV2HeaderV1Body) {
           /*format_version_string=*/"2");
   ASSERT_TRUE(signals);
   EXPECT_EQ(R"({"key1":null})", ExtractBiddingSignals(signals.get(), {"key1"}));
-  EXPECT_EQ(nullptr, signals->GetPriorityVector("name1"));
+  EXPECT_EQ(nullptr, signals->GetPerGroupData("name1"));
 }
 
 // A V1 header (i.e., no version header) with a V2 body treats all values as
@@ -1309,7 +1385,338 @@ TEST_F(TrustedSignalsTest, BiddingSignalsV1HeaderV2Body) {
             "signals format version 2");
   ASSERT_TRUE(signals);
   EXPECT_EQ(R"({"key1":null})", ExtractBiddingSignals(signals.get(), {"key1"}));
-  EXPECT_EQ(nullptr, signals->GetPriorityVector("name1"));
+  EXPECT_EQ(nullptr, signals->GetPerGroupData("name1"));
+}
+
+TEST_F(TrustedSignalsTest, BuildTrustedScoringSignalsURL) {
+  for (const bool send_creative_scanning_metadata : {false, true}) {
+    SCOPED_TRACE(send_creative_scanning_metadata);
+
+    auto test_data = std::to_array<TrustedSignals::CreativeInfo>(
+        {{/*ad_descriptor=*/blink::AdDescriptor(
+              GURL("https://creative1.test"),
+              std::optional(
+                  blink::AdSize(200, blink::AdSize::LengthUnit::kPixels, 100,
+                                blink::AdSize::LengthUnit::kScreenHeight))),
+          /*creative_scanning_metadata=*/"scan1",
+          /*interest_group_owner=*/
+          std::optional(url::Origin::Create(GURL("https://bidder1.test"))),
+          /*buyer_and_seller_reporting_id=*/"chair"},
+         {/*ad_descriptor=*/blink::AdDescriptor(
+              GURL("https://creative1.test"),
+              std::optional(
+                  blink::AdSize(200, blink::AdSize::LengthUnit::kPixels, 100,
+                                blink::AdSize::LengthUnit::kScreenHeight))),
+          /*creative_scanning_metadata=*/"scan1b",
+          /*interest_group_owner=*/
+          std::optional(url::Origin::Create(GURL("https://bidder1.test"))),
+          /*buyer_and_seller_reporting_id=*/"sofa"},
+         {/*ad_descriptor=*/blink::AdDescriptor(
+              GURL("https://creative1.test"),
+              std::optional(
+                  blink::AdSize(200, blink::AdSize::LengthUnit::kPixels, 100,
+                                blink::AdSize::LengthUnit::kScreenHeight))),
+          /*creative_scanning_metadata=*/"scan1/2",
+          /*interest_group_owner=*/
+          std::optional(url::Origin::Create(GURL("https://bidder2.test"))),
+          /*buyer_and_seller_reporting_id=*/"stool"},
+         {/*ad_descriptor=*/blink::AdDescriptor(
+              GURL("https://creative2.test"),
+              std::optional(
+                  blink::AdSize(200, blink::AdSize::LengthUnit::kPixels, 100,
+                                blink::AdSize::LengthUnit::kScreenHeight))),
+          /*creative_scanning_metadata=*/"scan2",
+          /*interest_group_owner=*/
+          std::optional(url::Origin::Create(GURL("https://bidder2.test"))),
+          /*buyer_and_seller_reporting_id=*/"stool"},
+         {// Same thing at different size.
+          /*ad_descriptor=*/blink::AdDescriptor(
+              GURL("https://creative2.test"),
+              std::optional(
+                  blink::AdSize(100, blink::AdSize::LengthUnit::kPixels, 50,
+                                blink::AdSize::LengthUnit::kScreenHeight))),
+          /*creative_scanning_metadata=*/"scan2",
+          /*interest_group_owner=*/
+          std::optional(url::Origin::Create(GURL("https://bidder2.test"))),
+          /*buyer_and_seller_reporting_id=*/"stool"}});
+
+    std::set<TrustedSignals::CreativeInfo> creative_set;
+    for (auto& input : test_data) {
+      if (!send_creative_scanning_metadata) {
+        input.ad_descriptor.size = std::nullopt;
+        input.creative_scanning_metadata.clear();
+        input.interest_group_owner = std::nullopt;
+        input.buyer_and_seller_reporting_id.clear();
+      }
+      creative_set.insert(std::move(input));
+    }
+
+    // Minimal valid input for main ad, to use when mainly testing component-ad
+    // specific query params..
+    std::set<TrustedSignals::CreativeInfo> single_ad_set;
+    TrustedSignals::CreativeInfo single_ad;
+    single_ad.ad_descriptor.url = GURL("https://product.test");
+    if (send_creative_scanning_metadata) {
+      single_ad.interest_group_owner =
+          url::Origin::Create(GURL("https://bidder0.test"));
+      single_ad.buyer_and_seller_reporting_id = "throne";
+    }
+    single_ad_set.insert(std::move(single_ad));
+
+    GURL ads_result = TrustedSignals::BuildTrustedScoringSignalsURL(
+        send_creative_scanning_metadata,
+        /*hostname=*/"https://publisher.test/",
+        /*trusted_scoring_signals_url=*/GURL("https://kv.test"),
+        /*ads=*/creative_set,
+        /*component_ads=*/{},
+        /*experiment_group_id=*/std::nullopt);
+    GURL component_ads_result = TrustedSignals::BuildTrustedScoringSignalsURL(
+        send_creative_scanning_metadata,
+        /*hostname=*/"https://publisher.test/",
+        /*trusted_scoring_signals_url=*/GURL("https://kv.test"),
+        /*ads=*/single_ad_set,
+        /*component_ads=*/creative_set,
+        /*experiment_group_id=*/std::nullopt);
+
+    if (send_creative_scanning_metadata) {
+      EXPECT_EQ(
+          "https://kv.test/?hostname=https%3A%2F%2Fpublisher.test%2F"
+          "&renderUrls=https%3A%2F%2Fcreative1.test%2F,"
+          "https%3A%2F%2Fcreative1.test%2F,"
+          "https%3A%2F%2Fcreative1.test%2F,"
+          "https%3A%2F%2Fcreative2.test%2F,"
+          "https%3A%2F%2Fcreative2.test%2F&"
+          "adCreativeScanningMetadata=scan1,scan1%2F2,scan1b,scan2,scan2"
+          "&adSizes=200px,100sh,200px,100sh,200px,100sh,100px,50sh,200px,100sh"
+          "&adBuyer=https%3A%2F%2Fbidder1.test,"
+          "https%3A%2F%2Fbidder2.test,"
+          "https%3A%2F%2Fbidder1.test,"
+          "https%3A%2F%2Fbidder2.test,"
+          "https%3A%2F%2Fbidder2.test"
+          "&adBuyerAndSellerReportingIds=chair,stool,sofa,stool,stool",
+          ads_result);
+      EXPECT_EQ(
+          "https://kv.test/?hostname=https%3A%2F%2Fpublisher.test%2F"
+          "&renderUrls=https%3A%2F%2Fproduct.test%2F"
+          "&adComponentRenderUrls=https%3A%2F%2Fcreative1.test%2F,"
+          "https%3A%2F%2Fcreative1.test%2F,"
+          "https%3A%2F%2Fcreative1.test%2F,"
+          "https%3A%2F%2Fcreative2.test%2F,"
+          "https%3A%2F%2Fcreative2.test%2F"
+          "&adCreativeScanningMetadata="
+          "&adComponentCreativeScanningMetadata="
+          "scan1,scan1%2F2,scan1b,scan2,scan2"
+          "&adSizes=,"
+          "&adComponentSizes="
+          "200px,100sh,200px,100sh,200px,100sh,100px,50sh,200px,100sh"
+          "&adBuyer=https%3A%2F%2Fbidder0.test"
+          "&adComponentBuyer=https%3A%2F%2Fbidder1.test,"
+          "https%3A%2F%2Fbidder2.test,"
+          "https%3A%2F%2Fbidder1.test,"
+          "https%3A%2F%2Fbidder2.test,"
+          "https%3A%2F%2Fbidder2.test"
+          "&adBuyerAndSellerReportingIds=throne",
+          component_ads_result);
+    } else {
+      EXPECT_EQ(
+          "https://kv.test/?hostname=https%3A%2F%2Fpublisher.test%2F"
+          "&renderUrls=https%3A%2F%2Fcreative1.test%2F,"
+          "https%3A%2F%2Fcreative2.test%2F",
+          ads_result);
+      EXPECT_EQ(
+          "https://kv.test/?hostname=https%3A%2F%2Fpublisher.test%2F"
+          "&renderUrls=https%3A%2F%2Fproduct.test%2F"
+          "&adComponentRenderUrls=https%3A%2F%2Fcreative1.test%2F,"
+          "https%3A%2F%2Fcreative2.test%2F",
+          component_ads_result);
+    }
+  }
+}
+
+// An empty size should be a comma, to make things line up properly.
+TEST_F(TrustedSignalsTest, BuildTrustedScoringSignalsURLNoSize) {
+  for (const bool both_without_size : {false, true}) {
+    SCOPED_TRACE(both_without_size);
+    std::set<TrustedSignals::CreativeInfo> input;
+
+    input.insert(TrustedSignals::CreativeInfo(
+        /*ad_descriptor=*/blink::AdDescriptor(GURL("https://c1.test"),
+                                              /*size=*/std::nullopt),
+        /*creative_scanning_metadata=*/"s1",
+        /*interest_group_owner=*/url::Origin::Create(GURL("https://b1.test")),
+        /*buyer_and_seller_reporting_id=*/"stool"));
+
+    input.insert(TrustedSignals::CreativeInfo(
+        /*ad_descriptor=*/blink::AdDescriptor(
+            GURL("https://c2.test"),
+            /*size=*/both_without_size
+                ? std::nullopt
+                : std::optional(
+                      blink::AdSize(100, blink::AdSize::LengthUnit::kPixels, 50,
+                                    blink::AdSize::LengthUnit::kPixels))),
+        /*creative_scanning_metadata=*/"s2",
+        /*interest_group_owner=*/url::Origin::Create(GURL("https://b2.test")),
+        /*buyer_and_seller_reporting_id=*/"chair"));
+
+    GURL result = TrustedSignals::BuildTrustedScoringSignalsURL(
+        /*send_creative_scanning_metadata=*/true,
+        /*hostname=*/"https://publisher.test/",
+        /*trusted_scoring_signals_url=*/GURL("https://kv.test"),
+        /*ads=*/input,
+        /*component_ads=*/{},
+        /*experiment_group_id=*/std::nullopt);
+
+    if (both_without_size) {
+      EXPECT_EQ(
+          "https://kv.test/?hostname=https%3A%2F%2Fpublisher.test%2F"
+          "&renderUrls=https%3A%2F%2Fc1.test%2F,https%3A%2F%2Fc2.test%2F"
+          "&adCreativeScanningMetadata=s1,s2"
+          "&adSizes=,,,"
+          "&adBuyer=https%3A%2F%2Fb1.test,https%3A%2F%2Fb2.test"
+          "&adBuyerAndSellerReportingIds=stool,chair",
+          result);
+    } else {
+      EXPECT_EQ(
+          "https://kv.test/?hostname=https%3A%2F%2Fpublisher.test%2F"
+          "&renderUrls=https%3A%2F%2Fc1.test%2F,https%3A%2F%2Fc2.test%2F"
+          "&adCreativeScanningMetadata=s1,s2"
+          "&adSizes=,,100px,50px"
+          "&adBuyer=https%3A%2F%2Fb1.test,https%3A%2F%2Fb2.test"
+          "&adBuyerAndSellerReportingIds=stool,chair",
+          result);
+    }
+  }
+}
+
+TEST_F(TrustedSignalsTest,
+       BuildTrustedScoringSignalsURLEmptyCreativeScanMetadata) {
+  std::set<TrustedSignals::CreativeInfo> input;
+
+  input.insert(TrustedSignals::CreativeInfo(
+      /*ad_descriptor=*/blink::AdDescriptor(
+          GURL("https://c1.test"),
+          blink::AdSize(100, blink::AdSize::LengthUnit::kPixels, 50,
+                        blink::AdSize::LengthUnit::kPixels)),
+      /*creative_scanning_metadata=*/std::string(),
+      /*interest_group_owner=*/url::Origin::Create(GURL("https://b1.test")),
+      /*buyer_and_seller_reporting_id=*/"stool"));
+
+  input.insert(TrustedSignals::CreativeInfo(
+      /*ad_descriptor=*/blink::AdDescriptor(
+          GURL("https://c2.test"),
+          blink::AdSize(100, blink::AdSize::LengthUnit::kPixels, 50,
+                        blink::AdSize::LengthUnit::kPixels)),
+      /*creative_scanning_metadata=*/"s2",
+      /*interest_group_owner=*/url::Origin::Create(GURL("https://b2.test")),
+      /*buyer_and_seller_reporting_id=*/"recliner"));
+
+  GURL result = TrustedSignals::BuildTrustedScoringSignalsURL(
+      /*send_creative_scanning_metadata=*/true,
+      /*hostname=*/"https://publisher.test/",
+      /*trusted_scoring_signals_url=*/GURL("https://kv.test"),
+      /*ads=*/std::move(input),
+      /*component_ads=*/{},
+      /*experiment_group_id=*/std::nullopt);
+
+  EXPECT_EQ(
+      "https://kv.test/?hostname=https%3A%2F%2Fpublisher.test%2F"
+      "&renderUrls=https%3A%2F%2Fc1.test%2F,https%3A%2F%2Fc2.test%2F"
+      "&adCreativeScanningMetadata=,s2"
+      "&adSizes=100px,50px,100px,50px"
+      "&adBuyer=https%3A%2F%2Fb1.test,https%3A%2F%2Fb2.test"
+      "&adBuyerAndSellerReportingIds=stool,recliner",
+      result);
+}
+
+TEST_F(TrustedSignalsTest, ScoringSignalsCreativeScanning) {
+  std::set<TrustedSignals::CreativeInfo> ads;
+  ads.insert(TrustedSignals::CreativeInfo(
+      /*ad_descriptor=*/blink::AdDescriptor(
+          GURL("https://foo.test"),
+          blink::AdSize(100, blink::AdSize::LengthUnit::kPixels, 50,
+                        blink::AdSize::LengthUnit::kPixels)),
+      /*creative_scanning_metadata=*/"s1",
+      /*interest_group_owner=*/url::Origin::Create(GURL("https://b1.test")),
+      /*buyer_and_seller_reporting_id=*/"stool"));
+
+  ads.insert(TrustedSignals::CreativeInfo(
+      /*ad_descriptor=*/blink::AdDescriptor(
+          GURL("https://foo.test"),
+          blink::AdSize(100, blink::AdSize::LengthUnit::kPixels, 50,
+                        blink::AdSize::LengthUnit::kPixels)),
+      /*creative_scanning_metadata=*/"s2",
+      /*interest_group_owner=*/url::Origin::Create(GURL("https://b2.test")),
+      /*buyer_and_seller_reporting_id=*/"sofa"));
+
+  ads.insert(TrustedSignals::CreativeInfo(
+      /*ad_descriptor=*/blink::AdDescriptor(GURL("https://bar.test")),
+      /*creative_scanning_metadata=*/"s3",
+      /*interest_group_owner=*/url::Origin::Create(GURL("https://b2.test")),
+      /*buyer_and_seller_reporting_id=*/"chair"));
+
+  std::set<TrustedSignals::CreativeInfo> ad_components;
+  ad_components.insert(TrustedSignals::CreativeInfo(
+      /*ad_descriptor=*/blink::AdDescriptor(
+          GURL("https://foosub.test"),
+          blink::AdSize(30, blink::AdSize::LengthUnit::kPixels, 16,
+                        blink::AdSize::LengthUnit::kPixels)),
+      /*creative_scanning_metadata=*/"c1",
+      /*interest_group_owner=*/url::Origin::Create(GURL("https://b1.test")),
+      /*buyer_and_seller_reporting_id=*/std::string()));
+
+  ad_components.insert(TrustedSignals::CreativeInfo(
+      /*ad_descriptor=*/blink::AdDescriptor(
+          GURL("https://barsub.test"),
+          blink::AdSize(60, blink::AdSize::LengthUnit::kPixels, 32,
+                        blink::AdSize::LengthUnit::kPixels)),
+      /*creative_scanning_metadata=*/"c2",
+      /*interest_group_owner=*/url::Origin::Create(GURL("https://b2.test")),
+      /*buyer_and_seller_reporting_id=*/std::string()));
+
+  GURL response_url(
+      "https://url.test/?hostname=publisher&"
+      "renderUrls=https%3A%2F%2Fbar.test%2F,https%3A%2F%2Ffoo.test%2F,"
+      "https%3A%2F%2Ffoo.test%2F"
+      "&adComponentRenderUrls=https%3A%2F%2Fbarsub.test%2F,"
+      "https%3A%2F%2Ffoosub.test%2F"
+      "&adCreativeScanningMetadata=s3,s1,s2"
+      "&adComponentCreativeScanningMetadata=c2,c1"
+      "&adSizes=,,100px,50px,100px,50px"
+      "&adComponentSizes=60px,32px,30px,16px"
+      "&adBuyer=https%3A%2F%2Fb2.test,https%3A%2F%2Fb1.test,"
+      "https%3A%2F%2Fb2.test"
+      "&adComponentBuyer=https%3A%2F%2Fb2.test,https%3A%2F%2Fb1.test"
+      "&adBuyerAndSellerReportingIds=chair,stool,sofa");
+
+  AddJsonResponse(&url_loader_factory_, response_url, kBaseScoringJson);
+
+  scoped_refptr<TrustedSignals::Result> signals =
+      FetchScoringSignals(std::move(ads), std::move(ad_components), kHostname,
+                          /*experiment_group_id=*/std::nullopt,
+                          /*send_creative_scanning_metadata=*/true);
+  ASSERT_TRUE(signals);
+
+  EXPECT_THAT(ExtractScoringSignals(
+                  signals.get(),
+                  /*render_url=*/GURL("https://foo.test/"),
+                  /*ad_component_render_urls=*/{"https://foosub.test/"}),
+              base::test::IsJson(R"({
+          "renderURL":{"https://foo.test/":1},
+          "renderUrl":{"https://foo.test/":1},
+          "adComponentRenderURLs":{"https://foosub.test/":2},
+          "adComponentRenderUrls":{"https://foosub.test/":2}
+      })"));
+
+  EXPECT_THAT(ExtractScoringSignals(
+                  signals.get(),
+                  /*render_url=*/GURL("https://bar.test/"),
+                  /*ad_component_render_urls=*/{"https://barsub.test/"}),
+              base::test::IsJson(R"({
+          "renderURL":{"https://bar.test/":[2]},
+          "renderUrl":{"https://bar.test/":[2]},
+          "adComponentRenderURLs":{"https://barsub.test/":[3]},
+          "adComponentRenderUrls":{"https://barsub.test/":[3]}
+      })"));
 }
 
 }  // namespace

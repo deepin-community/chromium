@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <limits>
 #include <map>
 #include <set>
@@ -17,15 +18,16 @@
 #include "base/check_is_test.h"
 #include "base/check_op.h"
 #include "base/feature_list.h"
-#include "base/ranges/algorithm.h"
+#include "base/not_fatal_until.h"
 #include "base/time/time.h"
-#include "base/version_info/version_info.h"
 #include "components/country_codes/country_codes.h"
 #include "components/prefs/pref_service.h"
+#include "components/regional_capabilities/regional_capabilities_utils.h"
 #include "components/search_engines/keyword_web_data_service.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
-#include "components/search_engines/search_engine_choice_utils.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/search_engines/search_engines_pref_names.h"
+#include "components/search_engines/search_engines_switches.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_prepopulate_data.h"
 #include "components/search_engines/template_url_service.h"
@@ -66,14 +68,15 @@ MergeEngineRequirements ComputeMergeEnginesRequirements(
       TemplateURLPrepopulateData::GetDataVersion(prefs);
   const int country_id = search_engine_choice_service->GetCountryId();
   const bool should_keywords_use_extended_list =
-      search_engines::IsChoiceScreenFlagEnabled(
-          search_engines::ChoicePromo::kAny) &&
       search_engines::IsEeaChoiceCountry(country_id);
-  const int milestone = version_info::GetMajorVersionNumberAsInt();
 
   bool update_builtin_keywords;
-  if (keywords_metadata.builtin_keyword_data_version >
-      prepopulate_resource_keyword_version) {
+  if (regional_capabilities::HasSearchEngineCountryListOverride()) {
+    // The search engine list is being explicitly overridden, so also force
+    // recomputing it for the keywords database.
+    update_builtin_keywords = true;
+  } else if (keywords_metadata.builtin_keyword_data_version >
+             prepopulate_resource_keyword_version) {
     // The version in the database is more recent than the version in the Chrome
     // binary. Downgrades are not supported, so don't update it.
     update_builtin_keywords = false;
@@ -96,16 +99,6 @@ MergeEngineRequirements ComputeMergeEnginesRequirements(
     // We started writing the pref while we were not checking the country
     // before. Once the feature flag is removed, we can clean up this pref.
     update_builtin_keywords = true;
-  } else if (should_keywords_use_extended_list &&
-             keywords_metadata.builtin_keyword_milestone != 0 &&
-             keywords_metadata.builtin_keyword_milestone < milestone) {
-    // The milestone changed and we need to recompute the list of visible search
-    // engines. This is needed only in the EEA.
-    // We skip cases where the milestone was not previously set to avoid
-    // unnecessary churn. We expect that by the time this might matter, the
-    // client will have this data populated when the search engine choice
-    // feature gets enabled.
-    update_builtin_keywords = true;
   } else {
     update_builtin_keywords = false;
   }
@@ -115,7 +108,6 @@ MergeEngineRequirements ComputeMergeEnginesRequirements(
   if (update_builtin_keywords) {
     merge_requirements.metadata.builtin_keyword_data_version =
         prepopulate_resource_keyword_version;
-    merge_requirements.metadata.builtin_keyword_milestone = milestone;
     merge_requirements.metadata.builtin_keyword_country = country_id;
     merge_requirements.should_keywords_use_extended_list =
         should_keywords_use_extended_list
@@ -312,10 +304,10 @@ void MergeIntoEngineData(const TemplateURL* original_turl,
     url_to_update->SetShortName(original_turl->short_name());
     url_to_update->SetKeyword(original_turl->keyword());
     if (original_turl->created_from_play_api()) {
-      // TODO(crbug/1002271): Search url from Play API might contain attribution
-      // info and therefore should be preserved through prepopulated data
-      // update. In the future we might decide to take different approach to
-      // pass attribution info to search providers.
+      // TODO(crbug.com/40646573): Search url from Play API might contain
+      // attribution info and therefore should be preserved through prepopulated
+      // data update. In the future we might decide to take different approach
+      // to pass attribution info to search providers.
       url_to_update->SetURL(original_turl->url());
     }
   }
@@ -428,34 +420,17 @@ ActionsFromCurrentData CreateActionsFromCurrentPrepopulateData(
   return actions;
 }
 
-const std::string& GetDefaultSearchProviderPrefValue(PrefService& prefs) {
-  if (search_engines::IsChoiceScreenFlagEnabled(
-          search_engines::ChoicePromo::kAny)) {
-    const auto& default_search_provider =
-        prefs.GetString(prefs::kDefaultSearchProviderGUID);
-
-    if (!default_search_provider.empty()) {
-      return default_search_provider;
-    }
-
-    const auto& synced_default_search_provider =
-        prefs.GetString(prefs::kSyncedDefaultSearchProviderGUID);
-    if (!synced_default_search_provider.empty()) {
-      prefs.SetString(prefs::kDefaultSearchProviderGUID,
-                      synced_default_search_provider);
-    }
-    return synced_default_search_provider;
-  }
-  return prefs.GetString(prefs::kSyncedDefaultSearchProviderGUID);
+const std::string& GetDefaultSearchProviderGuidFromPrefs(PrefService& prefs) {
+  return base::FeatureList::IsEnabled(switches::kSearchEngineChoiceTrigger)
+             ? prefs.GetString(prefs::kDefaultSearchProviderGUID)
+             : prefs.GetString(prefs::kSyncedDefaultSearchProviderGUID);
 }
 
-void SetDefaultSearchProviderPrefValue(PrefService& prefs,
-                                       const std::string& value) {
-  if (search_engines::IsChoiceScreenFlagEnabled(
-          search_engines::ChoicePromo::kAny)) {
+void SetDefaultSearchProviderGuidToPrefs(PrefService& prefs,
+                                         const std::string& value) {
+  prefs.SetString(prefs::kSyncedDefaultSearchProviderGUID, value);
+  if (base::FeatureList::IsEnabled(switches::kSearchEngineChoiceTrigger)) {
     prefs.SetString(prefs::kDefaultSearchProviderGUID, value);
-  } else {
-    prefs.SetString(prefs::kSyncedDefaultSearchProviderGUID, value);
   }
 }
 
@@ -545,9 +520,11 @@ void ApplyActionsFromCurrentData(
   // Remove items.
   for (const TemplateURL* removed_engine : actions.removed_engines) {
     auto j = FindTemplateURL(template_urls, removed_engine);
-    DCHECK(j != template_urls->end());
+    CHECK(j != template_urls->end(), base::NotFatalUntil::M130);
     DCHECK(!default_search_provider ||
-           (*j)->prepopulate_id() != default_search_provider->prepopulate_id());
+           (*j)->prepopulate_id() !=
+               default_search_provider->prepopulate_id() ||
+           (*j)->keyword() != default_search_provider->keyword());
     std::unique_ptr<TemplateURL> template_url = std::move(*j);
     template_urls->erase(j);
     if (service) {
@@ -574,7 +551,7 @@ void ApplyActionsFromCurrentData(
 }
 
 void GetSearchProvidersUsingKeywordResult(
-    const WDTypedResult& result,
+    const WDKeywordsResult& keyword_result,
     KeywordWebDataService* service,
     PrefService* prefs,
     search_engines::SearchEngineChoiceService* search_engine_choice_service,
@@ -585,12 +562,8 @@ void GetSearchProvidersUsingKeywordResult(
     std::set<std::string>* removed_keyword_guids) {
   DCHECK(template_urls);
   DCHECK(template_urls->empty());
-  DCHECK_EQ(KEYWORDS_RESULT, result.GetType());
 
-  WDKeywordsResult keyword_result = reinterpret_cast<
-      const WDResult<WDKeywordsResult>*>(&result)->GetValue();
-
-  for (auto& keyword : keyword_result.keywords) {
+  for (TemplateURLData keyword : keyword_result.keywords) {
     // Fix any duplicate encodings in the local database.  Note that we don't
     // adjust the last_modified time of this keyword; this way, we won't later
     // overwrite any changes on the sync server that happened to this keyword
@@ -631,7 +604,7 @@ void GetSearchProvidersUsingLoadedEngines(
   DCHECK(template_urls);
   std::vector<std::unique_ptr<TemplateURLData>> prepopulated_urls =
       TemplateURLPrepopulateData::GetPrepopulatedEngines(
-          prefs, search_engine_choice_service, nullptr);
+          prefs, search_engine_choice_service);
   RemoveDuplicatePrepopulateIDs(service, prepopulated_urls,
                                 default_search_provider, template_urls,
                                 search_terms_data, removed_keyword_guids);
@@ -685,5 +658,5 @@ bool DeDupeEncodings(std::vector<std::string>* encodings) {
 TemplateURLService::OwnedTemplateURLVector::iterator FindTemplateURL(
     TemplateURLService::OwnedTemplateURLVector* urls,
     const TemplateURL* url) {
-  return base::ranges::find(*urls, url, &std::unique_ptr<TemplateURL>::get);
+  return std::ranges::find(*urls, url, &std::unique_ptr<TemplateURL>::get);
 }

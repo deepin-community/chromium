@@ -17,7 +17,6 @@
 #include "base/memory/ref_counted.h"
 #include "base/version.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/update_client/update_client.h"
 #include "url/gurl.h"
 
@@ -94,7 +93,8 @@ struct ComponentRegistration {
       bool requires_network_encryption,
       bool supports_group_policy_enable_component_updates,
       bool allow_cached_copies,
-      bool allow_updates_on_metered_connection);
+      bool allow_updates_on_metered_connection,
+      bool allow_updates);
   ComponentRegistration(const ComponentRegistration& other);
   ComponentRegistration& operator=(const ComponentRegistration& other);
   ComponentRegistration(ComponentRegistration&& other);
@@ -113,6 +113,7 @@ struct ComponentRegistration {
   bool supports_group_policy_enable_component_updates;
   bool allow_cached_copies;
   bool allow_updates_on_metered_connection;
+  bool allow_updates;
 };
 
 // The component update service is in charge of installing or upgrading select
@@ -204,6 +205,8 @@ class ComponentUpdateService {
   friend class speech::SodaInstallerImpl;
   friend class ::ComponentsHandler;
   FRIEND_TEST_ALL_PREFIXES(ComponentInstallerTest, RegisterComponent);
+  FRIEND_TEST_ALL_PREFIXES(ComponentUpdaterTest, ComponentDetails);
+  FRIEND_TEST_ALL_PREFIXES(ComponentUpdaterTest, UpdatesDisabled);
 };
 
 using ServiceObserver = ComponentUpdateService::Observer;
@@ -221,15 +224,19 @@ class OnDemandUpdater {
   friend class OnDemandTester;
   friend class policy::ComponentUpdaterPolicyTest;
   friend class ::ComponentsHandler;
+  friend class OptimizationGuideOnDeviceModelInstallerPolicy;
   friend class ::PluginObserver;
   friend class SwReporterOnDemandFetcher;
   friend class SodaComponentInstallerPolicy;
   friend class SodaLanguagePackComponentInstallerPolicy;
+  friend class TranslateKitComponentInstallerPolicy;
+  friend class TranslateKitLanguagePackComponentInstallerPolicy;
   friend class ::extensions::AutotestPrivateLoadSmartDimComponentFunction;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   friend class ash::SmartDimComponentIntegrationTest;
   friend class CrOSComponentInstaller;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
+  friend class IwaKeyDistributionComponentInstallerPolicy;
 
   // Triggers an update check for a component. |id| is a value
   // returned by GetCrxComponentID(). If an update for this component is already

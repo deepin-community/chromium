@@ -8,6 +8,7 @@
 
 #include <math.h>
 
+#include <array>
 #include <iterator>
 #include <memory>
 #include <sstream>
@@ -31,6 +32,7 @@
 #include "core/fpdfdoc/cpdf_icon.h"
 #include "core/fpdfdoc/cpvt_word.h"
 #include "core/fxcrt/fx_string_wrappers.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "core/fxcrt/span.h"
 #include "fpdfsdk/cpdfsdk_formfillenvironment.h"
 #include "fpdfsdk/cpdfsdk_interactiveform.h"
@@ -39,7 +41,6 @@
 #include "fpdfsdk/pwl/cpwl_edit.h"
 #include "fpdfsdk/pwl/cpwl_edit_impl.h"
 #include "fpdfsdk/pwl/cpwl_wnd.h"
-#include "third_party/base/numerics/safe_conversions.h"
 
 namespace {
 
@@ -186,49 +187,50 @@ ByteString GetAP_Check(const CFX_FloatRect& crBBox) {
   const float fWidth = crBBox.Width();
   const float fHeight = crBBox.Height();
 
-  CFX_PointF pts[8][3] = {{CFX_PointF(0.28f, 0.52f), CFX_PointF(0.27f, 0.48f),
-                           CFX_PointF(0.29f, 0.40f)},
-                          {CFX_PointF(0.30f, 0.33f), CFX_PointF(0.31f, 0.29f),
-                           CFX_PointF(0.31f, 0.28f)},
-                          {CFX_PointF(0.39f, 0.28f), CFX_PointF(0.49f, 0.29f),
-                           CFX_PointF(0.77f, 0.67f)},
-                          {CFX_PointF(0.76f, 0.68f), CFX_PointF(0.78f, 0.69f),
-                           CFX_PointF(0.76f, 0.75f)},
-                          {CFX_PointF(0.76f, 0.75f), CFX_PointF(0.73f, 0.80f),
-                           CFX_PointF(0.68f, 0.75f)},
-                          {CFX_PointF(0.68f, 0.74f), CFX_PointF(0.68f, 0.74f),
-                           CFX_PointF(0.44f, 0.47f)},
-                          {CFX_PointF(0.43f, 0.47f), CFX_PointF(0.40f, 0.47f),
-                           CFX_PointF(0.41f, 0.58f)},
-                          {CFX_PointF(0.40f, 0.60f), CFX_PointF(0.28f, 0.66f),
-                           CFX_PointF(0.30f, 0.56f)}};
+  using PointRow = std::array<CFX_PointF, 3>;
+  std::array<PointRow, 8> point_table = {{
+      {{CFX_PointF(0.28f, 0.52f), CFX_PointF(0.27f, 0.48f),
+        CFX_PointF(0.29f, 0.40f)}},
+      {{CFX_PointF(0.30f, 0.33f), CFX_PointF(0.31f, 0.29f),
+        CFX_PointF(0.31f, 0.28f)}},
+      {{CFX_PointF(0.39f, 0.28f), CFX_PointF(0.49f, 0.29f),
+        CFX_PointF(0.77f, 0.67f)}},
+      {{CFX_PointF(0.76f, 0.68f), CFX_PointF(0.78f, 0.69f),
+        CFX_PointF(0.76f, 0.75f)}},
+      {{CFX_PointF(0.76f, 0.75f), CFX_PointF(0.73f, 0.80f),
+        CFX_PointF(0.68f, 0.75f)}},
+      {{CFX_PointF(0.68f, 0.74f), CFX_PointF(0.68f, 0.74f),
+        CFX_PointF(0.44f, 0.47f)}},
+      {{CFX_PointF(0.43f, 0.47f), CFX_PointF(0.40f, 0.47f),
+        CFX_PointF(0.41f, 0.58f)}},
+      {{CFX_PointF(0.40f, 0.60f), CFX_PointF(0.28f, 0.66f),
+        CFX_PointF(0.30f, 0.56f)}},
+  }};
 
-  for (size_t i = 0; i < std::size(pts); ++i) {
-    for (size_t j = 0; j < std::size(pts[0]); ++j) {
-      pts[i][j].x = pts[i][j].x * fWidth + crBBox.left;
-      pts[i][j].y *= pts[i][j].y * fHeight + crBBox.bottom;
+  for (PointRow& row : point_table) {
+    for (CFX_PointF& point : row) {
+      point.x = point.x * fWidth + crBBox.left;
+      point.y = point.y * fHeight + crBBox.bottom;
     }
   }
 
   fxcrt::ostringstream csAP;
-  WriteMove(csAP, pts[0][0]);
+  WriteMove(csAP, point_table[0][0]);
 
-  for (size_t i = 0; i < std::size(pts); ++i) {
-    size_t nNext = i < std::size(pts) - 1 ? i + 1 : 0;
-    const CFX_PointF& pt_next = pts[nNext][0];
-
-    float px1 = pts[i][1].x - pts[i][0].x;
-    float py1 = pts[i][1].y - pts[i][0].y;
-    float px2 = pts[i][2].x - pt_next.x;
-    float py2 = pts[i][2].y - pt_next.y;
-
+  for (size_t i = 0; i < point_table.size(); ++i) {
+    size_t nNext = i < point_table.size() - 1 ? i + 1 : 0;
+    const CFX_PointF& pt_next = point_table[nNext][0];
+    float px1 = point_table[i][1].x - point_table[i][0].x;
+    float py1 = point_table[i][1].y - point_table[i][0].y;
+    float px2 = point_table[i][2].x - pt_next.x;
+    float py2 = point_table[i][2].y - pt_next.y;
     WriteBezierCurve(
         csAP,
-        {pts[i][0].x + px1 * FXSYS_BEZIER, pts[i][0].y + py1 * FXSYS_BEZIER},
+        {point_table[i][0].x + px1 * FXSYS_BEZIER,
+         point_table[i][0].y + py1 * FXSYS_BEZIER},
         {pt_next.x + px2 * FXSYS_BEZIER, pt_next.y + py2 * FXSYS_BEZIER},
         pt_next);
   }
-
   return ByteString(csAP);
 }
 
@@ -317,7 +319,7 @@ ByteString GetAP_Star(const CFX_FloatRect& crBBox) {
   CFX_PointF ptCenter = CFX_PointF((crBBox.left + crBBox.right) / 2.0f,
                                    (crBBox.top + crBBox.bottom) / 2.0f);
 
-  CFX_PointF points[5];
+  std::array<CFX_PointF, 5> points;
   float fAngle = FXSYS_PI / 10.0f;
   for (auto& point : points) {
     point =
@@ -326,12 +328,11 @@ ByteString GetAP_Star(const CFX_FloatRect& crBBox) {
   }
 
   WriteMove(csAP, points[0]);
-
-  int next = 0;
-  for (size_t i = 0; i < std::size(points); ++i) {
-    next = (next + 2) % std::size(points);
-    WriteLine(csAP, points[next]);
-  }
+  WriteLine(csAP, points[2]);
+  WriteLine(csAP, points[4]);
+  WriteLine(csAP, points[1]);
+  WriteLine(csAP, points[3]);
+  WriteLine(csAP, points[0]);
 
   return ByteString(csAP);
 }
@@ -1054,7 +1055,7 @@ ByteString GetDropButtonAppStream(const CFX_FloatRect& rcBBox) {
         rcBBox, 2, CFX_Color(CFX_Color::Type::kGray, 0),
         CFX_Color(CFX_Color::Type::kGray, 1),
         CFX_Color(CFX_Color::Type::kGray, 0.5), BorderStyle::kBeveled,
-        CPWL_Dash(3, 0, 0));
+        CPWL_Dash{3, 0, 0});
   }
 
   CFX_PointF ptCenter = CFX_PointF((rcBBox.left + rcBBox.right) / 2,
@@ -1095,7 +1096,7 @@ void SetDefaultIconName(CPDF_Stream* pIcon, const char* name) {
   if (pImageDict->KeyExist("Name"))
     return;
 
-  pImageDict->SetNewFor<CPDF_String>("Name", name, false);
+  pImageDict->SetNewFor<CPDF_String>("Name", name);
 }
 
 std::optional<CheckStyle> CheckStyleFromCaption(const WideString& caption) {
@@ -1161,14 +1162,14 @@ void CPDFSDK_AppStream::SetAsPushButton() {
   CFX_Color crBorder = pControl->GetOriginalBorderColor();
 
   float fBorderWidth = static_cast<float>(widget_->GetBorderWidth());
-  CPWL_Dash dsBorder(3, 0, 0);
+  CPWL_Dash dsBorder{3, 0, 0};
   CFX_Color crLeftTop;
   CFX_Color crRightBottom;
 
   BorderStyle nBorderStyle = widget_->GetBorderStyle();
   switch (nBorderStyle) {
     case BorderStyle::kDash:
-      dsBorder = CPWL_Dash(3, 3, 0);
+      dsBorder = CPWL_Dash{3, 3, 0};
       break;
     case BorderStyle::kBeveled:
       fBorderWidth *= 2;
@@ -1312,14 +1313,14 @@ void CPDFSDK_AppStream::SetAsCheckBox() {
   CFX_Color crBackground = pControl->GetOriginalBackgroundColor();
   CFX_Color crBorder = pControl->GetOriginalBorderColor();
   float fBorderWidth = static_cast<float>(widget_->GetBorderWidth());
-  CPWL_Dash dsBorder(3, 0, 0);
+  CPWL_Dash dsBorder{3, 0, 0};
   CFX_Color crLeftTop;
   CFX_Color crRightBottom;
 
   BorderStyle nBorderStyle = widget_->GetBorderStyle();
   switch (nBorderStyle) {
     case BorderStyle::kDash:
-      dsBorder = CPWL_Dash(3, 3, 0);
+      dsBorder = CPWL_Dash{3, 3, 0};
       break;
     case BorderStyle::kBeveled:
       fBorderWidth *= 2;
@@ -1391,14 +1392,14 @@ void CPDFSDK_AppStream::SetAsRadioButton() {
   CFX_Color crBackground = pControl->GetOriginalBackgroundColor();
   CFX_Color crBorder = pControl->GetOriginalBorderColor();
   float fBorderWidth = static_cast<float>(widget_->GetBorderWidth());
-  CPWL_Dash dsBorder(3, 0, 0);
+  CPWL_Dash dsBorder{3, 0, 0};
   CFX_Color crLeftTop;
   CFX_Color crRightBottom;
 
   BorderStyle nBorderStyle = widget_->GetBorderStyle();
   switch (nBorderStyle) {
     case BorderStyle::kDash:
-      dsBorder = CPWL_Dash(3, 3, 0);
+      dsBorder = CPWL_Dash{3, 3, 0};
       break;
     case BorderStyle::kBeveled:
       fBorderWidth *= 2;
@@ -1705,7 +1706,7 @@ void CPDFSDK_AppStream::SetAsTextField(std::optional<WideString> sValue) {
       }
     } else {
       if (sValue.has_value())
-        nMaxLen = pdfium::base::checked_cast<int>(sValue.value().GetLength());
+        nMaxLen = pdfium::checked_cast<int>(sValue.value().GetLength());
       pEdit->SetLimitChar(nMaxLen);
     }
   }
@@ -1768,7 +1769,7 @@ void CPDFSDK_AppStream::SetAsTextField(std::optional<WideString> sValue) {
         ByteString sColor =
             GetStrokeColorAppStream(widget_->GetBorderPWLColor());
         if (sColor.GetLength() > 0) {
-          CPWL_Dash dsBorder = CPWL_Dash(3, 3, 0);
+          CPWL_Dash dsBorder = CPWL_Dash{3, 3, 0};
           AutoClosedQCommand q(&sLines);
           sLines << widget_->GetBorderWidth() << " " << kSetLineWidthOperator
                  << "\n"
@@ -1852,7 +1853,7 @@ void CPDFSDK_AppStream::Write(const ByteString& sAPType,
   RetainPtr<CPDF_Dictionary> stream_dict = stream->GetMutableDict();
   stream_dict->SetMatrixFor("Matrix", widget_->GetMatrix());
   stream_dict->SetRectFor("BBox", widget_->GetRotatedRect());
-  stream->SetDataAndRemoveFilter(sContents.raw_span());
+  stream->SetDataAndRemoveFilter(sContents.unsigned_span());
 }
 
 void CPDFSDK_AppStream::Remove(ByteStringView sAPType) {
@@ -1875,12 +1876,12 @@ ByteString CPDFSDK_AppStream::GetBorderAppStream() const {
   CFX_Color crRightBottom;
 
   float fBorderWidth = static_cast<float>(widget_->GetBorderWidth());
-  CPWL_Dash dsBorder(3, 0, 0);
+  CPWL_Dash dsBorder{3, 0, 0};
 
   BorderStyle nBorderStyle = widget_->GetBorderStyle();
   switch (nBorderStyle) {
     case BorderStyle::kDash:
-      dsBorder = CPWL_Dash(3, 3, 0);
+      dsBorder = CPWL_Dash{3, 3, 0};
       break;
     case BorderStyle::kBeveled:
       fBorderWidth *= 2;

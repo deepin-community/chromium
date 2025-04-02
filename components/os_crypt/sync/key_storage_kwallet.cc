@@ -82,7 +82,6 @@ KeyStorageKWallet::InitResult KeyStorageKWallet::InitWallet() {
   }
 
   NOTREACHED();
-  return InitResult::PERMANENT_FAIL;
 }
 
 std::optional<std::string> KeyStorageKWallet::GetKeyImpl() {

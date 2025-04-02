@@ -7,8 +7,8 @@
 #include <utility>
 
 #include "net/base/net_errors.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 #include "third_party/blink/public/mojom/frame/lifecycle.mojom-shared.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
@@ -34,9 +34,12 @@ CreateDOMExceptionCodeAndMessageFromNetErrorCode(int32_t net_error) {
       return {DOMExceptionCode::kUnknownError, "Unexpected error occured."};
     case net::ERR_ACCESS_DENIED:
       return {DOMExceptionCode::kInvalidAccessError,
-              "Access to the requested host is blocked."};
+              "Access to the requested host or port is blocked."};
     case net::ERR_NETWORK_ACCESS_DENIED:
       return {DOMExceptionCode::kInvalidAccessError, "Firewall error."};
+    case net::ERR_BLOCKED_BY_PRIVATE_NETWORK_ACCESS_CHECKS:
+      return {DOMExceptionCode::kInvalidAccessError,
+              "Access to private network is blocked."};
     default:
       return {DOMExceptionCode::kNetworkError, "Network Error."};
   }
@@ -44,12 +47,8 @@ CreateDOMExceptionCodeAndMessageFromNetErrorCode(int32_t net_error) {
 
 }  // namespace
 
-ScriptPromise Socket::opened(ScriptState* script_state) const {
-  return ScriptPromise(script_state, opened_.Get(script_state->GetIsolate()));
-}
-
-ScriptPromise Socket::closed(ScriptState* script_state) const {
-  return ScriptPromise(script_state, closed_.Get(script_state->GetIsolate()));
+ScriptPromise<IDLUndefined> Socket::closed(ScriptState* script_state) const {
+  return closed_->Promise(script_state->World());
 }
 
 Socket::Socket(ScriptState* script_state)
@@ -61,14 +60,8 @@ Socket::Socket(ScriptState* script_state)
           GetExecutionContext()->GetScheduler()->RegisterFeature(
               SchedulingPolicy::Feature::kOutstandingNetworkRequestDirectSocket,
               {SchedulingPolicy::DisableBackForwardCache()})),
-      opened_resolver_(
-          MakeGarbageCollected<ScriptPromiseResolver>(script_state)),
-      opened_(script_state->GetIsolate(),
-              opened_resolver_->Promise().V8Promise()),
-      closed_resolver_(
-          MakeGarbageCollected<ScriptPromiseResolver>(script_state)),
-      closed_(script_state->GetIsolate(),
-              closed_resolver_->Promise().V8Promise()) {
+      closed_(MakeGarbageCollected<ScriptPromiseProperty<IDLUndefined, IDLAny>>(
+          GetExecutionContext())) {
   UpdateStateIfNeeded();
 
   GetExecutionContext()->GetBrowserInterfaceBroker().GetInterface(
@@ -80,7 +73,7 @@ Socket::Socket(ScriptState* script_state)
   // |closed| promise is just one of the ways to learn that the socket state has
   // changed. Therefore it's not necessary to force developers to handle
   // rejections.
-  closed_resolver_->Promise().MarkAsHandled();
+  closed_->MarkAsHandled();
 }
 
 Socket::~Socket() = default;
@@ -97,7 +90,7 @@ bool Socket::CheckContextAndPermissions(ScriptState* script_state,
   ExecutionContext* execution_context = ExecutionContext::From(script_state);
   if (!execution_context->IsIsolatedContext() ||
       !execution_context->IsFeatureEnabled(
-          mojom::blink::PermissionsPolicyFeature::kCrossOriginIsolated)) {
+          network::mojom::PermissionsPolicyFeature::kCrossOriginIsolated)) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kNotAllowedError,
         "Frame is not sufficiently isolated to use Direct Sockets.");
@@ -105,7 +98,7 @@ bool Socket::CheckContextAndPermissions(ScriptState* script_state,
   }
 
   if (!execution_context->IsFeatureEnabled(
-          mojom::blink::PermissionsPolicyFeature::kDirectSockets)) {
+          network::mojom::PermissionsPolicyFeature::kDirectSockets)) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kNotAllowedError,
         "Permissions-Policy: direct-sockets are disabled.");
@@ -125,13 +118,7 @@ DOMException* Socket::CreateDOMExceptionFromNetErrorCode(int32_t net_error) {
 void Socket::Trace(Visitor* visitor) const {
   visitor->Trace(script_state_);
   visitor->Trace(service_);
-
-  visitor->Trace(opened_resolver_);
-  visitor->Trace(opened_);
-
-  visitor->Trace(closed_resolver_);
   visitor->Trace(closed_);
-
   ExecutionContextLifecycleStateObserver::Trace(visitor);
 }
 

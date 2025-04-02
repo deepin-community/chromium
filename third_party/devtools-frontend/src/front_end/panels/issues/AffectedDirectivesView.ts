@@ -6,12 +6,12 @@ import * as Common from '../../core/common/common.js';
 import * as Host from '../../core/host/host.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as Platform from '../../core/platform/platform.js';
-import type * as Protocol from '../../generated/protocol.js';
 import * as SDK from '../../core/sdk/sdk.js';
+import type * as Protocol from '../../generated/protocol.js';
 import * as IssuesManager from '../../models/issues_manager/issues_manager.js';
-import * as IssuesComponents from './components/components.js';
 
 import {AffectedItem, AffectedResourcesView} from './AffectedResourcesView.js';
+import * as IssuesComponents from './components/components.js';
 
 const UIStrings = {
   /**
@@ -96,7 +96,7 @@ export class AffectedDirectivesView extends AffectedResourcesView {
       const onElementRevealIconClick: (arg0?: Event|undefined) => void = () => {
         const target = model.getTargetIfNotDisposed();
         if (target) {
-          Host.userMetrics.issuesPanelResourceOpened(this.issue.getCategory(), AffectedItem.Element);
+          Host.userMetrics.issuesPanelResourceOpened(this.issue.getCategory(), AffectedItem.ELEMENT);
           const deferredDOMNode = new SDK.DOMModel.DeferredDOMNode(target, violatingNodeId);
           void Common.Revealer.reveal(deferredDOMNode);
         }

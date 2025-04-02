@@ -14,7 +14,9 @@
 
 #include "./centipede/resource_pool.h"
 
+#include <sstream>
 #include <string>
+#include <thread>  // NOLINT: For thread IDs.
 #include <utility>
 
 #include "absl/log/check.h"
@@ -63,11 +65,13 @@ const absl::Status& ResourcePool<ResourceT>::LeaseToken::status() const {
 
 template <typename ResourceT>
 std::string ResourcePool<ResourceT>::LeaseToken::id() const {
-  return absl::StrCat("lease_tid_", thread_id_, "_rid_", request_.id);
+  std::stringstream ss;
+  ss << thread_id_;
+  return absl::StrCat("lease_tid_", ss.str(), "_rid_", request_.id);
 }
 
 template <typename ResourceT>
-pid_t ResourcePool<ResourceT>::LeaseToken::thread_id() const {
+std::thread::id ResourcePool<ResourceT>::LeaseToken::thread_id() const {
   return thread_id_;
 }
 
@@ -90,7 +94,7 @@ ResourcePool<ResourceT>::ResourcePool(const ResourceT& quota)
 template <typename ResourceT>
 typename ResourcePool<ResourceT>::LeaseToken
 ResourcePool<ResourceT>::AcquireLeaseBlocking(LeaseRequest&& request) {
-  if (VLOG_IS_ON(1)) {
+  if (ABSL_VLOG_IS_ON(1)) {
     absl::ReaderMutexLock lock{&pool_mu_};
     VLOG(1) << "Received lease request " << request.id           //
             << "\nrequested: " << request.amount.FormattedStr()  //

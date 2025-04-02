@@ -10,8 +10,8 @@
 #include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "content/browser/browser_context_impl.h"
+#include "content/browser/preloading/prefetch/no_vary_search_helper.h"
 #include "content/browser/preloading/prefetch/prefetch_container.h"
 #include "content/browser/preloading/prefetch/prefetch_params.h"
 #include "content/browser/preloading/prefetch/prefetch_service.h"
@@ -26,10 +26,8 @@
 #include "content/public/browser/prefetch_metrics.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/content_client.h"
 #include "net/http/http_no_vary_search_data.h"
-#include "services/network/public/cpp/features.h"
 #include "services/network/public/mojom/no_vary_search.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom.h"
@@ -56,7 +54,7 @@ SpeculationCandidateToPrefetchUrlParams(
 
   if (prefetch_type.IsProxyRequiredWhenCrossOrigin() &&
       ShouldPrefetchBypassProxyForTestHost(prefetch_url.host())) {
-    // TODO(crbug.com/1501700): Remove SetProxyBypassedForTest, since it is the
+    // TODO(crbug.com/40942006): Remove SetProxyBypassedForTest, since it is the
     // only mutator of the PrefetchType.
     prefetch_type.SetProxyBypassedForTest();  // IN-TEST
   }
@@ -69,11 +67,8 @@ SpeculationCandidateToPrefetchUrlParams(
 
 PrefetchDocumentManager::PrefetchDocumentManager(RenderFrameHost* rfh)
     : DocumentUserData(rfh),
-      WebContentsObserver(WebContents::FromRenderFrameHost(rfh)),
       document_token_(
           static_cast<RenderFrameHostImpl*>(rfh)->GetDocumentToken()),
-      no_vary_search_support_enabled_(
-          network::features::kPrefetchNoVarySearchShippedByDefault.Get()),
       prefetch_destruction_callback_(base::DoNothing()) {}
 
 PrefetchDocumentManager::~PrefetchDocumentManager() {
@@ -82,8 +77,8 @@ PrefetchDocumentManager::~PrefetchDocumentManager() {
     return;
 
   // Invalidate weak pointers to `this` a little earlier to avoid callbacks to
-  // `this` (especially `PrefetchWillBeDestroyed()`) during `ResetPrefetch()`
-  // below.
+  // `this` (especially `PrefetchWillBeDestroyed()`) during
+  // `MayReleasePrefetch()` below.
   weak_method_factory_.InvalidateWeakPtrs();
 
   // On destruction, removes any prefetches that not yet start prefetching from
@@ -96,7 +91,7 @@ PrefetchDocumentManager::~PrefetchDocumentManager() {
         case PrefetchContainer::LoadState::kEligible:
         case PrefetchContainer::LoadState::kFailedIneligible:
         case PrefetchContainer::LoadState::kFailedHeldback:
-          prefetch_service->ResetPrefetch(prefetch_iter.second);
+          prefetch_service->MayReleasePrefetch(prefetch_iter.second);
           break;
         case PrefetchContainer::LoadState::kStarted:
           break;
@@ -116,7 +111,7 @@ PrefetchDocumentManager* PrefetchDocumentManager::FromDocumentToken(
       // and the Document of `document_token` might be pending deletion or
       // bfcached, so check `document_token_` to confirm we get the correct
       // `PrefetchDocumentManager`.
-      // TODO(crbug.com/936696): clean this up once RenderDocument ships.
+      // TODO(crbug.com/40615943): clean this up once RenderDocument ships.
       if (prefetch_document_manager->document_token_ == document_token) {
         return prefetch_document_manager;
       }
@@ -125,68 +120,11 @@ PrefetchDocumentManager* PrefetchDocumentManager::FromDocumentToken(
   return nullptr;
 }
 
-void PrefetchDocumentManager::DidStartNavigation(
-    NavigationHandle* navigation_handle) {
-  if (PrefetchDocumentManagerEarlyCookieCopySkipped()) {
-    // The `DidStartNavigation` logic is for optimization, but we are not sure
-    // how much that is buying us. We are experimenting disabling it.
-    // See crbug.com/1503003 for details.
-    return;
-  }
-
-  // Ignore navigations for a different LocalFrameToken.
-  // TODO(crbug.com/1431804, crbug.com/1431387): LocalFrameToken is used here
-  // for scoping while RenderFrameHost's ID is used elsewhere. In the long term
-  // we should fix this inconsistency, but the current code is at least not
-  // worse than checking RenderFrameHostId here.
-  if (render_frame_host().GetFrameToken() !=
-      navigation_handle->GetInitiatorFrameToken()) {
-    DVLOG(1) << "PrefetchDocumentManager::DidStartNavigation() for "
-             << navigation_handle->GetURL()
-             << ": skipped (different LocalFrameToken)";
-    return;
-  }
-
-  // Ignores any same document navigations since we can't use prefetches to
-  // speed them up.
-  if (navigation_handle->IsSameDocument()) {
-    DVLOG(1) << "PrefetchDocumentManager::DidStartNavigation() for "
-             << navigation_handle->GetURL() << ": skipped (same document)";
-    return;
-  }
-
-  PrefetchService* prefetch_service = GetPrefetchService();
-  if (!prefetch_service) {
-    return;
-  }
-
-  base::WeakPtr<PrefetchContainer> prefetch_container =
-      prefetch_service->MatchUrl(
-          PrefetchContainer::Key(document_token_, navigation_handle->GetURL()));
-  if (!prefetch_container) {
-    return;
-  }
-
-  switch (prefetch_container->GetServableState(PrefetchCacheableDuration())) {
-    case PrefetchContainer::ServableState::kServable:
-      // For prefetches that are already servable, start the process of
-      // copying cookies from the isolated network context used to make the
-      // prefetch to the default network context.
-      prefetch_service->CopyIsolatedCookies(prefetch_container->CreateReader());
-      break;
-
-    case PrefetchContainer::ServableState::kNotServable:
-    case PrefetchContainer::ServableState::kShouldBlockUntilHeadReceived:
-      break;
-  }
-}
-
 void PrefetchDocumentManager::ProcessCandidates(
-    std::vector<blink::mojom::SpeculationCandidatePtr>& candidates,
-    base::WeakPtr<SpeculationHostDevToolsObserver> devtools_observer) {
+    std::vector<blink::mojom::SpeculationCandidatePtr>& candidates) {
   // Filter out candidates that can be handled by |PrefetchService| and
   // determine the type of prefetch required.
-  // TODO(https://crbug.com/1299059): Once this code becomes enabled by default
+  // TODO(crbug.com/40215782): Once this code becomes enabled by default
   // to handle all prefetches and the prefetch proxy code in chrome/browser/ is
   // removed, then we can move the logic of which speculation candidates this
   // code can handle up a layer to |SpeculationHostImpl|.
@@ -198,36 +136,44 @@ void PrefetchDocumentManager::ProcessCandidates(
   // candidate for it. Note: A matching candidate is not necessarily the
   // candidate that originally triggered the prefetch, but is any prefetch
   // candidate that has the same URL.
-  if (PrefetchNewLimitsEnabled()) {
-    std::vector<GURL> urls_from_candidates;
-    urls_from_candidates.reserve(candidates.size());
-    for (const auto& candidate_ptr : candidates) {
-      if (candidate_ptr->action == blink::mojom::SpeculationAction::kPrefetch) {
-        urls_from_candidates.push_back(candidate_ptr->url);
-      }
+  std::vector<GURL> urls_from_candidates;
+  urls_from_candidates.reserve(candidates.size());
+  for (const auto& candidate_ptr : candidates) {
+    if (candidate_ptr->action == blink::mojom::SpeculationAction::kPrefetch) {
+      urls_from_candidates.push_back(candidate_ptr->url);
     }
-    base::flat_set<GURL> url_set(std::move(urls_from_candidates));
-    std::vector<base::WeakPtr<PrefetchContainer>> prefetches_to_evict;
-    for (const auto& [url, prefetch] : all_prefetches_) {
-      if (prefetch && !base::Contains(url_set, url)) {
-        prefetches_to_evict.push_back(prefetch);
-      }
+  }
+  base::flat_set<GURL> url_set(std::move(urls_from_candidates));
+  std::vector<base::WeakPtr<PrefetchContainer>> prefetches_to_evict;
+  for (const auto& [all_prefetches_key, prefetch] : all_prefetches_) {
+    const auto& [url, planned_max_preloading_type] = all_prefetches_key;
+
+    // Don't evict prefetch ahead of prerender, which is initiated by
+    // `PrerenderImpl`, as `PrefetchDocumentManager::ProcessCandidates()` is
+    // only called for prefeches managed by `Prefetcher`.
+    if (planned_max_preloading_type != PreloadingType::kPrefetch) {
+      continue;
     }
-    for (const auto& prefetch : prefetches_to_evict) {
-      all_prefetches_.erase(prefetch->GetURL());
-      switch (prefetch->GetLoadState()) {
-        case PrefetchContainer::LoadState::kNotStarted:
-        case PrefetchContainer::LoadState::kEligible:
-        case PrefetchContainer::LoadState::kFailedIneligible:
-        case PrefetchContainer::LoadState::kFailedHeldback:
-          break;
-        case PrefetchContainer::LoadState::kStarted:
-          prefetch->SetPrefetchStatus(
-              PrefetchStatus::kPrefetchEvictedAfterCandidateRemoved);
-          break;
-      }
-      GetPrefetchService()->ResetPrefetch(prefetch);
+
+    if (prefetch && !base::Contains(url_set, url)) {
+      prefetches_to_evict.push_back(prefetch);
     }
+  }
+  for (const auto& prefetch : prefetches_to_evict) {
+    all_prefetches_.erase(
+        std::make_pair(prefetch->GetURL(), PreloadingType::kPrefetch));
+    switch (prefetch->GetLoadState()) {
+      case PrefetchContainer::LoadState::kNotStarted:
+      case PrefetchContainer::LoadState::kEligible:
+      case PrefetchContainer::LoadState::kFailedIneligible:
+      case PrefetchContainer::LoadState::kFailedHeldback:
+        break;
+      case PrefetchContainer::LoadState::kStarted:
+        prefetch->SetPrefetchStatus(
+            PrefetchStatus::kPrefetchEvictedAfterCandidateRemoved);
+        break;
+    }
+    GetPrefetchService()->MayReleasePrefetch(prefetch);
   }
 
   auto should_process_entry =
@@ -244,12 +190,17 @@ void PrefetchDocumentManager::ProcessCandidates(
         return true;
       };
 
-  base::EraseIf(candidates, should_process_entry);
+  std::erase_if(candidates, should_process_entry);
 
-  for (auto& [prefetch_url, prefetch_type, referrer, no_vary_search_expected] :
+  for (auto& [prefetch_url, prefetch_type, referrer, no_vary_search_hint] :
        prefetches) {
-    PrefetchUrl(prefetch_url, prefetch_type, referrer, no_vary_search_expected,
-                devtools_observer);
+    // Eager candidates are enacted by the same predictor that creates them.
+    const PreloadingPredictor enacting_predictor =
+        GetPredictorForPreloadingTriggerType(prefetch_type.trigger_type());
+    PrefetchUrl(prefetch_url, prefetch_type, enacting_predictor,
+                /*planned_max_preloading_type=*/PreloadingType::kPrefetch,
+                referrer, no_vary_search_hint,
+                base::MakeRefCounted<PreloadPipelineInfo>());
   }
 
   if (PrefetchService* prefetch_service = GetPrefetchService()) {
@@ -259,30 +210,48 @@ void PrefetchDocumentManager::ProcessCandidates(
 
 bool PrefetchDocumentManager::MaybePrefetch(
     blink::mojom::SpeculationCandidatePtr candidate,
-    base::WeakPtr<SpeculationHostDevToolsObserver> devtools_observer) {
+    const PreloadingPredictor& enacting_predictor) {
   if (candidate->action != blink::mojom::SpeculationAction::kPrefetch) {
     return false;
   }
 
-  auto [prefetch_url, prefetch_type, referrer, no_vary_search_expected] =
+  auto [prefetch_url, prefetch_type, referrer, no_vary_search_hint] =
       SpeculationCandidateToPrefetchUrlParams(candidate);
-  PrefetchUrl(prefetch_url, prefetch_type, referrer, no_vary_search_expected,
-              devtools_observer);
+  PrefetchUrl(prefetch_url, prefetch_type, enacting_predictor,
+              /*planned_max_preloading_type=*/PreloadingType::kPrefetch,
+              referrer, no_vary_search_hint,
+              base::MakeRefCounted<PreloadPipelineInfo>());
   return true;
+}
+
+void PrefetchDocumentManager::PrefetchAheadOfPrerender(
+    scoped_refptr<PreloadPipelineInfo> preload_pipeline_info,
+    blink::mojom::SpeculationCandidatePtr candidate,
+    const PreloadingPredictor& enacting_predictor) {
+  auto [prefetch_url, prefetch_type, referrer, no_vary_search_hint] =
+      SpeculationCandidateToPrefetchUrlParams(candidate);
+  PrefetchUrl(prefetch_url, prefetch_type, enacting_predictor,
+              /*planned_max_preloading_type=*/PreloadingType::kPrerender,
+              referrer, no_vary_search_hint, std::move(preload_pipeline_info));
 }
 
 void PrefetchDocumentManager::PrefetchUrl(
     const GURL& url,
     const PrefetchType& prefetch_type,
+    const PreloadingPredictor& enacting_predictor,
+    PreloadingType planned_max_preloading_type,
     const blink::mojom::Referrer& referrer,
-    const network::mojom::NoVarySearchPtr& mojo_no_vary_search_expected,
-    base::WeakPtr<SpeculationHostDevToolsObserver> devtools_observer) {
-  // Skip any prefetches that have already been requested.
-  auto prefetch_container_iter = all_prefetches_.find(url);
+    const network::mojom::NoVarySearchPtr& mojo_no_vary_search_hint,
+    scoped_refptr<PreloadPipelineInfo> preload_pipeline_info) {
+  const std::pair<GURL, PreloadingType> all_prefetches_key =
+      std::make_pair(url, planned_max_preloading_type);
+
+  // Skip prefetches that have already been requested.
+  auto prefetch_container_iter = all_prefetches_.find(all_prefetches_key);
   if (prefetch_container_iter != all_prefetches_.end() &&
       prefetch_container_iter->second != nullptr) {
     if (prefetch_container_iter->second->GetPrefetchType() != prefetch_type) {
-      // TODO(https://crbug.com/1299059): Handle changing the PrefetchType of an
+      // TODO(crbug.com/40215782): Handle changing the PrefetchType of an
       // existing prefetch.
     }
 
@@ -295,11 +264,10 @@ void PrefetchDocumentManager::PrefetchUrl(
       &render_frame_host(),
       blink::mojom::WebFeature::kSpeculationRulesPrefetch);
 
-  std::optional<net::HttpNoVarySearchData> no_vary_search_expected;
-  if (mojo_no_vary_search_expected) {
-    no_vary_search_expected =
-        no_vary_search::ParseHttpNoVarySearchDataFromMojom(
-            mojo_no_vary_search_expected);
+  std::optional<net::HttpNoVarySearchData> no_vary_search_hint;
+  if (mojo_no_vary_search_hint) {
+    no_vary_search_hint = no_vary_search::ParseHttpNoVarySearchDataFromMojom(
+        mojo_no_vary_search_hint);
   }
   PrefetchService* prefetch_service = GetPrefetchService();
   if (!prefetch_service) {
@@ -308,30 +276,35 @@ void PrefetchDocumentManager::PrefetchUrl(
 
   auto* web_contents = WebContents::FromRenderFrameHost(&render_frame_host());
   auto* preloading_data =
-      PreloadingData::GetOrCreateForWebContents(web_contents);
+      PreloadingDataImpl::GetOrCreateForWebContents(web_contents);
 
+  const PreloadingPredictor creating_predictor =
+      GetPredictorForPreloadingTriggerType(prefetch_type.trigger_type());
   PreloadingURLMatchCallback matcher =
       PreloadingDataImpl::GetPrefetchServiceMatcher(
-          prefetch_service, PrefetchContainer::Key(document_token_, url));
+          *prefetch_service, PrefetchContainer::Key(document_token_, url));
 
   auto* attempt =
       static_cast<PreloadingAttemptImpl*>(preloading_data->AddPreloadingAttempt(
-          GetPredictorForPreloadingTriggerType(prefetch_type.trigger_type()),
-          PreloadingType::kPrefetch, std::move(matcher),
+          creating_predictor, enacting_predictor, PreloadingType::kPrefetch,
+          std::move(matcher), planned_max_preloading_type,
           web_contents->GetPrimaryMainFrame()->GetPageUkmSourceId()));
 
   attempt->SetSpeculationEagerness(prefetch_type.GetEagerness());
+  CHECK(prefetch_type.GetEagerness() !=
+            blink::mojom::SpeculationEagerness::kEager ||
+        creating_predictor == enacting_predictor);
 
   // `PreloadingPrediction` is added in `PreloadingDecider`.
 
   // Create a new |PrefetchContainer| and take ownership of it
   auto container = std::make_unique<PrefetchContainer>(
       static_cast<RenderFrameHostImpl&>(render_frame_host()), document_token_,
-      url, prefetch_type, referrer, std::move(no_vary_search_expected),
-      weak_method_factory_.GetWeakPtr(), attempt->GetWeakPtr());
-  container->SetDevToolsObserver(std::move(devtools_observer));
+      url, prefetch_type, referrer, std::move(no_vary_search_hint),
+      weak_method_factory_.GetWeakPtr(), std::move(preload_pipeline_info),
+      attempt->GetWeakPtr());
   DVLOG(1) << *container << ": created";
-  all_prefetches_[url] = container->GetWeakPtr();
+  all_prefetches_[all_prefetches_key] = container->GetWeakPtr();
 
   referring_page_metrics_.prefetch_attempted_count++;
 
@@ -342,7 +315,17 @@ void PrefetchDocumentManager::PrefetchUrl(
 
 bool PrefetchDocumentManager::IsPrefetchAttemptFailedOrDiscarded(
     const GURL& url) {
-  auto it = all_prefetches_.find(url);
+  return IsPrefetchAttemptFailedOrDiscardedInternal(
+             url, PreloadingType::kPrefetch) &&
+         IsPrefetchAttemptFailedOrDiscardedInternal(url,
+                                                    PreloadingType::kPrerender);
+}
+
+bool PrefetchDocumentManager::IsPrefetchAttemptFailedOrDiscardedInternal(
+    const GURL& url,
+    PreloadingType planned_max_preloading_type) {
+  auto it =
+      all_prefetches_.find(std::make_pair(url, planned_max_preloading_type));
   if (it == all_prefetches_.end() || !it->second)
     return true;
 
@@ -374,12 +357,9 @@ bool PrefetchDocumentManager::IsPrefetchAttemptFailedOrDiscarded(
     case PrefetchStatus::kPrefetchFailedMIMENotSupported:
     case PrefetchStatus::kPrefetchIsPrivacyDecoy:
     case PrefetchStatus::kPrefetchNotUsedCookiesChanged:
-    case PrefetchStatus::kPrefetchIneligibleBrowserContextOffTheRecord:
     case PrefetchStatus::kPrefetchHeldback:
-    case PrefetchStatus::kPrefetchAllowed:
     case PrefetchStatus::kPrefetchFailedInvalidRedirect:
     case PrefetchStatus::kPrefetchFailedIneligibleRedirect:
-    case PrefetchStatus::kPrefetchFailedPerPageLimitExceeded:
     case PrefetchStatus::
         kPrefetchIneligibleSameSiteCrossOriginPrefetchRequiredProxy:
     case PrefetchStatus::kPrefetchEvictedAfterCandidateRemoved:
@@ -392,6 +372,36 @@ bool PrefetchDocumentManager::IsPrefetchAttemptFailedOrDiscarded(
 void PrefetchDocumentManager::SetPrefetchServiceForTesting(
     PrefetchService* prefetch_service) {
   g_prefetch_service_for_testing = prefetch_service;
+}
+
+void PrefetchDocumentManager::ResetPrefetchAheadOfPrerenderIfExist(
+    const GURL& url) {
+  auto it =
+      all_prefetches_.find(std::make_pair(url, PreloadingType::kPrerender));
+  if (it == all_prefetches_.end()) {
+    return;
+  }
+
+  base::WeakPtr<PrefetchContainer> prefetch = it->second;
+
+  if (!prefetch) {
+    return;
+  }
+
+  switch (prefetch->GetLoadState()) {
+    case PrefetchContainer::LoadState::kNotStarted:
+    case PrefetchContainer::LoadState::kEligible:
+    case PrefetchContainer::LoadState::kFailedIneligible:
+    case PrefetchContainer::LoadState::kFailedHeldback:
+      break;
+    case PrefetchContainer::LoadState::kStarted:
+      prefetch->SetPrefetchStatus(
+          PrefetchStatus::kPrefetchEvictedAfterCandidateRemoved);
+      break;
+  }
+
+  GetPrefetchService()->MayReleasePrefetch(prefetch);
+  all_prefetches_.erase(it);
 }
 
 PrefetchService* PrefetchDocumentManager::GetPrefetchService() const {
@@ -421,21 +431,6 @@ void PrefetchDocumentManager::OnPrefetchSuccessful(
   }
 }
 
-void PrefetchDocumentManager::EnableNoVarySearchSupportFromOriginTrial() {
-  no_vary_search_support_enabled_ = true;
-}
-
-// In order to ship No-Vary-Search header and keep the Origin Trial and be
-// able to remotely go back to Origin Trial in case we unship, we use
-// the suggested approach at
-// go/graduating-from-finch#optional-leave-a-finch-hook of using a separate
-// base feature to control shipping - in our case we will continue to use the
-// existing base feature kPrefetchNoVarySearch.
-bool PrefetchDocumentManager::NoVarySearchSupportEnabled() const {
-  return no_vary_search_support_enabled_ &&
-         base::FeatureList::IsEnabled(network::features::kPrefetchNoVarySearch);
-}
-
 std::tuple<bool, base::WeakPtr<PrefetchContainer>>
 PrefetchDocumentManager::CanPrefetchNow(PrefetchContainer* prefetch) {
   RenderFrameHost* rfh = &render_frame_host();
@@ -446,19 +441,14 @@ PrefetchDocumentManager::CanPrefetchNow(PrefetchContainer* prefetch) {
           Visibility::VISIBLE) {
     return std::make_tuple(false, nullptr);
   }
-  if (!PrefetchNewLimitsEnabled()) {
-    return std::make_tuple(true, nullptr);
-  }
-  DCHECK(PrefetchNewLimitsEnabled());
   if (prefetch->GetPrefetchType().GetEagerness() ==
       blink::mojom::SpeculationEagerness::kEager) {
-    return std::make_tuple(
-        completed_eager_prefetches_.size() <
-            MaxNumberOfEagerPrefetchesPerPageForPrefetchNewLimits(),
-        nullptr);
+    return std::make_tuple(completed_eager_prefetches_.size() <
+                               MaxNumberOfEagerPrefetchesPerPage(),
+                           nullptr);
   } else {
     if (completed_non_eager_prefetches_.size() <
-        MaxNumberOfNonEagerPrefetchesPerPageForPrefetchNewLimits()) {
+        MaxNumberOfNonEagerPrefetchesPerPage()) {
       return std::make_tuple(true, nullptr);
     }
     // We are at capacity, and now need to evict the oldest non-eager prefetch
@@ -466,7 +456,7 @@ PrefetchDocumentManager::CanPrefetchNow(PrefetchContainer* prefetch) {
     DCHECK(GetPrefetchService());
     base::WeakPtr<PrefetchContainer> oldest_prefetch =
         completed_non_eager_prefetches_.front();
-    // TODO(crbug.com/1445086): We should also be checking if the prefetch is
+    // TODO(crbug.com/40064525): We should also be checking if the prefetch is
     // currently being used to serve a navigation. In that scenario, evicting
     // doesn't make sense.
     return std::make_tuple(true, oldest_prefetch);
@@ -481,18 +471,16 @@ void PrefetchDocumentManager::SetPrefetchDestructionCallback(
 void PrefetchDocumentManager::PrefetchWillBeDestroyed(
     PrefetchContainer* prefetch) {
   prefetch_destruction_callback_.Run(prefetch->GetURL());
-  if (PrefetchNewLimitsEnabled()) {
-    std::vector<base::WeakPtr<PrefetchContainer>>& completed_prefetches =
-        prefetch->GetPrefetchType().GetEagerness() ==
-                blink::mojom::SpeculationEagerness::kEager
-            ? completed_eager_prefetches_
-            : completed_non_eager_prefetches_;
-    auto it = base::ranges::find(
-        completed_prefetches, prefetch->GetPrefetchContainerKey(),
-        [&](const auto& p) { return p->GetPrefetchContainerKey(); });
-    if (it != completed_prefetches.end()) {
-      completed_prefetches.erase(it);
-    }
+
+  std::vector<base::WeakPtr<PrefetchContainer>>& completed_prefetches =
+      prefetch->GetPrefetchType().GetEagerness() ==
+              blink::mojom::SpeculationEagerness::kEager
+          ? completed_eager_prefetches_
+          : completed_non_eager_prefetches_;
+  auto it = std::ranges::find(completed_prefetches, prefetch->key(),
+                              [&](const auto& p) { return p->key(); });
+  if (it != completed_prefetches.end()) {
+    completed_prefetches.erase(it);
   }
 }
 

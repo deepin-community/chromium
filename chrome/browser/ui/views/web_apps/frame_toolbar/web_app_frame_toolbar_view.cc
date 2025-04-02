@@ -195,12 +195,24 @@ gfx::Size WebAppFrameToolbarView::GetToolbarButtonSize() const {
 }
 
 views::View* WebAppFrameToolbarView::GetDefaultExtensionDialogAnchorView() {
-  return right_container_->extensions_container()->GetExtensionsButton();
+  ExtensionsToolbarContainer* extensions_container =
+      GetExtensionsToolbarContainer();
+  if (extensions_container && extensions_container->GetVisible()) {
+    return extensions_container->GetExtensionsButton();
+  }
+  return GetAppMenuButton();
 }
 
 PageActionIconView* WebAppFrameToolbarView::GetPageActionIconView(
     PageActionIconType type) {
   return right_container_->page_action_icon_controller()->GetIconView(type);
+}
+
+page_actions::PageActionView* WebAppFrameToolbarView::GetPageActionView(
+    actions::ActionId action_id) {
+  // TODO(crbug.com/386376455): Return the appropriate view once web apps
+  // support the new Page Actions framework.
+  return nullptr;
 }
 
 AppMenuButton* WebAppFrameToolbarView::GetAppMenuButton() {
@@ -215,7 +227,7 @@ gfx::Rect WebAppFrameToolbarView::GetFindBarBoundingBox(int contents_bottom) {
   // If LTR find bar will be right aligned so align to right edge of app menu
   // button. Otherwise it will be left aligned so align to the left edge of the
   // app menu button.
-  views::View* anchor_view = GetAnchorView(PageActionIconType::kFind);
+  views::View* anchor_view = GetAnchorView(std::nullopt);
   gfx::Rect anchor_bounds =
       anchor_view->ConvertRectToWidget(anchor_view->GetLocalBounds());
   int x_pos = 0;
@@ -236,7 +248,8 @@ views::AccessiblePaneView* WebAppFrameToolbarView::GetAsAccessiblePaneView() {
   return this;
 }
 
-views::View* WebAppFrameToolbarView::GetAnchorView(PageActionIconType type) {
+views::View* WebAppFrameToolbarView::GetAnchorView(
+    std::optional<actions::ActionId> action_id) {
   views::View* anchor = GetAppMenuButton();
   return anchor ? anchor : this;
 }
@@ -244,10 +257,6 @@ views::View* WebAppFrameToolbarView::GetAnchorView(PageActionIconType type) {
 void WebAppFrameToolbarView::ZoomChangedForActiveTab(bool can_show_bubble) {
   right_container_->page_action_icon_controller()->ZoomChangedForActiveTab(
       can_show_bubble);
-}
-
-SidePanelToolbarButton* WebAppFrameToolbarView::GetSidePanelButton() {
-  return nullptr;
 }
 
 AvatarToolbarButton* WebAppFrameToolbarView::GetAvatarToolbarButton() {

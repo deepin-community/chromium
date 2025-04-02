@@ -22,12 +22,13 @@
 #include "content/public/browser/desktop_media_id.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/window/dialog_delegate.h"
 
 class DesktopMediaPickerViewsBrowserTest : public DialogBrowserTest {
  public:
-  DesktopMediaPickerViewsBrowserTest() {}
+  DesktopMediaPickerViewsBrowserTest() = default;
 
   DesktopMediaPickerViewsBrowserTest(
       const DesktopMediaPickerViewsBrowserTest&) = delete;
@@ -36,7 +37,7 @@ class DesktopMediaPickerViewsBrowserTest : public DialogBrowserTest {
 
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
-    picker_ = std::make_unique<DesktopMediaPickerViews>();
+    picker_ = std::make_unique<DesktopMediaPickerImpl>();
     auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
     gfx::NativeWindow native_window = browser()->window()->GetNativeWindow();
 
@@ -44,13 +45,15 @@ class DesktopMediaPickerViewsBrowserTest : public DialogBrowserTest {
     if (override_source_lists_.empty()) {
       sources = CreateDefaultSourceLists();
     } else {
-      for (auto& source : override_source_lists_)
+      for (auto& source : override_source_lists_) {
         sources.push_back(std::move(source));
+      }
     }
 
     std::vector<FakeDesktopMediaList*> source_lists;
-    for (const auto& source : sources)
+    for (const auto& source : sources) {
       source_lists.push_back(static_cast<FakeDesktopMediaList*>(source.get()));
+    }
 
     DesktopMediaPicker::Params picker_params{
         DesktopMediaPicker::Params::RequestSource::kUnknown};
@@ -62,8 +65,9 @@ class DesktopMediaPickerViewsBrowserTest : public DialogBrowserTest {
     picker_->Show(picker_params, std::move(sources),
                   DesktopMediaPicker::DoneCallback());
 
-    if (after_show_callback_)
+    if (after_show_callback_) {
       std::move(after_show_callback_).Run(source_lists);
+    }
   }
 
  protected:
@@ -77,7 +81,7 @@ class DesktopMediaPickerViewsBrowserTest : public DialogBrowserTest {
     return sources;
   }
 
-  std::unique_ptr<DesktopMediaPickerViews> picker_;
+  std::unique_ptr<DesktopMediaPickerImpl> picker_;
 
   // If this list isn't filled in, a default list of source lists will be
   // created.
@@ -94,15 +98,7 @@ class DesktopMediaPickerViewsBrowserTest : public DialogBrowserTest {
 
 // Invokes a dialog that allows the user to select what view of their desktop
 // they would like to share.
-// TODO(crbug.com/1238879): Test is flaky on Win.
-#if BUILDFLAG(IS_WIN)
-#define MAYBE_InvokeUi_default DISABLED_InvokeUi_default
-#else
-#define MAYBE_InvokeUi_default InvokeUi_default
-#endif
-
-IN_PROC_BROWSER_TEST_F(DesktopMediaPickerViewsBrowserTest,
-                       MAYBE_InvokeUi_default) {
+IN_PROC_BROWSER_TEST_F(DesktopMediaPickerViewsBrowserTest, InvokeUi_default) {
   after_show_callback_ =
       base::BindOnce([](const std::vector<FakeDesktopMediaList*>& sources) {
         sources[0]->AddSource(0);
@@ -127,14 +123,7 @@ IN_PROC_BROWSER_TEST_F(DesktopMediaPickerViewsBrowserTest,
 
 // Show the picker UI with only one source type: TYPE_WEB_CONTENTS, aka the
 // tab picker.
-// crbug.com/1261820: flaky on Win
-#if BUILDFLAG(IS_WIN)
-#define MAYBE_InvokeUi_tabs DISABLED_InvokeUi_tabs
-#else
-#define MAYBE_InvokeUi_tabs InvokeUi_tabs
-#endif
-IN_PROC_BROWSER_TEST_F(DesktopMediaPickerViewsBrowserTest,
-                       MAYBE_InvokeUi_tabs) {
+IN_PROC_BROWSER_TEST_F(DesktopMediaPickerViewsBrowserTest, InvokeUi_tabs) {
   after_show_callback_ =
       base::BindOnce([](const std::vector<FakeDesktopMediaList*>& sources) {
         sources[0]->AddSource(0);
@@ -157,7 +146,7 @@ IN_PROC_BROWSER_TEST_F(DesktopMediaPickerViewsBrowserTest,
   EXPECT_EQ(dialog->GetOkButton(),
             dialog->DialogDelegate::GetInitiallyFocusedView());
   EXPECT_FALSE(picker_->GetDialogViewForTesting()->IsDialogButtonEnabled(
-      ui::DIALOG_BUTTON_OK));
+      ui::mojom::DialogButton::kOk));
 }
 
 // Validate that the dialog title changes to match the source type when there's

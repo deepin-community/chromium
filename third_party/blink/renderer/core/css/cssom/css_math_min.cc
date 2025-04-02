@@ -83,7 +83,6 @@ CSSMathExpressionNode* CSSMathMin::ToCalcExpressionNode() const {
       // TODO(crbug.com/983784): Remove this when all ToCalcExpressionNode()
       // overrides are implemented.
       NOTREACHED();
-      continue;
     }
     operands.push_back(value->ToCalcExpressionNode());
   }
@@ -91,7 +90,6 @@ CSSMathExpressionNode* CSSMathMin::ToCalcExpressionNode() const {
     // TODO(crbug.com/983784): Remove this when all ToCalcExpressionNode()
     // overrides are implemented.
     NOTREACHED();
-    return nullptr;
   }
   return CSSMathExpressionOperation::CreateComparisonFunction(
       std::move(operands), CSSMathOperator::kMin);

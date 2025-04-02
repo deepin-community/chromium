@@ -11,29 +11,28 @@
 
 #include <riscv_vector.h>
 
-#include <xnnpack/common.h>
-#include <xnnpack/intrinsics-polyfill.h>
-#include <xnnpack/vunary.h>
+#include "xnnpack/common.h"
+#include "xnnpack/vunary.h"
 
 
 void xnn_f16_vclamp_ukernel__rvvfp16arith_u8v(
     size_t batch,
-    const void* input,
-    void* output,
+    const xnn_float16* input,
+    xnn_float16* output,
     const union xnn_f16_minmax_params params[restrict XNN_MIN_ELEMENTS(1)])
 {
   assert(batch != 0);
-  assert(batch % sizeof(float) == 0);
+  assert(batch % sizeof(_Float16) == 0);
   assert(input != NULL);
   assert(output != NULL);
 
   const uint16_t* i = (const uint16_t*) input;
   uint16_t* o = (uint16_t*) output;
 
-  const _Float16 vmin = params->fp16arith.min;
-  const _Float16 vmax = params->fp16arith.max;
+  const _Float16 vmin = *(const _Float16*) &params->scalar.min;
+  const _Float16 vmax = *(const _Float16*) &params->scalar.max;
 
-  batch >>= XNN_LOG2_SIZEOF_FLOAT;
+  batch >>= XNN_LOG2_SIZEOF_HALF;
   do {
     const size_t n = __riscv_vsetvl_e16m8(batch);
     vfloat16m8_t vacc = __riscv_vle16_v_f16m8((const void*) i, n);

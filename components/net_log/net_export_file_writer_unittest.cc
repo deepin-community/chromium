@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <optional>
 
@@ -22,7 +23,6 @@
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "net/base/network_change_notifier.h"
@@ -67,8 +67,8 @@ namespace net_log {
 
 class FakeNetLogExporter : public network::mojom::NetLogExporter {
  public:
-  FakeNetLogExporter() {}
-  ~FakeNetLogExporter() override {}
+  FakeNetLogExporter() = default;
+  ~FakeNetLogExporter() override = default;
 
   void Start(base::File destination,
              base::Value::Dict extra_constants,
@@ -532,14 +532,17 @@ TEST_F(NetExportFileWriterTest, InitWithExistingLog) {
 }
 
 TEST_F(NetExportFileWriterTest, StartAndStopWithAllCaptureModes) {
-  const net::NetLogCaptureMode capture_modes[3] = {
+  const std::array<net::NetLogCaptureMode, 3> capture_modes = {
       net::NetLogCaptureMode::kDefault,
       net::NetLogCaptureMode::kIncludeSensitive,
-      net::NetLogCaptureMode::kEverything};
+      net::NetLogCaptureMode::kEverything,
+  };
 
-  const std::string capture_mode_strings[3] = {
-      kCaptureModeDefaultString, kCaptureModeIncludeSensitiveString,
-      kCaptureModeIncludeEverythingString};
+  const std::array<std::string, 3> capture_mode_strings = {
+      kCaptureModeDefaultString,
+      kCaptureModeIncludeSensitiveString,
+      kCaptureModeIncludeEverythingString,
+  };
 
   ASSERT_TRUE(InitializeThenVerifyNewState(true, false));
 
@@ -595,16 +598,16 @@ TEST_F(NetExportFileWriterTest, StartClearsFile) {
   ASSERT_TRUE(StopThenVerifyNewStateAndFile(
       base::FilePath(), base::Value::Dict(), kCaptureModeDefaultString));
 
-  int64_t stop_file_size;
-  EXPECT_TRUE(base::GetFileSize(default_log_path(), &stop_file_size));
+  std::optional<int64_t> stop_file_size = base::GetFileSize(default_log_path());
+  ASSERT_TRUE(stop_file_size.has_value());
 
   // Add some junk at the end of the file.
   std::string junk_data("Hello");
   EXPECT_TRUE(base::AppendToFile(default_log_path(), junk_data));
 
-  int64_t junk_file_size;
-  EXPECT_TRUE(base::GetFileSize(default_log_path(), &junk_file_size));
-  EXPECT_GT(junk_file_size, stop_file_size);
+  std::optional<int64_t> junk_file_size = base::GetFileSize(default_log_path());
+  ASSERT_TRUE(junk_file_size.has_value());
+  EXPECT_GT(junk_file_size.value(), stop_file_size.value());
 
   // Start and stop again and make sure the file is back to the size it was
   // before adding the junk data.
@@ -615,10 +618,11 @@ TEST_F(NetExportFileWriterTest, StartClearsFile) {
   ASSERT_TRUE(StopThenVerifyNewStateAndFile(
       base::FilePath(), base::Value::Dict(), kCaptureModeDefaultString));
 
-  int64_t new_stop_file_size;
-  EXPECT_TRUE(base::GetFileSize(default_log_path(), &new_stop_file_size));
+  std::optional<int64_t> new_stop_file_size =
+      base::GetFileSize(default_log_path());
+  ASSERT_TRUE(new_stop_file_size.has_value());
 
-  EXPECT_EQ(stop_file_size, new_stop_file_size);
+  EXPECT_EQ(stop_file_size.value(), new_stop_file_size.value());
 }
 
 // Adds an event to the log file, then checks that the file is larger than
@@ -634,8 +638,8 @@ TEST_F(NetExportFileWriterTest, AddEvent) {
       base::FilePath(), base::Value::Dict(), kCaptureModeDefaultString));
 
   // Get file size without the event.
-  int64_t stop_file_size;
-  EXPECT_TRUE(base::GetFileSize(default_log_path(), &stop_file_size));
+  std::optional<int64_t> stop_file_size = base::GetFileSize(default_log_path());
+  ASSERT_TRUE(stop_file_size.has_value());
 
   ASSERT_TRUE(StartThenVerifyNewState(
       base::FilePath(), net::NetLogCaptureMode::kDefault,
@@ -647,9 +651,9 @@ TEST_F(NetExportFileWriterTest, AddEvent) {
       base::FilePath(), base::Value::Dict(), kCaptureModeDefaultString));
 
   // Get file size after adding the event and make sure it's larger than before.
-  int64_t new_stop_file_size;
-  EXPECT_TRUE(base::GetFileSize(default_log_path(), &new_stop_file_size));
-  EXPECT_GE(new_stop_file_size, stop_file_size);
+  std::optional<int64_t> new_stop_file_size =
+      base::GetFileSize(default_log_path());
+  EXPECT_GE(new_stop_file_size.value(), stop_file_size.value());
 }
 
 // Using a custom path to make sure logging can still occur when the path has
@@ -672,8 +676,8 @@ TEST_F(NetExportFileWriterTest, AddEventCustomPath) {
       custom_log_path, base::Value::Dict(), kCaptureModeDefaultString));
 
   // Get file size without the event.
-  int64_t stop_file_size;
-  EXPECT_TRUE(base::GetFileSize(custom_log_path, &stop_file_size));
+  std::optional<int64_t> stop_file_size = base::GetFileSize(custom_log_path);
+  ASSERT_TRUE(stop_file_size.has_value());
 
   ASSERT_TRUE(
       StartThenVerifyNewState(custom_log_path, net::NetLogCaptureMode::kDefault,
@@ -685,9 +689,10 @@ TEST_F(NetExportFileWriterTest, AddEventCustomPath) {
       custom_log_path, base::Value::Dict(), kCaptureModeDefaultString));
 
   // Get file size after adding the event and make sure it's larger than before.
-  int64_t new_stop_file_size;
-  EXPECT_TRUE(base::GetFileSize(custom_log_path, &new_stop_file_size));
-  EXPECT_GE(new_stop_file_size, stop_file_size);
+  std::optional<int64_t> new_stop_file_size =
+      base::GetFileSize(custom_log_path);
+  ASSERT_TRUE(new_stop_file_size.has_value());
+  EXPECT_GE(new_stop_file_size.value(), stop_file_size.value());
 }
 
 TEST_F(NetExportFileWriterTest, StopWithPolledData) {

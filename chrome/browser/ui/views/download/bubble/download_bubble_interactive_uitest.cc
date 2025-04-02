@@ -5,7 +5,6 @@
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/buildflag.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/download/bubble/download_bubble_prefs.h"
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_browsertest_utils.h"
@@ -37,18 +36,16 @@
 #include "ui/views/widget/any_widget_observer.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_MAC)
-#include "chrome/browser/ui/browser_commands.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ui/ash/test_util.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chrome/browser/ui/views/frame/immersive_mode_controller_chromeos.h"
-#include "chromeos/ui/frame/immersive/immersive_fullscreen_controller_test_api.h"
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/ui/browser_commands.h"
 #endif
 
 namespace {
 
-#if !BUILDFLAG(IS_MAC)
 // This waits for the download bubble widget to be shown.
 views::NamedWidgetShownWaiter CreateDownloadBubbleDialogWaiter() {
   return views::NamedWidgetShownWaiter{views::test::AnyWidgetTestPasskey{},
@@ -64,9 +61,8 @@ auto WaitForDownloadBubbleShow(views::NamedWidgetShownWaiter& waiter) {
 
 bool IsExclusiveAccessBubbleVisible(ExclusiveAccessBubbleViews* bubble) {
   bool is_hiding = bubble->animation_for_test()->IsClosing();
-  return bubble->IsShowing() || (bubble->IsVisibleForTesting() && !is_hiding);
+  return bubble->IsShowing() || (bubble->IsVisible() && !is_hiding);
 }
-#endif
 
 // TODO(chlily): Deduplicate this helper class into a test utils file.
 class TestDownloadManagerDelegate : public ChromeDownloadManagerDelegate {
@@ -75,7 +71,7 @@ class TestDownloadManagerDelegate : public ChromeDownloadManagerDelegate {
       : ChromeDownloadManagerDelegate(profile) {
     GetDownloadIdReceiverCallback().Run(download::DownloadItem::kInvalidId + 1);
   }
-  ~TestDownloadManagerDelegate() override {}
+  ~TestDownloadManagerDelegate() override = default;
 
   bool DetermineDownloadTarget(
       download::DownloadItem* item,
@@ -105,6 +101,7 @@ class DownloadBubbleInteractiveUiTest
       : InteractiveFeaturePromoTestT(UseDefaultTrackerAllowingPromos(
             {feature_engagement::kIPHDownloadEsbPromoFeature})) {
 #if BUILDFLAG(IS_MAC)
+    // TODO(chlily): Add test coverage for immersive fullscreen disabled on Mac.
     test_features_.InitWithFeatures({features::kImmersiveFullscreen}, {});
 #endif  // BUILDFLAG(IS_MAC)
   }
@@ -164,7 +161,7 @@ class DownloadBubbleInteractiveUiTest
         [](DownloadToolbarButtonView* download_toolbar_button, Browser* browser,
            bool active, const base::Feature& feature) {
           return active == BrowserView::GetBrowserViewForBrowser(browser)
-                               ->GetFeaturePromoController()
+                               ->GetFeaturePromoControllerForTesting()
                                ->IsPromoActive(feature);
         },
         download_toolbar_button(), browser(), active, std::cref(feature));
@@ -221,7 +218,6 @@ class DownloadBubbleInteractiveUiTest
     });
   }
 
-#if !BUILDFLAG(IS_MAC)
   // Check for whether the exclusive access bubble is shown ("Press Esc to
   // exit fullscreen" or other similar message).
   auto IsExclusiveAccessBubbleDisplayed(bool displayed) {
@@ -245,22 +241,12 @@ class DownloadBubbleInteractiveUiTest
                      : false);
     });
   }
-#endif
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_MAC)
-  auto ToggleFullscreen() {
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
-    chromeos::ImmersiveFullscreenControllerTestApi(
-        static_cast<ImmersiveModeControllerChromeos*>(
-            browser_view->immersive_mode_controller())
-            ->controller())
-        .SetupForTest();
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
+#if BUILDFLAG(IS_MAC)
+  auto EnterImmersiveFullscreen() {
     return [&]() { ui_test_utils::ToggleFullscreenModeAndWait(browser()); };
   }
 
-#if !BUILDFLAG(IS_CHROMEOS_LACROS)
   auto IsInImmersiveFullscreen() {
     return [&]() {
       auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
@@ -268,8 +254,7 @@ class DownloadBubbleInteractiveUiTest
              browser_view->immersive_mode_controller()->IsEnabled();
     };
   }
-#endif  // !BUILDFLAG(IS_CHROMEOS_LACROS)
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
 
   bool IsPartialViewEnabled() {
     return download::IsDownloadBubblePartialViewEnabled(browser()->profile());
@@ -334,7 +319,7 @@ IN_PROC_BROWSER_TEST_F(DownloadBubbleInteractiveUiTest,
       WaitForShow(kToolbarDownloadButtonElementId),
       Check(DownloadBubbleIsShowingDetails(IsPartialViewEnabled())),
       // Click outside (at the center point of the browser) to close the bubble.
-      MoveMouseTo(kBrowserViewElementId), ClickMouse(), FlushEvents(),
+      MoveMouseTo(kBrowserViewElementId), ClickMouse(),
       EnsureNotPresent(kToolbarDownloadBubbleElementId),
       Check(DownloadBubbleIsShowingDetails(false),
             "Bubble is closed after clicking outside of it."),
@@ -405,18 +390,12 @@ IN_PROC_BROWSER_TEST_F(
 }
 #endif
 
-// This test is only for ChromeOS and Mac where we have immersive fullscreen.
-#if BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_MAC)
+// This test is only for Mac where we have immersive fullscreen.
+#if BUILDFLAG(IS_MAC)
 IN_PROC_BROWSER_TEST_F(DownloadBubbleInteractiveUiTest,
                        ToolbarIconShownAfterImmersiveFullscreenDownload) {
   RunTestSequence(
-      Do(ToggleFullscreen()),
-#if !BUILDFLAG(IS_CHROMEOS_LACROS)
-      // This cannot be enabled yet for ChromeOS because it would be flaky, due
-      // to the delay between server and client agreeing on immersive state.
-      // TODO(crbug.com/1448281): Enable this check for ChromeOS.
-      Check(IsInImmersiveFullscreen()),
-#endif  // !BUILDFLAG(IS_CHROMEOS_LACROS)
+      Do(EnterImmersiveFullscreen()), Check(IsInImmersiveFullscreen()),
       // No download toolbar icon should be present before the download.
       EnsureNotPresent(kToolbarDownloadButtonElementId),
       // Download a file to make the partial bubble show up, if enabled.
@@ -433,29 +412,38 @@ IN_PROC_BROWSER_TEST_F(DownloadBubbleInteractiveUiTest,
       Do(ChangeBubbleVisibility(false)), Do(ChangeButtonVisibility(false)),
       WaitForHide(kToolbarDownloadButtonElementId));
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
 
-// This test is only for Lacros, where tab fullscreen is non-immersive, and
-// other platforms, where fullscreen is not immersive.
-// TODO(chlily): Add test coverage for Mac.
-#if !BUILDFLAG(IS_MAC)
 // Test that downloading a file in tab fullscreen (not browser fullscreen)
 // results in an exclusive access bubble, and the partial view, if enabled, is
 // displayed after the tab exits fullscreen.
 IN_PROC_BROWSER_TEST_F(
     DownloadBubbleInteractiveUiTest,
     ExclusiveAccessBubbleShownForTabFullscreenDownloadThenPartialView) {
+  using ui_test_utils::FullscreenWaiter;
+
   DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsElementId);
 
   // Grab the fullscreen accelerator, which is used to exit fullscreen in the
   // test. For some reason, exiting tab fullscreen via JavaScript doesn't work
   // (times out).
   ui::Accelerator fullscreen_accelerator;
+#if BUILDFLAG(IS_MAC)
+  // SendAccelerator or ui_controls::SendKeyPress doesn't support fn key on
+  // Mac, that the default fullscreen hotkey wouldn't work.
+  // TODO: When SendAccelerator fixed on mac, remove this hard coded key.
+  fullscreen_accelerator =
+      ui::Accelerator(ui::VKEY_F, ui::EF_COMMAND_DOWN | ui::EF_CONTROL_DOWN);
+#else
   chrome::AcceleratorProviderForBrowser(browser())->GetAcceleratorForCommandId(
       IDC_FULLSCREEN, &fullscreen_accelerator);
+#endif
 
   views::NamedWidgetShownWaiter dialog_waiter =
       CreateDownloadBubbleDialogWaiter();
+
+  auto tab_fullscreen_waiter = std::make_unique<FullscreenWaiter>(
+      browser(), FullscreenWaiter::Expectation{.tab_fullscreen = true});
 
   RunTestSequenceInContext(
       browser()->window()->GetElementContext(),
@@ -466,7 +454,14 @@ IN_PROC_BROWSER_TEST_F(
       InParallel(
           ExecuteJs(kWebContentsElementId,
                     "() => document.documentElement.requestFullscreen()"),
-          InAnyContext(WaitForShow(kExclusiveAccessBubbleViewElementId))),
+          InAnyContext(WaitForShow(kExclusiveAccessBubbleViewElementId)),
+          Do([&]() {
+            tab_fullscreen_waiter->Wait();
+            // Reset the fullscreen waiter to wait for exiting fullscreen next
+            // time.
+            tab_fullscreen_waiter = std::make_unique<FullscreenWaiter>(
+                browser(), FullscreenWaiter::kNoFullscreen);
+          })),
       // The exclusive access bubble should notify about the fullscreen change.
       Check(IsExclusiveAccessBubbleDisplayed(true),
             "Exclusive access bubble is displayed upon entering fullscreen"),
@@ -481,10 +476,10 @@ IN_PROC_BROWSER_TEST_F(
             "Exclusive access bubble is displayed after starting a download"),
       Check(IsExclusiveAccessBubbleForDownload(true),
             "Exclusive access bubble is for a download"),
-      FlushEvents(),
+
       // Now exit fullscreen, and the partial view, if enabled, should be shown.
-      SendAccelerator(kBrowserViewElementId, fullscreen_accelerator),
-      FlushEvents(),
+      InParallel(SendAccelerator(kBrowserViewElementId, fullscreen_accelerator),
+                 Do([&]() { tab_fullscreen_waiter->Wait(); })),
       If([&]() { return IsPartialViewEnabled(); },
          Steps(Do(WaitForDownloadBubbleShow(dialog_waiter)),
                Check(DownloadBubbleIsShowingDetails(true),
@@ -495,7 +490,6 @@ IN_PROC_BROWSER_TEST_F(
       Do(ChangeBubbleVisibility(false)), Do(ChangeButtonVisibility(false)),
       WaitForHide(kToolbarDownloadButtonElementId));
 }
-#endif
 
 // Tests that the partial view does not steal focus from the web contents, and
 // that the partial view is still closable when clicking outside of it, and that
@@ -514,7 +508,7 @@ IN_PROC_BROWSER_TEST_F(DownloadBubbleInteractiveUiTest,
          Steps(Check(DownloadBubbleIsActive(false),
                      "Partial view, if enabled, is inactive."))),
       // Click outside (at the center point of the browser) to close the bubble.
-      MoveMouseTo(kBrowserViewElementId), ClickMouse(), FlushEvents(),
+      MoveMouseTo(kBrowserViewElementId), ClickMouse(),
       EnsureNotPresent(kToolbarDownloadBubbleElementId),
       Check(DownloadBubbleIsShowingDetails(false),
             "Bubble is closed after clicking outside of it."),

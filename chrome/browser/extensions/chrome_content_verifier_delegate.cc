@@ -15,7 +15,6 @@
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/strings/escape.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/syslog_logging.h"
 #include "base/version.h"
@@ -42,7 +41,7 @@
 #include "extensions/common/switches.h"
 #include "net/base/backoff_entry.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/extensions/extension_assets_manager_chromeos.h"
 #endif
 
@@ -60,7 +59,25 @@ GetModeForTesting() {
 const char kContentVerificationExperimentName[] =
     "ExtensionContentVerification";
 
+ChromeContentVerifierDelegate::GetVerifyInfoTestOverride::VerifyInfoCallback*
+    g_verify_info_test_callback = nullptr;
+
 }  // namespace
+
+ChromeContentVerifierDelegate::GetVerifyInfoTestOverride::
+    GetVerifyInfoTestOverride(VerifyInfoCallback callback)
+    : callback_(std::move(callback)) {
+  DCHECK_EQ(nullptr, g_verify_info_test_callback)
+      << "Nested overrides are not supported.";
+  g_verify_info_test_callback = &callback_;
+}
+
+ChromeContentVerifierDelegate::GetVerifyInfoTestOverride::
+    ~GetVerifyInfoTestOverride() {
+  DCHECK_EQ(&callback_, g_verify_info_test_callback)
+      << "Nested overrides are not supported.";
+  g_verify_info_test_callback = nullptr;
+}
 
 ChromeContentVerifierDelegate::VerifyInfo::VerifyInfo(Mode mode,
                                                       bool is_from_webstore,
@@ -147,8 +164,7 @@ ChromeContentVerifierDelegate::ChromeContentVerifierDelegate(
     content::BrowserContext* context)
     : context_(context), default_mode_(GetDefaultMode()) {}
 
-ChromeContentVerifierDelegate::~ChromeContentVerifierDelegate() {
-}
+ChromeContentVerifierDelegate::~ChromeContentVerifierDelegate() = default;
 
 ContentVerifierDelegate::VerifierSourceType
 ChromeContentVerifierDelegate::GetVerifierSourceType(
@@ -162,8 +178,7 @@ ChromeContentVerifierDelegate::GetVerifierSourceType(
 }
 
 ContentVerifierKey ChromeContentVerifierDelegate::GetPublicKey() {
-  return ContentVerifierKey(kWebstoreSignaturesPublicKey,
-                            kWebstoreSignaturesPublicKeySize);
+  return kWebstoreSignaturesPublicKey;
 }
 
 GURL ChromeContentVerifierDelegate::GetSignatureFetchUrl(
@@ -221,7 +236,7 @@ void ChromeContentVerifierDelegate::VerifyFailed(
     // If a non-webstore extension has no computed hashes for content
     // verification, leave it as is for now.
     // See https://crbug.com/958794#c22 for more details.
-    // TODO(https://crbug.com/1044572): Schedule the extension for reinstall.
+    // TODO(crbug.com/40669814): Schedule the extension for reinstall.
     if (!info.is_from_webstore) {
       if (!base::Contains(would_be_reinstalled_ids_, extension_id)) {
         corrupted_extension_reinstaller->RecordPolicyReinstallReason(
@@ -302,6 +317,10 @@ bool ChromeContentVerifierDelegate::IsFromWebstore(
 
 ChromeContentVerifierDelegate::VerifyInfo
 ChromeContentVerifierDelegate::GetVerifyInfo(const Extension& extension) const {
+  if (g_verify_info_test_callback) {
+    return g_verify_info_test_callback->Run(extension);
+  }
+
   ManagementPolicy* management_policy =
       ExtensionSystem::Get(context_)->management_policy();
 
@@ -310,7 +329,7 @@ ChromeContentVerifierDelegate::GetVerifyInfo(const Extension& extension) const {
                        management_policy->ShouldRepairIfCorrupted(&extension);
   bool is_from_webstore = IsFromWebstore(extension);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (ExtensionAssetsManagerChromeOS::IsSharedInstall(&extension)) {
     return VerifyInfo(VerifyInfo::Mode::ENFORCE_STRICT, is_from_webstore,
                       should_repair);

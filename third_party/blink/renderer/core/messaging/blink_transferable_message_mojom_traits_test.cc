@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/core/messaging/blink_transferable_message_mojom_traits.h"
 
 #include "base/memory/scoped_refptr.h"
@@ -46,10 +51,8 @@ scoped_refptr<SerializedScriptValue> BuildSerializedScriptValue(
     Transferables& transferables) {
   SerializedScriptValue::SerializeOptions options;
   options.transferables = &transferables;
-  ExceptionState exceptionState(isolate, ExceptionContextType::kOperationInvoke,
-                                "MessageChannel", "postMessage");
   return SerializedScriptValue::Serialize(isolate, value, options,
-                                          exceptionState);
+                                          PassThroughException(isolate));
 }
 
 TEST(BlinkTransferableMessageStructTraitsTest,
@@ -90,8 +93,7 @@ TEST(BlinkTransferableMessageStructTraitsTest,
   ArrayBufferContents& deserialized_contents =
       out.message->GetArrayBufferContentsArray()[0];
   Vector<uint8_t> deserialized_data;
-  deserialized_data.Append(static_cast<uint8_t*>(deserialized_contents.Data()),
-                           8);
+  deserialized_data.AppendSpan(deserialized_contents.ByteSpan().first(8u));
   ASSERT_EQ(deserialized_data.size(), 8U);
   for (wtf_size_t i = 0; i < deserialized_data.size(); i++) {
     ASSERT_TRUE(deserialized_data[i] == i);
@@ -138,7 +140,8 @@ TEST(BlinkTransferableMessageStructTraitsTest,
   ASSERT_EQ(originalContentsData, deserialized_contents.Data());
 
   // The original ArrayBufferContents should be detached.
-  ASSERT_EQ(nullptr, v8_buffer->GetBackingStore()->Data());
+  ASSERT_TRUE(v8_buffer->WasDetached());
+  ASSERT_EQ(0UL, v8_buffer->GetBackingStore()->ByteLength());
   ASSERT_TRUE(original_array_buffer->IsDetached());
 }
 
@@ -221,7 +224,7 @@ TEST(BlinkTransferableMessageStructTraitsTest,
 class BlinkTransferableMessageStructTraitsWithFakeGpuTest : public Test {
  public:
   void SetUp() override {
-    auto sii = base::MakeRefCounted<viz::TestSharedImageInterface>();
+    auto sii = base::MakeRefCounted<gpu::TestSharedImageInterface>();
     sii_ = sii.get();
     context_provider_ = viz::TestContextProvider::Create(std::move(sii));
     InitializeSharedGpuContextGLES2(context_provider_.get());
@@ -229,7 +232,7 @@ class BlinkTransferableMessageStructTraitsWithFakeGpuTest : public Test {
 
   void TearDown() override {
     sii_ = nullptr;
-    SharedGpuContext::ResetForTesting();
+    SharedGpuContext::Reset();
   }
 
   gpu::SyncToken GenTestSyncToken(GLbyte id) {
@@ -241,20 +244,18 @@ class BlinkTransferableMessageStructTraitsWithFakeGpuTest : public Test {
   }
 
   ImageBitmap* CreateAcceleratedStaticImageBitmap() {
-    auto mailbox = gpu::Mailbox::GenerateForSharedImage();
+    auto client_si = gpu::ClientSharedImage::CreateForTesting();
 
     return MakeGarbageCollected<ImageBitmap>(
-        AcceleratedStaticBitmapImage::CreateFromCanvasMailbox(
-            mailbox, GenTestSyncToken(100), 0,
-            SkImageInfo::MakeN32Premul(100, 100), GL_TEXTURE_2D, true,
+        AcceleratedStaticBitmapImage::CreateFromCanvasSharedImage(
+            std::move(client_si), GenTestSyncToken(100), 0,
+            SkImageInfo::MakeN32Premul(100, 100),
             SharedGpuContext::ContextProviderWrapper(),
             base::PlatformThread::CurrentRef(),
             base::MakeRefCounted<base::NullTaskRunner>(),
             WTF::BindOnce(&BlinkTransferableMessageStructTraitsWithFakeGpuTest::
                               OnImageDestroyed,
-                          WTF::Unretained(this)),
-            /*supports_display_compositing=*/true,
-            /*is_overlay_candidate=*/true));
+                          WTF::Unretained(this))));
   }
 
   void OnImageDestroyed(const gpu::SyncToken&, bool) {
@@ -262,7 +263,7 @@ class BlinkTransferableMessageStructTraitsWithFakeGpuTest : public Test {
   }
 
  protected:
-  viz::TestSharedImageInterface* sii_;
+  gpu::TestSharedImageInterface* sii_;
   scoped_refptr<viz::TestContextProvider> context_provider_;
 
   bool image_destroyed_ = false;

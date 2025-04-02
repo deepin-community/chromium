@@ -99,7 +99,7 @@ class DnsLookupClient : public network::mojom::ResolveHostClient {
         /*resolved_addresses=*/std::nullopt,
         /*endpoint_results_with_metadata=*/std::nullopt));
   }
-  ~DnsLookupClient() override {}
+  ~DnsLookupClient() override = default;
 
   // network::mojom::ResolveHostClient:
   void OnComplete(int32_t error,
@@ -376,8 +376,9 @@ void NetInternalsTest::MessageHandler::DnsLookup(
   ASSERT_TRUE(browser());
 
   auto resolve_host_parameters = network::mojom::ResolveHostParameters::New();
-  if (local)
+  if (local) {
     resolve_host_parameters->source = net::HostResolverSource::LOCAL_ONLY;
+  }
   mojo::PendingRemote<network::mojom::ResolveHostClient> client;
   // DnsLookupClient owns itself.
   new DnsLookupClient(
@@ -420,6 +421,7 @@ void NetInternalsTest::MessageHandler::RgisterTestSharedDictionary(
           *dict.FindString("match"),
           ToRequestDestinationList(dict.FindList("match_dest")),
           id_string ? *id_string : "", GURL(*dict.FindString("dictionary_url")),
+          ToTime(dict.FindString("last_fetch_time")->c_str()),
           ToTime(dict.FindString("response_time")->c_str()),
           base::Seconds(*dict.FindInt("expiration")),
           ToTime(dict.FindString("last_used_time")->c_str()),

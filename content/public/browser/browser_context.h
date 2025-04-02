@@ -21,14 +21,17 @@
 #include "base/supports_user_data.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/k_anonymity_service_delegate.h"
+#include "content/public/browser/prefetch_request_status_listener.h"
 #include "content/public/browser/zoom_level_delegate.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
-#include "services/network/public/mojom/network_context.mojom-forward.h"
+#include "net/http/http_no_vary_search_data.h"
+#include "net/http/http_request_headers.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom-forward.h"
 #include "third_party/blink/public/mojom/push_messaging/push_messaging.mojom-forward.h"
 #include "third_party/blink/public/mojom/push_messaging/push_messaging_status.mojom-forward.h"
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
+#include "url/origin.h"
 
 class GURL;
 
@@ -119,7 +122,7 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   // The currently recommended practice is to make the methods in this section
   // non-virtual instance methods.
   //
-  // TODO(https://crbug.com/1179776): Consider moving these methods to
+  // TODO(crbug.com/40169693): Consider moving these methods to
   // BrowserContextImpl.
 
   BrowserContext();
@@ -195,6 +198,19 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
       base::OnceClosure done);
 
   StoragePartition* GetDefaultStoragePartition();
+
+  // Starts a prefetch network request for the given |url|.
+  void StartBrowserPrefetchRequest(
+      const GURL& url,
+      bool javascript_enabled,
+      std::optional<net::HttpNoVarySearchData> no_vary_search_hint,
+      const net::HttpRequestHeaders& additional_headers,
+      std::unique_ptr<PrefetchRequestStatusListener> request_status_listener);
+
+  // Updates the "Accept Language" header that the prefetch service delegate
+  // will use.
+  void UpdatePrefetchServiceDelegateAcceptLanguageHeader(
+      std::string accept_language_header);
 
   using BlobCallback = base::OnceCallback<void(std::unique_ptr<BlobHandle>)>;
   using BlobContextGetter =
@@ -312,8 +328,13 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   void WriteIntoTrace(perfetto::TracedProto<TraceProto> context) const;
 
   // Deprecated. Do not add new callers.
-  // TODO(https://crbug.com/908955): Get rid of ResourceContext.
+  // TODO(crbug.com/40604019): Get rid of ResourceContext.
   ResourceContext* GetResourceContext() const;
+
+  // Grant third-party cookie access to certain sites that the user visited in
+  // the past, according to the popup heuristics described at
+  // https://github.com/amaliev/3pcd-exemption-heuristics/blob/main/explainer.md
+  void BackfillPopupHeuristicGrants(base::OnceCallback<void(bool)> callback);
 
   base::WeakPtr<BrowserContext> GetWeakPtr();
 
@@ -325,7 +346,7 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   // pure (i.e. `= 0`) although it may make sense to provide a default
   // implementation for some of the methods.
   //
-  // TODO(https://crbug.com/1179776): Migrate method declarations from this
+  // TODO(crbug.com/40169693): Migrate method declarations from this
   // section into a separate BrowserContextDelegate class.
 
   // Creates a delegate to initialize a HostZoomMap and persist its information.
@@ -454,6 +475,12 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   // any, nullptr otherwise.
   virtual OriginTrialsControllerDelegate* GetOriginTrialsControllerDelegate();
 
+#if BUILDFLAG(IS_ANDROID)
+  // Returns extra request headers to be set when navigation happens for `url`.
+  // This function is designed for the headers provided by WebView.loadUrl().
+  virtual std::string GetExtraHeadersForUrl(const GURL& url);
+#endif  // BUILDFLAG(IS_ANDROID)
+
  private:
   // Please don't add more fields to BrowserContext.
   //
@@ -461,7 +488,7 @@ class CONTENT_EXPORT BrowserContext : public base::SupportsUserData {
   // methods and no fields), but currently BrowserContext and BrowserContextImpl
   // and BrowserContextDelegate are kind of mixed together in a single class.
   //
-  // TODO(https://crbug.com/1179776): Make BrowserContextImpl to implement
+  // TODO(crbug.com/40169693): Make BrowserContextImpl to implement
   // BrowserContext instead (Removing afterwards the BrowserContextImpl,
   // fwd-declaration, `impl_` field, `friend` declaration and `impl` accessor
   // below).

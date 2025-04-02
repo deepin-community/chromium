@@ -9,8 +9,9 @@
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/signin/public/base/signin_buildflags.h"
+
+class PrefService;
 
 namespace switches {
 
@@ -27,10 +28,22 @@ namespace switches {
 
 #if BUILDFLAG(IS_ANDROID)
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-BASE_DECLARE_FEATURE(kSeedAccountsRevamp);
+BASE_DECLARE_FEATURE(kCctSignInPrompt);
 
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-BASE_DECLARE_FEATURE(kEnterprisePolicyOnSignin);
+BASE_DECLARE_FEATURE(kForceSupervisedSigninWithCapabilities);
+
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kHistoryOptInEntryPoints);
+
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kSkipCheckForAccountManagementOnSignin);
+
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kUnoForAuto);
+
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kUseHostedDomainForManagementCheckOnSignin);
 #endif
 
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
@@ -40,7 +53,7 @@ extern const char kClearTokenService[];
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 BASE_DECLARE_FEATURE(kEnableBoundSessionCredentials);
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-bool IsBoundSessionCredentialsEnabled();
+bool IsBoundSessionCredentialsEnabled(const PrefService* profile_prefs);
 
 // This parameter is applicable only to the platforms that use DICE as an
 // account consistency protocol.
@@ -65,37 +78,23 @@ COMPONENT_EXPORT(SIGNIN_SWITCHES)
 BASE_DECLARE_FEATURE(kEnableChromeRefreshTokenBinding);
 
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-bool IsChromeRefreshTokenBindingEnabled();
+bool IsChromeRefreshTokenBindingEnabled(const PrefService* profile_prefs);
 #endif
 
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-BASE_DECLARE_FEATURE(kEnableFetchingAccountCapabilities);
-
-COMPONENT_EXPORT(SIGNIN_SWITCHES)
 BASE_DECLARE_FEATURE(kForceDisableExtendedSyncPromos);
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+extern const char kForceFreDefaultBrowserStep[];
+#endif
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 BASE_DECLARE_FEATURE(kForceStartupSigninPromo);
 #endif
 
-#if BUILDFLAG(IS_ANDROID)
-COMPONENT_EXPORT(SIGNIN_SWITCHES)
-BASE_DECLARE_FEATURE(kRestoreSignedInAccountAndSettingsFromBackup);
-#endif
-
-#if BUILDFLAG(IS_ANDROID)
-COMPONENT_EXPORT(SIGNIN_SWITCHES)
-BASE_DECLARE_FEATURE(kSearchEngineChoice);
-#endif
-
-// Used to experiment and validate the UNO model on Desktop. Not meant to be
-// launched to stable for the moment, while it's still in a prototype state.
-COMPONENT_EXPORT(SIGNIN_SWITCHES)
-BASE_DECLARE_FEATURE(kUnoDesktop);
-
-// Used for the launch of the UNO model on Desktop, as well as for the later
-// phases of the experiment.
+// Used for the launch of the UNO model on Desktop Phase 0.
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
 BASE_DECLARE_FEATURE(kExplicitBrowserSigninUIOnDesktop);
 // Param to control whether the bubbles are dismissible by pressing on the
@@ -104,34 +103,83 @@ COMPONENT_EXPORT(SIGNIN_SWITCHES)
 extern const base::FeatureParam<bool>
     kInterceptBubblesDismissibleByAvatarButton;
 
-enum class ExplicitBrowserSigninPhase {
-  // Used to enable the changes made for the experimental feature `kUnoDesktop`
-  // and for the full launch feature `kExplicitBrowserSigninUIOnDesktop`.
-  kExperimental = 0,
-  // Used to enable the changes made only for the full launch feature
-  // `kExplicitBrowserSigninUIOnDesktop`.
-  kFull = 1,
-};
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+bool IsExplicitBrowserSigninUIOnDesktopEnabled();
+
+// Requires `kExplicitBrowserSigninUIOnDesktop`.
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kImprovedSigninUIOnDesktop);
 
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-bool IsExplicitBrowserSigninUIOnDesktopEnabled(
-    ExplicitBrowserSigninPhase phase);
-
-// Controls the view mode for (history) sync screen.
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || \
-    BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-COMPONENT_EXPORT(SIGNIN_SWITCHES)
-BASE_DECLARE_FEATURE(kMinorModeRestrictionsForHistorySyncOptIn);
+bool IsImprovedSigninUIOnDesktopEnabled();
 
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-extern const base::FeatureParam<int> kMinorModeRestrictionsFetchDeadlineMs;
-#endif
+BASE_DECLARE_FEATURE(kImprovedSettingsUIOnDesktop);
+
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+bool IsImprovedSettingsUIOnDesktopEnabled();
+
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kEnableSnackbarInSettings);
 
 #if BUILDFLAG(IS_IOS)
+
+// Features to enable identities in auth error (stale token).
 COMPONENT_EXPORT(SIGNIN_SWITCHES)
-BASE_DECLARE_FEATURE(kRemoveSignedInAccountsDialog);
+BASE_DECLARE_FEATURE(kEnableIdentityInAuthError);
+
+// Show the error badge on the identity disc in the NTP.
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kEnableErrorBadgeOnIdentityDisc);
+
+// Features to enable using the ASWebAuthenticationSession to add accounts to
+// device.
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kEnableASWebAuthenticationSession);
 #endif
 
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kBatchUploadDesktop);
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+bool IsBatchUploadDesktopEnabled();
+
+// Temporary flag to test Profile Picker Glic version.
+// TODO(crbug.com/390212241): Cleanup the flag when the code triggering the
+// Profile Picker Glic mode is hooked to the Glic view.
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kProfilePickerGlicTesting);
+
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kShowEnterpriseDialogForAllManagedAccountsSignin);
 }  // namespace switches
+
+// TODO(crbug.com/337879458): Move switches below into the switches namespace.
+
+#if BUILDFLAG(IS_CHROMEOS)
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kStableDeviceId);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(ENABLE_MIRROR) && !BUILDFLAG(IS_IOS)
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kVerifyRequestInitiatorForMirrorHeaders);
+#endif  // BUILDFLAG(ENABLE_MIRROR) && !BUILDFLAG(IS_IOS)
+
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kProfilesReordering);
+
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kOutlineSilhouetteIcon);
+
+#if BUILDFLAG(IS_ANDROID)
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kIgnoreMirrorHeadersInBackgoundTabs);
+#endif
+
+COMPONENT_EXPORT(SIGNIN_SWITCHES)
+BASE_DECLARE_FEATURE(kNonDefaultGaiaOriginCheck);
 
 #endif  // COMPONENTS_SIGNIN_PUBLIC_BASE_SIGNIN_SWITCHES_H_

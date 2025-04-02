@@ -34,7 +34,8 @@ CSSValue* StyleMaskSourceImage::CssValue() const {
 
 CSSValue* StyleMaskSourceImage::ComputedCSSValue(
     const ComputedStyle& style,
-    bool allow_visited_style) const {
+    bool allow_visited_style,
+    CSSValuePhase value_phase) const {
   return resource_css_value_->ComputedCSSValueMaybeLocal();
 }
 
@@ -58,11 +59,11 @@ bool StyleMaskSourceImage::IsAccessAllowed(String& failing_url) const {
   return !image_ || image_->IsAccessAllowed(failing_url);
 }
 
-IntrinsicSizingInfo StyleMaskSourceImage::GetNaturalSizingInfo(
+NaturalSizingInfo StyleMaskSourceImage::GetNaturalSizingInfo(
     float multiplier,
     RespectImageOrientationEnum respect_orientation) const {
   if (!image_) {
-    return IntrinsicSizingInfo::None();
+    return NaturalSizingInfo::None();
   }
   return image_->GetNaturalSizingInfo(multiplier, respect_orientation);
 }

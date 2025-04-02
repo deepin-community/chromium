@@ -5,7 +5,6 @@
 #include "third_party/blink/renderer/modules/service_worker/service_worker_event_queue.h"
 
 #include "base/containers/contains.h"
-#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/default_tick_clock.h"
@@ -14,13 +13,6 @@
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
-
-// This feature flag enables a new behavior that waits
-// processing events until the top-level script is evaluated.
-// See: https://crbug.com/1462568
-BASE_FEATURE(kServiceWorkerEventQueueWaitForScriptEvaluation,
-             "ServiceWorkerEventQueueWaitForScriptEvaluation",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // static
 constexpr base::TimeDelta ServiceWorkerEventQueue::kEventTimeout;
@@ -63,12 +55,7 @@ ServiceWorkerEventQueue::ServiceWorkerEventQueue(
     : task_runner_(std::move(task_runner)),
       before_start_event_callback_(std::move(before_start_event_callback)),
       idle_callback_(std::move(idle_callback)),
-      tick_clock_(tick_clock) {
-  if (!base::FeatureList::IsEnabled(
-          kServiceWorkerEventQueueWaitForScriptEvaluation)) {
-    is_ready_for_processing_events_ = true;
-  }
-}
+      tick_clock_(tick_clock) {}
 
 ServiceWorkerEventQueue::~ServiceWorkerEventQueue() {
   // Abort all callbacks.
@@ -83,15 +70,9 @@ void ServiceWorkerEventQueue::Start() {
   timer_.Start(FROM_HERE, kUpdateInterval,
                WTF::BindRepeating(&ServiceWorkerEventQueue::UpdateStatus,
                                   WTF::Unretained(this)));
-  if (base::FeatureList::IsEnabled(
-          kServiceWorkerEventQueueWaitForScriptEvaluation)) {
-    is_ready_for_processing_events_ = true;
-    ResetIdleTimeout();
-    ProcessEvents();
-  } else if (!HasInflightEvent() && !HasScheduledIdleCallback()) {
-    // If no event happens until Start(), the idle callback should be scheduled.
-    OnNoInflightEvent();
-  }
+  is_ready_for_processing_events_ = true;
+  ResetIdleTimeout();
+  ProcessEvents();
 }
 
 void ServiceWorkerEventQueue::EnqueueNormal(
@@ -253,8 +234,8 @@ void ServiceWorkerEventQueue::SetIdleDelay(base::TimeDelta idle_delay) {
   idle_callback_handle_.Cancel();
 
   // Calculate the updated time of when the |idle_callback_| should be invoked.
-  DCHECK(!last_no_inflight_event_.is_null());
-  auto new_idle_callback_time = last_no_inflight_event_ + idle_delay;
+  DCHECK(!last_no_inflight_event_time_.is_null());
+  auto new_idle_callback_time = last_no_inflight_event_time_ + idle_delay;
   base::TimeDelta delta_until_idle =
       new_idle_callback_time - tick_clock_->NowTicks();
 
@@ -352,7 +333,7 @@ void ServiceWorkerEventQueue::OnNoInflightEvent() {
     ProcessEvents();
     return;
   }
-  last_no_inflight_event_ = tick_clock_->NowTicks();
+  last_no_inflight_event_time_ = tick_clock_->NowTicks();
   ScheduleIdleCallback(idle_delay_);
 }
 
@@ -365,7 +346,7 @@ bool ServiceWorkerEventQueue::HasInflightEvent() const {
 }
 
 void ServiceWorkerEventQueue::ResetIdleTimeout() {
-  last_no_inflight_event_ = base::TimeTicks();
+  last_no_inflight_event_time_ = base::TimeTicks();
   idle_callback_handle_.Cancel();
   did_idle_timeout_ = false;
 }

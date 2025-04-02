@@ -63,10 +63,7 @@ class MockDriveFs : public mojom::DriveFsInterceptorForTesting,
  public:
   MockDriveFs() = default;
 
-  DriveFs* GetForwardingInterface() override {
-    NOTREACHED();
-    return nullptr;
-  }
+  DriveFs* GetForwardingInterface() override { NOTREACHED(); }
 
   void FetchChangeLog(
       std::vector<mojom::FetchChangeLogOptionsPtr> options) override {
@@ -185,6 +182,11 @@ class TestingDriveFsHostDelegate : public DriveFsHost::Delegate,
 
   void PersistMachineRootID(const std::string& id) override {}
 
+  void PersistNotification(
+      mojom::DriveFsNotificationPtr notification) override {}
+
+  void PersistSyncErrors(mojom::MirrorSyncErrorListPtr error_list) override {}
+
   const raw_ptr<signin::IdentityManager> identity_manager_;
   const AccountId account_id_;
   mojo::PendingRemote<mojom::DriveFsBootstrap> pending_bootstrap_;
@@ -224,7 +226,8 @@ class DriveFsHostTest : public ::testing::Test, public mojom::DriveFsBootstrap {
   void SetUp() override {
     testing::Test::SetUp();
     profile_path_ = base::FilePath(FILE_PATH_LITERAL("/path/to/profile"));
-    account_id_ = AccountId::FromUserEmailGaiaId("test@example.com", "ID");
+    account_id_ =
+        AccountId::FromUserEmailGaiaId("test@example.com", GaiaId("ID"));
 
     disk_manager_ = std::make_unique<ash::disks::MockDiskMountManager>();
     identity_test_env_.MakePrimaryAccountAvailable(

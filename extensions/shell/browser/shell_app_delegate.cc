@@ -44,7 +44,9 @@ void ShellAppDelegate::ResizeWebContents(content::WebContents* web_contents,
 content::WebContents* ShellAppDelegate::OpenURLFromTab(
     content::BrowserContext* context,
     content::WebContents* source,
-    const content::OpenURLParams& params) {
+    const content::OpenURLParams& params,
+    base::OnceCallback<void(content::NavigationHandle&)>
+        navigation_handle_callback) {
   NOTIMPLEMENTED();
   return nullptr;
 }
@@ -113,7 +115,6 @@ bool ShellAppDelegate::TakeFocus(content::WebContents* web_contents,
 content::PictureInPictureResult ShellAppDelegate::EnterPictureInPicture(
     content::WebContents* web_contents) {
   NOTREACHED();
-  return content::PictureInPictureResult::kNotSupported;
 }
 
 void ShellAppDelegate::ExitPictureInPicture() {

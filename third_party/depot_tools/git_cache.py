@@ -176,6 +176,8 @@ class Mirror(object):
         # Use the same dir for authenticated URLs and unauthenticated URLs.
         norm_url = norm_url.replace('googlesource.com/a/', 'googlesource.com/')
 
+        norm_url = norm_url.replace(':', '__')
+
         return norm_url.replace('-', '--').replace('/', '-').lower()
 
     @staticmethod
@@ -183,6 +185,12 @@ class Mirror(object):
         """Convert a cache dir path to its corresponding url."""
         netpath = re.sub(r'\b-\b', '/',
                          os.path.basename(path)).replace('--', '-')
+
+        netpath = netpath.replace('__', ':')
+
+        if netpath.startswith('git@'):
+            return netpath
+
         return 'https://%s' % netpath
 
     @classmethod
@@ -555,7 +563,7 @@ class Mirror(object):
             depth = 10000
         gclient_utils.safe_makedirs(self.GetCachePath())
 
-        def bootstrap(force=False):
+        def bootstrap_cache(force=False):
             self._ensure_bootstrapped(depth,
                                       bootstrap,
                                       reset_fetch_config,
@@ -572,12 +580,12 @@ class Mirror(object):
                 wipe_cache()
 
             try:
-                bootstrap()
+                bootstrap_cache()
             except ClobberNeeded:
                 # This is a major failure, we need to clean and force a
                 # bootstrap.
                 wipe_cache()
-                bootstrap(force=True)
+                bootstrap_cache(force=True)
 
     def update_bootstrap(self, prune=False, gc_aggressive=False):
         # NOTE: There have been cases where repos were being recursively
@@ -724,6 +732,11 @@ def CMDupdate_bootstrap(parser, args):
               file=sys.stderr)
         return 1
 
+    if gclient_utils.IsEnvCog():
+        print('updating bootstrap is not supported in non-git environment.',
+              file=sys.stderr)
+        return 1
+
     parser.add_option('--skip-populate',
                       action='store_true',
                       help='Skips "populate" step if mirror already exists.')
@@ -755,6 +768,11 @@ def CMDupdate_bootstrap(parser, args):
 @metrics.collector.collect_metrics('git cache populate')
 def CMDpopulate(parser, args):
     """Ensure that the cache has all up-to-date objects for the given repo."""
+    if gclient_utils.IsEnvCog():
+        print('populating cache is not supported in non-git environment.',
+              file=sys.stderr)
+        return 1
+
     parser.add_option('--depth',
                       type='int',
                       help='Only cache DEPTH commits of history')
@@ -818,6 +836,13 @@ def CMDpopulate(parser, args):
 @metrics.collector.collect_metrics('git cache fetch')
 def CMDfetch(parser, args):
     """Update mirror, and fetch in cwd."""
+    if gclient_utils.IsEnvCog():
+        print(
+            'fetching new commits into cache is not supported in non-git '
+            'environment.',
+            file=sys.stderr)
+        return 1
+
     parser.add_option('--all', action='store_true', help='Fetch all remotes')
     parser.add_option('--no_bootstrap',
                       '--no-bootstrap',
@@ -880,13 +905,6 @@ def CMDfetch(parser, args):
                             lock_timeout=options.timeout)
         subprocess.check_call([Mirror.git_exe, 'fetch', remote])
     return 0
-
-
-@subcommand.usage('do not use - it is a noop.')
-@metrics.collector.collect_metrics('git cache unlock')
-def CMDunlock(parser, args):
-    """This command does nothing."""
-    print('This command does nothing and will be removed in the future.')
 
 
 class OptionParser(optparse.OptionParser):

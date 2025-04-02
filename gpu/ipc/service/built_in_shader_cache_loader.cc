@@ -2,15 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "gpu/ipc/service/built_in_shader_cache_loader.h"
 
 #include "base/apple/foundation_util.h"
 #include "base/command_line.h"
 #include "base/files/file.h"
 #include "base/functional/bind.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/task/thread_pool.h"
-#include "base/time/time.h"
 #include "gpu/config/gpu_switches.h"
 #include "gpu/ipc/service/built_in_shader_cache_writer.h"
 
@@ -152,12 +155,7 @@ BuiltInShaderCacheLoader::TakeEntries() {
 
 std::unique_ptr<std::vector<BuiltInShaderCacheLoader::CacheEntry>>
 BuiltInShaderCacheLoader::TakeEntriesImpl() {
-  const base::TimeTicks start_time = base::TimeTicks::Now();
   loaded_signaler_.Wait();
-  const base::TimeTicks end_time = base::TimeTicks::Now();
-  base::UmaHistogramCustomMicrosecondsTimes(
-      "Gpu.MetalShaderCache.WaitTime", end_time - start_time,
-      base::Microseconds(1), base::Milliseconds(100), 100);
   std::unique_ptr<std::vector<CacheEntry>> entries =
       std::make_unique<std::vector<CacheEntry>>(std::move(entries_));
   return entries;
@@ -168,14 +166,7 @@ BuiltInShaderCacheLoader::BuiltInShaderCacheLoader() = default;
 BuiltInShaderCacheLoader::~BuiltInShaderCacheLoader() = default;
 
 void BuiltInShaderCacheLoader::Load(const base::FilePath& path) {
-  const base::TimeTicks start_time = base::TimeTicks::Now();
   LoadImpl(path);
-  const base::TimeTicks end_time = base::TimeTicks::Now();
-  base::UmaHistogramCustomMicrosecondsTimes(
-      "Gpu.MetalShaderCache.LoadTime", end_time - start_time,
-      base::Microseconds(10), base::Milliseconds(100), 100);
-  base::UmaHistogramCounts100("Gpu.MetalShaderCache.NumEntriesInCache",
-                              entries_.size());
   loaded_signaler_.Signal();
 }
 

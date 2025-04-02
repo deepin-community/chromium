@@ -15,13 +15,12 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "absl/types/optional.h"
 #include "api/environment/environment.h"
 #include "api/field_trials_view.h"
 #include "api/scoped_refptr.h"
-#include "api/transport/field_trial_based_config.h"
 #include "api/video/i420_buffer.h"
 #include "api/video/video_frame.h"
 #include "api/video/video_frame_buffer.h"
@@ -54,13 +53,13 @@ constexpr bool kIsArm = true;
 constexpr bool kIsArm = false;
 #endif
 
-absl::optional<LibvpxVp8Decoder::DeblockParams> DefaultDeblockParams() {
+std::optional<LibvpxVp8Decoder::DeblockParams> DefaultDeblockParams() {
   return LibvpxVp8Decoder::DeblockParams(/*max_level=*/8,
                                          /*degrade_qp=*/60,
                                          /*min_qp=*/30);
 }
 
-absl::optional<LibvpxVp8Decoder::DeblockParams>
+std::optional<LibvpxVp8Decoder::DeblockParams>
 GetPostProcParamsFromFieldTrialGroup(const FieldTrialsView& field_trials) {
   std::string group = field_trials.Lookup(kIsArm ? kVp8PostProcArmFieldTrial
                                                  : kVp8PostProcFieldTrial);
@@ -86,10 +85,6 @@ GetPostProcParamsFromFieldTrialGroup(const FieldTrialsView& field_trials) {
 }
 
 }  // namespace
-
-std::unique_ptr<VideoDecoder> VP8Decoder::Create() {
-  return std::make_unique<LibvpxVp8Decoder>();
-}
 
 std::unique_ptr<VideoDecoder> CreateVp8Decoder(const Environment& env) {
   return std::make_unique<LibvpxVp8Decoder>(env);
@@ -119,15 +114,10 @@ class LibvpxVp8Decoder::QpSmoother {
   rtc::ExpFilter smoother_;
 };
 
-LibvpxVp8Decoder::LibvpxVp8Decoder()
-    : LibvpxVp8Decoder(FieldTrialBasedConfig()) {}
-
 LibvpxVp8Decoder::LibvpxVp8Decoder(const Environment& env)
-    : LibvpxVp8Decoder(env.field_trials()) {}
-
-LibvpxVp8Decoder::LibvpxVp8Decoder(const FieldTrialsView& field_trials)
-    : use_postproc_(kIsArm ? field_trials.IsEnabled(kVp8PostProcArmFieldTrial)
-                           : true),
+    : use_postproc_(
+          kIsArm ? env.field_trials().IsEnabled(kVp8PostProcArmFieldTrial)
+                 : true),
       buffer_pool_(false, 300 /* max_number_of_buffers*/),
       decode_complete_callback_(NULL),
       inited_(false),
@@ -135,9 +125,9 @@ LibvpxVp8Decoder::LibvpxVp8Decoder(const FieldTrialsView& field_trials)
       last_frame_width_(0),
       last_frame_height_(0),
       key_frame_required_(true),
-      deblock_params_(use_postproc_
-                          ? GetPostProcParamsFromFieldTrialGroup(field_trials)
-                          : absl::nullopt),
+      deblock_params_(use_postproc_ ? GetPostProcParamsFromFieldTrialGroup(
+                                          env.field_trials())
+                                    : std::nullopt),
       qp_smoother_(use_postproc_ ? new QpSmoother() : nullptr) {}
 
 LibvpxVp8Decoder::~LibvpxVp8Decoder() {
@@ -170,7 +160,7 @@ bool LibvpxVp8Decoder::Configure(const Settings& settings) {
 
   // Always start with a complete key frame.
   key_frame_required_ = true;
-  if (absl::optional<int> buffer_pool_size = settings.buffer_pool_size()) {
+  if (std::optional<int> buffer_pool_size = settings.buffer_pool_size()) {
     if (!buffer_pool_.Resize(*buffer_pool_size)) {
       return false;
     }
@@ -312,10 +302,10 @@ int LibvpxVp8Decoder::ReturnFrame(
 
   VideoFrame decoded_image = VideoFrame::Builder()
                                  .set_video_frame_buffer(buffer)
-                                 .set_timestamp_rtp(timestamp)
+                                 .set_rtp_timestamp(timestamp)
                                  .set_color_space(explicit_color_space)
                                  .build();
-  decode_complete_callback_->Decoded(decoded_image, absl::nullopt, qp);
+  decode_complete_callback_->Decoded(decoded_image, std::nullopt, qp);
 
   return WEBRTC_VIDEO_CODEC_OK;
 }

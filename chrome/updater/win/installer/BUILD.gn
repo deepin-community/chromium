@@ -4,7 +4,8 @@
 
 import("//build/config/python.gni")
 import("//build/timestamp.gni")
-import("//chrome/process_version_rc_template.gni")
+import("//chrome/updater/branding.gni")
+import("//chrome/updater/updater_process_version_rc_template.gni")
 import("//testing/test.gni")
 
 source_set("msi_custom_action_sources") {
@@ -29,9 +30,11 @@ shared_library("msi_custom_action") {
   deps = [
     ":msi_custom_action_sources",
     ":version",
+    "//chrome/updater:constants_prod",
   ]
 
   configs += [ "//build/config/win:windowed" ]
+  libs = [ "rpcrt4.lib" ]
 }
 
 source_set("lib") {
@@ -51,6 +54,8 @@ source_set("lib") {
     "installer_resource.h",
     "pe_resource.cc",
     "pe_resource.h",
+    "splash_wnd.cc",
+    "splash_wnd.h",
     "string.cc",
     "string.h",
   ]
@@ -71,11 +76,13 @@ source_set("lib_with_resources") {
   visibility = [ ":*" ]
   sources = [ "installer.rc" ]
   public_deps = [ ":lib" ]
+  deps = [ "//build:branding_buildflags" ]
 }
 
-process_version_rc_template("version") {
-  template_file = "installer_version.rc.version"
-  output = "$root_out_dir/installer_version.rc"
+updater_process_version_rc_template("version") {
+  original_filename = "UpdaterSetup.exe"
+  rc = "installer_version.rc"
+  product_fullname = "$updater_metainstaller_name"
 }
 
 # This target creats a list of runtime dependencies for the component
@@ -134,7 +141,8 @@ template("generate_installer") {
 
     deps = invoker.archive_deps
 
-    if (is_component_build) {
+    if (is_component_build || is_asan) {
+      # Include component build / ASan DLLs in the installer.
       args += [ "--component_build=1" ]
     }
   }
@@ -157,6 +165,7 @@ template("generate_installer") {
              ":version",
              "//build/win:default_exe_manifest",
              "//chrome/updater:base",
+             "//chrome/updater:branding_header",
              "//third_party/abseil-cpp:absl",
            ] + invoker.deps
   }

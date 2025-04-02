@@ -28,11 +28,15 @@
 #ifndef SRC_DAWN_NATIVE_ADAPTER_H_
 #define SRC_DAWN_NATIVE_ADAPTER_H_
 
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "dawn/common/Ref.h"
 #include "dawn/common/RefCounted.h"
+#include "dawn/common/WeakRefSupport.h"
 #include "dawn/native/DawnNative.h"
+#include "dawn/native/Device.h"
 #include "dawn/native/PhysicalDevice.h"
 #include "dawn/native/dawn_platform.h"
 
@@ -42,43 +46,54 @@ class DeviceBase;
 class TogglesState;
 struct SupportedLimits;
 
-class AdapterBase : public RefCounted {
+class AdapterBase : public RefCounted, public WeakRefSupport<AdapterBase> {
   public:
-    AdapterBase(Ref<PhysicalDeviceBase> physicalDevice,
-                FeatureLevel featureLevel,
+    AdapterBase(InstanceBase* instance,
+                Ref<PhysicalDeviceBase> physicalDevice,
+                wgpu::FeatureLevel featureLevel,
                 const TogglesState& requiredAdapterToggles,
                 wgpu::PowerPreference powerPreference);
     ~AdapterBase() override;
 
+    // Gets the instance without adding a ref.
+    InstanceBase* GetInstance() const;
+
     // WebGPU API
     InstanceBase* APIGetInstance() const;
-    bool APIGetLimits(SupportedLimits* limits) const;
-    void APIGetProperties(AdapterProperties* properties) const;
+    wgpu::Status APIGetLimits(SupportedLimits* limits) const;
+    wgpu::Status APIGetInfo(AdapterInfo* info) const;
     bool APIHasFeature(wgpu::FeatureName feature) const;
-    size_t APIEnumerateFeatures(wgpu::FeatureName* features) const;
-    void APIRequestDevice(const DeviceDescriptor* descriptor,
-                          WGPURequestDeviceCallback callback,
-                          void* userdata);
-    Future APIRequestDeviceF(const DeviceDescriptor* descriptor,
-                             const RequestDeviceCallbackInfo& callbackInfo);
+    void APIGetFeatures(SupportedFeatures* features) const;
+    void APIGetFeatures(wgpu::SupportedFeatures* features) const;
+    Future APIRequestDevice(const DeviceDescriptor* descriptor,
+                            const WGPURequestDeviceCallbackInfo& callbackInfo);
     DeviceBase* APICreateDevice(const DeviceDescriptor* descriptor = nullptr);
-    ResultOrError<Ref<DeviceBase>> CreateDevice(const DeviceDescriptor* rawDescriptor);
+    wgpu::Status APIGetFormatCapabilities(wgpu::TextureFormat format,
+                                          DawnFormatCapabilities* capabilities);
 
     void SetUseTieredLimits(bool useTieredLimits);
 
-    FeaturesSet GetSupportedFeatures() const;
-
     // Return the underlying PhysicalDevice.
     PhysicalDeviceBase* GetPhysicalDevice();
+    const PhysicalDeviceBase* GetPhysicalDevice() const;
 
     // Get the actual toggles state of the adapter.
     const TogglesState& GetTogglesState() const;
 
-    FeatureLevel GetFeatureLevel() const;
+    wgpu::FeatureLevel GetFeatureLevel() const;
+
+    // Get a human readable label for the adapter (in practice, the physical device name)
+    const std::string& GetName() const;
 
   private:
+    std::pair<Ref<DeviceBase::DeviceLostEvent>, ResultOrError<Ref<DeviceBase>>> CreateDevice(
+        const DeviceDescriptor* rawDescriptor);
+    ResultOrError<Ref<DeviceBase>> CreateDeviceInternal(const DeviceDescriptor* rawDescriptor,
+                                                        Ref<DeviceBase::DeviceLostEvent> lostEvent);
+
+    Ref<InstanceBase> mInstance;
     Ref<PhysicalDeviceBase> mPhysicalDevice;
-    FeatureLevel mFeatureLevel;
+    wgpu::FeatureLevel mFeatureLevel;
     bool mUseTieredLimits = false;
 
     // Supported features under adapter toggles.

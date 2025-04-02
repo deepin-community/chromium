@@ -4,7 +4,9 @@
 
 #include "components/ui_devtools/views/window_element.h"
 
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
+#include "base/not_fatal_until.h"
 #include "base/strings/string_number_conversions.h"
 #include "components/ui_devtools/protocol.h"
 #include "components/ui_devtools/ui_element_delegate.h"
@@ -23,8 +25,8 @@ namespace {
 
 int GetIndexOfChildInParent(aura::Window* window) {
   const aura::Window::Windows& siblings = window->parent()->children();
-  auto it = base::ranges::find(siblings, window);
-  DCHECK(it != siblings.end());
+  auto it = std::ranges::find(siblings, window);
+  CHECK(it != siblings.end(), base::NotFatalUntil::M130);
   return std::distance(siblings.begin(), it);
 }
 
@@ -47,7 +49,7 @@ WindowElement::~WindowElement() {
 // Handles removing window_.
 void WindowElement::OnWindowHierarchyChanging(
     const aura::WindowObserver::HierarchyChangeParams& params) {
-  if (params.target == window_) {
+  if (params.target == window_.get()) {
     parent()->RemoveChild(this);
     delete this;
   }
@@ -56,7 +58,8 @@ void WindowElement::OnWindowHierarchyChanging(
 // Handles adding window_.
 void WindowElement::OnWindowHierarchyChanged(
     const aura::WindowObserver::HierarchyChangeParams& params) {
-  if (window_ == params.new_parent && params.receiver == params.new_parent) {
+  if (window_.get() == params.new_parent &&
+      params.receiver == params.new_parent) {
     AddChild(new WindowElement(params.target, delegate(), this));
   }
 }

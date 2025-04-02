@@ -85,6 +85,21 @@ constexpr Register KeyedLoadWithVectorDescriptor::VectorRegister() {
 }
 
 // static
+constexpr Register EnumeratedKeyedLoadBaselineDescriptor::EnumIndexRegister() {
+  return a4;
+}
+
+// static
+constexpr Register EnumeratedKeyedLoadBaselineDescriptor::CacheTypeRegister() {
+  return a5;
+}
+
+// static
+constexpr Register EnumeratedKeyedLoadBaselineDescriptor::SlotRegister() {
+  return a2;
+}
+
+// static
 constexpr Register KeyedHasICBaselineDescriptor::ReceiverRegister() {
   return kInterpreterAccumulatorRegister;
 }
@@ -142,6 +157,24 @@ constexpr Register BaselineLeaveFrameDescriptor::WeightRegister() { return a3; }
 // static
 // static
 constexpr Register TypeConversionDescriptor::ArgumentRegister() { return a0; }
+
+#ifdef V8_ENABLE_MAGLEV
+// static
+constexpr Register
+MaglevOptimizeCodeOrTailCallOptimizedCodeSlotDescriptor::FlagsRegister() {
+  return t4;
+}
+// static
+constexpr Register MaglevOptimizeCodeOrTailCallOptimizedCodeSlotDescriptor::
+    FeedbackVectorRegister() {
+  return a6;
+}
+// static
+constexpr Register
+MaglevOptimizeCodeOrTailCallOptimizedCodeSlotDescriptor::TemporaryRegister() {
+  return a5;
+}
+#endif  // V8_ENABLE_MAGLEV
 
 // static
 constexpr auto TypeofDescriptor::registers() { return RegisterArray(a0); }
@@ -316,7 +349,8 @@ CallApiCallbackOptimizedDescriptor::ActualArgumentsCountRegister() {
   return a2;
 }
 // static
-constexpr Register CallApiCallbackOptimizedDescriptor::CallDataRegister() {
+constexpr Register
+CallApiCallbackOptimizedDescriptor::FunctionTemplateInfoRegister() {
   return a3;
 }
 // static
@@ -330,7 +364,8 @@ CallApiCallbackGenericDescriptor::ActualArgumentsCountRegister() {
   return a2;
 }
 // static
-constexpr Register CallApiCallbackGenericDescriptor::CallHandlerInfoRegister() {
+constexpr Register
+CallApiCallbackGenericDescriptor::FunctionTemplateInfoRegister() {
   return a3;
 }
 // static

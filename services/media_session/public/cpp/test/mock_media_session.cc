@@ -4,11 +4,11 @@
 
 #include "services/media_session/public/cpp/test/mock_media_session.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
-#include "base/ranges/algorithm.h"
 
 namespace media_session {
 namespace test {
@@ -71,14 +71,19 @@ void MockMediaSessionMojoObserver::MediaSessionInfoChanged(
              expected_hide_metadata_ == session_info_->hide_metadata) {
     QuitWaitingIfNeeded();
     expected_hide_metadata_.reset();
+  } else if (expected_meets_visibility_threshold_.has_value() &&
+             expected_meets_visibility_threshold_ ==
+                 session_info_->meets_visibility_threshold) {
+    QuitWaitingIfNeeded();
+    expected_meets_visibility_threshold_.reset();
   } else {
     if (wanted_state_ == session_info_->state ||
         session_info_->playback_state == wanted_playback_state_ ||
         session_info_->microphone_state == wanted_microphone_state_ ||
         session_info_->camera_state == wanted_camera_state_ ||
         (wanted_audio_video_states_ &&
-         base::ranges::is_permutation(*session_info_->audio_video_states,
-                                      *wanted_audio_video_states_))) {
+         std::ranges::is_permutation(*session_info_->audio_video_states,
+                                     *wanted_audio_video_states_))) {
       QuitWaitingIfNeeded();
     }
   }
@@ -184,7 +189,7 @@ void MockMediaSessionMojoObserver::WaitForCameraState(
 
 void MockMediaSessionMojoObserver::WaitForAudioVideoStates(
     const std::vector<mojom::MediaAudioVideoState>& wanted_states) {
-  if (session_info_ && base::ranges::is_permutation(
+  if (session_info_ && std::ranges::is_permutation(
                            *session_info_->audio_video_states, wanted_states)) {
     return;
   }
@@ -288,6 +293,18 @@ base::TimeDelta MockMediaSessionMojoObserver::WaitForExpectedPositionAtLeast(
 
   return (*session_position_)
       ->GetPositionAtTime((*session_position_)->last_updated_time());
+}
+
+bool MockMediaSessionMojoObserver::WaitForMeetsVisibilityThreshold(
+    bool meets_visibility_threshold) {
+  if (session_info_ &&
+      session_info_->meets_visibility_threshold == meets_visibility_threshold) {
+    return meets_visibility_threshold;
+  }
+
+  expected_meets_visibility_threshold_ = meets_visibility_threshold;
+  StartWaiting();
+  return meets_visibility_threshold;
 }
 
 void MockMediaSessionMojoObserver::StartWaiting() {
@@ -404,11 +421,15 @@ void MockMediaSession::ScrubTo(base::TimeDelta seek_time) {
 }
 
 void MockMediaSession::EnterPictureInPicture() {
-  // TODO(crbug.com/1040263): Implement EnterPictureinpicture.
+  // TODO(crbug.com/40113959): Implement EnterPictureinpicture.
 }
 
 void MockMediaSession::ExitPictureInPicture() {
-  // TODO(crbug.com/1040263): Implement ExitPictureinpicture.
+  // TODO(crbug.com/40113959): Implement ExitPictureinpicture.
+}
+
+void MockMediaSession::GetVisibility(GetVisibilityCallback callback) {
+  std::move(callback).Run(false);
 }
 
 void MockMediaSession::SetIsControllable(bool value) {

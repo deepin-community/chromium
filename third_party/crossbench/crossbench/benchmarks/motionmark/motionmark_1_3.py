@@ -4,21 +4,36 @@
 
 from __future__ import annotations
 
-from typing import Tuple
+import datetime as dt
+from typing import Tuple, Type
 
-from .motionmark_1 import (MotionMark1Benchmark, MotionMark1Probe,
-                           MotionMark1Story)
+from crossbench.benchmarks.motionmark.motionmark_1 import (
+    MotionMark1Benchmark, MotionMark1Probe, MotionMark1ProbeContext,
+    MotionMark1Story)
 
 
 class MotionMark13Probe(MotionMark1Probe):
   __doc__ = MotionMark1Probe.__doc__
   NAME = "motionmark_1.3"
 
+  def get_context_cls(self) -> Type[MotionMark13ProbeContext]:
+    return MotionMark13ProbeContext
+
+
+class MotionMark13ProbeContext(MotionMark1ProbeContext):
+  pass
+
 
 class MotionMark13Story(MotionMark1Story):
   NAME = "motionmark_1.3"
-  PROBES = (MotionMark13Probe,)
-  URL = "https://browserbench.org/MotionMark1.3/developer.html"
+  URL: str = "https://chromium-workloads.web.app/motionmark/v1.3/MotionMark/"
+  URL_OFFICIAL: str = "https://browserbench.org/MotionMark1.3/"
+  READY_TIMEOUT: dt.timedelta = dt.timedelta(seconds=12)
+  DEVELOPER_READY_JS: str = (
+      "return !(document.querySelector('#frame-rate-detection span'));")
+  READY_JS: str = (
+      "return !!("
+      "   document.querySelector('#frame-rate-label')?.textContent?.trim());")
 
 
 class MotionMark13Benchmark(MotionMark1Benchmark):
@@ -30,6 +45,7 @@ class MotionMark13Benchmark(MotionMark1Benchmark):
 
   NAME = "motionmark_1.3"
   DEFAULT_STORY_CLS = MotionMark13Story
+  PROBES = (MotionMark13Probe,)
 
   @classmethod
   def version(cls) -> Tuple[int, ...]:

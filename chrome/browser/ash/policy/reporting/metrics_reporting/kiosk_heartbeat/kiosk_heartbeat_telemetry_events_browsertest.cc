@@ -8,11 +8,11 @@
 #include "base/time/time.h"
 #include "base/time/time_override.h"
 #include "chrome/browser/ash/login/test/cryptohome_mixin.h"
+#include "chrome/browser/ash/login/test/user_auth_config.h"
 #include "chrome/browser/ash/policy/affiliation/affiliation_mixin.h"
 #include "chrome/browser/ash/policy/affiliation/affiliation_test_helper.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
 #include "chrome/browser/browser_process.h"
@@ -20,6 +20,7 @@
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/constants/chromeos_features.h"
 #include "chromeos/dbus/missive/missive_client_test_observer.h"
@@ -66,18 +67,16 @@ bool IsKioskHeartbeatTelemetryEvent(const Record& record) {
 // `KioskHeartbeatTelemetrySampler`. Inheriting from
 // `DevicePolicyCrosBrowserTest` enables use of `AffiliationMixin` for setting
 // up profile/device affiliation. Only available in Ash.
-class KioskHeartbeatEventsBrowsertest
+class KioskHeartbeatEventsBrowserTest
     : public ::policy::DevicePolicyCrosBrowserTest {
  protected:
-  KioskHeartbeatEventsBrowsertest() {
+  KioskHeartbeatEventsBrowserTest() {
     scoped_feature_list_.InitAndEnableFeature(
         chromeos::features::kKioskHeartbeatsViaERP);
+
+    // Initialize the MockClock.
+    test::MockClock::Get();
   }
-  KioskHeartbeatEventsBrowsertest(const KioskHeartbeatEventsBrowsertest&) =
-      delete;
-  KioskHeartbeatEventsBrowsertest& operator=(
-      const KioskHeartbeatEventsBrowsertest&) = delete;
-  ~KioskHeartbeatEventsBrowsertest() override {}
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     ::policy::AffiliationTestHelper::AppendCommandLineSwitchesForLoginManager(
@@ -86,9 +85,10 @@ class KioskHeartbeatEventsBrowsertest
   }
 
   void SetUpOnMainThread() override {
-    // Initialize the MockClock.
-    test::MockClock::Get();
     crypto_home_mixin_.MarkUserAsExisting(affiliation_mixin_.account_id());
+    crypto_home_mixin_.ApplyAuthConfig(
+        affiliation_mixin_.account_id(),
+        ash::test::UserAuthConfig::Create(ash::test::kDefaultAuthSetup));
     ::policy::SetDMTokenForTesting(
         ::policy::DMToken::CreateValidToken(kDMToken));
     ::policy::DevicePolicyCrosBrowserTest::SetUpOnMainThread();
@@ -118,26 +118,21 @@ class KioskHeartbeatEventsBrowsertest
   ::ash::CryptohomeMixin crypto_home_mixin_{&mixin_host_};
 };
 
-IN_PROC_BROWSER_TEST_F(KioskHeartbeatEventsBrowsertest,
+IN_PROC_BROWSER_TEST_F(KioskHeartbeatEventsBrowserTest,
                        PRE_ReportKioskHeartbeats) {
   // Simple case that sets up the affiliated user through SetUpOnMainThread
   // PRE-condition.
 }
 
-IN_PROC_BROWSER_TEST_F(KioskHeartbeatEventsBrowsertest, ReportKioskHeartbeats) {
+IN_PROC_BROWSER_TEST_F(KioskHeartbeatEventsBrowserTest, ReportKioskHeartbeats) {
   SetKioskHeartbeatEnabled();
   ::chromeos::MissiveClientTestObserver missive_observer(
       base::BindRepeating(&IsKioskHeartbeatTelemetryEvent));
 
-  // Force telemetry collection by advancing the timer and verify data that is
-  // being enqueued via ERP.
-  test::MockClock::Get().Advance(
-      metrics::kDefaultHeartbeatTelemetryCollectionRate);
-
-  // Consume all queued tasks so that policy is synched and collector started.
+  // Consume all queued tasks so that policy is synced and collector started.
   base::RunLoop().RunUntilIdle();
 
-  // Fail if no heartbeat is received and GetNextEnqueuedRecord will block.
+  // Fail if no heartbeat is queued immediately.
   ASSERT_TRUE(missive_observer.HasNewEnqueuedRecord())
       << "No new KioskHeartbeat record enqueued to ERP. Failing";
 
@@ -148,6 +143,15 @@ IN_PROC_BROWSER_TEST_F(KioskHeartbeatEventsBrowsertest, ReportKioskHeartbeats) {
   ASSERT_TRUE(metric_data.ParseFromString(record.data()));
   EXPECT_TRUE(metric_data.has_timestamp_ms());
   EXPECT_FALSE(missive_observer.HasNewEnqueuedRecord());
+
+  // Fast-forward so that another heartbeat should be enqueued.
+  test::MockClock::Get().Advance(
+      metrics::kDefaultHeartbeatTelemetryCollectionRate);
+
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_TRUE(missive_observer.HasNewEnqueuedRecord())
+      << "No new KioskHeartbeat record enqueued to ERP. Failing";
 }
 }  // namespace
 }  // namespace reporting

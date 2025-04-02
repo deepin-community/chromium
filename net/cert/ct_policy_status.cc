@@ -22,11 +22,9 @@ const char* CTPolicyComplianceToString(CTPolicyCompliance status) {
       return "COMPLIANCE_DETAILS_NOT_AVAILABLE";
     case CTPolicyCompliance::CT_POLICY_COUNT:
       NOTREACHED();
-      return "unknown";
   }
 
   NOTREACHED();
-  return "unknown";
 }
 
 }  // namespace net::ct

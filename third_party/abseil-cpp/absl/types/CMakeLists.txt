@@ -114,6 +114,7 @@ absl_cc_library(
     ${ABSL_DEFAULT_COPTS}
   DEPS
     absl::algorithm
+    absl::config
     absl::core_headers
     absl::nullability
     absl::throw_delegate
@@ -138,6 +139,7 @@ absl_cc_test(
     absl::inlined_vector
     absl::hash_testing
     absl::strings
+    absl::type_traits
     GTest::gmock_main
 )
 

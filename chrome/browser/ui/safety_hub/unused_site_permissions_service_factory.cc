@@ -4,11 +4,14 @@
 
 #include "chrome/browser/ui/safety_hub/unused_site_permissions_service_factory.h"
 
+#include "base/feature_list.h"
 #include "base/no_destructor.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/safety_hub/unused_site_permissions_service.h"
+#include "chrome/common/chrome_features.h"
 #include "components/prefs/pref_service.h"
+#include "components/safe_browsing/core/common/features.h"
 
 // static
 UnusedSitePermissionsServiceFactory*
@@ -29,6 +32,9 @@ UnusedSitePermissionsServiceFactory::UnusedSitePermissionsServiceFactory()
           "UnusedSitePermissionsService",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
               .Build()) {
   DependsOn(HostContentSettingsMapFactory::GetInstance());
 }
@@ -36,9 +42,20 @@ UnusedSitePermissionsServiceFactory::UnusedSitePermissionsServiceFactory()
 UnusedSitePermissionsServiceFactory::~UnusedSitePermissionsServiceFactory() =
     default;
 
-KeyedService* UnusedSitePermissionsServiceFactory::BuildServiceInstanceFor(
+std::unique_ptr<KeyedService>
+UnusedSitePermissionsServiceFactory::BuildServiceInstanceForBrowserContext(
     content::BrowserContext* context) const {
-  auto* service = new UnusedSitePermissionsService(
+  return std::make_unique<UnusedSitePermissionsService>(
       context, Profile::FromBrowserContext(context)->GetPrefs());
-  return service;
+}
+
+bool UnusedSitePermissionsServiceFactory::ServiceIsCreatedWithBrowserContext()
+    const {
+#if BUILDFLAG(IS_ANDROID)
+  return base::FeatureList::IsEnabled(features::kSafetyHub) ||
+         base::FeatureList::IsEnabled(
+             safe_browsing::kSafetyHubAbusiveNotificationRevocation);
+#else   // BUILDFLAG(IS_ANDROID)
+  return base::FeatureList::IsEnabled(features::kSafetyHubServicesOnStartUp);
+#endif  // BUILDFLAG(IS_ANDROID)
 }

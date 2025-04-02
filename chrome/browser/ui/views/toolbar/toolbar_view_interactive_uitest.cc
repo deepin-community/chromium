@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-
 #include <stddef.h>
 
 #include "base/functional/bind.h"
@@ -13,7 +11,6 @@
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
@@ -27,6 +24,7 @@
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/toolbar/reload_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_button.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -41,6 +39,7 @@
 #include "ui/base/test/ui_controls.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/views/focus/focus_manager.h"
+#include "ui/views/test/widget_activation_waiter.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
@@ -59,6 +58,17 @@ class ToolbarViewTest : public InteractiveBrowserTest {
   }
 
   void RunToolbarCycleFocusTest(Browser* browser);
+
+  void SetLocationBarSecurityLevelForTesting(
+      security_state::SecurityLevel security_level) {
+    BrowserView* browser_view =
+        BrowserView::GetBrowserViewForBrowser(browser());
+    LocationBarView* location_bar_view = browser_view->GetLocationBarView();
+    LocationIconView* location_icon_view =
+        location_bar_view->location_icon_view();
+
+    location_icon_view->SetSecurityLevelForTesting(security_level);
+  }
 };
 
 void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
@@ -67,8 +77,7 @@ void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
 
   // Test relies on browser window activation, while platform such as Linux's
   // window activation is asynchronous.
-  views::test::WidgetActivationWaiter waiter(widget, true);
-  waiter.Wait();
+  views::test::WaitForWidgetActive(widget, true);
 
   // Send focus to the toolbar as if the user pressed Alt+Shift+T. This should
   // happen after the browser window activation.
@@ -89,14 +98,18 @@ void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
     focus_manager->AdvanceFocus(false);
     view = focus_manager->GetFocusedView();
     ids.push_back(view->GetID());
-    if (view->GetID() == VIEW_ID_RELOAD_BUTTON)
+    if (view->GetID() == VIEW_ID_RELOAD_BUTTON) {
       found_reload = true;
-    if (view->GetID() == VIEW_ID_APP_MENU)
+    }
+    if (view->GetID() == VIEW_ID_APP_MENU) {
       found_app_menu = true;
-    if (view->GetID() == VIEW_ID_OMNIBOX)
+    }
+    if (view->GetID() == VIEW_ID_OMNIBOX) {
       found_location_bar = true;
-    if (ids.size() > 100)
+    }
+    if (ids.size() > 100) {
       GTEST_FAIL() << "Tabbed 100 times, still haven't cycled back!";
+    }
   }
 
   // Make sure we found a few key items.
@@ -111,8 +124,9 @@ void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
     focus_manager->AdvanceFocus(true);
     view = focus_manager->GetFocusedView();
     reverse_ids.push_back(view->GetID());
-    if (reverse_ids.size() > 100)
+    if (reverse_ids.size() > 100) {
       GTEST_FAIL() << "Tabbed 100 times, still haven't cycled back!";
+    }
   }
 
   // Assert that the views were focused in exactly the reverse order.
@@ -120,8 +134,9 @@ void ToolbarViewTest::RunToolbarCycleFocusTest(Browser* browser) {
   // be the same, and the others are reverse.
   ASSERT_EQ(ids.size(), reverse_ids.size());
   size_t count = ids.size();
-  for (size_t i = 0; i < count - 1; i++)
+  for (size_t i = 0; i < count - 1; i++) {
     EXPECT_EQ(ids[i], reverse_ids[count - 2 - i]);
+  }
   EXPECT_EQ(ids[count - 1], reverse_ids[count - 1]);
 }
 
@@ -186,8 +201,8 @@ IN_PROC_BROWSER_TEST_F(ToolbarViewTest, BackButtonHoverThenClick) {
   EXPECT_FALSE(back_button->GetEnabled());
 }
 
-// TODO(crbug.com/1405449): The ui test utils do not seem to adequately simulate
-// mouse hovering on Mac.
+// TODO(crbug.com/40252318): The ui test utils do not seem to adequately
+// simulate mouse hovering on Mac.
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_BackButtonHoverMetricsLogged DISABLED_BackButtonHoverMetricsLogged
 #else
@@ -241,8 +256,8 @@ IN_PROC_BROWSER_TEST_F(ToolbarViewTest,
   EXPECT_NE(nullptr, extensions_container);
 }
 
-// TODO(crbug.com/991596): Setup test profiles properly for CrOS.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+// TODO(crbug.com/41474891): Setup test profiles properly for CrOS.
+#if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_ExtensionsToolbarContainerForGuest \
   DISABLED_ExtensionsToolbarContainerForGuest
 #else
@@ -284,12 +299,38 @@ IN_PROC_BROWSER_TEST_F(ToolbarViewTest, BackButtonMenu) {
       MoveMouseTo(kToolbarBackButtonElementId), ClickMouse(ui_controls::RIGHT),
       Log("Logging to probe crbug.com/1489499. Waiting for back button menu."),
       WaitForShow(kToolbarBackButtonMenuElementId),
+#if BUILDFLAG(IS_MAC)
+      Log("Skipping remainder of test because native Mac context menus steal "
+          "the event loop making testing unreliable. See b/40074126 for full "
+          "description."));
+#else
       // Don't try to send an event to the menu before it's fully shown.
-      FlushEvents(),
+
       // Dismiss the context menu by clicking on it.
       Log("Moving mouse to menu."),
       MoveMouseTo(kToolbarBackButtonMenuElementId),
       Log("Clicking mouse to dismiss."), ClickMouse(),
       Log("Waiting for menu to dismiss."),
       WaitForHide(kToolbarBackButtonMenuElementId), Log("Menu dismissed."));
+#endif
+}
+
+// Tests that the browser updates the toolbar's visible security state only
+// when the state changes, not every time it's asked to update.
+IN_PROC_BROWSER_TEST_F(ToolbarViewTest, SecurityStateChanged) {
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+
+  // Set the location bar's initial security level and check that the browser
+  // updates to it.
+  SetLocationBarSecurityLevelForTesting(security_state::SecurityLevel::SECURE);
+  EXPECT_TRUE(browser_view->UpdateToolbarSecurityState());
+
+  // The security level has not changed, so asking the browser again to update
+  // should fail.
+  EXPECT_FALSE(browser_view->UpdateToolbarSecurityState());
+
+  // Change the security level and check that the browser updates its toolbar.
+  SetLocationBarSecurityLevelForTesting(
+      security_state::SecurityLevel::DANGEROUS);
+  EXPECT_TRUE(browser_view->UpdateToolbarSecurityState());
 }

@@ -17,16 +17,18 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <istream>
 #include <mutex>  //NOLINT
+#include <ostream>
 #include <string_view>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
-#include "./centipede/defs.h"
-#include "./centipede/logging.h"
 #include "./centipede/pc_info.h"
+#include "./common/defs.h"
+#include "./common/logging.h"
 
 namespace centipede {
 
@@ -55,7 +57,13 @@ using PCIndexVec = std::vector<PCIndex>;
 using CFTable = std::vector<intptr_t>;
 
 // Reads a CFTable from `file_path`, returns it. Returns empty table on error.
-CFTable ReadCfTableFromFile(std::string_view file_path);
+CFTable ReadCfTable(std::string_view file_path);
+
+// Same as above but reads from a stream.
+CFTable ReadCfTable(std::istream &in);
+
+// Writes the `cf_table` to `out`.
+void WriteCfTable(const CFTable &cf_table, std::ostream &out);
 
 // Reads a DsoTable from `file_path`, returns it. Returns empty table on error.
 DsoTable ReadDsoTableFromFile(std::string_view file_path);

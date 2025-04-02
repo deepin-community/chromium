@@ -28,7 +28,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-import * as Host from '../../core/host/host.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import type * as Platform from '../../core/platform/platform.js';
 import * as IconButton from '../../ui/components/icon_button/icon_button.js';
@@ -37,8 +36,7 @@ import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 import * as ARIAUtils from './ARIAUtils.js';
 import {AnchorBehavior, GlassPane, MarginBehavior, PointerEventsBehavior, SizeBehavior} from './GlassPane.js';
 import {InspectorView} from './InspectorView.js';
-import softContextMenuStyles from './softContextMenu.css.legacy.js';
-import * as ThemeSupport from './theme_support/theme_support.js';
+import softContextMenuStyles from './softContextMenu.css.js';
 import {Tooltip} from './Tooltip.js';
 import {createTextChild, ElementFocusRestorer} from './UIUtils.js';
 
@@ -84,10 +82,11 @@ export class SoftContextMenu {
   private onMenuClosed?: () => void;
   private focusOnTheFirstItem = true;
   private keepOpen: boolean;
+  private loggableParent: Element|null;
 
   constructor(
       items: SoftContextMenuDescriptor[], itemSelectedCallback: (arg0: number) => void, keepOpen: boolean,
-      parentMenu?: SoftContextMenu, onMenuClosed?: () => void) {
+      parentMenu?: SoftContextMenu, onMenuClosed?: () => void, loggableParent?: Element|null) {
     this.items = items;
     this.itemSelectedCallback = itemSelectedCallback;
     this.parentMenu = parentMenu;
@@ -96,6 +95,7 @@ export class SoftContextMenu {
     this.detailsForElementMap = new WeakMap();
     this.onMenuClosed = onMenuClosed;
     this.keepOpen = keepOpen;
+    this.loggableParent = loggableParent || null;
   }
 
   getItems(): SoftContextMenuDescriptor[] {
@@ -111,14 +111,20 @@ export class SoftContextMenu {
 
     this.glassPane = new GlassPane();
     this.glassPane.setPointerEventsBehavior(
-        this.parentMenu ? PointerEventsBehavior.PierceGlassPane : PointerEventsBehavior.BlockedByGlassPane);
+        this.parentMenu ? PointerEventsBehavior.PIERCE_GLASS_PANE : PointerEventsBehavior.BLOCKED_BY_GLASS_PANE);
     this.glassPane.registerRequiredCSS(softContextMenuStyles);
     this.glassPane.setContentAnchorBox(anchorBox);
-    this.glassPane.setSizeBehavior(SizeBehavior.MeasureContent);
-    this.glassPane.setMarginBehavior(MarginBehavior.NoMargin);
-    this.glassPane.setAnchorBehavior(this.parentMenu ? AnchorBehavior.PreferRight : AnchorBehavior.PreferBottom);
+    this.glassPane.setSizeBehavior(SizeBehavior.MEASURE_CONTENT);
+    this.glassPane.setMarginBehavior(MarginBehavior.NO_MARGIN);
+    this.glassPane.setAnchorBehavior(this.parentMenu ? AnchorBehavior.PREFER_RIGHT : AnchorBehavior.PREFER_BOTTOM);
 
     this.contextMenuElement = this.glassPane.contentElement.createChild('div', 'soft-context-menu');
+    this.contextMenuElement.setAttribute('jslog', `${VisualLogging.menu().track({resize: true}).parent('mapped').track({
+                                           keydown: 'ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Enter|Space|Escape',
+                                         })}`);
+    if (this.loggableParent) {
+      VisualLogging.setMappedParent(this.contextMenuElement, this.loggableParent);
+    }
     this.contextMenuElement.tabIndex = -1;
     ARIAUtils.markAsMenu(this.contextMenuElement);
     this.contextMenuElement.addEventListener('mouseup', e => e.consume(), false);
@@ -246,7 +252,7 @@ export class SoftContextMenu {
       subMenuTimer: undefined,
     };
 
-    if (item.jslogContext) {
+    if (item.jslogContext && !item.element?.hasAttribute('jslog')) {
       if (item.type === 'checkbox') {
         menuItemElement.setAttribute(
             'jslog', `${VisualLogging.toggle().track({click: true}).context(item.jslogContext)}`);
@@ -327,15 +333,8 @@ export class SoftContextMenu {
     createTextChild(menuItemElement, item.label || '');
     ARIAUtils.setExpanded(menuItemElement, false);
 
-    // TODO: Consider removing this branch and use the same icon on all platforms.
-    if (Host.Platform.isMac() && !ThemeSupport.ThemeSupport.instance().hasTheme()) {
-      const subMenuArrowElement = menuItemElement.createChild('span', 'soft-context-menu-item-submenu-arrow');
-      ARIAUtils.markAsHidden(subMenuArrowElement);
-      subMenuArrowElement.textContent = '\u25B6';  // BLACK RIGHT-POINTING TRIANGLE
-    } else {
-      const subMenuArrowElement = IconButton.Icon.create('triangle-right', 'soft-context-menu-item-submenu-arrow');
-      menuItemElement.appendChild(subMenuArrowElement);
-    }
+    const subMenuArrowElement = IconButton.Icon.create('keyboard-arrow-right', 'soft-context-menu-item-submenu-arrow');
+    menuItemElement.appendChild(subMenuArrowElement);
 
     menuItemElement.addEventListener('mousedown', this.menuItemMouseDown.bind(this), false);
     menuItemElement.addEventListener('mouseup', this.menuItemMouseUp.bind(this), false);
@@ -371,6 +370,7 @@ export class SoftContextMenu {
 
   private menuItemMouseUp(event: Event): void {
     this.triggerAction((event.target as HTMLElement), event);
+    void VisualLogging.logClick(event.target as HTMLElement, event);
     event.consume();
   }
 
@@ -447,10 +447,10 @@ export class SoftContextMenu {
     this.subMenu = new SoftContextMenu(detailsForElement.subItems, this.itemSelectedCallback, false, this);
     const anchorBox = menuItemElement.boxInWindow();
     // Adjust for padding.
-    anchorBox.y -= 5;
+    anchorBox.y -= 9;
     anchorBox.x += 3;
     anchorBox.width -= 6;
-    anchorBox.height += 10;
+    anchorBox.height += 18;
     this.subMenu.show(this.document, anchorBox);
   }
 
@@ -556,6 +556,7 @@ export class SoftContextMenu {
         // The custom element will handle the event, so return early and do not consume it.
         return;
       }
+      VisualLogging.logClick(this.highlightedMenuItemElement, keyboardEvent);
       this.triggerAction(this.highlightedMenuItemElement, keyboardEvent);
       if (detailsForElement.subItems && this.subMenu) {
         this.subMenu.highlightNext();
@@ -639,8 +640,11 @@ export interface SoftContextMenuDescriptor {
   type: 'checkbox'|'item'|'separator'|'subMenu';
   id?: number;
   label?: string;
+  accelerator?: {keyCode: number, modifiers: number};
+  isExperimentalFeature?: boolean;
   enabled?: boolean;
   checked?: boolean;
+  isDevToolsPerformanceMenuItem?: boolean;
   subItems?: SoftContextMenuDescriptor[];
   element?: Element;
   shortcut?: string;

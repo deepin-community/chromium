@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "components/chromeos_camera/mjpeg_decode_accelerator.h"
 
 #include <stddef.h>
@@ -128,8 +133,9 @@ struct ParsedJpegImage {
     // Encode the generated image in the JPEG format, the output buffer will be
     // automatically resized while encoding.
     constexpr int kJpegQuality = 100;
-    std::vector<unsigned char> encoded;
-    LOG_ASSERT(gfx::JPEGCodec::Encode(src, kJpegQuality, downsample, &encoded));
+    std::optional<std::vector<uint8_t>> encoded =
+        gfx::JPEGCodec::Encode(src, kJpegQuality, downsample);
+    LOG_ASSERT(encoded.has_value());
 
     base::FilePath filename;
     LOG_ASSERT(base::GetTempDir(&filename));
@@ -137,7 +143,8 @@ struct ParsedJpegImage {
         filename.Append(base::StringPrintf("black-%dx%d.jpg", width, height));
 
     auto image = std::make_unique<ParsedJpegImage>(filename);
-    image->data_str.append(encoded.begin(), encoded.end());
+    image->data_str =
+        std::string(base::as_string_view(std::move(encoded).value()));
     image->InitializeSizes(width, height);
     return image;
   }
@@ -596,7 +603,7 @@ JpegClient::JpegClient(
       use_dmabuf_(use_dmabuf),
       skip_result_checking_(skip_result_checking) {}
 
-JpegClient::~JpegClient() {}
+JpegClient::~JpegClient() = default;
 
 void JpegClient::CreateJpegDecoder() {
   decoder_ = nullptr;
@@ -758,40 +765,38 @@ void JpegClient::SaveToFile(int32_t task_id,
   // Note that we use J420ToARGB instead of I420ToARGB so that the
   // kYuvJPEGConstants YUV-to-RGB conversion matrix is used.
   const int conversion_status = libyuv::J420ToARGB(
-      in_frame->visible_data(media::VideoFrame::kYPlane),
-      in_frame->stride(media::VideoFrame::kYPlane),
-      in_frame->visible_data(media::VideoFrame::kUPlane),
-      in_frame->stride(media::VideoFrame::kUPlane),
-      in_frame->visible_data(media::VideoFrame::kVPlane),
-      in_frame->stride(media::VideoFrame::kVPlane),
-      argb_out_frame->GetWritableVisibleData(media::VideoFrame::kARGBPlane),
-      argb_out_frame->stride(media::VideoFrame::kARGBPlane),
+      in_frame->visible_data(media::VideoFrame::Plane::kY),
+      in_frame->stride(media::VideoFrame::Plane::kY),
+      in_frame->visible_data(media::VideoFrame::Plane::kU),
+      in_frame->stride(media::VideoFrame::Plane::kU),
+      in_frame->visible_data(media::VideoFrame::Plane::kV),
+      in_frame->stride(media::VideoFrame::Plane::kV),
+      argb_out_frame->GetWritableVisibleData(media::VideoFrame::Plane::kARGB),
+      argb_out_frame->stride(media::VideoFrame::Plane::kARGB),
       argb_out_frame->visible_rect().width(),
       argb_out_frame->visible_rect().height());
   LOG_ASSERT(conversion_status == 0);
 
   // Save as a PNG.
-  std::vector<uint8_t> png_output;
-  const bool png_encode_status = gfx::PNGCodec::Encode(
-      argb_out_frame->visible_data(media::VideoFrame::kARGBPlane),
+  std::optional<std::vector<uint8_t>> png_output = gfx::PNGCodec::Encode(
+      argb_out_frame->visible_data(media::VideoFrame::Plane::kARGB),
       gfx::PNGCodec::FORMAT_BGRA, argb_out_frame->visible_rect().size(),
-      argb_out_frame->stride(media::VideoFrame::kARGBPlane),
-      true, /* discard_transparency */
-      std::vector<gfx::PNGCodec::Comment>(), &png_output);
-  LOG_ASSERT(png_encode_status);
+      argb_out_frame->stride(media::VideoFrame::Plane::kARGB),
+      /*discard_transparency=*/true, std::vector<gfx::PNGCodec::Comment>());
+  LOG_ASSERT(png_output.has_value());
   const base::FilePath in_filename(task.image->filename());
   const base::FilePath out_filename =
       in_filename.ReplaceExtension(".png").InsertBeforeExtension(suffix);
-  const bool success = base::WriteFile(out_filename, png_output);
+  const bool success = base::WriteFile(out_filename, png_output.value());
   LOG_ASSERT(success);
 }
 
 double JpegClient::GetMeanAbsoluteDifference() {
   double mean_abs_difference = 0;
   size_t num_samples = 0;
-  const size_t planes[] = {media::VideoFrame::kYPlane,
-                           media::VideoFrame::kUPlane,
-                           media::VideoFrame::kVPlane};
+  const size_t planes[] = {media::VideoFrame::Plane::kY,
+                           media::VideoFrame::Plane::kU,
+                           media::VideoFrame::Plane::kV};
   for (size_t plane : planes) {
     const uint8_t* hw_data = hw_out_frame_->data(plane);
     const uint8_t* sw_data = sw_out_frame_->data(plane);
@@ -852,12 +857,12 @@ bool JpegClient::GetSoftwareDecodeResult(int32_t task_id) {
   if (libyuv::ConvertToI420(
           reinterpret_cast<const uint8_t*>(task.image->data_str.data()),
           task.image->data_str.size(),
-          decode_frame->GetWritableVisibleData(media::VideoFrame::kYPlane),
-          decode_frame->stride(media::VideoFrame::kYPlane),
-          decode_frame->GetWritableVisibleData(media::VideoFrame::kUPlane),
-          decode_frame->stride(media::VideoFrame::kUPlane),
-          decode_frame->GetWritableVisibleData(media::VideoFrame::kVPlane),
-          decode_frame->stride(media::VideoFrame::kVPlane), 0, 0,
+          decode_frame->GetWritableVisibleData(media::VideoFrame::Plane::kY),
+          decode_frame->stride(media::VideoFrame::Plane::kY),
+          decode_frame->GetWritableVisibleData(media::VideoFrame::Plane::kU),
+          decode_frame->stride(media::VideoFrame::Plane::kU),
+          decode_frame->GetWritableVisibleData(media::VideoFrame::Plane::kV),
+          decode_frame->stride(media::VideoFrame::Plane::kV), 0, 0,
           decode_frame->visible_rect().width(),
           decode_frame->visible_rect().height(),
           decode_frame->visible_rect().width(),
@@ -877,27 +882,27 @@ bool JpegClient::GetSoftwareDecodeResult(int32_t task_id) {
       return false;
     }
     if (libyuv::I420Scale(
-            sw_tmp_frame_->visible_data(media::VideoFrame::kYPlane) +
-                crop.y() * sw_tmp_frame_->stride(media::VideoFrame::kYPlane) +
+            sw_tmp_frame_->visible_data(media::VideoFrame::Plane::kY) +
+                crop.y() * sw_tmp_frame_->stride(media::VideoFrame::Plane::kY) +
                 crop.x(),
-            sw_tmp_frame_->stride(media::VideoFrame::kYPlane),
-            sw_tmp_frame_->visible_data(media::VideoFrame::kUPlane) +
+            sw_tmp_frame_->stride(media::VideoFrame::Plane::kY),
+            sw_tmp_frame_->visible_data(media::VideoFrame::Plane::kU) +
                 crop.y() / 2 *
-                    sw_tmp_frame_->stride(media::VideoFrame::kUPlane) +
+                    sw_tmp_frame_->stride(media::VideoFrame::Plane::kU) +
                 crop.x() / 2,
-            sw_tmp_frame_->stride(media::VideoFrame::kUPlane),
-            sw_tmp_frame_->visible_data(media::VideoFrame::kVPlane) +
+            sw_tmp_frame_->stride(media::VideoFrame::Plane::kU),
+            sw_tmp_frame_->visible_data(media::VideoFrame::Plane::kV) +
                 crop.y() / 2 *
-                    sw_tmp_frame_->stride(media::VideoFrame::kVPlane) +
+                    sw_tmp_frame_->stride(media::VideoFrame::Plane::kV) +
                 crop.x() / 2,
-            sw_tmp_frame_->stride(media::VideoFrame::kVPlane), crop.width(),
+            sw_tmp_frame_->stride(media::VideoFrame::Plane::kV), crop.width(),
             crop.height(),
-            sw_out_frame_->GetWritableVisibleData(media::VideoFrame::kYPlane),
-            sw_out_frame_->stride(media::VideoFrame::kYPlane),
-            sw_out_frame_->GetWritableVisibleData(media::VideoFrame::kUPlane),
-            sw_out_frame_->stride(media::VideoFrame::kUPlane),
-            sw_out_frame_->GetWritableVisibleData(media::VideoFrame::kVPlane),
-            sw_out_frame_->stride(media::VideoFrame::kVPlane),
+            sw_out_frame_->GetWritableVisibleData(media::VideoFrame::Plane::kY),
+            sw_out_frame_->stride(media::VideoFrame::Plane::kY),
+            sw_out_frame_->GetWritableVisibleData(media::VideoFrame::Plane::kU),
+            sw_out_frame_->stride(media::VideoFrame::Plane::kU),
+            sw_out_frame_->GetWritableVisibleData(media::VideoFrame::Plane::kV),
+            sw_out_frame_->stride(media::VideoFrame::Plane::kV),
             sw_out_frame_->visible_rect().width(),
             sw_out_frame_->visible_rect().height(),
             libyuv::kFilterBilinear) != 0) {
@@ -1088,12 +1093,12 @@ scoped_refptr<media::VideoFrame> GetTestDecodedData() {
           gfx::Rect(3, 3) /* visible_rect */,
           gfx::Size(3, 3) /* natural_size */, base::TimeDelta());
   LOG_ASSERT(frame.get());
-  uint8_t* y_data = frame->writable_data(media::VideoFrame::kYPlane);
-  int y_stride = frame->stride(media::VideoFrame::kYPlane);
-  uint8_t* u_data = frame->writable_data(media::VideoFrame::kUPlane);
-  int u_stride = frame->stride(media::VideoFrame::kUPlane);
-  uint8_t* v_data = frame->writable_data(media::VideoFrame::kVPlane);
-  int v_stride = frame->stride(media::VideoFrame::kVPlane);
+  uint8_t* y_data = frame->writable_data(media::VideoFrame::Plane::kY);
+  int y_stride = frame->stride(media::VideoFrame::Plane::kY);
+  uint8_t* u_data = frame->writable_data(media::VideoFrame::Plane::kU);
+  int u_stride = frame->stride(media::VideoFrame::Plane::kU);
+  uint8_t* v_data = frame->writable_data(media::VideoFrame::Plane::kV);
+  int v_stride = frame->stride(media::VideoFrame::Plane::kV);
 
   // Data for the Y plane.
   memcpy(&y_data[0 * y_stride], "\x01\x02\x03", 3);
@@ -1117,14 +1122,17 @@ TEST(JpegClientTest, GetMeanAbsoluteDifference) {
   client.sw_out_frame_ = GetTestDecodedData();
 
   uint8_t* y_data =
-      client.sw_out_frame_->writable_data(media::VideoFrame::kYPlane);
-  const int y_stride = client.sw_out_frame_->stride(media::VideoFrame::kYPlane);
+      client.sw_out_frame_->writable_data(media::VideoFrame::Plane::kY);
+  const int y_stride =
+      client.sw_out_frame_->stride(media::VideoFrame::Plane::kY);
   uint8_t* u_data =
-      client.sw_out_frame_->writable_data(media::VideoFrame::kUPlane);
-  const int u_stride = client.sw_out_frame_->stride(media::VideoFrame::kUPlane);
+      client.sw_out_frame_->writable_data(media::VideoFrame::Plane::kU);
+  const int u_stride =
+      client.sw_out_frame_->stride(media::VideoFrame::Plane::kU);
   uint8_t* v_data =
-      client.sw_out_frame_->writable_data(media::VideoFrame::kVPlane);
-  const int v_stride = client.sw_out_frame_->stride(media::VideoFrame::kVPlane);
+      client.sw_out_frame_->writable_data(media::VideoFrame::Plane::kV);
+  const int v_stride =
+      client.sw_out_frame_->stride(media::VideoFrame::Plane::kV);
 
   // Change some visible data in the software decoding result.
   double expected_abs_mean_diff = 0;

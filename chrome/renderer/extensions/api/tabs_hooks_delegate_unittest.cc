@@ -45,12 +45,12 @@ void CallAPIAndExpectError(v8::Local<v8::Context> context,
 
 class TabsHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
  public:
-  TabsHooksDelegateTest() {}
+  TabsHooksDelegateTest() = default;
 
   TabsHooksDelegateTest(const TabsHooksDelegateTest&) = delete;
   TabsHooksDelegateTest& operator=(const TabsHooksDelegateTest&) = delete;
 
-  ~TabsHooksDelegateTest() override {}
+  ~TabsHooksDelegateTest() override = default;
 
   // NativeExtensionBindingsSystemUnittest:
   void SetUp() override {
@@ -83,7 +83,10 @@ class TabsHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
   bool UseStrictIPCMessageSender() override { return true; }
 
   virtual scoped_refptr<const Extension> BuildExtension() {
-    return ExtensionBuilder("foo").Build();
+    // TODO(https://crbug.com/40804030): Update this to use MV3.
+    // SendMessageTester needs to be updated since runtime.sendMessage() now
+    // returns a promise.
+    return ExtensionBuilder("foo").SetManifestVersion(2).Build();
   }
 
   NativeRendererMessagingService* messaging_service() {
@@ -95,7 +98,7 @@ class TabsHooksDelegateTest : public NativeExtensionBindingsSystemUnittest {
  private:
   std::unique_ptr<NativeRendererMessagingService> messaging_service_;
 
-  raw_ptr<ScriptContext, ExperimentalRenderer> script_context_ = nullptr;
+  raw_ptr<ScriptContext> script_context_ = nullptr;
   scoped_refptr<const Extension> extension_;
 };
 

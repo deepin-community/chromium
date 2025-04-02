@@ -48,7 +48,13 @@ VideoPictureInPictureWindowControllerImpl::
     VideoPictureInPictureWindowControllerImpl(WebContents* web_contents)
     : WebContentsUserData<VideoPictureInPictureWindowControllerImpl>(
           *web_contents),
-      WebContentsObserver(web_contents) {}
+      WebContentsObserver(web_contents) {
+  MediaSessionImpl* media_session =
+      MediaSessionImpl::FromWebContents(web_contents);
+  if (media_session) {
+    media_session->UpdateVideoPictureInPictureWindowController(this);
+  }
+}
 
 void VideoPictureInPictureWindowControllerImpl::Show() {
   DCHECK(window_);
@@ -97,6 +103,8 @@ void VideoPictureInPictureWindowControllerImpl::Show() {
       media_session_action_next_slide_handled_);
   window_->SetPreviousSlideButtonVisibility(
       media_session_action_previous_slide_handled_);
+  window_->SetFaviconImages(favicon_images_);
+  window_->SetSourceTitle(source_title_);
   window_->ShowInactive();
   GetWebContentsImpl()->SetHasPictureInPictureVideo(true);
 }
@@ -110,6 +118,7 @@ void VideoPictureInPictureWindowControllerImpl::Close(bool should_pause_video) {
     return;
 
   window_->Hide();
+  // The call to `Hide()` may cause `window_` to be cleared.
   CloseInternal(should_pause_video);
 }
 
@@ -207,17 +216,30 @@ bool VideoPictureInPictureWindowControllerImpl::TogglePlayPause() {
   DCHECK(active_session_);
 
   if (IsPlayerActive()) {
-    if (media_session_action_pause_handled_) {
-      MediaSessionImpl::Get(web_contents())
-          ->Suspend(MediaSession::SuspendType::kUI);
-      return true /* still playing */;
-    }
-
-    active_session_->GetMediaPlayerRemote()->RequestPause(
-        /*triggered_by_user=*/false);
-    return false /* paused */;
+    return PauseInternal();
   }
+  return PlayInternal();
+}
 
+void VideoPictureInPictureWindowControllerImpl::Play() {
+  // This comes from the window, rather than the renderer, so we must actually
+  // have a window at this point.
+  DCHECK(window_);
+  DCHECK(active_session_);
+
+  PlayInternal();
+}
+
+void VideoPictureInPictureWindowControllerImpl::Pause() {
+  // This comes from the window, rather than the renderer, so we must actually
+  // have a window at this point.
+  DCHECK(window_);
+  DCHECK(active_session_);
+
+  PauseInternal();
+}
+
+bool VideoPictureInPictureWindowControllerImpl::PlayInternal() {
   if (media_session_action_play_handled_) {
     MediaSessionImpl::Get(web_contents())
         ->Resume(MediaSession::SuspendType::kUI);
@@ -226,6 +248,18 @@ bool VideoPictureInPictureWindowControllerImpl::TogglePlayPause() {
 
   active_session_->GetMediaPlayerRemote()->RequestPlay();
   return true /* playing */;
+}
+
+bool VideoPictureInPictureWindowControllerImpl::PauseInternal() {
+  if (media_session_action_pause_handled_) {
+    MediaSessionImpl::Get(web_contents())
+        ->Suspend(MediaSession::SuspendType::kUI);
+    return true /* still playing */;
+  }
+
+  active_session_->GetMediaPlayerRemote()->RequestPause(
+      /*triggered_by_user=*/false);
+  return false /* paused */;
 }
 
 PictureInPictureResult VideoPictureInPictureWindowControllerImpl::StartSession(
@@ -270,8 +304,12 @@ PictureInPictureResult VideoPictureInPictureWindowControllerImpl::StartSession(
   SetShowPlayPauseButton(show_play_pause_button);
   Show();
 
-  // TODO(crbug.com/1331248): Rather than set this synchronously, we should call
-  // back with the bounds once the window provides them.
+  if (on_window_created_notify_observers_callback_) {
+    std::move(on_window_created_notify_observers_callback_).Run();
+  }
+
+  // TODO(crbug.com/40227464): Rather than set this synchronously, we should
+  // call back with the bounds once the window provides them.
   *window_size = GetSize();
   return result;
 }
@@ -335,6 +373,12 @@ void VideoPictureInPictureWindowControllerImpl::HangUp() {
     MediaSession::Get(web_contents())->HangUp();
 }
 
+void VideoPictureInPictureWindowControllerImpl::SeekTo(base::TimeDelta time) {
+  if (media_session_action_seek_to_handled_) {
+    MediaSession::Get(web_contents())->SeekTo(time);
+  }
+}
+
 void VideoPictureInPictureWindowControllerImpl::MediaSessionInfoChanged(
     const media_session::mojom::MediaSessionInfoPtr& info) {
   if (!info)
@@ -354,7 +398,7 @@ void VideoPictureInPictureWindowControllerImpl::MediaSessionInfoChanged(
 
 void VideoPictureInPictureWindowControllerImpl::MediaSessionActionsChanged(
     const std::set<media_session::mojom::MediaSessionAction>& actions) {
-  // TODO(crbug.com/919842): Currently, the first Media Session to be created
+  // TODO(crbug.com/40608570): Currently, the first Media Session to be created
   // (independently of the frame) will be used. This means, we could show a
   // Skip Ad button for a PiP video from another frame. Ideally, we should have
   // a Media Session per frame, not per tab. This is not implemented yet.
@@ -390,6 +434,9 @@ void VideoPictureInPictureWindowControllerImpl::MediaSessionActionsChanged(
   media_session_action_next_slide_handled_ =
       actions.find(media_session::mojom::MediaSessionAction::kNextSlide) !=
       actions.end();
+  media_session_action_seek_to_handled_ =
+      actions.find(media_session::mojom::MediaSessionAction::kSeekTo) !=
+      actions.end();
 
   if (!window_)
     return;
@@ -413,8 +460,56 @@ void VideoPictureInPictureWindowControllerImpl::MediaSessionActionsChanged(
 
 void VideoPictureInPictureWindowControllerImpl::MediaSessionPositionChanged(
     const std::optional<media_session::MediaPosition>& media_position) {
+  // If we've already sent this position to |window|, then no need to update
+  // again.
+  if (media_position == media_position_ && window_received_media_position_) {
+    return;
+  }
+
   media_position_ = media_position;
   UpdatePlaybackState();
+
+  if (window_ && media_position.has_value()) {
+    window_->SetMediaPosition(*media_position);
+    window_received_media_position_ = true;
+  } else {
+    window_received_media_position_ = false;
+  }
+}
+
+void VideoPictureInPictureWindowControllerImpl::MediaSessionImagesChanged(
+    const base::flat_map<media_session::mojom::MediaSessionImageType,
+                         std::vector<media_session::MediaImage>>& images) {
+  auto it =
+      images.find(media_session::mojom::MediaSessionImageType::kSourceIcon);
+  if (it == images.end()) {
+    if (favicon_images_.empty()) {
+      return;
+    }
+    favicon_images_.clear();
+  } else {
+    if (it->second == favicon_images_) {
+      return;
+    }
+    favicon_images_ = it->second;
+  }
+
+  if (window_) {
+    window_->SetFaviconImages(favicon_images_);
+  }
+}
+
+void VideoPictureInPictureWindowControllerImpl::MediaSessionMetadataChanged(
+    const std::optional<media_session::MediaMetadata>& metadata) {
+  if (metadata) {
+    source_title_ = metadata->source_title;
+  } else {
+    source_title_.clear();
+  }
+
+  if (window_) {
+    window_->SetSourceTitle(source_title_);
+  }
 }
 
 gfx::Size VideoPictureInPictureWindowControllerImpl::GetSize() {
@@ -485,6 +580,17 @@ const gfx::Rect& VideoPictureInPictureWindowControllerImpl::GetSourceBounds()
   return source_bounds_;
 }
 
+void VideoPictureInPictureWindowControllerImpl::GetMediaImage(
+    const media_session::MediaImage& image,
+    int minimum_size_px,
+    int desired_size_px,
+    MediaSession::GetMediaImageBitmapCallback callback) {
+  MediaSessionImpl* media_session = MediaSessionImpl::Get(web_contents());
+  CHECK(media_session);
+  media_session->GetMediaImageBitmap(image, minimum_size_px, desired_size_px,
+                                     std::move(callback));
+}
+
 std::optional<gfx::Rect>
 VideoPictureInPictureWindowControllerImpl::GetWindowBounds() {
   if (!window_)
@@ -500,6 +606,13 @@ void VideoPictureInPictureWindowControllerImpl::
   window_->SetPlayPauseButtonVisibility((media_session_action_pause_handled_ &&
                                          media_session_action_play_handled_) ||
                                         always_show_play_pause_button_);
+}
+
+void VideoPictureInPictureWindowControllerImpl::
+    SetOnWindowCreatedNotifyObserversCallback(
+        base::OnceClosure on_window_created_notify_observers_callback) {
+  on_window_created_notify_observers_callback_ =
+      std::move(on_window_created_notify_observers_callback);
 }
 
 WebContentsImpl*

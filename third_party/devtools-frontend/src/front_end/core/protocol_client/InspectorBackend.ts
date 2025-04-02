@@ -28,10 +28,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-import {NodeURL} from './NodeURL.js';
-import type * as Platform from '../platform/platform.js';
 import type * as ProtocolProxyApi from '../../generated/protocol-proxy-api.js';
 import type * as Protocol from '../../generated/protocol.js';
+import type * as Platform from '../platform/platform.js';
+
+import {NodeURL} from './NodeURL.js';
 
 export const DevToolsStubErrorCode = -32015;
 // TODO(dgozman): we are not reporting generic errors in tests, but we should
@@ -39,10 +40,10 @@ export const DevToolsStubErrorCode = -32015;
 const GenericErrorCode = -32000;
 const ConnectionClosedErrorCode = -32001;
 
-type MessageParams = {
+interface MessageParams {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [x: string]: any,
-};
+  [x: string]: any;
+}
 
 type ProtocolDomainName = ProtocolProxyApi.ProtocolDomainName;
 
@@ -52,15 +53,15 @@ export interface MessageError {
   data?: string|null;
 }
 
-export type Message = {
-  sessionId?: string,
-  url?: Platform.DevToolsPath.UrlString,
-  id?: number,
-  error?: MessageError|null,
-  result?: Object|null,
-  method?: QualifiedName,
-  params?: MessageParams|null,
-};
+export interface Message {
+  sessionId?: string;
+  url?: Platform.DevToolsPath.UrlString;
+  id?: number;
+  error?: MessageError|null;
+  result?: Object|null;
+  method?: QualifiedName;
+  params?: MessageParams|null;
+}
 
 interface EventMessage extends Message {
   method: QualifiedName;
@@ -99,7 +100,7 @@ interface CallbackWithDebugInfo {
 }
 
 export class InspectorBackend {
-  readonly agentPrototypes: Map<ProtocolDomainName, _AgentPrototype> = new Map();
+  readonly agentPrototypes: Map<ProtocolDomainName, AgentPrototype> = new Map();
   #initialized: boolean = false;
   #eventParameterNamesForDomain = new Map<ProtocolDomainName, EventParameterNames>();
   readonly typeMap = new Map<QualifiedName, CommandParameter[]>();
@@ -134,10 +135,10 @@ export class InspectorBackend {
     return this.#initialized;
   }
 
-  private agentPrototype(domain: ProtocolDomainName): _AgentPrototype {
+  private agentPrototype(domain: ProtocolDomainName): AgentPrototype {
     let prototype = this.agentPrototypes.get(domain);
     if (!prototype) {
-      prototype = new _AgentPrototype(domain);
+      prototype = new AgentPrototype(domain);
       this.agentPrototypes.set(domain, prototype);
     }
     return prototype;
@@ -329,7 +330,7 @@ export class SessionRouter {
     const messageId = this.nextMessageId();
     const messageObject: Message = {
       id: messageId,
-      method: method,
+      method,
     };
 
     if (params) {
@@ -544,7 +545,7 @@ export class TargetBase {
     router.registerSession(this, this.sessionId);
 
     for (const [domain, agentPrototype] of inspectorBackend.agentPrototypes) {
-      const agent = Object.create((agentPrototype as _AgentPrototype));
+      const agent = Object.create((agentPrototype as AgentPrototype));
       agent.target = this;
       this.#agents.set(domain, agent);
     }
@@ -632,10 +633,6 @@ export class TargetBase {
     return this.getAgent('CSS');
   }
 
-  databaseAgent(): ProtocolProxyApi.DatabaseApi {
-    return this.getAgent('Database');
-  }
-
   debuggerAgent(): ProtocolProxyApi.DebuggerApi {
     return this.getAgent('Debugger');
   }
@@ -666,6 +663,10 @@ export class TargetBase {
 
   eventBreakpointsAgent(): ProtocolProxyApi.EventBreakpointsApi {
     return this.getAgent('EventBreakpoints');
+  }
+
+  extensionsAgent(): ProtocolProxyApi.ExtensionsApi {
+    return this.getAgent('Extensions');
   }
 
   fetchAgent(): ProtocolProxyApi.FetchApi {
@@ -816,10 +817,6 @@ export class TargetBase {
     this.registerDispatcher('CSS', dispatcher);
   }
 
-  registerDatabaseDispatcher(dispatcher: ProtocolProxyApi.DatabaseDispatcher): void {
-    this.registerDispatcher('Database', dispatcher);
-  }
-
   registerBackgroundServiceDispatcher(dispatcher: ProtocolProxyApi.BackgroundServiceDispatcher): void {
     this.registerDispatcher('BackgroundService', dispatcher);
   }
@@ -930,9 +927,7 @@ export class TargetBase {
  * The reasons this is done is so that on the prototypes we can install the implementations
  * of the invoke_enable, etc. methods that the front-end uses.
  */
-// TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration
-// eslint-disable-next-line @typescript-eslint/naming-convention
-class _AgentPrototype {
+class AgentPrototype {
   replyArgs: {
     [x: string]: string[],
   };
@@ -949,15 +944,14 @@ class _AgentPrototype {
   registerCommand(
       methodName: UnqualifiedName, parameters: CommandParameter[], replyArgs: string[], description: string): void {
     const domainAndMethod = qualifyName(this.domain, methodName);
-    function sendMessagePromise(this: _AgentPrototype, ...args: unknown[]): Promise<unknown> {
-      return _AgentPrototype.prototype.sendMessageToBackendPromise.call(this, domainAndMethod, parameters, args);
+    function sendMessagePromise(this: AgentPrototype, ...args: unknown[]): Promise<unknown> {
+      return AgentPrototype.prototype.sendMessageToBackendPromise.call(this, domainAndMethod, parameters, args);
     }
     // @ts-ignore Method code generation
     this[methodName] = sendMessagePromise;
     this.metadata[domainAndMethod] = {parameters, description, replyArgs};
 
-    function invoke(
-        this: _AgentPrototype, request: Object|undefined = {}): Promise<Protocol.ProtocolResponseWithError> {
+    function invoke(this: AgentPrototype, request: Object|undefined = {}): Promise<Protocol.ProtocolResponseWithError> {
       return this.invoke(domainAndMethod, request);
     }
 

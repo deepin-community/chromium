@@ -5,7 +5,6 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_FIELD_TYPES_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_FIELD_TYPES_H_
 
-#include <optional>
 #include <type_traits>
 
 #include "base/types/cxx23_to_underlying.h"
@@ -82,19 +81,15 @@ namespace autofill {
 // If the user made no attempt at formatting the number (it consists only of
 // characters of the set [+0123456789], no whitespaces, no parentheses, no
 // hyphens, no slashes, etc), we will make an attempt to format the number in a
-// proper way. If AutofillInferCountryCallingCode is enabled, we will infer the
-// country code and also store that in the formatted number.
-// If a website contains <input autocomplete="tel"> this is what we fill. I.e.,
-// the phone number representation the user tried to give us.
-// With AutofillInferCountryCallingCode, the GetInfo() representation always
-// contains a country code. So for filling purposes, PHONE_HOME_WHOLE_NUMBER is
-// in international format.
-// If we reformat the number ourselves, the GetRawInfo() contains the inferred
-// country code. If we don't reformat the number, the GetRawInfo()
-// representation remains without one. In all countries but the US and Canada,
-// formatting will put a + in front of the country code.
-// TODO(crbug.com/1311937) Clean this up once AutofillInferCountryCallingCode
-// is launched.
+// proper way. We will infer the country code and also store that in the
+// formatted number. If a website contains <input autocomplete="tel"> this is
+// what we fill. I.e., the phone number representation the user tried to give
+// us. The GetInfo() representation always contains a country code. So for
+// filling purposes, PHONE_HOME_WHOLE_NUMBER is in international format. If we
+// reformat the number ourselves, the GetRawInfo() contains the inferred country
+// code. If we don't reformat the number, the GetRawInfo() representation
+// remains without one. In all countries but the US and Canada, formatting will
+// put a + in front of the country code.
 //
 // PHONE_HOME_EXTENSION: Extensions are detected, but not filled. This would
 //   be the part that comes after a PHONE_HOME_WHOLE_NUMBER or
@@ -167,7 +162,7 @@ enum FieldType {
   ADDRESS_HOME_CITY = 33,
   ADDRESS_HOME_STATE = 34,
   ADDRESS_HOME_ZIP = 35,
-  // TODO(crbug.com/1434216): Autofill stores country codes. When
+  // TODO(crbug.com/40264633): Autofill stores country codes. When
   // ADDRESS_HOME_COUNTRY is accessed through `AutofillProfile::GetRawInfo()`, a
   // country code is returned. When retrieved using
   // `AutofillProfile::GetInfo()`, the country name is returned.
@@ -414,7 +409,8 @@ enum FieldType {
   // contain the "Entre calle 1" field.
   ADDRESS_HOME_BETWEEN_STREETS_2 = 152,
 
-  // ADDRESS_HOME_HOUSE_NUMBER_AND_APT 153 is server-side only.
+  // House number and apartment.
+  ADDRESS_HOME_HOUSE_NUMBER_AND_APT = 153,
 
   // Username field in a password-less forgot password form.
   SINGLE_USERNAME_FORGOT_PASSWORD = 154,
@@ -438,13 +434,17 @@ enum FieldType {
   // Departamento).
   ADDRESS_HOME_APT_TYPE = 157,
 
-  // Reserved for a server-side-only use: 158-159
+  // Loyalty program card or membeship ID.
+  LOYALTY_MEMBERSHIP_ID = 158,
+
+  // Reserved for a server-side-only use: 159
 
   // Similar to `SINGLE_USERNAME`, but for the case when there are additional
   // fields between single username and password forms.
   // Will be used to rollout new predictions based on new votes of Username
   // First Flow with intermediate values.
-  // TODO(b/294195764): Deprecate after fully rolling out new predictions.
+  // TODO(crbug.com/294195764): Deprecate after fully rolling out new
+  // predictions.
   SINGLE_USERNAME_WITH_INTERMEDIATE_VALUES = 160,
 
   // SERVER_RESPONSE_PENDING is not exposed as an enum value to prevent
@@ -454,6 +454,46 @@ enum FieldType {
   // the same as NO_SERVER_DATA, which indicates that the server has no
   // classification for the field.
   // SERVER_RESPONSE_PENDING = 161;
+
+  // Improved Prediction indicates that this field is support by the predition
+  // improvement system.
+  // This type is a metatype and does not correspond to a specific sort of
+  // data.
+  // It should not take precedence over existing types.
+  IMPROVED_PREDICTION = 162,
+
+  // Types to represent alternative names (e.g. phonetic name in Japanese).
+  ALTERNATIVE_FULL_NAME = 163,
+  ALTERNATIVE_GIVEN_NAME = 164,
+  ALTERNATIVE_FAMILY_NAME = 165,
+
+  // Prefix of the last name, e.g. "van" in the Netherlands.
+  // This is the first child of NAME_LAST.
+  NAME_LAST_PREFIX = 166,
+
+  // Type to represent the core part of the last name.
+  // More technically it contains the last name without the prefix.
+  // NAME_LAST_CORE: NAME_LAST_FIRST + NAME_LAST_CONJUNCTION + NAME_LAST_SECOND.
+  // Don't use this type unless there is NAME_LAST_PREFIX present in the form.
+  // E.g. "Gogh" in "Vincent van Gogh".
+  NAME_LAST_CORE = 167,
+
+  // Types corresponding to the "Passport" entity from
+  // components/autofill/core/browser/data_model/entity_schema.json.
+  // *TAG field types are merely placeholder tagging that the type belongs to
+  // the passport entity, but that the existing Autofill classification or logic
+  // should be used.
+  PASSPORT_NAME_TAG = 168,
+  PASSPORT_NUMBER = 169,
+  PASSPORT_ISSUING_COUNTRY_TAG = 170,
+  PASSPORT_EXPIRATION_DATE_TAG = 171,
+  PASSPORT_ISSUE_DATE_TAG = 172,
+
+  // Types corresponding to the "Loyalty card" entity from
+  // components/autofill/core/browser/data_model/entity_schema.json.
+  LOYALTY_MEMBERSHIP_PROGRAM = 173,
+  LOYALTY_MEMBERSHIP_PROVIDER = 174,
+  // The member ID is represented by LOYALTY_MEMBERSHIP_ID.
 
   // No new types can be added without a corresponding change to the Autofill
   // server.
@@ -465,7 +505,7 @@ enum FieldType {
   // If the newly added type is a storable type of AutofillProfile, update
   // AutofillProfile.StorableTypes in
   // tools/metrics/histograms/metadata/autofill/histograms.xml.
-  MAX_VALID_FIELD_TYPE = 162,
+  MAX_VALID_FIELD_TYPE = 175,
 };
 // LINT.ThenChange(//chrome/common/extensions/api/autofill_private.idl)
 
@@ -482,17 +522,18 @@ enum class FieldTypeGroup {
   kUsernameField,
   kUnfillable,
   kIban,
-  kMaxValue = kIban,
+  kStandaloneCvcField,
+  kAutofillAi,
+  kMaxValue = kAutofillAi,
 };
 
 template <>
-struct DenseSetTraits<FieldType> {
-  static constexpr FieldType kMinValue = NO_SERVER_DATA;
-  static constexpr FieldType kMaxValue = MAX_VALID_FIELD_TYPE;
-  static constexpr bool kPacked = false;
-};
+struct DenseSetTraits<FieldType>
+    : EnumDenseSetTraits<FieldType, NO_SERVER_DATA, MAX_VALID_FIELD_TYPE> {};
 
 using FieldTypeSet = DenseSet<FieldType>;
+
+using FieldTypeGroupSet = DenseSet<FieldTypeGroup>;
 
 using HtmlFieldTypeSet = DenseSet<HtmlFieldType>;
 
@@ -557,8 +598,7 @@ constexpr FieldType ToSafeFieldType(std::underlying_type_t<FieldType> raw_value,
            // Reserved for server-side only use.
            !(111 <= t && t <= 113) && t != 117 && t != 127 &&
            !(130 <= t && t <= 132) && t != 134 && !(137 <= t && t <= 139) &&
-           !(147 <= t && t <= 149) && t != 153 && t != 155 && t != 158 &&
-           t != 159 && t != 161;
+           !(147 <= t && t <= 149) && t != 155 && t != 159 && t != 161;
   };
   return IsValid(raw_value) ? static_cast<FieldType>(raw_value)
                             : fallback_value;
@@ -572,7 +612,9 @@ constexpr HtmlFieldType ToSafeHtmlFieldType(
     return static_cast<underlying_type_t>(HtmlFieldType::kMinValue) <= t &&
            t <= static_cast<underlying_type_t>(HtmlFieldType::kMaxValue) &&
            // Full address is deprecated.
-           t != 17;
+           t != 17 &&
+           // UPI is deprecated.
+           t != 46;
   };
   return IsValid(raw_value) ? static_cast<HtmlFieldType>(raw_value)
                             : fallback_value;

@@ -4,13 +4,13 @@
 
 #include "services/video_capture/shared_memory_virtual_device_mojo_adapter.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/check_op.h"
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/ranges/algorithm.h"
 #include "media/capture/video/scoped_buffer_pool_reservation.h"
 #include "media/capture/video/video_capture_buffer_pool_impl.h"
 #include "media/capture/video/video_capture_buffer_pool_util.h"
@@ -63,7 +63,7 @@ void SharedMemoryVirtualDeviceMojoAdapter::RequestFrameBuffer(
 
   // Remove dropped buffer if there is one.
   if (buffer_id_to_drop != media::VideoCaptureBufferPool::kInvalidId) {
-    auto entry_iter = base::ranges::find(known_buffer_ids_, buffer_id_to_drop);
+    auto entry_iter = std::ranges::find(known_buffer_ids_, buffer_id_to_drop);
     if (entry_iter != known_buffer_ids_.end()) {
       known_buffer_ids_.erase(entry_iter);
       if (producer_.is_bound())
@@ -172,8 +172,7 @@ void SharedMemoryVirtualDeviceMojoAdapter::Start(
 void SharedMemoryVirtualDeviceMojoAdapter::StartInProcess(
     const media::VideoCaptureParams& requested_settings,
     const base::WeakPtr<media::VideoFrameReceiver>& frame_handler,
-    mojo::PendingRemote<video_capture::mojom::VideoEffectsManager>
-        video_effects_manager) {
+    media::VideoEffectsContext context) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   video_frame_handler_in_process_ = std::move(frame_handler);
   video_frame_handler_in_process_->OnStarted();

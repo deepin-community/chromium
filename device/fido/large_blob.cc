@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <ostream>
 
+#include "base/containers/map_util.h"
 #include "base/containers/span.h"
-#include "base/ranges/algorithm.h"
 #include "components/cbor/reader.h"
 #include "components/cbor/writer.h"
 #include "crypto/aead.h"
@@ -30,9 +30,9 @@ std::array<uint8_t, kAssociatedDataLength> GenerateLargeBlobAdditionalData(
   std::array<uint8_t, kAssociatedDataLength> additional_data;
   const std::array<uint8_t, 8>& size_array =
       fido_parsing_utils::Uint64LittleEndian(size);
-  base::ranges::copy(kLargeBlobADPrefix, additional_data.begin());
-  base::ranges::copy(size_array,
-                     additional_data.begin() + kLargeBlobADPrefix.size());
+  std::ranges::copy(kLargeBlobADPrefix, additional_data.begin());
+  std::ranges::copy(size_array,
+                    additional_data.begin() + kLargeBlobADPrefix.size());
   return additional_data;
 }
 
@@ -52,9 +52,10 @@ bool LargeBlob::operator==(const LargeBlob& other) const {
          other.original_size == original_size;
 }
 
-LargeBlobArrayFragment::LargeBlobArrayFragment(const std::vector<uint8_t> bytes,
-                                               const size_t offset)
+LargeBlobArrayFragment::LargeBlobArrayFragment(std::vector<uint8_t> bytes,
+                                               size_t offset)
     : bytes(std::move(bytes)), offset(offset) {}
+
 LargeBlobArrayFragment::~LargeBlobArrayFragment() = default;
 LargeBlobArrayFragment::LargeBlobArrayFragment(LargeBlobArrayFragment&&) =
     default;
@@ -195,10 +196,14 @@ std::optional<LargeBlobData> LargeBlobData::Parse(const cbor::Value& value) {
   if (ciphertext_it == map.end() || !ciphertext_it->second.is_bytestring()) {
     return std::nullopt;
   }
-  auto nonce_it =
-      map.find(cbor::Value(static_cast<int>(LargeBlobDataKeys::kNonce)));
-  if (nonce_it == map.end() || !nonce_it->second.is_bytestring() ||
-      nonce_it->second.GetBytestring().size() != kLargeBlobArrayNonceLength) {
+  const auto* nonce = base::FindOrNull(
+      map, cbor::Value(static_cast<int>(LargeBlobDataKeys::kNonce)));
+  if (!nonce || !nonce->is_bytestring()) {
+    return std::nullopt;
+  }
+  auto sized_nonce_span = base::span(nonce->GetBytestring())
+                              .to_fixed_extent<kLargeBlobArrayNonceLength>();
+  if (!sized_nonce_span) {
     return std::nullopt;
   }
   auto orig_size_it =
@@ -206,9 +211,7 @@ std::optional<LargeBlobData> LargeBlobData::Parse(const cbor::Value& value) {
   if (orig_size_it == map.end() || !orig_size_it->second.is_unsigned()) {
     return std::nullopt;
   }
-  return LargeBlobData(ciphertext_it->second.GetBytestring(),
-                       base::make_span<kLargeBlobArrayNonceLength>(
-                           nonce_it->second.GetBytestring()),
+  return LargeBlobData(ciphertext_it->second.GetBytestring(), *sized_nonce_span,
                        orig_size_it->second.GetUnsigned());
 }
 
@@ -217,7 +220,7 @@ LargeBlobData::LargeBlobData(
     base::span<const uint8_t, kLargeBlobArrayNonceLength> nonce,
     int64_t orig_size)
     : ciphertext_(std::move(ciphertext)), orig_size_(std::move(orig_size)) {
-  base::ranges::copy(nonce, nonce_.begin());
+  std::ranges::copy(nonce, nonce_.begin());
 }
 LargeBlobData::LargeBlobData(LargeBlobKey key, LargeBlob large_blob)
     : orig_size_(large_blob.original_size) {

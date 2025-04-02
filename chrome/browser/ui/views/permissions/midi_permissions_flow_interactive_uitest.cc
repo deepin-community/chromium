@@ -20,12 +20,13 @@
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
-#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/dns/mock_host_resolver.h"
+#include "third_party/blink/public/common/features.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
 #include "ui/views/interaction/interactive_views_test.h"
 #include "ui/views/view_utils.h"
@@ -40,7 +41,7 @@ DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kWebContentsElementId);
 class MidiPermissionsFlowInteractiveUITest : public InteractiveBrowserTest {
  public:
   MidiPermissionsFlowInteractiveUITest() {
-    feature_list_.InitAndEnableFeature(features::kBlockMidiByDefault);
+    feature_list_.InitAndEnableFeature(blink::features::kBlockMidiByDefault);
     https_server_ = std::make_unique<net::EmbeddedTestServer>(
         net::EmbeddedTestServer::TYPE_HTTPS);
   }
@@ -80,7 +81,7 @@ class MidiPermissionsFlowInteractiveUITest : public InteractiveBrowserTest {
     return Steps(
         InstrumentTab(kWebContentsElementId),
         NavigateWebContents(kWebContentsElementId, GetURL()),
-        // TODO(crbug.com/1420307) Change this call back to just
+        // TODO(crbug.com/40063295) Change this call back to just
         // `navigator.requestMIDIAccess` once the feature is ready
         ExecuteJs(kWebContentsElementId,
                   "() => { navigator.requestMIDIAccess( { sysex: true } ) }"),
@@ -125,8 +126,8 @@ IN_PROC_BROWSER_TEST_F(MidiPermissionsFlowInteractiveUITest,
             for (PermissionToggleRowView* permission_toggle_row :
                  AsView<PageInfoMainView>(element)->GetToggleRowsForTesting()) {
               if (permission_toggle_row->GetRowTitleForTesting() ==
-                         l10n_util::GetStringUTF16(
-                             IDS_SITE_SETTINGS_TYPE_MIDI_SYSEX)) {
+                  l10n_util::GetStringUTF16(
+                      IDS_SITE_SETTINGS_TYPE_MIDI_SYSEX)) {
                 includes_midi_sysex = true;
               }
             }
@@ -149,17 +150,14 @@ IN_PROC_BROWSER_TEST_F(MidiPermissionsFlowInteractiveUITest,
             for (PermissionToggleRowView* permission_toggle_row :
                  AsView<PageInfoMainView>(element)->GetToggleRowsForTesting()) {
               if (permission_toggle_row->GetRowTitleForTesting() ==
-                         l10n_util::GetStringUTF16(
-                             IDS_SITE_SETTINGS_TYPE_MIDI_SYSEX)) {
+                  l10n_util::GetStringUTF16(
+                      IDS_SITE_SETTINGS_TYPE_MIDI_SYSEX)) {
                 includes_midi_sysex = true;
               }
             }
             EXPECT_TRUE(includes_midi_sysex);
           })));
 }
-
-// TODO(b/315345075): Add a test for the behavior of the MIDI toggle in page
-// info.
 
 // Display blockage indicator of MIDI when blocked.
 IN_PROC_BROWSER_TEST_F(MidiPermissionsFlowInteractiveUITest,
@@ -168,23 +166,17 @@ IN_PROC_BROWSER_TEST_F(MidiPermissionsFlowInteractiveUITest,
       context(), NavigateAndRequestMidi(),
       PressButton(PermissionPromptBubbleBaseView::kBlockButtonElementId),
       WaitForHide(PermissionPromptBubbleBaseView::kMainViewId),
-      AfterShow(
-          ContentSettingImageView::kMidiSysexActivityIndicatorElementId,
-          base::BindOnce([](ui::TrackedElement* element) {
-            auto* element_view = AsView<ContentSettingImageView>(element);
-            EXPECT_EQ(element_view->get_icon_for_testing(),
-                      base::FeatureList::IsEnabled(features::kChromeRefresh2023)
-                          ? &vector_icons::kMidiOffChromeRefreshIcon
-                          : &vector_icons::kMidiIcon);
-            EXPECT_EQ(element_view->get_icon_badge_for_testing(),
-                      base::FeatureList::IsEnabled(features::kChromeRefresh2023)
-                          ? &gfx::kNoneIcon
-                          : &vector_icons::kBlockedBadgeIcon);
-            EXPECT_EQ(
-                element_view->get_tooltip_text_for_testing(),
-                l10n_util::GetStringUTF16(IDS_BLOCKED_MIDI_SYSEX_MESSAGE));
-          })));
-  // TODO(b/315345075): Add a check for the strings displayed in the bubble.
+      AfterShow(ContentSettingImageView::kMidiSysexActivityIndicatorElementId,
+                base::BindOnce([](ui::TrackedElement* element) {
+                  auto* element_view = AsView<ContentSettingImageView>(element);
+                  EXPECT_EQ(element_view->get_icon_for_testing(),
+                            &vector_icons::kMidiOffChromeRefreshIcon);
+                  EXPECT_EQ(element_view->get_icon_badge_for_testing(),
+                            &gfx::VectorIcon::EmptyIcon());
+                  EXPECT_EQ(element_view->get_tooltip_text_for_testing(),
+                            l10n_util::GetStringUTF16(
+                                IDS_BLOCKED_MIDI_SYSEX_MESSAGE));
+                })));
 }
 
 // Display in-use indicator of MIDI when allowed.
@@ -194,19 +186,15 @@ IN_PROC_BROWSER_TEST_F(MidiPermissionsFlowInteractiveUITest,
       context(), NavigateAndRequestMidi(),
       PressButton(PermissionPromptBubbleBaseView::kAllowButtonElementId),
       WaitForHide(PermissionPromptBubbleBaseView::kMainViewId),
-      AfterShow(
-          ContentSettingImageView::kMidiSysexActivityIndicatorElementId,
-          base::BindOnce([](ui::TrackedElement* element) {
-            auto* element_view = AsView<ContentSettingImageView>(element);
-            EXPECT_EQ(element_view->get_icon_for_testing(),
-                      base::FeatureList::IsEnabled(features::kChromeRefresh2023)
-                          ? &vector_icons::kMidiChromeRefreshIcon
-                          : &vector_icons::kMidiIcon);
-            EXPECT_EQ(element_view->get_icon_badge_for_testing(),
-                      &gfx::kNoneIcon);
-            EXPECT_EQ(
-                element_view->get_tooltip_text_for_testing(),
-                l10n_util::GetStringUTF16(IDS_ALLOWED_MIDI_SYSEX_MESSAGE));
-          })));
-  // TODO(b/315345075): Add a check for the strings displayed in the bubble.
+      AfterShow(ContentSettingImageView::kMidiSysexActivityIndicatorElementId,
+                base::BindOnce([](ui::TrackedElement* element) {
+                  auto* element_view = AsView<ContentSettingImageView>(element);
+                  EXPECT_EQ(element_view->get_icon_for_testing(),
+                            &vector_icons::kMidiChromeRefreshIcon);
+                  EXPECT_EQ(element_view->get_icon_badge_for_testing(),
+                            &gfx::VectorIcon::EmptyIcon());
+                  EXPECT_EQ(element_view->get_tooltip_text_for_testing(),
+                            l10n_util::GetStringUTF16(
+                                IDS_ALLOWED_MIDI_SYSEX_MESSAGE));
+                })));
 }

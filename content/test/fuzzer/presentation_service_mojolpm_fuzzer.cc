@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -125,7 +124,8 @@ class PresentationServiceTestcase : public content::RenderViewHostTestHarness {
 
   // A fake delegate which we can control with protobuf messages,
   // the actions of which are also within our fuzzer's actions.
-  // Required as `PresentationServiceDelegateImpl` expects UI interaction.
+  // Required as `ControllerPresentationServiceDelegateImpl` expects UI
+  // interaction.
   std::unique_ptr<ControllerPresentationServiceDelegateForFuzzing>
       controller_delegate_;
 

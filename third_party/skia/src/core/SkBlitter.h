@@ -14,6 +14,7 @@
 #include "include/core/SkRegion.h"
 #include "include/private/base/SkAssert.h"
 #include "include/private/base/SkCPUTypes.h"
+#include "include/private/base/SkDebug.h"
 #include "include/private/base/SkTo.h"
 #include "src/base/SkAutoMalloc.h"
 
@@ -27,6 +28,7 @@ class SkPixmap;
 class SkShader;
 class SkSurfaceProps;
 struct SkMask;
+enum class SkDrawCoverage : bool;
 
 /** SkBlitter and its subclasses are responsible for actually writing pixels
     into memory. Besides efficiency, they handle clipping and antialiasing.
@@ -145,7 +147,7 @@ public:
                              const SkMatrix& ctm,
                              const SkPaint& paint,
                              SkArenaAlloc*,
-                             bool drawCoverage,
+                             SkDrawCoverage,
                              sk_sp<SkShader> clipShader,
                              const SkSurfaceProps& props);
 
@@ -288,8 +290,5 @@ private:
     SkRectClipBlitter   fRectBlitter;
     SkRgnClipBlitter    fRgnBlitter;
 };
-
-// A good size for creating shader contexts on the stack.
-enum {kSkBlitterContextSize = 3332};
 
 #endif

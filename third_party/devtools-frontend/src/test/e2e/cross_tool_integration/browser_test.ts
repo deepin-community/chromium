@@ -5,11 +5,10 @@
 import {assert} from 'chai';
 
 import {closeAllCloseableTabs, getBrowserAndPages, goToResource} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {getCurrentConsoleMessages} from '../helpers/console-helpers.js';
 import {openPanelViaMoreTools} from '../helpers/settings-helpers.js';
 
-describe('Browser', async () => {
+describe('Browser', () => {
   it('can reload a website after all closeable tools are closed', async () => {
     // Navigate to website
     const {target} = getBrowserAndPages();

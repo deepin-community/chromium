@@ -20,19 +20,19 @@
 #include "base/metrics/histogram_shared_memory.h"
 #include "base/metrics/persistent_histogram_allocator.h"
 #include "base/metrics/persistent_memory_allocator.h"
+#include "base/not_fatal_until.h"
 #include "base/observer_list.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/token.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
-#include "components/tracing/common/trace_startup_config.h"
+#include "components/metrics/histogram_controller.h"
 #include "components/tracing/common/tracing_switches.h"
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/child_process_host_impl.h"
-#include "content/browser/metrics/histogram_controller.h"
 #include "content/browser/metrics/histogram_shared_memory_config.h"
 #include "content/browser/tracing/background_tracing_manager_impl.h"
 #include "content/public/browser/browser_child_process_host_delegate.h"
@@ -51,14 +51,15 @@
 #include "mojo/public/cpp/bindings/scoped_message_error_crash_key.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "services/tracing/public/cpp/trace_startup.h"
+#include "services/tracing/public/cpp/trace_startup_config.h"
 
 #if BUILDFLAG(IS_APPLE)
 #include "content/browser/child_process_task_port_provider_mac.h"
 #endif
 
 #if BUILDFLAG(IS_MAC)
-#include "content/browser/sandbox_support_mac_impl.h"
-#include "content/common/sandbox_support_mac.mojom.h"
+#include "content/browser/sandbox_support_impl.h"
+#include "content/common/sandbox_support.mojom.h"
 #endif
 
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_ANDROID)
@@ -91,6 +92,10 @@ base::LazyInstance<base::ObserverList<BrowserChildProcessObserver>::Unchecked>::
         LAZY_INSTANCE_INITIALIZER;
 
 void NotifyProcessLaunchedAndConnected(const ChildProcessData& data) {
+  // Assert that the process is valid, as guaranteed in a comment on the
+  // declaration of `BrowserChildProcessLaunchedAndConnected()`.
+  CHECK(data.GetProcess().IsValid(), base::NotFatalUntil::M130);
+
   for (auto& observer : g_browser_child_process_observers.Get())
     observer.BrowserChildProcessLaunchedAndConnected(data);
 }
@@ -115,7 +120,6 @@ memory_instrumentation::mojom::ProcessType GetCoordinatorClientProcessType(
       return memory_instrumentation::mojom::ProcessType::PLUGIN;
     default:
       NOTREACHED();
-      return memory_instrumentation::mojom::ProcessType::OTHER;
   }
 }
 void BindTracedProcessFromUIThread(
@@ -179,10 +183,9 @@ BrowserChildProcessHostImpl::BrowserChildProcessHostImpl(
     content::ProcessType process_type,
     BrowserChildProcessHostDelegate* delegate,
     ChildProcessHost::IpcMode ipc_mode)
-    : data_(process_type), delegate_(delegate) {
+    : data_(process_type, ChildProcessHostImpl::GenerateChildProcessUniqueId()),
+      delegate_(delegate) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-
-  data_.id = ChildProcessHostImpl::GenerateChildProcessUniqueId();
 
   // Create a persistent memory segment for subprocess histograms.
   CreateMetricsAllocator();
@@ -191,6 +194,7 @@ BrowserChildProcessHostImpl::BrowserChildProcessHostImpl(
 
   g_child_process_list.Get().push_back(this);
   GetContentClient()->browser()->BrowserChildProcessHostCreated(this);
+  GetContentClient()->browser()->ExposeInterfacesToChild(&binder_map_);
 }
 
 BrowserChildProcessHostImpl::~BrowserChildProcessHostImpl() {
@@ -225,12 +229,6 @@ void BrowserChildProcessHostImpl::TerminateAll() {
   for (auto it = copy.begin(); it != copy.end(); ++it) {
     delete (*it)->delegate();  // ~*HostDelegate deletes *HostImpl.
   }
-}
-
-// static
-void BrowserChildProcessHostImpl::CopyTraceStartupFlags(
-    base::CommandLine* cmd_line) {
-  tracing::PropagateTracingFlagsToChildProcessCmdLine(cmd_line);
 }
 
 void BrowserChildProcessHostImpl::Launch(
@@ -324,17 +322,10 @@ void BrowserChildProcessHostImpl::LaunchWithoutExtraCommandLineSwitches(
   static const char* const kForwardSwitches[] = {
       switches::kDisableInProcessStackTraces,
       switches::kDisableBestEffortTasks,
-      switches::kDisableLogging,
-      switches::kEnableLogging,
       switches::kIPCConnectionTimeout,
       switches::kLogBestEffortTasks,
-      switches::kLogFile,
-      switches::kLoggingLevel,
-      switches::kMojoCoreLibraryPath,
       switches::kPerfettoDisableInterning,
       switches::kTraceToConsole,
-      switches::kV,
-      switches::kVModule,
   };
   cmd_line->CopySwitchesFrom(browser_command_line, kForwardSwitches);
 
@@ -356,13 +347,28 @@ void BrowserChildProcessHostImpl::LaunchWithoutExtraCommandLineSwitches(
     child_process_host_->SetProfilingFile(OpenProfilingFile());
 #endif
 
+  tracing_config_memory_region_ =
+      MakeRefCounted<base::RefCountedData<base::ReadOnlySharedMemoryRegion>>(
+          tracing::CreateTracingConfigSharedMemory());
+  tracing_output_memory_region_ =
+      tracing_config_memory_region_->data.IsValid()
+          ? MakeRefCounted<
+                base::RefCountedData<base::UnsafeSharedMemoryRegion>>(
+                tracing::CreateTracingOutputSharedMemory())
+          : nullptr;
+
   child_process_launcher_ = std::make_unique<ChildProcessLauncher>(
       std::move(delegate), std::move(cmd_line), data_.id, this,
       std::move(*child_process_host_->GetMojoInvitation()),
       base::BindRepeating(&BrowserChildProcessHostImpl::OnMojoError,
                           weak_factory_.GetWeakPtr(),
                           base::SingleThreadTaskRunner::GetCurrentDefault()),
-      std::move(file_data), metrics_shared_region_.Duplicate(),
+      std::move(file_data),
+      base::HistogramSharedMemory::PassOnCommandLineIsEnabled(
+          data_.process_type)
+          ? metrics_shared_region_
+          : nullptr,
+      tracing_config_memory_region_, tracing_output_memory_region_,
       terminate_on_shutdown);
   ShareMetricsAllocatorToProcess();
 
@@ -398,7 +404,7 @@ ChildProcessTerminationInfo BrowserChildProcessHostImpl::GetTerminationInfo(
   if (!child_process_launcher_) {
     // If the delegate doesn't use Launch() helper.
     ChildProcessTerminationInfo info;
-    // TODO(crbug.com/1412835): iOS is single process mode for now.
+    // TODO(crbug.com/40255458): iOS is single process mode for now.
 #if !BUILDFLAG(IS_IOS)
     info.status = base::GetTerminationStatus(data_.GetProcess().Handle(),
                                              &info.exit_code);
@@ -446,11 +452,17 @@ void BrowserChildProcessHostImpl::OnBadMessageReceived(
     const IPC::Message& message) {
   std::string log_message = "Bad message received of type: ";
   if (message.IsValid()) {
-    log_message += std::to_string(message.type());
+    log_message += base::NumberToString(message.type());
   } else {
     log_message += "unknown";
   }
   TerminateOnBadMessageReceived(log_message);
+}
+
+void BrowserChildProcessHostImpl::BindChildHistogramFetcherFactory(
+    mojo::PendingReceiver<metrics::mojom::ChildHistogramFetcherFactory>
+        factory) {
+  GetHost()->BindReceiver(std::move(factory));
 }
 
 void BrowserChildProcessHostImpl::TerminateOnBadMessageReceived(
@@ -529,7 +541,6 @@ void BrowserChildProcessHostImpl::OnChildDisconnected() {
       case base::TERMINATION_STATUS_LAUNCH_FAILED: {
         // This is handled in OnProcessLaunchFailed.
         NOTREACHED();
-        break;
       }
       case base::TERMINATION_STATUS_NORMAL_TERMINATION: {
         // TODO(wfh): This should not be hit but is sometimes. Investigate.
@@ -547,7 +558,6 @@ void BrowserChildProcessHostImpl::OnChildDisconnected() {
 #endif  // BUILDFLAG(IS_WIN)
       case base::TERMINATION_STATUS_MAX_ENUM: {
         NOTREACHED();
-        break;
       }
     }
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -563,14 +573,14 @@ bool BrowserChildProcessHostImpl::Send(IPC::Message* message) {
 void BrowserChildProcessHostImpl::CreateMetricsAllocator() {
   // Create a persistent memory segment for subprocess histograms only if
   // they're active in the browser.
-  // TODO(crbug.com/1290457): Remove this.
+  // TODO(crbug.com/40818143): Remove this.
   if (!base::GlobalHistogramAllocator::Get()) {
     DVLOG(1) << "GlobalHistogramAllocator not configured";
     return;
   }
 
   // This class is not expected to be used for renderer child processes.
-  // TODO(crbug/1028263): CHECK, once proven that this scenario does not
+  // TODO(crbug.com/40109064): CHECK, once proven that this scenario does not
   // occur in the wild, else remove dump and just return early if disproven.
   if (data_.process_type == PROCESS_TYPE_RENDERER) {
     base::debug::DumpWithoutCrashing();
@@ -602,21 +612,51 @@ void BrowserChildProcessHostImpl::CreateMetricsAllocator() {
            << "; process_type='"
            << GetProcessTypeNameInEnglish(data_.process_type) << "'";
 
-  metrics_shared_region_ = std::move(shared_memory->region);
+  metrics_shared_region_ =
+      MakeRefCounted<base::RefCountedData<base::UnsafeSharedMemoryRegion>>(
+          std::move(shared_memory->region));
   metrics_allocator_ = std::move(shared_memory->allocator);
 }
 
 void BrowserChildProcessHostImpl::ShareMetricsAllocatorToProcess() {
-  if (metrics_allocator_) {
-    HistogramController::GetInstance()->SetHistogramMemory<ChildProcessHost>(
-        GetHost(), std::move(metrics_shared_region_));
-    DVLOG(1) << "metrics_shared_region_ has been moved: " << "pid=" << data_.id
-             << "; process_type="
-             << GetProcessTypeNameInEnglish(data_.process_type);
-  } else {
-    HistogramController::GetInstance()->SetHistogramMemory<ChildProcessHost>(
-        GetHost(), base::UnsafeSharedMemoryRegion());
-  }
+  // Only get histograms from content process types; skip "embedder" process
+  // types.
+  const bool is_content_process =
+      (data_.process_type < PROCESS_TYPE_CONTENT_END);
+
+  // Get histogram data from content processes; exchange pings with embedder
+  // processes.
+  const auto histogram_mode =
+      is_content_process
+          ? metrics::HistogramController::ChildProcessMode::kGetHistogramData
+          : metrics::HistogramController::ChildProcessMode::kPingOnly;
+
+  // If this is a content process, but passing the shared memory region on the
+  // command line is NOT enabled for this process type, then we pass the region
+  // via the child's HistogramController, below; otherwise, we give the
+  // HistogramController a default (invalid) region.
+  // TODO(crbug.com/40818143): simplify to always pass an empty region or to
+  // elide that param once passing the region via the command line is fully
+  // launched for all content process types.
+  auto memory_region =
+      is_content_process && metrics_shared_region_ &&
+              !base::HistogramSharedMemory::PassOnCommandLineIsEnabled(
+                  data_.process_type)
+          ? std::move(metrics_shared_region_->data)
+          : base::UnsafeSharedMemoryRegion();
+
+  // Pass the shared memory region to use for future histogram transmission
+  // (an invalid region if the region was already passed via the command line)
+  // and ask the child to transmit any early histograms that did not get stored
+  // in shared memory. This happens exactly once for each child process.
+  metrics::HistogramController::GetInstance()->SetHistogramMemory(
+      this, std::move(memory_region), histogram_mode);
+
+  // At this point the shared memory region has either been shared via command
+  // line, or it has been given (moved) to the histogram controller. The child
+  // process host no longer needs to track it. We can safely release the host's
+  // reference.
+  metrics_shared_region_.reset();
 }
 
 void BrowserChildProcessHostImpl::OnProcessLaunchFailed(int error_code) {
@@ -657,7 +697,7 @@ void BrowserChildProcessHostImpl::OnProcessLaunched() {
 #if BUILDFLAG(IS_WIN)
   // Start a WaitableEventWatcher that will invoke OnProcessExitedEarly if the
   // child process exits. This watcher is stopped once the IPC channel is
-  // connected and the exit of the child process is detecter by an error on the
+  // connected and the exit of the child process is detected by an error on the
   // IPC channel thereafter.
   DCHECK(!early_exit_watcher_.GetWatchedObject());
   early_exit_watcher_.StartWatchingOnce(process.Handle(), this);
@@ -672,7 +712,7 @@ void BrowserChildProcessHostImpl::OnProcessLaunched() {
     NotifyProcessLaunchedAndConnected(data_);
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // In ChromeOS, there are still child processes of NaCl modules, and they
   // don't contribute to tracing actually. So do not register those clients
   // to the tracing service. See https://crbug.com/1101468.

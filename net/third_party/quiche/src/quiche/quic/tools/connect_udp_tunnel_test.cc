@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -113,6 +114,11 @@ class MockSocket : public ConnectingClientSocket {
 class ConnectUdpTunnelTest : public quiche::test::QuicheTest {
  public:
   void SetUp() override {
+#if defined(_WIN32)
+    WSADATA wsa_data;
+    const WORD version_required = MAKEWORD(2, 2);
+    ASSERT_EQ(WSAStartup(version_required, &wsa_data), 0);
+#endif
     auto socket = std::make_unique<StrictMock<MockSocket>>();
     socket_ = socket.get();
     ON_CALL(socket_factory_,
@@ -167,7 +173,7 @@ TEST_F(ConnectUdpTunnelTest, OpenTunnel) {
                 Property(&QuicBackendResponse::trailers, IsEmpty()),
                 Property(&QuicBackendResponse::body, IsEmpty()))));
 
-  spdy::Http2HeaderBlock request_headers;
+  quiche::HttpHeaderBlock request_headers;
   request_headers[":method"] = "CONNECT";
   request_headers[":protocol"] = "connect-udp";
   request_headers[":authority"] = "proxy.test";
@@ -199,7 +205,7 @@ TEST_F(ConnectUdpTunnelTest, OpenTunnelToIpv4LiteralTarget) {
                 Property(&QuicBackendResponse::trailers, IsEmpty()),
                 Property(&QuicBackendResponse::body, IsEmpty()))));
 
-  spdy::Http2HeaderBlock request_headers;
+  quiche::HttpHeaderBlock request_headers;
   request_headers[":method"] = "CONNECT";
   request_headers[":protocol"] = "connect-udp";
   request_headers[":authority"] = "proxy.test";
@@ -239,7 +245,7 @@ TEST_F(ConnectUdpTunnelTest, OpenTunnelToIpv6LiteralTarget) {
        {"target_port", absl::StrCat(kAcceptablePort)}},
       &path));
 
-  spdy::Http2HeaderBlock request_headers;
+  quiche::HttpHeaderBlock request_headers;
   request_headers[":method"] = "CONNECT";
   request_headers[":protocol"] = "connect-udp";
   request_headers[":authority"] = "proxy.test";
@@ -258,7 +264,7 @@ TEST_F(ConnectUdpTunnelTest, OpenTunnelWithMalformedRequest) {
                   &QuicResetStreamError::ietf_application_code,
                   static_cast<uint64_t>(QuicHttp3ErrorCode::MESSAGE_ERROR))));
 
-  spdy::Http2HeaderBlock request_headers;
+  quiche::HttpHeaderBlock request_headers;
   request_headers[":method"] = "CONNECT";
   request_headers[":protocol"] = "connect-udp";
   request_headers[":authority"] = "proxy.test";
@@ -282,7 +288,7 @@ TEST_F(ConnectUdpTunnelTest, OpenTunnelWithUnacceptableTarget) {
                                     HasSubstr("destination_ip_prohibited")))),
                   Property(&QuicBackendResponse::trailers, IsEmpty()))));
 
-  spdy::Http2HeaderBlock request_headers;
+  quiche::HttpHeaderBlock request_headers;
   request_headers[":method"] = "CONNECT";
   request_headers[":protocol"] = "connect-udp";
   request_headers[":authority"] = "proxy.test";
@@ -311,7 +317,7 @@ TEST_F(ConnectUdpTunnelTest, ReceiveFromTarget) {
           quiche::ConnectUdpDatagramUdpPacketPayload(kData).Serialize()))
       .WillOnce(Return(MESSAGE_STATUS_SUCCESS));
 
-  spdy::Http2HeaderBlock request_headers;
+  quiche::HttpHeaderBlock request_headers;
   request_headers[":method"] = "CONNECT";
   request_headers[":protocol"] = "connect-udp";
   request_headers[":authority"] = "proxy.test";
@@ -340,7 +346,7 @@ TEST_F(ConnectUdpTunnelTest, SendToTarget) {
 
   EXPECT_CALL(request_handler_, OnResponseBackendComplete(_));
 
-  spdy::Http2HeaderBlock request_headers;
+  quiche::HttpHeaderBlock request_headers;
   request_headers[":method"] = "CONNECT";
   request_headers[":protocol"] = "connect-udp";
   request_headers[":authority"] = "proxy.test";

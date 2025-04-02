@@ -34,8 +34,7 @@ WebstoreReinstaller::WebstoreReinstaller(
           ->HasDisableReason(extension_id, disable_reason::DISABLE_CORRUPTED));
 }
 
-WebstoreReinstaller::~WebstoreReinstaller() {
-}
+WebstoreReinstaller::~WebstoreReinstaller() = default;
 
 void WebstoreReinstaller::BeginReinstall() {
   WebstoreStandaloneInstaller::BeginInstall();
@@ -50,10 +49,9 @@ WebstoreReinstaller::CreateInstallPrompt() const {
   std::unique_ptr<ExtensionInstallPrompt::Prompt> prompt(
       new ExtensionInstallPrompt::Prompt(
           ExtensionInstallPrompt::REPAIR_PROMPT));
-  prompt->SetWebstoreData(localized_user_count(),
-                          show_user_count(),
-                          average_rating(),
-                          rating_count());
+  prompt->SetWebstoreData(localized_user_count(), show_user_count(),
+                          average_rating(), rating_count(),
+                          localized_rating_count());
   return prompt;
 }
 

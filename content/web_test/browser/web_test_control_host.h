@@ -133,7 +133,7 @@ class WebTestControlHost : public WebContentsObserver,
   void DidCreateOrAttachWebContents(WebContents* web_contents);
 
   void SetTempPath(const base::FilePath& temp_path);
-  void OverrideWebkitPrefs(blink::web_pref::WebPreferences* prefs);
+  void OverrideWebPreferences(blink::web_pref::WebPreferences* prefs);
   void OpenURL(const GURL& url);
   bool IsMainWindow(WebContents* web_contents) const;
   std::unique_ptr<BluetoothChooser> RunBluetoothChooser(
@@ -143,6 +143,9 @@ class WebTestControlHost : public WebContentsObserver,
 
   WebTestResultPrinter* printer() { return printer_.get(); }
   void set_printer(WebTestResultPrinter* printer) { printer_.reset(printer); }
+
+  // WebTestControlHost implementation.
+  void PrintMessageToStderr(const std::string& message) override;
 
   void DevToolsProcessCrashed();
 
@@ -211,12 +214,13 @@ class WebTestControlHost : public WebContentsObserver,
       bool capture_navigation_history,
       bool capture_pixels) override;
   void TestFinishedInSecondaryRenderer() override;
-  void PrintMessageToStderr(const std::string& message) override;
   void PrintMessage(const std::string& message) override;
   void Reload() override;
   void OverridePreferences(
       const blink::web_pref::WebPreferences& web_preferences) override;
   void SetMainWindowHidden(bool hidden) override;
+  void SetFrameWindowHidden(const blink::LocalFrameToken& frame_token,
+                            bool hidden) override;
   void CheckForLeakedWindows() override;
   void GoToOffset(int offset) override;
   void SendBluetoothManualChooserEvent(const std::string& event,
@@ -289,7 +293,7 @@ class WebTestControlHost : public WebContentsObserver,
   void OnAudioDump(const std::vector<unsigned char>& audio_dump);
   void OnImageDump(const std::string& actual_pixel_hash, const SkBitmap& image);
   void OnTextDump(const std::string& dump);
-  void OnDumpFrameLayoutResponse(int frame_tree_node_id,
+  void OnDumpFrameLayoutResponse(FrameTreeNodeId frame_tree_node_id,
                                  const std::string& dump);
   void OnTestFinished();
   void OnCaptureSessionHistory();
@@ -308,6 +312,14 @@ class WebTestControlHost : public WebContentsObserver,
   void OnPixelDumpCaptured(const SkBitmap& snapshot);
   void ReportResults();
   void EnqueueSurfaceCopyRequest();
+
+  // Returns the WebContents associated with `frame_token`. Must only be called
+  // when processing messages received on the mojom::WebTestControlHost
+  // interface from renderer processes. `frame_token` must correspond to a valid
+  // RenderFrameHost.
+  // The return value can not be null.
+  WebContents* GetWebContentsFromCurrentContext(
+      const blink::LocalFrameToken& frame_token);
 
   mojo::AssociatedRemote<mojom::WebTestRenderFrame>&
   GetWebTestRenderFrameRemote(RenderFrameHost* frame);
@@ -423,10 +435,10 @@ class WebTestControlHost : public WebContentsObserver,
 
   // Map from frame_tree_node_id into frame-specific dumps while collecting
   // text dumps from all frames, before stitching them together.
-  std::map<int, std::string> frame_to_layout_dump_map_;
+  std::map<FrameTreeNodeId, std::string> frame_to_layout_dump_map_;
 
   std::vector<std::unique_ptr<Node>> composite_all_frames_node_storage_;
-  std::queue<Node*> composite_all_frames_node_queue_;
+  std::queue<raw_ptr<Node, CtnExperimental>> composite_all_frames_node_queue_;
 
   // Map from one frame to one mojo pipe.
   std::map<GlobalRenderFrameHostId,

@@ -9,6 +9,7 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
+#include "chrome/browser/ash/app_list/search/local_image_search/search_utils.h"
 #include "chromeos/services/machine_learning/public/cpp/service_connection.h"
 
 namespace app_list {
@@ -76,13 +77,18 @@ void ImageContentAnnotator::ConnectToImageAnnotator() {
   ml_service_->LoadImageAnnotator(
       std::move(config), image_content_annotator_.BindNewPipeAndPassReceiver(),
       base::BindOnce(
-          [](bool* ica_dlc_initialized,
+          [](bool* ica_dlc_initialized, int* num_retries_passed,
              const chromeos::machine_learning::mojom::LoadModelResult result) {
             DVLOG(1) << result;
             if (result ==
                 chromeos::machine_learning::mojom::LoadModelResult::OK) {
               DVLOG(1) << "ICA bind is done.";
               LogStatusUma(Status::kOk);
+              // Tracks how many retries have been done before the DLC is ready.
+              base::UmaHistogramExactLinear(
+                  "Apps.AppList.AnnotationStorage.ImageAnnotationWorker."
+                  "ImageContentAnnotator.NumberOfRetries",
+                  *num_retries_passed, 20);
               *ica_dlc_initialized = true;
               return;
             } else if (result == chromeos::machine_learning::mojom::
@@ -103,7 +109,7 @@ void ImageContentAnnotator::ConnectToImageAnnotator() {
             }
             *ica_dlc_initialized = false;
           },
-          &ica_dlc_initialized_));
+          &ica_dlc_initialized_, &num_retries_passed_));
 }
 
 void ImageContentAnnotator::DisconnectAnnotator() {
@@ -116,17 +122,28 @@ void ImageContentAnnotator::AnnotateEncodedImage(
     base::OnceCallback<void(ImageAnnotationResultPtr)> callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DVLOG(1) << "Making a MemoryMappedFile.";
+  LogIcaUma(IcaStatus::kAnnotateStart);
   base::MemoryMappedFile data;
   if (!data.Initialize(image_path)) {
+    LogIcaUma(IcaStatus::kDataInitFailed);
     LOG(ERROR) << "Could not create a memory mapped file for an "
                   "image file to generate annotations";
   }
   base::MappedReadOnlyRegion mapped_region =
       base::ReadOnlySharedMemoryRegion::Create(data.length());
-  CHECK(mapped_region.IsValid());
-  memcpy(mapped_region.mapping.memory(), data.data(), data.length());
+  // It's safe to early return here as the caller function
+  // `ImageAnnotationWorker::OnDecodeImageFile()` has started the
+  // `timeout_timer_` and it will continue the process when the timer gets
+  // timeout.
+  if (!mapped_region.IsValid()) {
+    LogIcaUma(IcaStatus::kMappedRegionInvalid);
+    LOG(ERROR) << "Mapped region is not valid";
+    return;
+  }
+  base::span(mapped_region.mapping).copy_from(data.bytes());
 
   EnsureAnnotatorIsConnected();
+  LogIcaUma(IcaStatus::kRequestSent);
   image_content_annotator_->AnnotateEncodedImage(
       std::move(mapped_region.region), std::move(callback));
 }

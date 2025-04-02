@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/ui/views/frame/minimize_button_metrics_win.h"
 
 #include <dwmapi.h>
@@ -118,8 +123,9 @@ int MinimizeButtonMetrics::GetMinimizeButtonOffsetForWindow() const {
     if (titlebar_info.rgrect[2].left == titlebar_info.rgrect[2].right ||
         (titlebar_info.rgstate[2] &
          (STATE_SYSTEM_INVISIBLE | STATE_SYSTEM_OFFSCREEN |
-          STATE_SYSTEM_UNAVAILABLE)))
+          STATE_SYSTEM_UNAVAILABLE))) {
       return 0;
+    }
     minimize_button_corner = {titlebar_info.rgrect[2].left, 0};
   }
 
@@ -151,8 +157,9 @@ int MinimizeButtonMetrics::GetMinimizeButtonOffsetX() const {
   // CacheMinimizeButtonDelta() for more details.
   DCHECK(cached_minimize_button_x_delta_);
 
-  if (base::i18n::IsRTL())
+  if (base::i18n::IsRTL()) {
     return cached_minimize_button_x_delta_;
+  }
 
   RECT client_rect = {0};
   GetClientRect(hwnd_, &client_rect);
@@ -161,8 +168,9 @@ int MinimizeButtonMetrics::GetMinimizeButtonOffsetX() const {
 
 int MinimizeButtonMetrics::GetAndCacheMinimizeButtonOffsetX() const {
   const int minimize_button_offset = GetMinimizeButtonOffsetForWindow();
-  if (minimize_button_offset <= 0)
+  if (minimize_button_offset <= 0) {
     return 0;
+  }
 
   if (base::i18n::IsRTL()) {
     cached_minimize_button_x_delta_ = minimize_button_offset;

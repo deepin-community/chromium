@@ -1,17 +1,10 @@
-load("//bazel:skia_rules.bzl", "exports_files_legacy", "skia_cc_library")
+load("//bazel:skia_rules.bzl", "skia_cc_library")
+
+package(
+    default_applicable_licenses = ["//:license"],
+)
 
 licenses(["notice"])
-
-exports_files_legacy()
-
-skia_cc_library(
-    name = "noop_testrunner",
-    testonly = True,
-    srcs = ["BazelNoopTestRunner.cpp"],
-    visibility = [
-        "//gm:__pkg__",
-    ],
-)
 
 skia_cc_library(
     name = "testrunner",
@@ -22,6 +15,7 @@ skia_cc_library(
     hdrs = ["TestRunner.h"],
     visibility = [
         "//bench:__subpackages__",
+        "//gm:__subpackages__",
         "//tools/testrunners:__subpackages__",
     ],
     deps = [

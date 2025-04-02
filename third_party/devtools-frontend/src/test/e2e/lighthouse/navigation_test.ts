@@ -13,7 +13,6 @@ import {
   waitFor,
   waitForElementWithTextContent,
 } from '../../shared/helper.js';
-import {describe} from '../../shared/mocha-extensions.js';
 import {
   clickStartButton,
   getAuditsBreakdown,
@@ -32,7 +31,7 @@ import {
 // This test will fail (by default) in headful mode, as the target page never gets painted.
 // To resolve this when debugging, just make sure the target page is visible during the lighthouse run.
 
-describe('Navigation', async function() {
+describe('Navigation', function() {
   // The tests in this suite are particularly slow
   if (this.timeout() !== 0) {
     this.timeout(60_000);
@@ -72,14 +71,8 @@ describe('Navigation', async function() {
     await navigateToLighthouseTab('lighthouse/hello.html');
     await registerServiceWorker();
 
-    await selectCategories([
-      'performance',
-      'accessibility',
-      'best-practices',
-      'seo',
-      'pwa',
-      'lighthouse-plugin-publisher-ads',
-    ]);
+    await waitFor('.lighthouse-start-view');
+    // We don't call selectCategories explicitly, but it's implied we leave all the checkboxes checked
 
     let numNavigations = 0;
     const {target} = getBrowserAndPages();
@@ -91,24 +84,34 @@ describe('Navigation', async function() {
 
     const {lhr, artifacts, reportEl} = await waitForResult();
 
+    const receivedCategories = Array.from(Object.keys(lhr.categories)).sort();
+    const sentCategories = Array.from(lhr.configSettings.onlyCategories).sort();
+    assert.deepEqual(receivedCategories, sentCategories);
+
     // 1 initial about:blank jump
     // 1 navigation for the actual page load
     // 2 navigations to go to chrome://terms and back testing bfcache
     // 1 refresh after auditing to reset state
     assert.strictEqual(numNavigations, 5);
 
-    assert.strictEqual(lhr.lighthouseVersion, '11.5.0');
+    assert.strictEqual(lhr.lighthouseVersion, '12.3.0');
     assert.match(lhr.finalUrl, /^https:\/\/localhost:[0-9]+\/test\/e2e\/resources\/lighthouse\/hello.html/);
 
     assert.strictEqual(lhr.configSettings.throttlingMethod, 'simulate');
-    assert.strictEqual(lhr.configSettings.disableStorageReset, false);
+    assert.isFalse(lhr.configSettings.disableStorageReset);
     assert.strictEqual(lhr.configSettings.formFactor, 'mobile');
     assert.strictEqual(lhr.configSettings.throttling.rttMs, 150);
-    assert.strictEqual(lhr.configSettings.screenEmulation.disabled, true);
+    assert.isTrue(lhr.configSettings.screenEmulation.disabled);
     assert.include(lhr.configSettings.emulatedUserAgent, 'Mobile');
     assert.include(lhr.environment.networkUserAgent, 'Mobile');
 
-    assert.deepStrictEqual(artifacts.ViewportDimensions, {
+    const trace = artifacts.Trace;
+    assert.isNotOk(
+        trace.traceEvents.some((e: Record<string, unknown>) => e.cat === 'disabled-by-default-v8.cpu_profiler'),
+        'Trace contained v8 profiler events',
+    );
+
+    assert.deepEqual(artifacts.ViewportDimensions, {
       innerHeight: 823,
       innerWidth: 412,
       outerHeight: 823,
@@ -117,13 +120,9 @@ describe('Navigation', async function() {
     });
 
     const {auditResults, erroredAudits, failedAudits} = getAuditsBreakdown(lhr, ['max-potential-fid']);
-    assert.strictEqual(auditResults.length, 191);
-    assert.deepStrictEqual(erroredAudits, []);
-    assert.deepStrictEqual(failedAudits.map(audit => audit.id), [
-      'installable-manifest',
-      'splash-screen',
-      'themed-omnibox',
-      'maskable-icon',
+    assert.lengthOf(auditResults, 157);
+    assert.deepEqual(erroredAudits, []);
+    assert.deepEqual(failedAudits.map(audit => audit.id), [
       'document-title',
       'html-has-lang',
       'render-blocking-resources',
@@ -131,7 +130,7 @@ describe('Navigation', async function() {
     ]);
 
     const viewTraceButton = await $textContent('View Trace', reportEl);
-    assert.ok(!viewTraceButton);
+    assert.isOk(!viewTraceButton);
 
     // Test view trace button behavior
     // For some reason the CDP click command doesn't work here even if the tools menu is open.
@@ -160,8 +159,7 @@ describe('Navigation', async function() {
     const waitForJson = await interceptNextFileSave();
 
     // For some reason the CDP click command doesn't work here even if the tools menu is open.
-    await reportEl.$eval(
-        'a[data-action="save-json"]:not(.hidden)', saveJsonEl => (saveJsonEl as HTMLElement).click());
+    await reportEl.$eval('a[data-action="save-json"]:not(.hidden)', saveJsonEl => (saveJsonEl as HTMLElement).click());
 
     const jsonContent = await waitForJson();
     assert.strictEqual(jsonContent, JSON.stringify(lhr, null, 2));
@@ -169,8 +167,7 @@ describe('Navigation', async function() {
     const waitForHtml = await interceptNextFileSave();
 
     // For some reason the CDP click command doesn't work here even if the tools menu is open.
-    await reportEl.$eval(
-        'a[data-action="save-html"]:not(.hidden)', saveHtmlEl => (saveHtmlEl as HTMLElement).click());
+    await reportEl.$eval('a[data-action="save-html"]:not(.hidden)', saveHtmlEl => (saveHtmlEl as HTMLElement).click());
 
     const htmlContent = await waitForHtml();
     const iframeHandle = await renderHtmlInIframe(htmlContent);
@@ -201,20 +198,16 @@ describe('Navigation', async function() {
     ];
 
     const {auditResults, erroredAudits, failedAudits} = getAuditsBreakdown(lhr, flakyAudits);
-    assert.strictEqual(auditResults.length, 168);
-    assert.deepStrictEqual(erroredAudits, []);
-    assert.deepStrictEqual(failedAudits.map(audit => audit.id), [
-      'installable-manifest',
-      'splash-screen',
-      'themed-omnibox',
-      'maskable-icon',
+    assert.lengthOf(auditResults, 157);
+    assert.deepEqual(erroredAudits, []);
+    assert.deepEqual(failedAudits.map(audit => audit.id), [
       'document-title',
       'html-has-lang',
       'meta-description',
     ]);
 
     const viewTraceButton = await $textContent('View Trace', reportEl);
-    assert.ok(viewTraceButton);
+    assert.isOk(viewTraceButton);
   });
 
   it('successfully returns a Lighthouse report when settings changed', async () => {
@@ -222,6 +215,7 @@ describe('Navigation', async function() {
     await navigateToLighthouseTab('lighthouse/hello.html');
     await registerServiceWorker();
 
+    await setToolbarCheckboxWithText(true, 'Habilitar muestreo de JS');
     await setToolbarCheckboxWithText(false, 'Borrar almacenamiento');
     await selectCategories(['performance', 'best-practices']);
     await selectDevice('desktop');
@@ -230,6 +224,12 @@ describe('Navigation', async function() {
 
     const {reportEl, lhr, artifacts} = await waitForResult();
 
+    const trace = artifacts.Trace;
+    assert.isOk(
+        trace.traceEvents.some((e: Record<string, unknown>) => e.cat === 'disabled-by-default-v8.cpu_profiler'),
+        'Trace did not contain any v8 profiler events',
+    );
+
     const {innerWidth, innerHeight, devicePixelRatio} = artifacts.ViewportDimensions;
     // TODO: Figure out why outerHeight can be different depending on OS
     assert.strictEqual(innerHeight, 720);
@@ -237,18 +237,18 @@ describe('Navigation', async function() {
     assert.strictEqual(devicePixelRatio, 1);
 
     const {erroredAudits} = getAuditsBreakdown(lhr);
-    assert.deepStrictEqual(erroredAudits, []);
+    assert.deepEqual(erroredAudits, []);
 
-    assert.deepStrictEqual(Object.keys(lhr.categories), ['performance', 'best-practices']);
-    assert.strictEqual(lhr.configSettings.disableStorageReset, true);
+    assert.deepEqual(Object.keys(lhr.categories), ['performance', 'best-practices']);
+    assert.isTrue(lhr.configSettings.disableStorageReset);
     assert.strictEqual(lhr.configSettings.formFactor, 'desktop');
     assert.strictEqual(lhr.configSettings.throttling.rttMs, 40);
-    assert.strictEqual(lhr.configSettings.screenEmulation.disabled, true);
+    assert.isTrue(lhr.configSettings.screenEmulation.disabled);
     assert.notInclude(lhr.configSettings.emulatedUserAgent, 'Mobile');
     assert.notInclude(lhr.environment.networkUserAgent, 'Mobile');
 
     const viewTreemapButton = await $textContent('Ver gráfico de rectángulos', reportEl);
-    assert.ok(viewTreemapButton);
+    assert.isOk(viewTreemapButton);
 
     const footerIssueText = await reportEl.$eval('.lh-footer__version_issue', footerIssueEl => {
       return footerIssueEl.textContent;

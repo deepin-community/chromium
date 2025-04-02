@@ -2,11 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-/* eslint-disable rulesdir/es_modules_import */
+import type {ElementHandle, Page} from 'puppeteer-core';
 
-import {type ElementHandle, type Page} from 'puppeteer-core';
-
-import {type UserFlow} from '../../../front_end/panels/recorder/models/Schema.js';
+import type {UserFlow} from '../../../front_end/panels/recorder/models/Schema.js';
 import type * as Recorder from '../../../front_end/panels/recorder/recorder.js';
 import {openPanelViaMoreTools} from '../../../test/e2e/helpers/settings-helpers.js';
 import {
@@ -85,7 +83,7 @@ export async function enableAndOpenRecorderPanel(path: string) {
 }
 
 async function createRecording(name: string, selectorAttribute?: string) {
-  const newRecordingButton = await waitForAria('Create a new recording');
+  const newRecordingButton = await waitForAria('Create recording');
   await newRecordingButton.click();
   const input = await waitForAria('RECORDING NAME');
   await input.type(name);
@@ -121,11 +119,11 @@ export async function openRecorderPanel() {
   await waitFor('devtools-recording-view');
 }
 
-type StartRecordingOptions = {
-  networkCondition?: string,
-  untrustedEvents?: boolean,
-  selectorAttribute?: string,
-};
+interface StartRecordingOptions {
+  networkCondition?: string;
+  untrustedEvents?: boolean;
+  selectorAttribute?: string;
+}
 
 export async function startRecording(
     path: string,
@@ -237,6 +235,8 @@ export async function clickSelectButtonItem(itemLabel: string, root: string) {
   }
 
   await clickElement(selectMenuItems[selectMenuItemIndex]);
+  const button = await waitFor('devtools-button', selectMenu);
+  await clickElement(button);
 }
 
 export async function setupRecorderWithScript(
@@ -255,7 +255,7 @@ export async function setupRecorderWithScriptAndReplay(
     ): Promise<void> {
   await setupRecorderWithScript(script, path);
   const onceFinished = onReplayFinished();
-  await clickSelectButtonItem('Normal (Default)', 'devtools-replay-button');
+  await clickSelectButtonItem('Normal (Default)', 'devtools-replay-section');
   await onceFinished;
 }
 

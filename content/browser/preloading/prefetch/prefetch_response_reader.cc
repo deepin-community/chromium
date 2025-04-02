@@ -4,11 +4,16 @@
 
 #include "content/browser/preloading/prefetch/prefetch_response_reader.h"
 
-#include "base/debug/dump_without_crashing.h"
+#include <algorithm>
+
 #include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
+#include "base/strings/string_util.h"
 #include "base/task/sequenced_task_runner.h"
 #include "content/browser/preloading/prefetch/prefetch_features.h"
+#include "content/browser/preloading/prefetch/prefetch_params.h"
 #include "content/browser/preloading/prefetch/prefetch_streaming_url_loader.h"
+#include "net/http/http_cookie_indices.h"
 #include "services/network/public/mojom/early_hints.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
@@ -37,27 +42,31 @@ GetStatusForRecordingFromErrorOnResponseReceived(
 
 bool PrefetchResponseReader::Servable(
     base::TimeDelta cacheable_duration) const {
-  bool servable = false;
   switch (load_state_) {
     case LoadState::kResponseReceived:
+      // If the response hasn't been completed yet, we can still serve the
+      // prefetch (depending on |head_|).
+      CHECK(!response_complete_time_);
+      return true;
+
     case LoadState::kCompleted:
-      servable = true;
-      break;
+      // Prefetch is servable as long as it is fresh.
+      CHECK(response_complete_time_);
+      return base::TimeTicks::Now() <
+             response_complete_time_.value() + cacheable_duration;
 
     case LoadState::kStarted:
     case LoadState::kRedirectHandled:
     case LoadState::kFailedResponseReceived:
-    case LoadState::kFailed:
     case LoadState::kFailedRedirect:
-      servable = false;
-      break;
-  }
+      CHECK(!response_complete_time_)
+          << "LoadState: " << static_cast<int>(load_state_);
+      return false;
 
-  // If the response hasn't been completed yet (meaning response_complete_time_
-  // is std::nullopt), we can still serve the prefetch (depending on |head_|).
-  return servable && (!response_complete_time_.has_value() ||
-                      base::TimeTicks::Now() <
-                          response_complete_time_.value() + cacheable_duration);
+    case LoadState::kFailed:
+      CHECK(response_complete_time_);
+      return false;
+  }
 }
 
 bool PrefetchResponseReader::IsWaitingForResponse() const {
@@ -75,11 +84,28 @@ bool PrefetchResponseReader::IsWaitingForResponse() const {
   }
 }
 
-PrefetchResponseReader::PrefetchResponseReader() {
+bool PrefetchResponseReader::VariesOnCookieIndices() const {
+  return cookie_indices_.has_value();
+}
+
+bool PrefetchResponseReader::MatchesCookieIndices(
+    base::span<const std::pair<std::string, std::string>> cookies) const {
+  CHECK(cookie_indices_.has_value());
+  net::CookieIndicesHash hash =
+      net::HashCookieIndices(cookie_indices_->cookie_names, cookies);
+  return hash == cookie_indices_->expected_hash;
+}
+
+PrefetchResponseReader::PrefetchResponseReader(bool is_reusable)
+    : is_reusable_(is_reusable) {
   serving_url_loader_receivers_.set_disconnect_handler(base::BindRepeating(
       &PrefetchResponseReader::OnServingURLLoaderMojoDisconnect,
       weak_ptr_factory_.GetWeakPtr()));
 }
+
+PrefetchResponseReader::PrefetchResponseReader()
+    : PrefetchResponseReader(
+          base::FeatureList::IsEnabled(features::kPrefetchReusable)) {}
 
 PrefetchResponseReader::~PrefetchResponseReader() {
   if (should_record_metrics_) {
@@ -118,15 +144,6 @@ void PrefetchResponseReader::OnServingURLLoaderMojoDisconnect() {
 }
 
 PrefetchRequestHandler PrefetchResponseReader::CreateRequestHandler() {
-  if (create_request_handler_called_) {
-    // Monitor cases where CreateRequestHandler() is called multiple times, for
-    // investigation of crbug.com/1483599. Anyway such cases should be handled
-    // (failing gracefully) below, e.g. by checking `body_`.
-    // TODO(crbug.com/1483599): Remove this.
-    base::debug::DumpWithoutCrashing();
-  }
-  create_request_handler_called_ = true;
-
   mojo::ScopedDataPipeConsumerHandle body;
 
   // Returns a null handler if some checks fail here.
@@ -138,7 +155,7 @@ PrefetchRequestHandler PrefetchResponseReader::CreateRequestHandler() {
     case LoadState::kResponseReceived:
     case LoadState::kCompleted:
     case LoadState::kFailed:
-      if (base::FeatureList::IsEnabled(features::kPrefetchReusable)) {
+      if (is_reusable_) {
         if (body_tee_) {
           body = body_tee_->Clone();
         }
@@ -148,6 +165,10 @@ PrefetchRequestHandler PrefetchResponseReader::CreateRequestHandler() {
       if (!body) {
         // This might be because `CreateRequestHandler()` is called for the
         // second time.
+        base::UmaHistogramBoolean(
+            "Preloading.Prefetch."
+            "PrefetchResponseReaderCreateRequestHandlerInvalidBody",
+            true);
         return {};
       }
       break;
@@ -176,7 +197,7 @@ void PrefetchResponseReader::BindAndStart(
     const network::ResourceRequest& resource_request,
     mojo::PendingReceiver<network::mojom::URLLoader> receiver,
     mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
-  if (!base::FeatureList::IsEnabled(features::kPrefetchReusable)) {
+  if (!is_reusable_) {
     // Only one client is allowed if the feature is disabled.
     CHECK(serving_url_loader_clients_.empty());
   }
@@ -210,9 +231,9 @@ void PrefetchResponseReader::BindAndStart(
       // `ForwardResponse()` should be called. Other `kFailed` cases shouldn't
       // reach here.
       //
-      // TODO(crbug.com/1449360): we might want to revisit this behavior.
+      // TODO(crbug.com/40064891): we might want to revisit this behavior.
 
-      // TODO(crbug.com/1483599): The code below is duplicated to investigate
+      // TODO(crbug.com/40072532): The code below is duplicated to investigate
       // the `load_state_` value on CHECK failure. Remove the duplicated code.
       CHECK(GetHead());
       CHECK(forward_body_);
@@ -239,7 +260,6 @@ void PrefetchResponseReader::BindAndStart(
       // `CreateRequestHandler()` shouldn't be called for these non-servable
       // states.
       NOTREACHED();
-      break;
   }
 
   RunEventQueue(client_id);
@@ -308,7 +328,7 @@ void PrefetchResponseReader::RunEventQueue(ServingUrlLoaderClientId client_id) {
 
 void PrefetchResponseReader::OnComplete(
     network::URLLoaderCompletionStatus completion_status) {
-  // TODO(crbug.com/1484028): Remove this alias.
+  // TODO(crbug.com/40072670): Remove this alias.
   auto load_state = load_state_;
   base::debug::Alias(&load_state);
 
@@ -328,17 +348,13 @@ void PrefetchResponseReader::OnComplete(
       load_state_ = LoadState::kFailed;
       break;
     case LoadState::kRedirectHandled:
-      CHECK(false);
-      break;
+      NOTREACHED();
     case LoadState::kCompleted:
-      CHECK(false);
-      break;
+      NOTREACHED();
     case LoadState::kFailed:
-      CHECK(false);
-      break;
+      NOTREACHED();
     case LoadState::kFailedRedirect:
-      CHECK(false);
-      break;
+      NOTREACHED();
   }
 
   CHECK(!response_complete_time_);
@@ -396,6 +412,11 @@ void PrefetchResponseReader::HandleRedirect(
       return;
   }
 
+  // Store away the info we want, then clear the request cookies before we
+  // potentially forward them to any client.
+  StoreInfoFromResponseHead(*redirect_head);
+  redirect_head->request_cookies.clear();
+
   AddEventToQueue(base::BindRepeating(&PrefetchResponseReader::ForwardRedirect,
                                       base::Unretained(this), redirect_info,
                                       std::move(redirect_head)));
@@ -425,10 +446,15 @@ void PrefetchResponseReader::OnReceiveResponse(
     body.reset();
   }
 
+  // Store away the info we want, then clear the request cookies before we
+  // potentially forward them to any client.
+  StoreInfoFromResponseHead(*head);
+  head->request_cookies.clear();
+
   head_ = std::move(head);
-  if (base::FeatureList::IsEnabled(features::kPrefetchReusable)) {
+  if (is_reusable_) {
     body_tee_ = base::MakeRefCounted<PrefetchDataPipeTee>(
-        std::move(body), features::kPrefetchReusableBodySizeLimit.Get());
+        std::move(body), GetPrefetchDataPipeTeeBodySizeLimit());
   } else {
     body_ = std::move(body);
   }
@@ -504,20 +530,6 @@ void PrefetchResponseReader::SetPriority(net::RequestPriority priority,
   }
 }
 
-void PrefetchResponseReader::PauseReadingBodyFromNet() {
-  // Forward calls from the serving URL loader to the prefetch URL loader.
-  if (streaming_url_loader_) {
-    streaming_url_loader_->PauseReadingBodyFromNet();
-  }
-}
-
-void PrefetchResponseReader::ResumeReadingBodyFromNet() {
-  // Forward calls from the serving URL loader to the prefetch URL loader.
-  if (streaming_url_loader_) {
-    streaming_url_loader_->ResumeReadingBodyFromNet();
-  }
-}
-
 PrefetchStreamingURLLoaderStatus PrefetchResponseReader::GetStatusForRecording()
     const {
   switch (load_state_) {
@@ -562,5 +574,39 @@ PrefetchStreamingURLLoaderStatus PrefetchResponseReader::GetStatusForRecording()
       }
   }
 }
+
+void PrefetchResponseReader::StoreInfoFromResponseHead(
+    const network::mojom::URLResponseHead& head) {
+  // Responses that don't have headers generated by the network service don't
+  // have anything to store.
+  if (!head.headers || !head.parsed_headers) {
+    return;
+  }
+  CHECK(!cookie_indices_)
+      << "This shouldn't happen more than once per PrefetchResponseReader.";
+  size_t iter = 0;
+  std::string request_header;
+  bool vary_on_cookie = false;
+  while (head.headers->EnumerateHeader(&iter, "vary", &request_header)) {
+    if (request_header == "*" ||
+        base::EqualsCaseInsensitiveASCII(request_header, "cookie")) {
+      vary_on_cookie = true;
+      break;
+    }
+  }
+  if (vary_on_cookie && head.parsed_headers->cookie_indices.has_value()) {
+    auto& indices = cookie_indices_.emplace();
+    indices.cookie_names = *head.parsed_headers->cookie_indices;
+    std::ranges::sort(indices.cookie_names);
+    auto repeated = std::ranges::unique(indices.cookie_names);
+    indices.cookie_names.erase(repeated.begin(), repeated.end());
+    indices.cookie_names.shrink_to_fit();
+    indices.expected_hash =
+        net::HashCookieIndices(indices.cookie_names, head.request_cookies);
+  }
+}
+
+PrefetchResponseReader::CookieIndicesInfo::CookieIndicesInfo() = default;
+PrefetchResponseReader::CookieIndicesInfo::~CookieIndicesInfo() = default;
 
 }  // namespace content

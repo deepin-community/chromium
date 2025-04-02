@@ -17,8 +17,8 @@
 
 #include "base/debug/crash_logging.h"
 #include "base/memory/raw_ptr.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/observer_list.h"
+#include "ui/accessibility/ax_common.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
 #include "ui/accessibility/ax_export.h"
 #include "ui/accessibility/ax_tree_data.h"
@@ -37,6 +37,8 @@ class AXSelection;
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
+//
+// LINT.IfChange(AXTreeUnserializeError)
 enum class AXTreeUnserializeError {
   // Tree has no root.
   kNoRoot = 0,
@@ -58,10 +60,7 @@ enum class AXTreeUnserializeError {
   // increase, but none of the other enum values may change.
   kMaxValue = kPendingChanges
 };
-
-#define ACCESSIBILITY_TREE_UNSERIALIZE_ERROR_HISTOGRAM(enum_value) \
-  base::UmaHistogramEnumeration(                                   \
-      "Accessibility.Reliability.Tree.UnserializeError", enum_value)
+// LINT.ThenChange(/tools/metrics/histograms/metadata/accessibility/enums.xml:AccessibilityTreeUnserializeError)
 
 // AXTree is a live, managed tree of AXNode objects that can receive
 // updates from another AXTreeSource via AXTreeUpdates, and it can be
@@ -265,13 +264,12 @@ class AX_EXPORT AXTree {
   // `SetFocusedNodeShouldNeverBeIgnored` above).
   static bool is_focused_node_always_unignored_;
 
-#if DCHECK_IS_ON()
-  bool has_plugin_ = false;
+#if AX_FAIL_FAST_BUILD()
   void CheckTreeConsistency(const AXTreeUpdate& update);
 #endif
 
   // Accumulate errors as there can be more than one before Chrome is crashed
-  // via AccessibilityFatalError();
+  // via UnrecoverableAccessibilityError();
   // In an AX_FAIL_FAST_BUILD or if |is_fatal|, will assert/crash immediately.
   void RecordError(const AXTreeUpdateState& update_state,
                    std::string new_error,
@@ -309,12 +307,14 @@ class AX_EXPORT AXTree {
 
   // Notify the delegate that |node| will be destroyed or reparented.
   void NotifyNodeWillBeReparentedOrDeleted(
-      AXNode* node,
-      const AXTreeUpdateState* update_state);
+      AXNode& node,
+      const AXTreeUpdateState& update_state);
 
   // Notify the delegate that |node| and all of its descendants will be
   // destroyed. This function is called during AXTree teardown.
-  void RecursivelyNotifyNodeDeletedForTreeTeardown(AXNode* node);
+  void RecursivelyNotifyNodeWillBeDeletedForTreeTeardown(
+      AXNode& node,
+      std::set<AXNodeID>& deleted_nodes);
 
   // Notify the delegate that the node marked by |node_id| has been deleted.
   // We are passing the node id instead of ax node is because by the time this
@@ -354,7 +354,10 @@ class AX_EXPORT AXTree {
       const AXTreeData* new_tree_data,
       const AXNodeData& new_data);
 
-  void UpdateReverseRelations(AXNode* node, const AXNodeData& new_data);
+  // Update maps that track which relations are pointing to |node|.
+  void UpdateReverseRelations(AXNode* node,
+                              const AXNodeData& new_data,
+                              bool is_new_node = false);
 
   // Sets a flag indicating whether the tree is currently being updated or not.
   // If the tree is being updated, then its internal pointers might be invalid

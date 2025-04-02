@@ -6,15 +6,16 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <iterator>
 #include <optional>
+#include <string_view>
 
 #include "base/check.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/lazy_instance.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
@@ -330,7 +331,7 @@ TranslateLanguageList::TranslateLanguageList()
   DCHECK(
       std::is_sorted(supported_languages_.begin(), supported_languages_.end()));
   DCHECK(supported_languages_.end() ==
-         base::ranges::adjacent_find(supported_languages_));
+         std::ranges::adjacent_find(supported_languages_));
 
   if (update_is_disabled)
     return;
@@ -339,7 +340,7 @@ TranslateLanguageList::TranslateLanguageList()
   language_list_fetcher_->set_max_retry_on_5xx(kMaxRetryOn5xx);
 }
 
-TranslateLanguageList::~TranslateLanguageList() {}
+TranslateLanguageList::~TranslateLanguageList() = default;
 
 void TranslateLanguageList::GetSupportedLanguages(
     bool translate_allowed,
@@ -365,7 +366,7 @@ void TranslateLanguageList::GetSupportedPartialTranslateLanguages(
       std::end(kDefaultSupportedPartialTranslateLanguages));
 }
 
-std::string TranslateLanguageList::GetLanguageCode(base::StringPiece language) {
+std::string TranslateLanguageList::GetLanguageCode(std::string_view language) {
   // Only remove the country code for country specific languages we don't
   // support specifically yet.
   if (IsSupportedLanguage(language))
@@ -373,15 +374,15 @@ std::string TranslateLanguageList::GetLanguageCode(base::StringPiece language) {
   return std::string(language::ExtractBaseLanguage(language));
 }
 
-bool TranslateLanguageList::IsSupportedLanguage(base::StringPiece language) {
-  return base::ranges::binary_search(supported_languages_, language);
+bool TranslateLanguageList::IsSupportedLanguage(std::string_view language) {
+  return std::ranges::binary_search(supported_languages_, language);
 }
 
 // static
 bool TranslateLanguageList::IsSupportedPartialTranslateLanguage(
-    base::StringPiece language) {
-  return base::ranges::binary_search(kDefaultSupportedPartialTranslateLanguages,
-                                     language);
+    std::string_view language) {
+  return std::ranges::binary_search(kDefaultSupportedPartialTranslateLanguages,
+                                    language);
 }
 
 // static
@@ -478,7 +479,7 @@ void TranslateLanguageList::NotifyEvent(int line, std::string message) {
 }
 
 bool TranslateLanguageList::SetSupportedLanguages(
-    base::StringPiece language_list) {
+    std::string_view language_list) {
   // The format is in JSON as:
   // {
   //   "sl": {"XX": "LanguageName", ...},
@@ -521,7 +522,7 @@ bool TranslateLanguageList::SetSupportedLanguages(
   DCHECK(
       std::is_sorted(supported_languages_.begin(), supported_languages_.end()));
   DCHECK(supported_languages_.end() ==
-         base::ranges::adjacent_find(supported_languages_));
+         std::ranges::adjacent_find(supported_languages_));
 
   NotifyEvent(__LINE__, base::JoinString(supported_languages_, ", "));
   return true;

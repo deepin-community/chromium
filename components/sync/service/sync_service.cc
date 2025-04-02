@@ -35,10 +35,10 @@ bool SyncService::IsSyncFeatureEnabled() const {
 }
 
 bool SyncService::CanSyncFeatureStart() const {
-  return GetDisableReasons().Empty() &&
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  return GetDisableReasons().empty() &&
+#if BUILDFLAG(IS_CHROMEOS)
          !GetUserSettings()->IsSyncFeatureDisabledViaDashboard() &&
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
          HasSyncConsent();
 }
 
@@ -55,7 +55,6 @@ bool SyncService::IsEngineInitialized() const {
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 bool SyncService::IsSyncFeatureActive() const {
@@ -74,7 +73,6 @@ bool SyncService::IsSyncFeatureActive() const {
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 bool SyncService::HasUnrecoverableError() const {

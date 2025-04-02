@@ -31,9 +31,7 @@ class CORE_EXPORT FontFaceSetWorker final
   FontFaceSetWorker& operator=(const FontFaceSetWorker&) = delete;
   ~FontFaceSetWorker() override;
 
-  ScriptPromiseTyped<FontFaceSet> ready(ScriptState*) override;
-
-  AtomicString status() const override;
+  ScriptPromise<FontFaceSet> ready(ScriptState*) override;
 
   WorkerGlobalScope* GetWorker() const;
 

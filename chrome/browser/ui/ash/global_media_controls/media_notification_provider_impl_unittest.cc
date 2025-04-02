@@ -3,20 +3,19 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/ash/global_media_controls/media_notification_provider_impl.h"
+
 #include <memory>
 
 #include "ash/system/media/media_notification_provider_observer.h"
 #include "ash/test_shell_delegate.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/unguessable_token.h"
 #include "chrome/browser/ash/crosapi/crosapi_ash.h"
 #include "chrome/browser/ash/crosapi/crosapi_manager.h"
 #include "chrome/browser/ash/crosapi/media_ui_ash.h"
 #include "chrome/browser/ash/crosapi/test_crosapi_environment.h"
 #include "chrome/browser/media/router/discovery/mdns/dns_sd_registry.h"
-#include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/ui/global_media_controls/cast_media_notification_item.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/test/base/chrome_ash_test_base.h"
@@ -264,8 +263,6 @@ class CastStartStopMediaNotificationProviderImplTest
   void SetUp() override {
     // This must be called before MediaNotificationProviderImplTest::SetUp()
     // starts the GPU service thread.
-    scoped_feature_list_.InitAndEnableFeature(
-        media_router::kGlobalMediaControlsCastStartStop);
     MediaNotificationProviderImplTest::SetUp();
 
     profile_ = crosapi_environment_.profile_manager()->CreateTestingProfile(
@@ -294,7 +291,6 @@ class CastStartStopMediaNotificationProviderImplTest
   }
 
   raw_ptr<Profile> profile_ = nullptr;
-  base::test::ScopedFeatureList scoped_feature_list_;
   std::unique_ptr<views::View> list_view_;
 };
 
@@ -314,9 +310,9 @@ TEST_F(CastStartStopMediaNotificationProviderImplTest, ShowCastFooterView) {
   views::Button* stop_casting_button =
       static_cast<views::Button*>(footer_view->children()[0]);
   views::test::ButtonTestApi(stop_casting_button)
-      .NotifyClick(ui::MouseEvent(ui::ET_MOUSE_PRESSED, gfx::Point(0, 0),
-                                  gfx::Point(0, 0), ui::EventTimeForNow(),
-                                  ui::EF_LEFT_MOUSE_BUTTON, 0));
+      .NotifyClick(ui::MouseEvent(
+          ui::EventType::kMousePressed, gfx::Point(0, 0), gfx::Point(0, 0),
+          ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON, 0));
 }
 
 TEST_F(CastStartStopMediaNotificationProviderImplTest, ShowDeviceSelectorView) {

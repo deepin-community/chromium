@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {CHOOSE_ENTRY_PROPERTY} from './file_manager/choose_entry_const.js';
+
+const EXTENSION_ID = 'oobinhbdbiehknkpbpejbbpdbkdjmoco';
+
 interface TestMessageCommand {
   name: string;
   [key: string]: any;
@@ -147,12 +151,12 @@ export async function sendBrowserTestCommand(
       }
       return result;
     } catch (error: any) {
-      console.log(error.stack || error);
+      console.info(error.stack || error);
       return tryAgain;
     }
   });
   if (debug) {
-    console.log('BrowserTest ' + command.name + ': ' + result);
+    console.info('BrowserTest ' + command.name + ': ' + result);
   }
   return result;
 }
@@ -1775,4 +1779,77 @@ export function formatDate(date: Date) {
  */
 export function sanitizeDate(strDate: string): string {
   return strDate.replace('\u202f', ' ');
+}
+
+/**
+ * Opens a foreground window that makes a call to
+ * chrome.fileSystem.chooseEntry. This is due to the fact that this API
+ * shouldn't be called in the background page (see crbug.com/736930).
+ *
+ * @return Promise fulfilled when a foreground window opens.
+ */
+export async function openEntryChoosingWindow(
+    params: chrome.fileSystem.ChooseEntryOptions):
+    Promise<chrome.windows.Window> {
+  const json = JSON.stringify(params);
+  const url = 'file_manager/choose_entry.html?' +
+      new URLSearchParams({value: json}).toString();
+  return new Promise((resolve, reject) => {
+    chrome.windows.create({url, height: 600, width: 400}, (win) => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+      } else {
+        resolve(win);
+      }
+    });
+  });
+}
+
+chrome.runtime.onMessage.addListener(
+    (msg: any, sender: chrome.runtime.MessageSender,
+     _sendResponse: (_arg: any) => void) => {
+      if (sender.id !== EXTENSION_ID) {
+        return false;
+      } else if (msg.msgType === CHOOSE_ENTRY_PROPERTY) {
+        if (msg.entryNames) {
+          globalThis[CHOOSE_ENTRY_PROPERTY] = msg.entryNames as string;
+        } else {
+          delete globalThis[CHOOSE_ENTRY_PROPERTY];
+        }
+        return true;
+      }
+      return false;
+    });
+
+/**
+ * Companion function to openEntryChoosingWindow function. This function waits
+ * until entry selected in a dialog shown by chooseEntry() is set.
+ * @return the entry set by the dialog shown via chooseEntry().
+ */
+export async function pollForChosenEntry(caller: string): Promise<string> {
+  await repeatUntil(() => {
+    if (globalThis[CHOOSE_ENTRY_PROPERTY] !== undefined) {
+      return;
+    }
+    return pending(caller, 'Waiting for chooseEntry() result');
+  });
+  return globalThis[CHOOSE_ENTRY_PROPERTY]!;
+}
+
+/** Waits until the MediaApp/Backlight shows up. */
+export async function waitForMediaApp() {
+  // The MediaApp window should open for the file.
+  const caller = getCaller();
+  const mediaAppAppId = 'jhdjimmaggjajfjphpljagpgkidjilnj';
+  await repeatUntil(async () => {
+    const result = await sendTestMessage({
+      name: 'hasSwaStarted',
+      swaAppId: mediaAppAppId,
+    });
+
+    if (result === 'true') {
+      return;
+    }
+    return pending(caller, 'Waiting for MediaApp to open');
+  });
 }

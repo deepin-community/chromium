@@ -79,7 +79,6 @@ constexpr BackendUsage SelectedBackendToMetric(
       return used ? BackendUsage::kKwallet6 : BackendUsage::kKwallet6Failed;
   }
   NOTREACHED();
-  return BackendUsage::kDeferFailed;
 }
 
 const char* SelectedLinuxBackendToString(
@@ -99,7 +98,6 @@ const char* SelectedLinuxBackendToString(
       return "KWALLET6";
   }
   NOTREACHED();
-  return nullptr;
 }
 
 }  // namespace
@@ -118,7 +116,7 @@ std::unique_ptr<KeyStorageLinux> KeyStorageLinux::CreateService(
   VLOG(1) << "Selected backend for OSCrypt: "
           << SelectedLinuxBackendToString(selected_backend);
 
-  // TODO(crbug.com/782851) Schedule the initialisation on each backend's
+  // TODO(crbug.com/40548841) Schedule the initialisation on each backend's
   // favourite thread.
 
   // Try initializing the selected backend.

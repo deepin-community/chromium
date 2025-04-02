@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/base_switches.h"
@@ -25,6 +26,7 @@
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_factory.h"
 #include "chrome/browser/apps/app_service/browser_app_launcher.h"
+#include "chrome/browser/extensions/api_test_util.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/profiles/profile.h"
@@ -140,7 +142,7 @@ bool ExtensionApiTest::RunExtensionTest(const base::FilePath& extension_path,
     // Note: We use is_valid() here in the expectation that the provided url
     // may lack a scheme & host and thus be a relative url within the loaded
     // extension.
-    // TODO(https://crbug.com/1284691): Update callers passing relative paths
+    // TODO(crbug.com/40210201): Update callers passing relative paths
     // for page URLs to instead use extension_url.
     if (!url_to_open.is_valid())
       url_to_open = extension->GetResourceURL(run_options.page_url);
@@ -205,32 +207,8 @@ bool ExtensionApiTest::OpenTestURL(const GURL& url, bool open_in_incognito) {
 
 // Test that exactly one extension is loaded, and return it.
 const Extension* ExtensionApiTest::GetSingleLoadedExtension() {
-  ExtensionRegistry* registry = ExtensionRegistry::Get(browser()->profile());
-
-  const Extension* result = nullptr;
-  for (const scoped_refptr<const Extension>& extension :
-       registry->enabled_extensions()) {
-    // Ignore any component extensions. They are automatically loaded into all
-    // profiles and aren't the extension we're looking for here.
-    if (extension->location() == mojom::ManifestLocation::kComponent)
-      continue;
-
-    if (result != nullptr) {
-      // TODO(yoz): this is misleading; it counts component extensions.
-      message_ = base::StringPrintf(
-          "Expected only one extension to be present.  Found %u.",
-          static_cast<unsigned>(registry->enabled_extensions().size()));
-      return nullptr;
-    }
-
-    result = extension.get();
-  }
-
-  if (!result) {
-    message_ = "extension pointer is NULL.";
-    return nullptr;
-  }
-  return result;
+  return api_test_util::GetSingleLoadedExtension(browser()->profile(),
+                                                 message_);
 }
 
 bool ExtensionApiTest::StartEmbeddedTestServer() {
@@ -278,7 +256,7 @@ bool ExtensionApiTest::StartWebSocketServer(
   return true;
 }
 
-void ExtensionApiTest::SetCustomArg(base::StringPiece custom_arg) {
+void ExtensionApiTest::SetCustomArg(std::string_view custom_arg) {
   test_config_->Set(kTestCustomArg, base::Value(custom_arg));
 }
 

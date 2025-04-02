@@ -50,7 +50,8 @@ void WorkletModuleScriptFetcher::Fetch(
   ScriptResource::Fetch(fetch_params, fetch_client_settings_object_fetcher,
                         this, global_scope_->GetIsolate(),
                         ScriptResource::kNoStreaming, kNoCompileHintsProducer,
-                        kNoCompileHintsConsumer);
+                        kNoCompileHintsConsumer,
+                        v8_compile_hints::MagicCommentMode::kNever);
 }
 
 void WorkletModuleScriptFetcher::NotifyFinished(Resource* resource) {

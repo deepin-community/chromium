@@ -11,7 +11,7 @@ import * as UI from '../../ui/legacy/legacy.js';
 
 import {ApplicationPanelTreeElement} from './ApplicationPanelTreeElement.js';
 import * as ApplicationComponents from './components/components.js';
-import {type ResourcesPanel} from './ResourcesPanel.js';
+import type {ResourcesPanel} from './ResourcesPanel.js';
 
 const UIStrings = {
   /**
@@ -27,7 +27,7 @@ export class BounceTrackingMitigationsTreeElement extends ApplicationPanelTreeEl
       UI.Widget.Widget, ApplicationComponents.BounceTrackingMitigationsView.BounceTrackingMitigationsView>;
 
   constructor(resourcesPanel: ResourcesPanel) {
-    super(resourcesPanel, i18nString(UIStrings.bounceTrackingMitigations), false);
+    super(resourcesPanel, i18nString(UIStrings.bounceTrackingMitigations), false, 'bounce-tracking-mitigations');
     const icon = IconButton.Icon.create('database');
     this.setLeadingIcons([icon]);
   }

@@ -38,6 +38,8 @@
 #include "dawn/native/Instance.h"
 #include "dawn/native/opengl/ContextEGL.h"
 #include "dawn/native/opengl/DeviceGL.h"
+#include "dawn/native/opengl/DisplayEGL.h"
+#include "dawn/native/opengl/SwapChainEGL.h"
 
 namespace dawn::native::opengl {
 
@@ -53,7 +55,7 @@ const Vendor kVendors[] = {{"ATI", gpu_info::kVendorID_AMD},
                            {"Imagination", gpu_info::kVendorID_ImgTec},
                            {"Intel", gpu_info::kVendorID_Intel},
                            {"NVIDIA", gpu_info::kVendorID_Nvidia},
-                           {"Qualcomm", gpu_info::kVendorID_Qualcomm}};
+                           {"Qualcomm", gpu_info::kVendorID_Qualcomm_PCI}};
 
 uint32_t GetVendorIdFromVendors(const char* vendor) {
     uint32_t vendorId = 0;
@@ -87,53 +89,56 @@ uint32_t GetDeviceIdFromRender(std::string_view render) {
     return deviceId;
 }
 
+bool IsANGLEDesktopGL(std::string_view renderer) {
+    return renderer.find("ANGLE") != std::string::npos &&
+           renderer.find("OpenGL") != std::string::npos &&
+           renderer.find("OpenGL ES") == std::string::npos;
+}
+
+bool IsSwiftShader(std::string_view renderer) {
+    return renderer.find("SwiftShader") != std::string::npos;
+}
+
 }  // anonymous namespace
 
 // static
-ResultOrError<Ref<PhysicalDevice>> PhysicalDevice::Create(InstanceBase* instance,
-                                                          wgpu::BackendType backendType,
-                                                          void* (*getProc)(const char*),
-                                                          EGLDisplay display) {
-    EGLFunctions egl;
-    egl.Init(getProc);
+ResultOrError<Ref<PhysicalDevice>> PhysicalDevice::Create(wgpu::BackendType backendType,
+                                                          Ref<DisplayEGL> display,
+                                                          bool forceES31AndNoExtensions) {
+    const EGLFunctions& egl = display->egl;
+    EGLDisplay eglDisplay = display->GetDisplay();
 
-    EGLenum api = backendType == wgpu::BackendType::OpenGLES ? EGL_OPENGL_ES_API : EGL_OPENGL_API;
-
-    if (display == EGL_NO_DISPLAY) {
-        display = egl.GetCurrentDisplay();
-    }
-
-    if (display == EGL_NO_DISPLAY) {
-        display = egl.GetDisplay(EGL_DEFAULT_DISPLAY);
-    }
-
+    // Create a temporary context and make it current during the creation of the PhysicalDevice so
+    // that we can query the limits and other properties. Assumes that the limit are the same
+    // irrespective of the context creation options.
     std::unique_ptr<ContextEGL> context;
-    DAWN_TRY_ASSIGN(context, ContextEGL::Create(egl, api, display, false));
+    DAWN_TRY_ASSIGN(context,
+                    ContextEGL::Create(display, backendType, /*useRobustness*/ false,
+                                       /*useANGLETextureSharing*/ false,
+                                       /*forceES31AndNoExtensions*/ forceES31AndNoExtensions));
 
-    EGLContext prevDrawSurface = egl.GetCurrentSurface(EGL_DRAW);
-    EGLContext prevReadSurface = egl.GetCurrentSurface(EGL_READ);
+    EGLSurface prevDrawSurface = egl.GetCurrentSurface(EGL_DRAW);
+    EGLSurface prevReadSurface = egl.GetCurrentSurface(EGL_READ);
     EGLContext prevContext = egl.GetCurrentContext();
 
     context->MakeCurrent();
 
     Ref<PhysicalDevice> physicalDevice =
-        AcquireRef(new PhysicalDevice(instance, backendType, display));
-    DAWN_TRY(physicalDevice->InitializeGLFunctions(getProc));
-    DAWN_TRY(physicalDevice->Initialize());
+        AcquireRef(new PhysicalDevice(backendType, std::move(display)));
+    DAWN_TRY_WITH_CLEANUP(physicalDevice->Initialize(), {
+        egl.MakeCurrent(eglDisplay, prevDrawSurface, prevReadSurface, prevContext);
+    });
 
-    egl.MakeCurrent(display, prevDrawSurface, prevReadSurface, prevContext);
+    egl.MakeCurrent(eglDisplay, prevDrawSurface, prevReadSurface, prevContext);
+
     return physicalDevice;
 }
 
-PhysicalDevice::PhysicalDevice(InstanceBase* instance,
-                               wgpu::BackendType backendType,
-                               EGLDisplay display)
-    : PhysicalDeviceBase(instance, backendType), mDisplay(display) {}
+PhysicalDevice::PhysicalDevice(wgpu::BackendType backendType, Ref<DisplayEGL> display)
+    : PhysicalDeviceBase(backendType), mDisplay(std::move(display)) {}
 
-MaybeError PhysicalDevice::InitializeGLFunctions(void* (*getProc)(const char*)) {
-    // Use getProc to populate the dispatch table
-    mEGLFunctions.Init(getProc);
-    return mFunctions.Initialize(getProc);
+DisplayEGL* PhysicalDevice::GetDisplay() const {
+    return mDisplay.Get();
 }
 
 bool PhysicalDevice::SupportsExternalImages() const {
@@ -142,17 +147,23 @@ bool PhysicalDevice::SupportsExternalImages() const {
 }
 
 MaybeError PhysicalDevice::InitializeImpl() {
+    DAWN_TRY(mFunctions.Initialize(mDisplay->egl.GetProcAddress));
+
+    // In some cases (like like of EGL_KHR_create_context) we don't know before this point that we
+    // got a GL context that supports the required version. Check it now.
+    switch (GetBackendType()) {
+        case wgpu::BackendType::OpenGLES:
+            DAWN_INVALID_IF(!mFunctions.IsAtLeastGLES(3, 1), "OpenGL ES 3.1 is required.");
+            break;
+        case wgpu::BackendType::OpenGL:
+            DAWN_INVALID_IF(!mFunctions.IsAtLeastGL(4, 4), "Desktop OpenGL 4.4 is required.");
+            break;
+        default:
+            DAWN_UNREACHABLE();
+    }
+
     if (mFunctions.GetVersion().IsES()) {
         DAWN_ASSERT(GetBackendType() == wgpu::BackendType::OpenGLES);
-
-        // WebGPU requires being able to render to f16 and being able to blend f16
-        // which EXT_color_buffer_half_float provides.
-        DAWN_INVALID_IF(!mFunctions.IsGLExtensionSupported("GL_EXT_color_buffer_half_float"),
-                        "GL_EXT_color_buffer_half_float is required");
-
-        // WebGPU requires being able to render to f32 but does not require being able to blend f32
-        DAWN_INVALID_IF(!mFunctions.IsGLExtensionSupported("GL_EXT_color_buffer_float"),
-                        "GL_EXT_color_buffer_float is required");
     } else {
         DAWN_ASSERT(GetBackendType() == wgpu::BackendType::OpenGL);
     }
@@ -178,6 +189,8 @@ MaybeError PhysicalDevice::InitializeImpl() {
 }
 
 void PhysicalDevice::InitializeSupportedFeaturesImpl() {
+    EnableFeature(Feature::StaticSamplers);
+
     // TextureCompressionBC
     {
         // BC1, BC2 and BC3 are not supported in OpenGL or OpenGL ES core features.
@@ -218,8 +231,29 @@ void PhysicalDevice::InitializeSupportedFeaturesImpl() {
             EnableFeature(dawn::native::Feature::TextureCompressionBC);
         }
     }
-    if (mName.find("ANGLE") != std::string::npos) {
+
+    if (mFunctions.IsGLExtensionSupported("GL_KHR_texture_compression_astc_ldr")) {
+        EnableFeature(Feature::TextureCompressionASTC);
+    }
+
+    // ETC2 is core in ES 3.0.
+    // However, ANGLE on Desktop GL does not support it.
+    if (mFunctions.IsAtLeastGLES(3, 0) && !IsANGLEDesktopGL(mName)) {
+        EnableFeature(Feature::TextureCompressionETC2);
+    }
+
+    if (mDisplay->egl.HasExt(EGLExt::DisplayTextureShareGroup)) {
         EnableFeature(dawn::native::Feature::ANGLETextureSharing);
+    }
+
+    if (mDisplay->egl.HasExt(EGLExt::ImageNativeBuffer) &&
+        mDisplay->egl.HasExt(EGLExt::GetNativeClientBuffer)) {
+        EnableFeature(dawn::native::Feature::SharedTextureMemoryAHardwareBuffer);
+    }
+
+    if (mDisplay->egl.HasExt(EGLExt::NativeFenceSync) && mDisplay->egl.HasExt(EGLExt::WaitSync) &&
+        mFunctions.IsGLExtensionSupported("GL_OES_EGL_sync")) {
+        EnableFeature(dawn::native::Feature::SharedFenceSyncFD);
     }
 
     // Non-zero baseInstance requires at least desktop OpenGL 4.2, and it is not supported in
@@ -242,9 +276,16 @@ void PhysicalDevice::InitializeSupportedFeaturesImpl() {
         EnableFeature(Feature::DualSourceBlending);
     }
 
-    // Norm16TextureFormats
+    // Unorm16TextureFormats, Snorm16TextureFormats and Norm16TextureFormats
     if (mFunctions.IsGLExtensionSupported("GL_EXT_texture_norm16")) {
+        EnableFeature(Feature::Unorm16TextureFormats);
+        EnableFeature(Feature::Snorm16TextureFormats);
         EnableFeature(Feature::Norm16TextureFormats);
+    }
+
+    // Float32Blendable
+    if (mFunctions.IsGLExtensionSupported("GL_EXT_float_blend")) {
+        EnableFeature(Feature::Float32Blendable);
     }
 }
 
@@ -282,7 +323,11 @@ MaybeError PhysicalDevice::InitializeSupportedLimitsImpl(CombinedLimits* limits)
     limits->v1.maxStorageBuffersPerShaderStage = Get(gl, GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS);
     // TODO(crbug.com/dawn/1834): Note that OpenGLES allows an implementation to have zero vertex
     // image uniforms, so this isn't technically correct for vertex shaders.
-    limits->v1.maxStorageTexturesPerShaderStage = Get(gl, GL_MAX_FRAGMENT_IMAGE_UNIFORMS);
+    limits->v1.maxStorageTexturesPerShaderStage = Get(gl, GL_MAX_COMPUTE_IMAGE_UNIFORMS);
+    limits->v1.maxStorageTexturesInFragmentStage = Get(gl, GL_MAX_FRAGMENT_IMAGE_UNIFORMS);
+    limits->v1.maxStorageBuffersInFragmentStage = Get(gl, GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS);
+    limits->v1.maxStorageTexturesInVertexStage = Get(gl, GL_MAX_VERTEX_IMAGE_UNIFORMS);
+    limits->v1.maxStorageBuffersInVertexStage = Get(gl, GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS);
 
     limits->v1.maxUniformBuffersPerShaderStage = Get(gl, GL_MAX_UNIFORM_BUFFER_BINDINGS);
     limits->v1.maxUniformBufferBindingSize = Get(gl, GL_MAX_UNIFORM_BLOCK_SIZE);
@@ -292,6 +337,11 @@ MaybeError PhysicalDevice::InitializeSupportedLimitsImpl(CombinedLimits* limits)
     limits->v1.minStorageBufferOffsetAlignment = Get(gl, GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT);
     limits->v1.maxVertexBuffers = Get(gl, GL_MAX_VERTEX_ATTRIB_BINDINGS);
     limits->v1.maxBufferSize = kAssumedMaxBufferSize;
+    // The code that handles adding the index buffer offset to first_index
+    // used in drawIndexedIndirect can not handle a max buffer size larger than 4gig.
+    // See IndirectDrawValidationEncoder.cpp
+    static_assert(kAssumedMaxBufferSize < 0x100000000u);
+
     limits->v1.maxVertexAttributes = Get(gl, GL_MAX_VERTEX_ATTRIBS);
     limits->v1.maxVertexBufferArrayStride = Get(gl, GL_MAX_VERTEX_ATTRIB_STRIDE);
     limits->v1.maxInterStageShaderComponents = Get(gl, GL_MAX_VARYING_COMPONENTS);
@@ -299,7 +349,7 @@ MaybeError PhysicalDevice::InitializeSupportedLimitsImpl(CombinedLimits* limits)
     // TODO(dawn:685, dawn:1448): Support higher values as ANGLE compiler always generates
     // additional shader varyings (gl_PointSize and dx_Position) on ANGLE D3D backends.
     limits->v1.maxInterStageShaderComponents =
-        std::min(limits->v1.maxInterStageShaderComponents, kMaxInterStageShaderComponents);
+        std::min(limits->v1.maxInterStageShaderComponents, kMaxInterStageShaderVariables * 4);
     limits->v1.maxInterStageShaderVariables =
         std::min(limits->v1.maxInterStageShaderVariables, kMaxInterStageShaderVariables);
 
@@ -322,28 +372,18 @@ MaybeError PhysicalDevice::InitializeSupportedLimitsImpl(CombinedLimits* limits)
     return {};
 }
 
-void PhysicalDevice::SetupBackendAdapterToggles(TogglesState* adpterToggles) const {}
+void PhysicalDevice::SetupBackendAdapterToggles(dawn::platform::Platform* platform,
+                                                TogglesState* adapterToggles) const {}
 
-void PhysicalDevice::SetupBackendDeviceToggles(TogglesState* deviceToggles) const {
+void PhysicalDevice::SetupBackendDeviceToggles(dawn::platform::Platform* platform,
+                                               TogglesState* deviceToggles) const {
     const OpenGLFunctions& gl = mFunctions;
-
-    bool supportsBaseVertex = gl.IsAtLeastGLES(3, 2) || gl.IsAtLeastGL(3, 2);
-
-    bool supportsBaseInstance = gl.IsAtLeastGLES(3, 2) || gl.IsAtLeastGL(4, 2);
 
     // TODO(crbug.com/dawn/582): Use OES_draw_buffers_indexed where available.
     bool supportsIndexedDrawBuffers = gl.IsAtLeastGLES(3, 2) || gl.IsAtLeastGL(3, 0);
 
     bool supportsSnormRead =
         gl.IsAtLeastGL(4, 4) || gl.IsGLExtensionSupported("GL_EXT_render_snorm");
-
-    bool supportsDepthRead = gl.IsAtLeastGL(3, 0) || gl.IsGLExtensionSupported("GL_NV_read_depth");
-
-    bool supportsStencilRead =
-        gl.IsAtLeastGL(3, 0) || gl.IsGLExtensionSupported("GL_NV_read_stencil");
-
-    bool supportsDepthStencilRead =
-        gl.IsAtLeastGL(3, 0) || gl.IsGLExtensionSupported("GL_NV_read_depth_stencil");
 
     // Desktop GL supports BGRA textures via swizzling in the driver; ES requires an extension.
     bool supportsBGRARead =
@@ -356,32 +396,14 @@ void PhysicalDevice::SetupBackendDeviceToggles(TogglesState* deviceToggles) cons
     bool supportsStencilWriteTexture =
         gl.GetVersion().IsDesktop() || gl.IsGLExtensionSupported("GL_OES_texture_stencil8");
 
-    // TODO(crbug.com/dawn/343): We can support the extension variants, but need to load the EXT
-    // procs without the extension suffix.
-    // We'll also need emulation of shader builtins gl_BaseVertex and gl_BaseInstance.
-
-    // supportsBaseVertex |=
-    //     (gl.IsAtLeastGLES(2, 0) &&
-    //      (gl.IsGLExtensionSupported("OES_draw_elements_base_vertex") ||
-    //       gl.IsGLExtensionSupported("EXT_draw_elements_base_vertex"))) ||
-    //     (gl.IsAtLeastGL(3, 1) && gl.IsGLExtensionSupported("ARB_draw_elements_base_vertex"));
-
-    // supportsBaseInstance |=
-    //     (gl.IsAtLeastGLES(3, 1) && gl.IsGLExtensionSupported("EXT_base_instance")) ||
-    //     (gl.IsAtLeastGL(3, 1) && gl.IsGLExtensionSupported("ARB_base_instance"));
-
-    if (gl.IsAtLeastGLES(3, 1) && gl.IsGLExtensionSupported("GL_ANGLE_base_vertex_base_instance")) {
-        supportsBaseVertex = true;
-        supportsBaseInstance = true;
-    }
+    bool isFloat32Renderable = gl.GetVersion().IsDesktop() || gl.IsAtLeastGLES(3, 2) ||
+                               gl.IsGLExtensionSupported("GL_EXT_color_buffer_float");
+    bool isFloat16Renderable =
+        isFloat32Renderable || gl.IsGLExtensionSupported("GL_EXT_color_buffer_half_float");
+    bool isRG11B10UfloatRenderable = isFloat32Renderable;
 
     // TODO(crbug.com/dawn/343): Investigate emulation.
-    deviceToggles->Default(Toggle::DisableBaseVertex, !supportsBaseVertex);
-    deviceToggles->Default(Toggle::DisableBaseInstance, !supportsBaseInstance);
     deviceToggles->Default(Toggle::DisableIndexedDrawBuffers, !supportsIndexedDrawBuffers);
-    deviceToggles->Default(Toggle::DisableDepthRead, !supportsDepthRead);
-    deviceToggles->Default(Toggle::DisableStencilRead, !supportsStencilRead);
-    deviceToggles->Default(Toggle::DisableDepthStencilRead, !supportsDepthStencilRead);
     deviceToggles->Default(Toggle::DisableSampleVariables, !supportsSampleVariables);
     deviceToggles->Default(Toggle::FlushBeforeClientWaitSync, gl.GetVersion().IsES());
     // For OpenGL ES, we must use a placeholder fragment shader for vertex-only render pipeline.
@@ -408,6 +430,16 @@ void PhysicalDevice::SetupBackendDeviceToggles(TogglesState* deviceToggles) cons
     // For OpenGL ES, use compute shader blit to emulate rgb9e5ufloat texture to buffer copies.
     deviceToggles->Default(Toggle::UseBlitForRGB9E5UfloatTextureCopy, gl.GetVersion().IsES());
 
+    // Use compute shader blit to emulate rg11b10ufloat texture to buffer copies if not color
+    // renderable.
+    deviceToggles->Default(Toggle::UseBlitForRG11B10UfloatTextureCopy, !isRG11B10UfloatRenderable);
+
+    // Use compute shader blit to emulate float16 texture to buffer copies if not color renderable.
+    deviceToggles->Default(Toggle::UseBlitForFloat16TextureCopy, !isFloat16Renderable);
+
+    // Use compute shader blit to emulate float32 texture to buffer copies if not color renderable.
+    deviceToggles->Default(Toggle::UseBlitForFloat32TextureCopy, !isFloat32Renderable);
+
     // Use a blit to emulate stencil-only buffer-to-texture copies.
     deviceToggles->Default(Toggle::UseBlitForBufferToStencilTextureCopy, true);
 
@@ -416,15 +448,18 @@ void PhysicalDevice::SetupBackendDeviceToggles(TogglesState* deviceToggles) cons
 
     // Use T2B and B2T copies to emulate a T2T copy between sRGB and non-sRGB textures.
     deviceToggles->Default(Toggle::UseT2B2TForSRGBTextureCopy, true);
+
+    // Scale depth bias value by * 0.5 on certain GL drivers.
+    deviceToggles->Default(Toggle::GLDepthBiasModifier, gl.GetVersion().IsDesktop() ||
+                                                            IsANGLEDesktopGL(mName) ||
+                                                            IsSwiftShader(mName));
 }
 
 ResultOrError<Ref<DeviceBase>> PhysicalDevice::CreateDeviceImpl(
     AdapterBase* adapter,
     const UnpackedPtr<DeviceDescriptor>& descriptor,
-    const TogglesState& deviceToggles) {
-    EGLenum api =
-        GetBackendType() == wgpu::BackendType::OpenGL ? EGL_OPENGL_API : EGL_OPENGL_ES_API;
-    std::unique_ptr<Device::Context> context;
+    const TogglesState& deviceToggles,
+    Ref<DeviceBase::DeviceLostEvent>&& lostEvent) {
     bool useANGLETextureSharing = false;
     for (size_t i = 0; i < descriptor->requiredFeatureCount; ++i) {
         if (descriptor->requiredFeatures[i] == wgpu::FeatureName::ANGLETextureSharing) {
@@ -432,13 +467,48 @@ ResultOrError<Ref<DeviceBase>> PhysicalDevice::CreateDeviceImpl(
         }
     }
 
-    DAWN_TRY_ASSIGN(context,
-                    ContextEGL::Create(mEGLFunctions, api, mDisplay, useANGLETextureSharing));
-    return Device::Create(adapter, descriptor, mFunctions, std::move(context), deviceToggles);
+    bool useRobustness = !deviceToggles.IsEnabled(Toggle::DisableRobustness);
+    bool forceES31AndNoExtensions = deviceToggles.IsEnabled(Toggle::GLForceES31AndNoExtensions);
+
+    std::unique_ptr<ContextEGL> context;
+    DAWN_TRY_ASSIGN(context, ContextEGL::Create(mDisplay, GetBackendType(), useRobustness,
+                                                useANGLETextureSharing, forceES31AndNoExtensions));
+
+    return Device::Create(adapter, descriptor, mFunctions, std::move(context), deviceToggles,
+                          std::move(lostEvent));
 }
 
-bool PhysicalDevice::SupportsFeatureLevel(FeatureLevel featureLevel) const {
-    return featureLevel == FeatureLevel::Compatibility;
+bool PhysicalDevice::SupportsFeatureLevel(wgpu::FeatureLevel featureLevel,
+                                          InstanceBase* instance) const {
+    return featureLevel == wgpu::FeatureLevel::Compatibility;
+}
+
+ResultOrError<PhysicalDeviceSurfaceCapabilities> PhysicalDevice::GetSurfaceCapabilities(
+    InstanceBase*,
+    const Surface*) const {
+    PhysicalDeviceSurfaceCapabilities capabilities;
+
+    capabilities.usages = wgpu::TextureUsage::RenderAttachment |
+                          wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::TextureBinding |
+                          wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::CopyDst;
+
+    for (wgpu::TextureFormat format : mDisplay->GetPotentialSurfaceFormats()) {
+        if (mDisplay->ChooseConfig(EGL_WINDOW_BIT, format) != kNoConfig) {
+            capabilities.formats.push_back(format);
+        }
+    }
+
+    capabilities.presentModes = {
+        wgpu::PresentMode::Fifo,
+        wgpu::PresentMode::Immediate,
+        wgpu::PresentMode::Mailbox,
+    };
+
+    capabilities.alphaModes = {
+        wgpu::CompositeAlphaMode::Opaque,
+    };
+
+    return capabilities;
 }
 
 FeatureValidationResult PhysicalDevice::ValidateFeatureSupportedWithTogglesImpl(
@@ -447,6 +517,6 @@ FeatureValidationResult PhysicalDevice::ValidateFeatureSupportedWithTogglesImpl(
     return {};
 }
 
-void PhysicalDevice::PopulateBackendProperties(UnpackedPtr<AdapterProperties>& properties) const {}
+void PhysicalDevice::PopulateBackendProperties(UnpackedPtr<AdapterInfo>& info) const {}
 
 }  // namespace dawn::native::opengl

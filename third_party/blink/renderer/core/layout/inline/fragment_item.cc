@@ -7,6 +7,7 @@
 #include "base/debug/dump_without_crashing.h"
 #include "third_party/blink/renderer/core/editing/bidi_adjustment.h"
 #include "third_party/blink/renderer/core/editing/position_with_affinity.h"
+#include "third_party/blink/renderer/core/layout/geometry/writing_mode_converter.h"
 #include "third_party/blink/renderer/core/layout/inline/fragment_items_builder.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_caret_position.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
@@ -113,8 +114,25 @@ FragmentItem::FragmentItem(const PhysicalLineBoxFragment& line)
       const_type_(kLine),
       sub_type_(static_cast<unsigned>(line.GetLineBoxType())),
       style_variant_(static_cast<unsigned>(line.GetStyleVariant())),
-      is_hidden_for_paint_(false),
+      is_hidden_for_paint_(line.IsHiddenForPaint()),
       text_direction_(static_cast<unsigned>(line.BaseDirection())),
+      ink_overflow_type_(static_cast<unsigned>(InkOverflow::Type::kNotSet)),
+      is_dirty_(false),
+      is_last_for_node_(true) {
+  DCHECK(!IsFormattingContextRoot());
+}
+
+FragmentItem::FragmentItem(const PhysicalSize& size,
+                           const PhysicalLineBoxFragment& base_line)
+    : line_({nullptr, /* descendants_count */ 1}),
+      rect_({PhysicalOffset(), size}),
+      layout_object_(base_line.ContainerLayoutObject()),
+      const_type_(kLine),
+      sub_type_(
+          static_cast<unsigned>(FragmentItem::LineBoxType::kNormalLineBox)),
+      style_variant_(static_cast<unsigned>(base_line.GetStyleVariant())),
+      is_hidden_for_paint_(false),
+      text_direction_(static_cast<unsigned>(base_line.BaseDirection())),
       ink_overflow_type_(static_cast<unsigned>(InkOverflow::Type::kNotSet)),
       is_dirty_(false),
       is_last_for_node_(true) {
@@ -144,12 +162,14 @@ FragmentItem::FragmentItem(LogicalLineItem&& line_item,
   DCHECK(line_item.CanCreateFragmentItem());
 
   if (line_item.inline_item) {
-    if (UNLIKELY(line_item.text_content)) {
+    if (line_item.text_content) [[unlikely]] {
       new (this) FragmentItem(
           *line_item.inline_item, std::move(line_item.shape_result),
           line_item.text_content,
           ToPhysicalSize(line_item.MarginSize(), writing_mode),
           line_item.is_hidden_for_paint);
+      has_over_annotation_ = line_item.has_over_annotation;
+      has_under_annotation_ = line_item.has_under_annotation;
       return;
     }
 
@@ -158,6 +178,8 @@ FragmentItem::FragmentItem(LogicalLineItem&& line_item,
                      line_item.text_offset,
                      ToPhysicalSize(line_item.MarginSize(), writing_mode),
                      line_item.is_hidden_for_paint);
+    has_over_annotation_ = line_item.has_over_annotation;
+    has_under_annotation_ = line_item.has_under_annotation;
     return;
   }
 
@@ -181,7 +203,6 @@ FragmentItem::FragmentItem(LogicalLineItem&& line_item,
 
   // CanCreateFragmentItem()
   NOTREACHED();
-  CHECK(false);
 }
 
 FragmentItem::FragmentItem(const FragmentItem& source)
@@ -195,12 +216,14 @@ FragmentItem::FragmentItem(const FragmentItem& source)
       style_variant_(source.style_variant_),
       is_hidden_for_paint_(source.is_hidden_for_paint_),
       text_direction_(source.text_direction_),
+      has_over_annotation_(source.has_over_annotation_),
+      has_under_annotation_(source.has_under_annotation_),
       ink_overflow_type_(static_cast<unsigned>(InkOverflow::Type::kNotSet)),
       is_dirty_(source.is_dirty_),
       is_last_for_node_(source.is_last_for_node_) {
   switch (Type()) {
     case kInvalid:
-      NOTREACHED_NORETURN() << "Cannot construct invalid value";
+      NOTREACHED() << "Cannot construct invalid value";
     case kText:
       new (&text_) TextItem(source.text_);
       break;
@@ -234,12 +257,14 @@ FragmentItem::FragmentItem(FragmentItem&& source)
       style_variant_(source.style_variant_),
       is_hidden_for_paint_(source.is_hidden_for_paint_),
       text_direction_(source.text_direction_),
+      has_over_annotation_(source.has_over_annotation_),
+      has_under_annotation_(source.has_under_annotation_),
       ink_overflow_type_(source.ink_overflow_type_),
       is_dirty_(source.is_dirty_),
       is_last_for_node_(source.is_last_for_node_) {
   switch (Type()) {
     case kInvalid:
-      NOTREACHED_NORETURN() << "Cannot construct invalid value";
+      NOTREACHED() << "Cannot construct invalid value";
     case kText:
       new (&text_) TextItem(std::move(source.text_));
       break;
@@ -344,7 +369,7 @@ bool FragmentItem::IsListMarker() const {
 
 LayoutObject& FragmentItem::BlockInInline() const {
   DCHECK(IsBlockInInline());
-  auto* const block = To<LayoutNGBlockFlow>(GetLayoutObject())->FirstChild();
+  auto* const block = To<LayoutBlockFlow>(GetLayoutObject())->FirstChild();
   DCHECK(block) << this;
   return *block;
 }
@@ -371,10 +396,23 @@ gfx::RectF FragmentItem::ObjectBoundingBox(const FragmentItems& items) const {
     ink_bounds.Offset(0.0f, font_data->GetFontMetrics().FloatAscent());
   ink_bounds.Scale(GetSvgFragmentData()->length_adjust_scale, 1.0f);
   const gfx::RectF& scaled_rect = GetSvgFragmentData()->rect;
-  if (!IsHorizontal()) {
-    ink_bounds =
-        gfx::RectF(scaled_rect.width() - ink_bounds.bottom(), ink_bounds.x(),
-                   ink_bounds.height(), ink_bounds.width());
+  // Convert a logical ink_bounds to physical. We don't use WiringModeConverter,
+  // which has no ToPhysical() for gfx::RectF.
+  switch (GetWritingMode()) {
+    case WritingMode::kHorizontalTb:
+      break;
+    case WritingMode::kVerticalLr:
+    case WritingMode::kVerticalRl:
+    case WritingMode::kSidewaysRl:
+      ink_bounds =
+          gfx::RectF(scaled_rect.width() - ink_bounds.bottom(), ink_bounds.x(),
+                     ink_bounds.height(), ink_bounds.width());
+      break;
+    case WritingMode::kSidewaysLr:
+      ink_bounds =
+          gfx::RectF(ink_bounds.y(), scaled_rect.height() - ink_bounds.right(),
+                     ink_bounds.height(), ink_bounds.width());
+      break;
   }
   ink_bounds.Offset(scaled_rect.OffsetFromOrigin());
   ink_bounds.Union(scaled_rect);
@@ -523,7 +561,6 @@ const ShapeResultView* FragmentItem::TextShapeResult() const {
   if (Type() == kGeneratedText)
     return generated_text_.shape_result.Get();
   NOTREACHED();
-  return nullptr;
 }
 
 TextOffsetRange FragmentItem::TextOffset() const {
@@ -532,7 +569,6 @@ TextOffsetRange FragmentItem::TextOffset() const {
   if (Type() == kGeneratedText)
     return {0, generated_text_.text.length()};
   NOTREACHED();
-  return {};
 }
 
 unsigned FragmentItem::StartOffsetInContainer(
@@ -551,7 +587,8 @@ unsigned FragmentItem::StartOffsetInContainer(
     if (current->Type() == kBox && !current->IsInlineBox())
       break;
   }
-  NOTREACHED();
+  // No such text fragment.  We don't know how to reproduce this.
+  // See crbug.com/372586875.
   return 0;
 }
 
@@ -563,7 +600,6 @@ StringView FragmentItem::Text(const FragmentItems& items) const {
   if (Type() == kGeneratedText)
     return GeneratedText();
   NOTREACHED();
-  return StringView();
 }
 
 TextFragmentPaintInfo FragmentItem::TextPaintInfo(
@@ -577,7 +613,6 @@ TextFragmentPaintInfo FragmentItem::TextPaintInfo(
             generated_text_.shape_result.Get()};
   }
   NOTREACHED();
-  return {};
 }
 
 TextDirection FragmentItem::BaseDirection() const {
@@ -643,6 +678,9 @@ AffineTransform FragmentItem::BuildSvgTransformForLengthAdjust() const {
       scale_transform.SetMatrix(
           scale, 0, 0, 1, with_text_path_transform ? 0 : x - scale * x, 0);
     } else {
+      // svg_data.rect is a physical bounding rectangle including lengthAdjust
+      // scaling.  So all vertical writing modes including sideways-lr need the
+      // same transform.
       float y = svg_data.rect.y();
       scale_transform.SetMatrix(1, 0, 0, scale, 0,
                                 with_text_path_transform ? 0 : y - scale * y);
@@ -671,12 +709,22 @@ AffineTransform FragmentItem::BuildSvgTransformForTextPath(
   // PositionOnPath()|.
   float x = svg_data.rect.x();
   float y = svg_data.rect.y();
-  if (IsHorizontal()) {
-    y += font_data->GetFontMetrics().FixedAscent(font_baseline);
-    transform.Translate(-svg_data.rect.width() / 2, svg_data.baseline_shift);
-  } else {
-    x += font_data->GetFontMetrics().FixedDescent(font_baseline);
-    transform.Translate(svg_data.baseline_shift, -svg_data.rect.height() / 2);
+  switch (GetWritingMode()) {
+    case WritingMode::kHorizontalTb:
+      y += font_data->GetFontMetrics().FixedAscent(font_baseline);
+      transform.Translate(-svg_data.rect.width() / 2, svg_data.baseline_shift);
+      break;
+    case WritingMode::kVerticalLr:
+    case WritingMode::kVerticalRl:
+    case WritingMode::kSidewaysRl:
+      x += font_data->GetFontMetrics().FixedDescent(font_baseline);
+      transform.Translate(svg_data.baseline_shift, -svg_data.rect.height() / 2);
+      break;
+    case WritingMode::kSidewaysLr:
+      x += font_data->GetFontMetrics().FixedAscent(font_baseline);
+      y = svg_data.rect.bottom();
+      transform.Translate(-svg_data.baseline_shift, svg_data.rect.height() / 2);
+      break;
   }
   transform.PreConcat(length_adjust);
   transform.SetE(transform.E() + x);
@@ -791,8 +839,9 @@ PhysicalRect FragmentItem::LocalVisualRectFor(
        cursor.MoveToNextForSameLayoutObject()) {
     DCHECK(cursor.Current().Item());
     const FragmentItem& item = *cursor.Current().Item();
-    if (UNLIKELY(item.IsHiddenForPaint()))
+    if (item.IsHiddenForPaint()) [[unlikely]] {
       continue;
+    }
     PhysicalRect child_visual_rect = item.SelfInkOverflowRect();
     child_visual_rect.offset += item.OffsetInContainerFragment();
     visual_rect.Unite(child_visual_rect);
@@ -814,13 +863,14 @@ PhysicalRect FragmentItem::RecalcInkOverflowForCursor(
   for (; *cursor; cursor->MoveToNextSkippingChildren()) {
     const FragmentItem* item = cursor->CurrentItem();
     DCHECK(item);
-    if (UNLIKELY(item->IsLayoutObjectDestroyedOrMoved())) {
+    if (item->IsLayoutObjectDestroyedOrMoved()) [[unlikely]] {
       // TODO(crbug.com/1099613): This should not happen, as long as it is
       // layout-clean. It looks like there are cases where the layout is dirty.
       continue;
     }
-    if (UNLIKELY(item->HasSelfPaintingLayer()))
+    if (item->HasSelfPaintingLayer()) [[unlikely]] {
       continue;
+    }
 
     PhysicalRect child_rect;
     item->GetMutableForPainting().RecalcInkOverflow(*cursor, inline_context,
@@ -838,11 +888,10 @@ void FragmentItem::RecalcInkOverflow(const InlineCursor& cursor,
                                      PhysicalRect* self_and_contents_rect_out) {
   DCHECK_EQ(this, cursor.CurrentItem());
 
-  if (UNLIKELY(IsLayoutObjectDestroyedOrMoved())) {
+  if (IsLayoutObjectDestroyedOrMoved()) [[unlikely]] {
     // TODO(crbug.com/1099613): This should not happen, as long as it is really
     // layout-clean. It looks like there are cases where the layout is dirty.
     NOTREACHED();
-    return;
   }
 
   if (IsText()) {
@@ -886,8 +935,9 @@ void FragmentItem::RecalcInkOverflow(const InlineCursor& cursor,
 
   if (Type() == kBox) {
     const PhysicalBoxFragment* box_fragment = PostLayoutBoxFragment();
-    if (UNLIKELY(!box_fragment))
+    if (!box_fragment) [[unlikely]] {
       return;
+    }
     if (!box_fragment->IsInlineBox()) {
       DCHECK(!HasChildren());
       if (box_fragment->CanUseFragmentsForInkOverflow()) {
@@ -915,13 +965,20 @@ void FragmentItem::RecalcInkOverflow(const InlineCursor& cursor,
   }
 
   if (Type() == kLine) {
+    if (!LineBoxFragment()) {
+      // InlinePaintContext::ScopedLineBox doesn't support nested scopes.
+      // Nested kLine items are placed at the end of the base line. So it's ok
+      // to clear the current line before handling nested lines.
+      inline_context->ClearLineBox();
+    }
     InlinePaintContext::ScopedLineBox scoped_line_box(cursor, inline_context);
     PhysicalRect contents_rect =
         RecalcInkOverflowForDescendantsOf(cursor, inline_context);
     const auto* const text_combine =
         DynamicTo<LayoutTextCombine>(GetLayoutObject());
-    if (UNLIKELY(text_combine))
+    if (text_combine) [[unlikely]] {
       contents_rect = text_combine->AdjustRectForBoundingBox(contents_rect);
+    }
     // Line boxes don't have self overflow. Compute content overflow only.
     *self_and_contents_rect_out = UnionRect(LocalRect(), contents_rect);
     ink_overflow_type_ = static_cast<unsigned>(
@@ -970,8 +1027,12 @@ LayoutUnit FragmentItem::CaretInlinePositionForOffset(StringView text,
   // This fragment is a flow control because otherwise ShapeResult exists.
   DCHECK(IsFlowControl());
   DCHECK_EQ(1u, text.length());
-  if (!offset || UNLIKELY(IsRtl(Style().Direction())))
+  if (!offset) {
     return LayoutUnit();
+  }
+  if (IsRtl(Style().Direction())) [[unlikely]] {
+    return LayoutUnit();
+  }
   if (const SvgFragmentData* svg_data = GetSvgFragmentData()) {
     return LayoutUnit(IsHorizontal() ? svg_data->rect.width()
                                      : svg_data->rect.height());
@@ -1003,7 +1064,7 @@ std::pair<LayoutUnit, LayoutUnit> FragmentItem::LineLeftAndRightForOffsets(
         start_offset, text, AdjustMidCluster::kToStart);
     float unrounded_end_position = shape_result->CaretPositionForOffset(
         end_offset, text, AdjustMidCluster::kToEnd);
-    if (UNLIKELY(unrounded_start_position > unrounded_end_position)) {
+    if (unrounded_start_position > unrounded_end_position) [[unlikely]] {
       start_position = LayoutUnit::FromFloatCeil(unrounded_start_position);
       end_position = LayoutUnit::FromFloatFloor(unrounded_end_position);
     } else {
@@ -1014,7 +1075,9 @@ std::pair<LayoutUnit, LayoutUnit> FragmentItem::LineLeftAndRightForOffsets(
     // This fragment is a flow control because otherwise ShapeResult exists.
     DCHECK(IsFlowControl());
     DCHECK_EQ(1u, text.length());
-    if (!start_offset || UNLIKELY(IsRtl(Style().Direction()))) {
+    if (!start_offset) {
+      start_position = LayoutUnit();
+    } else if (IsRtl(Style().Direction())) [[unlikely]] {
       start_position = LayoutUnit();
     } else if (IsSvgText()) {
       start_position =
@@ -1024,7 +1087,9 @@ std::pair<LayoutUnit, LayoutUnit> FragmentItem::LineLeftAndRightForOffsets(
       start_position = IsHorizontal() ? Size().width : Size().height;
     }
 
-    if (!end_offset || UNLIKELY(IsRtl(Style().Direction()))) {
+    if (!end_offset) {
+      end_position = LayoutUnit();
+    } else if (IsRtl(Style().Direction())) [[unlikely]] {
       end_position = LayoutUnit();
     } else if (IsSvgText()) {
       end_position =
@@ -1036,9 +1101,10 @@ std::pair<LayoutUnit, LayoutUnit> FragmentItem::LineLeftAndRightForOffsets(
   }
 
   // Swap positions if RTL.
-  return (UNLIKELY(start_position > end_position))
-             ? std::make_pair(end_position, start_position)
-             : std::make_pair(start_position, end_position);
+  if (start_position > end_position) [[unlikely]] {
+    return std::make_pair(end_position, start_position);
+  }
+  return std::make_pair(start_position, end_position);
 }
 
 PhysicalRect FragmentItem::LocalRect(StringView text,
@@ -1075,7 +1141,6 @@ PhysicalRect FragmentItem::LocalRect(StringView text,
       return {LayoutUnit(), height - end_position, width, inline_size};
   }
   NOTREACHED();
-  return {};
 }
 
 PhysicalRect FragmentItem::ComputeTextBoundsRectForHitTest(
@@ -1085,7 +1150,7 @@ PhysicalRect FragmentItem::ComputeTextBoundsRectForHitTest(
   const PhysicalOffset offset =
       inline_root_offset + OffsetInContainerFragment();
   const PhysicalRect border_rect(offset, Size());
-  if (UNLIKELY(is_occlusion_test)) {
+  if (is_occlusion_test) [[unlikely]] {
     PhysicalRect ink_overflow = SelfInkOverflowRect();
     ink_overflow.Move(border_rect.offset);
     return ink_overflow;
@@ -1130,9 +1195,10 @@ PositionWithAffinity FragmentItem::PositionForPointInText(
 unsigned FragmentItem::TextOffsetForPoint(const PhysicalOffset& point,
                                           const FragmentItems& items) const {
   DCHECK_EQ(Type(), kText);
-  const ComputedStyle& style = Style();
-  const LayoutUnit& point_in_line_direction =
-      style.IsHorizontalWritingMode() ? point.left : point.top;
+  WritingModeConverter converter({GetWritingMode(), TextDirection::kLtr},
+                                 Size());
+  const LayoutUnit point_in_line_direction =
+      converter.ToLogical(point, PhysicalSize()).inline_offset;
   if (const ShapeResultView* shape_result = TextShapeResult()) {
     float scaled_offset = ScaleInlineOffset(point_in_line_direction);
     // TODO(layout-dev): Move caret logic out of ShapeResult into separate
@@ -1147,7 +1213,7 @@ unsigned FragmentItem::TextOffsetForPoint(const PhysicalOffset& point,
   DCHECK(IsFlowControl());
 
   // Zero-inline-size objects such as newline always return the start offset.
-  LogicalSize size = Size().ConvertToLogical(style.GetWritingMode());
+  LogicalSize size = converter.ToLogical(Size());
   if (!size.inline_size)
     return StartOffset();
 
@@ -1185,7 +1251,7 @@ std::ostream& operator<<(std::ostream& ostream, const FragmentItem& item) {
   ostream << "{";
   switch (item.Type()) {
     case FragmentItem::kInvalid:
-      NOTREACHED_NORETURN() << "Invalid FragmentItem";
+      NOTREACHED() << "Invalid FragmentItem";
     case FragmentItem::kText:
       ostream << "Text " << item.StartOffset() << "-" << item.EndOffset() << " "
               << (IsLtr(item.ResolvedDirection()) ? "LTR" : "RTL");
@@ -1213,8 +1279,11 @@ std::ostream& operator<<(std::ostream& ostream, const FragmentItem& item) {
     case StyleVariant::kFirstLine:
       ostream << "FirstLine";
       break;
-    case StyleVariant::kEllipsis:
-      ostream << "Ellipsis";
+    case StyleVariant::kStandardEllipsis:
+      ostream << "StandardEllipsis";
+      break;
+    case StyleVariant::kFirstLineEllipsis:
+      ostream << "FirstLineEllipsis";
       break;
   }
   return ostream << "}";

@@ -28,6 +28,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/synchronization/lock.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
@@ -53,14 +58,17 @@
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/hash_traits.h"
-#include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
 #include "v8/include/cppgc/internal/api-constants.h"
 
 namespace blink {
 
 namespace {
 
-class HeapTest : public TestSupportingGC {};
+class HeapTest : public TestSupportingGC {
+#if DCHECK_IS_ON()
+  void TearDown() override { WTF::SetIsBeforeThreadCreatedForTest(); }
+#endif
+};
 
 class HeapDeathTest : public TestSupportingGC {};
 
@@ -104,7 +112,7 @@ static_assert(WTF::IsTraceable<HeapDeque<IntWrapper>>::value,
 static_assert(
     WTF::IsTraceable<HeapHashSet<IntWrapper, IntWrapperHashTraits>>::value,
     "HeapHashSet<IntWrapper> must be traceable.");
-static_assert(WTF::IsTraceable<HeapHashMap<int, IntWrapper>>::value,
+static_assert(WTF::IsTraceable<HeapHashMap<int, Member<IntWrapper>>>::value,
               "HeapHashMap<int, IntWrapper> must be traceable.");
 
 }  // namespace
@@ -1679,7 +1687,7 @@ class RefCountedAndGarbageCollected final
   ~RefCountedAndGarbageCollected() { ++destructor_calls_; }
 
   void AddRef() {
-    if (UNLIKELY(!ref_count_)) {
+    if (!ref_count_) [[unlikely]] {
       keep_alive_ = this;
     }
     ++ref_count_;
@@ -2044,7 +2052,7 @@ TEST_F(HeapTest, HeapHashCountedSetToVector) {
   set.insert(MakeGarbageCollected<IntWrapper>(1));
   set.insert(MakeGarbageCollected<IntWrapper>(2));
 
-  CopyToVector(set, vector);
+  vector.assign(set.Values());
   EXPECT_EQ(3u, vector.size());
 
   Vector<int> int_vector;
@@ -2064,10 +2072,45 @@ TEST_F(HeapTest, WeakHeapHashCountedSetToVector) {
   set.insert(MakeGarbageCollected<IntWrapper>(1));
   set.insert(MakeGarbageCollected<IntWrapper>(2));
 
-  CopyToVector(set, vector);
+  vector.assign(set.Values());
   EXPECT_LE(3u, vector.size());
   for (const auto& i : vector)
     EXPECT_TRUE(i->Value() == 1 || i->Value() == 2);
+}
+
+TEST_F(HeapTest, HeapHashSetToVector) {
+  HeapHashSet<Member<IntWrapper>> set;
+  HeapVector<Member<IntWrapper>> vector;
+  set.insert(MakeGarbageCollected<IntWrapper>(1));
+  set.insert(MakeGarbageCollected<IntWrapper>(1));
+  set.insert(MakeGarbageCollected<IntWrapper>(2));
+
+  vector.assign(set);
+  EXPECT_EQ(3u, vector.size());
+
+  Vector<int> int_vector;
+  for (const auto& i : vector) {
+    int_vector.push_back(i->Value());
+  }
+  std::sort(int_vector.begin(), int_vector.end());
+  ASSERT_EQ(3u, int_vector.size());
+  EXPECT_EQ(1, int_vector[0]);
+  EXPECT_EQ(1, int_vector[1]);
+  EXPECT_EQ(2, int_vector[2]);
+}
+
+TEST_F(HeapTest, WeakHeapHashSetToVector) {
+  HeapHashSet<WeakMember<IntWrapper>> set;
+  HeapVector<Member<IntWrapper>> vector;
+  set.insert(MakeGarbageCollected<IntWrapper>(1));
+  set.insert(MakeGarbageCollected<IntWrapper>(1));
+  set.insert(MakeGarbageCollected<IntWrapper>(2));
+
+  vector.assign(set);
+  EXPECT_EQ(3u, vector.size());
+  for (const auto& i : vector) {
+    EXPECT_TRUE(i->Value() == 1 || i->Value() == 2);
+  }
 }
 
 TEST_F(HeapTest, RefCountedGarbageCollected) {
@@ -2801,7 +2844,7 @@ class AllocatesOnAssignment : public GarbageCollected<AllocatesOnAssignment> {
   AllocatesOnAssignment(int x) : value_(MakeGarbageCollected<IntWrapper>(x)) {}
   AllocatesOnAssignment(IntWrapper* x) : value_(x) {}
 
-  AllocatesOnAssignment& operator=(const AllocatesOnAssignment x) {
+  AllocatesOnAssignment& operator=(const AllocatesOnAssignment& x) {
     value_ = x.value_;
     return *this;
   }

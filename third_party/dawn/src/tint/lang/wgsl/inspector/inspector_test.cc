@@ -143,6 +143,8 @@ class InspectorGetUsedExtensionNamesTest : public InspectorRunner, public testin
 
 class InspectorGetEnableDirectivesTest : public InspectorRunner, public testing::Test {};
 
+class InspectorGetBlendSrcTest : public InspectorBuilder, public testing::Test {};
+
 // This is a catch all for shaders that have demonstrated regressions/crashes in
 // the wild.
 class InspectorRegressionTest : public InspectorRunner, public testing::Test {};
@@ -371,9 +373,11 @@ TEST_F(InspectorGetEntryPointTest, WorkgroupStorageSizeEmpty) {
 
 TEST_F(InspectorGetEntryPointTest, WorkgroupStorageSizeSimple) {
     AddWorkgroupStorage("wg_f32", ty.f32());
+    AddWorkgroupStorage("wg_i32", ty.i32());
     MakePlainGlobalReferenceBodyFunction("f32_func", "wg_f32", ty.f32(), tint::Empty);
+    MakePlainGlobalReferenceBodyFunction("i32_func", "wg_i32", ty.i32(), tint::Empty);
 
-    MakeCallerBodyFunction("ep_func", Vector{std::string("f32_func")},
+    MakeCallerBodyFunction("ep_func", Vector{std::string("f32_func"), "i32_func"},
                            Vector{
                                Stage(ast::PipelineStage::kCompute),
                                WorkgroupSize(1_i),
@@ -384,7 +388,7 @@ TEST_F(InspectorGetEntryPointTest, WorkgroupStorageSizeSimple) {
     ASSERT_FALSE(inspector.has_error()) << inspector.error();
 
     ASSERT_EQ(1u, result.size());
-    EXPECT_EQ(16u, result[0].workgroup_storage_size);
+    EXPECT_EQ(32u, result[0].workgroup_storage_size);
 }
 
 TEST_F(InspectorGetEntryPointTest, WorkgroupStorageSizeCompoundTypes) {
@@ -593,7 +597,7 @@ TEST_F(InspectorGetEntryPointTest, MultipleInOutVariables) {
     EXPECT_EQ("in_var4", result[0].input_variables[2].variable_name);
     EXPECT_EQ(std::nullopt, result[0].input_variables[2].attributes.location);
     EXPECT_EQ(2u, result[0].input_variables[2].attributes.color);
-    EXPECT_EQ(InterpolationType::kFlat, result[0].input_variables[2].interpolation_type);
+    EXPECT_EQ(InterpolationType::kPerspective, result[0].input_variables[2].interpolation_type);
     EXPECT_EQ(ComponentType::kU32, result[0].input_variables[2].component_type);
 
     ASSERT_EQ(1u, result[0].output_variables.size());
@@ -1585,6 +1589,51 @@ TEST_F(InspectorGetEntryPointTest, FragDepthStructReferenced) {
     EXPECT_TRUE(result[0].frag_depth_used);
 }
 
+TEST_F(InspectorGetEntryPointTest, ClipDistancesReferenced) {
+    Enable(wgsl::Extension::kClipDistances);
+
+    Structure("out_struct", Vector{Member("inner_clip_distances", ty.array<f32, 8>(),
+                                          Vector{Builtin(core::BuiltinValue::kClipDistances)}),
+                                   Member("inner_position", ty.vec4<f32>(),
+                                          Vector{Builtin(core::BuiltinValue::kPosition)})});
+    Func("ep_func", tint::Empty, ty("out_struct"),
+         Vector{
+             Decl(Var("out_var", ty("out_struct"))),
+             Return("out_var"),
+         },
+         Vector{
+             Stage(ast::PipelineStage::kVertex),
+         });
+
+    Inspector& inspector = Build();
+
+    auto result = inspector.GetEntryPoints();
+
+    ASSERT_EQ(1u, result.size());
+    EXPECT_TRUE(result[0].clip_distances_size.has_value());
+    EXPECT_EQ(8u, *result[0].clip_distances_size);
+}
+
+TEST_F(InspectorGetEntryPointTest, ClipDistancesNotReferenced) {
+    Structure("out_struct", Vector{Member("inner_position", ty.vec4<f32>(),
+                                          Vector{Builtin(core::BuiltinValue::kPosition)})});
+    Func("ep_func", tint::Empty, ty("out_struct"),
+         Vector{
+             Decl(Var("out_var", ty("out_struct"))),
+             Return("out_var"),
+         },
+         Vector{
+             Stage(ast::PipelineStage::kVertex),
+         });
+
+    Inspector& inspector = Build();
+
+    auto result = inspector.GetEntryPoints();
+
+    ASSERT_EQ(1u, result.size());
+    EXPECT_FALSE(result[0].clip_distances_size.has_value());
+}
+
 TEST_F(InspectorGetEntryPointTest, ImplicitInterpolate) {
     Structure("in_struct", Vector{
                                Member("struct_inner", ty.f32(), Vector{Location(0_a)}),
@@ -1725,7 +1774,13 @@ INSTANTIATE_TEST_SUITE_P(
             InterpolationType::kLinear, InterpolationSampling::kCenter},
         InspectorGetEntryPointInterpolateTestParams{
             core::InterpolationType::kFlat, core::InterpolationSampling::kUndefined,
-            InterpolationType::kFlat, InterpolationSampling::kNone}));
+            InterpolationType::kFlat, InterpolationSampling::kFirst},
+        InspectorGetEntryPointInterpolateTestParams{
+            core::InterpolationType::kFlat, core::InterpolationSampling::kFirst,
+            InterpolationType::kFlat, InterpolationSampling::kFirst},
+        InspectorGetEntryPointInterpolateTestParams{
+            core::InterpolationType::kFlat, core::InterpolationSampling::kEither,
+            InterpolationType::kFlat, InterpolationSampling::kEither}));
 
 TEST_F(InspectorGetOverrideDefaultValuesTest, Bool) {
     GlobalConst("C", Expr(true));
@@ -2071,6 +2126,66 @@ TEST_F(InspectorGetResourceBindingsTest, Simple) {
     EXPECT_EQ(ResourceBinding::ResourceType::kDepthMultisampledTexture, result[8].resource_type);
     EXPECT_EQ(3u, result[8].bind_group);
     EXPECT_EQ(3u, result[8].binding);
+}
+
+TEST_F(InspectorGetResourceBindingsTest, InputAttachment) {
+    // enable chromium_internal_input_attachments;
+    // @group(0) @binding(1) @input_attachment_index(3)
+    // var input_tex1 : input_attachment<f32>;
+    //
+    // @group(4) @binding(3) @input_attachment_index(1)
+    // var input_tex2 : input_attachment<i32>;
+    //
+    // fn f1() -> vec4f {
+    //    return inputAttachmentLoad(input_tex1);
+    // }
+    //
+    // fn f2() -> vec4i {
+    //    return inputAttachmentLoad(input_tex2);
+    // }
+
+    Enable(Source{{12, 34}}, wgsl::Extension::kChromiumInternalInputAttachments);
+
+    GlobalVar("input_tex1", ty.input_attachment(ty.Of<f32>()),
+              Vector{Group(0_u), Binding(1_u), InputAttachmentIndex(3_u)});
+    GlobalVar("input_tex2", ty.input_attachment(ty.Of<i32>()),
+              Vector{Group(4_u), Binding(3_u), InputAttachmentIndex(1_u)});
+
+    Func("f1", Empty, ty.vec4<f32>(),
+         Vector{
+             Return(Call("inputAttachmentLoad", "input_tex1")),
+         });
+    Func("f2", Empty, ty.vec4<i32>(),
+         Vector{
+             Return(Call("inputAttachmentLoad", "input_tex2")),
+         });
+
+    MakeCallerBodyFunction("main",
+                           Vector{
+                               std::string("f1"),
+                               std::string("f2"),
+                           },
+                           Vector{
+                               Stage(ast::PipelineStage::kFragment),
+                           });
+
+    Inspector& inspector = Build();
+
+    auto result = inspector.GetResourceBindings("main");
+    ASSERT_FALSE(inspector.has_error()) << inspector.error();
+    ASSERT_EQ(2u, result.size());
+
+    EXPECT_EQ(ResourceBinding::ResourceType::kInputAttachment, result[0].resource_type);
+    EXPECT_EQ(0u, result[0].bind_group);
+    EXPECT_EQ(1u, result[0].binding);
+    EXPECT_EQ(3u, result[0].input_attachmnt_index);
+    EXPECT_EQ(inspector::ResourceBinding::SampledKind::kFloat, result[0].sampled_kind);
+
+    EXPECT_EQ(ResourceBinding::ResourceType::kInputAttachment, result[1].resource_type);
+    EXPECT_EQ(4u, result[1].bind_group);
+    EXPECT_EQ(3u, result[1].binding);
+    EXPECT_EQ(1u, result[1].input_attachmnt_index);
+    EXPECT_EQ(inspector::ResourceBinding::SampledKind::kSInt, result[1].sampled_kind);
 }
 
 TEST_F(InspectorGetUniformBufferResourceBindingsTest, MissingEntryPoint) {
@@ -3393,6 +3508,168 @@ fn main() {
     ASSERT_EQ(0u, result.Length());
 }
 
+// Regression test for crbug.com/dawn/380433758.
+TEST_F(InspectorGetSamplerTextureUsesTest, DiamondSampler) {
+    std::string shader = R"(
+fn sample(t: texture_2d<f32>, s: sampler) -> vec4f {
+  return textureSampleLevel(t, s, vec2f(0), 0);
+}
+
+fn useCombos0() -> vec4f {
+  return sample(tex0_0, smp0_0);
+}
+
+fn useCombos1() -> vec4f {
+  return sample(tex1_15, smp0_0);
+}
+
+@group(0) @binding(0) var tex0_0: texture_2d<f32>;
+@group(0) @binding(1) var tex1_15: texture_2d<f32>;
+@group(0) @binding(2) var smp0_0: sampler;
+
+@vertex fn vs() -> @builtin(position) vec4f {
+  return useCombos0();
+}
+
+@fragment fn fs() -> @location(0) vec4f {
+  return vec4f(useCombos1());
+})";
+
+    Inspector& inspector = Initialize(shader);
+    {
+        auto result = inspector.GetSamplerTextureUses("vs");
+        ASSERT_FALSE(inspector.has_error()) << inspector.error();
+        ASSERT_EQ(1u, result.Length());
+
+        EXPECT_EQ(0u, result[0].sampler_binding_point.group);
+        EXPECT_EQ(2u, result[0].sampler_binding_point.binding);
+        EXPECT_EQ(0u, result[0].texture_binding_point.group);
+        EXPECT_EQ(0u, result[0].texture_binding_point.binding);
+    }
+    {
+        auto result = inspector.GetSamplerTextureUses("fs");
+        ASSERT_FALSE(inspector.has_error()) << inspector.error();
+        ASSERT_EQ(1u, result.Length());
+
+        EXPECT_EQ(0u, result[0].sampler_binding_point.group);
+        EXPECT_EQ(2u, result[0].sampler_binding_point.binding);
+        EXPECT_EQ(0u, result[0].texture_binding_point.group);
+        EXPECT_EQ(1u, result[0].texture_binding_point.binding);
+    }
+}
+
+TEST_F(InspectorGetSamplerTextureUsesTest, DiamondSampler2) {
+    std::string shader = R"(
+fn sample(t: texture_2d<f32>, s: sampler) -> vec4f {
+  return textureSampleLevel(t, s, vec2f(0), 0);
+}
+
+fn useCombos0() -> vec4f {
+  return sample(tex0_0, smp0_0);
+}
+
+fn useCombos1(t: texture_2d<f32>) -> vec4f {
+  return sample(t, smp0_0);
+}
+
+fn useCombos2() -> vec4f {
+  return useCombos1(tex1_15);
+}
+
+@group(0) @binding(0) var tex0_0: texture_2d<f32>;
+@group(0) @binding(1) var tex1_15: texture_2d<f32>;
+@group(0) @binding(2) var smp0_0: sampler;
+
+@vertex fn vs() -> @builtin(position) vec4f {
+  return useCombos0();
+}
+
+@fragment fn fs() -> @location(0) vec4f {
+  return vec4f(useCombos2());
+})";
+
+    Inspector& inspector = Initialize(shader);
+    {
+        auto result = inspector.GetSamplerTextureUses("vs");
+        ASSERT_FALSE(inspector.has_error()) << inspector.error();
+        ASSERT_EQ(1u, result.Length());
+
+        EXPECT_EQ(0u, result[0].sampler_binding_point.group);
+        EXPECT_EQ(2u, result[0].sampler_binding_point.binding);
+        EXPECT_EQ(0u, result[0].texture_binding_point.group);
+        EXPECT_EQ(0u, result[0].texture_binding_point.binding);
+    }
+    {
+        auto result = inspector.GetSamplerTextureUses("fs");
+        ASSERT_FALSE(inspector.has_error()) << inspector.error();
+        ASSERT_EQ(1u, result.Length());
+
+        EXPECT_EQ(0u, result[0].sampler_binding_point.group);
+        EXPECT_EQ(2u, result[0].sampler_binding_point.binding);
+        EXPECT_EQ(0u, result[0].texture_binding_point.group);
+        EXPECT_EQ(1u, result[0].texture_binding_point.binding);
+    }
+}
+
+TEST_F(InspectorGetSamplerTextureUsesTest, DiamondSampler3) {
+    std::string shader = R"(
+fn sample(t: texture_2d<f32>, s: sampler) -> vec4f {
+  return textureSampleLevel(t, s, vec2f(0), 0);
+}
+
+fn useCombos0() -> vec4f {
+  return sample(tex0_0, smp0_0);
+}
+
+fn useCombos1(t: texture_2d<f32>) -> vec4f {
+  return sample(t, smp0_0);
+}
+
+fn useCombos2() -> vec4f {
+  return useCombos1(tex1_15);
+}
+
+@group(0) @binding(0) var tex0_0: texture_2d<f32>;
+@group(0) @binding(1) var tex1_15: texture_2d<f32>;
+@group(0) @binding(2) var smp0_0: sampler;
+
+@vertex fn vs() -> @builtin(position) vec4f {
+  _ = useCombos0();
+  return useCombos2();
+}
+
+@fragment fn fs() -> @location(0) vec4f {
+  return vec4f(useCombos2());
+})";
+
+    Inspector& inspector = Initialize(shader);
+    {
+        auto result = inspector.GetSamplerTextureUses("vs");
+        ASSERT_FALSE(inspector.has_error()) << inspector.error();
+        ASSERT_EQ(2u, result.Length());
+
+        EXPECT_EQ(0u, result[0].sampler_binding_point.group);
+        EXPECT_EQ(2u, result[0].sampler_binding_point.binding);
+        EXPECT_EQ(0u, result[0].texture_binding_point.group);
+        EXPECT_EQ(0u, result[0].texture_binding_point.binding);
+
+        EXPECT_EQ(0u, result[1].sampler_binding_point.group);
+        EXPECT_EQ(2u, result[1].sampler_binding_point.binding);
+        EXPECT_EQ(0u, result[1].texture_binding_point.group);
+        EXPECT_EQ(1u, result[1].texture_binding_point.binding);
+    }
+    {
+        auto result = inspector.GetSamplerTextureUses("fs");
+        ASSERT_FALSE(inspector.has_error()) << inspector.error();
+        ASSERT_EQ(1u, result.Length());
+
+        EXPECT_EQ(0u, result[0].sampler_binding_point.group);
+        EXPECT_EQ(2u, result[0].sampler_binding_point.binding);
+        EXPECT_EQ(0u, result[0].texture_binding_point.group);
+        EXPECT_EQ(1u, result[0].texture_binding_point.binding);
+    }
+}
+
 TEST_F(InspectorGetSamplerTextureUsesTest, Simple) {
     std::string shader = R"(
 @group(0) @binding(1) var mySampler: sampler;
@@ -3931,22 +4208,20 @@ fn main() {
     Inspector& inspector = Initialize(shader);
     auto info = inspector.GetTextureQueries("main");
 
-    ASSERT_EQ(1u, info.size());
-
-    EXPECT_EQ(Inspector::TextureQueryType::kTextureNumSamples, info[0].type);
-    EXPECT_EQ(2u, info[0].group);
-    EXPECT_EQ(3u, info[0].binding);
+    ASSERT_EQ(0u, info.size());
 }
 
 TEST_F(InspectorTextureTest, TextureLoadMultipleInEP) {
     std::string shader = R"(
 @group(2) @binding(3) var tex1: texture_2d<f32>;
 @group(1) @binding(4) var tex2: texture_multisampled_2d<f32>;
+@group(0) @binding(1) var tex3: texture_2d<f32>;
 
 @compute @workgroup_size(1)
 fn main() {
   let num1 = textureLoad(tex1, vec2(0, 0), 0);
   let num2 = textureLoad(tex2, vec2(0, 0), 0);
+  let num3 = textureLoad(tex3, vec2(0, 0), 0);
 })";
 
     Inspector& inspector = Initialize(shader);
@@ -3957,9 +4232,9 @@ fn main() {
     EXPECT_EQ(Inspector::TextureQueryType::kTextureNumLevels, info[0].type);
     EXPECT_EQ(2u, info[0].group);
     EXPECT_EQ(3u, info[0].binding);
-    EXPECT_EQ(Inspector::TextureQueryType::kTextureNumSamples, info[1].type);
-    EXPECT_EQ(1u, info[1].group);
-    EXPECT_EQ(4u, info[1].binding);
+    EXPECT_EQ(Inspector::TextureQueryType::kTextureNumLevels, info[1].type);
+    EXPECT_EQ(0u, info[1].group);
+    EXPECT_EQ(1u, info[1].binding);
 }
 
 TEST_F(InspectorTextureTest, TextureInSubfunction) {
@@ -4046,6 +4321,34 @@ TEST_F(InspectorTextureTest, TextureMultipleEPs) {
         EXPECT_EQ(0u, info2[1].group);
         EXPECT_EQ(4u, info2[1].binding);
     }
+}
+
+TEST_F(InspectorGetBlendSrcTest, Basic) {
+    Enable(wgsl::Extension::kDualSourceBlending);
+
+    Structure("out_struct",
+              Vector{
+                  Member("output_color", ty.vec4<f32>(), Vector{Location(0_u), BlendSrc(0_u)}),
+                  Member("output_blend", ty.vec4<f32>(), Vector{Location(0_u), BlendSrc(1_u)}),
+              });
+
+    Func("ep_func", tint::Empty, ty("out_struct"),
+         Vector{
+             Decl(Var("out_var", ty("out_struct"))),
+             Return("out_var"),
+         },
+         Vector{
+             Stage(ast::PipelineStage::kFragment),
+         });
+
+    Inspector& inspector = Build();
+
+    auto result = inspector.GetEntryPoints();
+
+    ASSERT_EQ(1u, result.size());
+    ASSERT_EQ(2u, result[0].output_variables.size());
+    EXPECT_EQ(0u, result[0].output_variables[0].attributes.blend_src);
+    EXPECT_EQ(1u, result[0].output_variables[1].attributes.blend_src);
 }
 
 }  // namespace

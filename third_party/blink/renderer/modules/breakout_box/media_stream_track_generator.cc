@@ -111,7 +111,6 @@ MediaStreamComponent* MediaStreamTrackGenerator::MakeMediaStreamComponent(
       break;
     default:
       NOTREACHED();
-      return nullptr;
   }
 
   const String track_id = WTF::CreateCanonicalUUIDString();

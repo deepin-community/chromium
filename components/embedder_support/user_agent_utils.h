@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_EMBEDDER_SUPPORT_USER_AGENT_UTILS_H_
 #define COMPONENTS_EMBEDDER_SUPPORT_USER_AGENT_UTILS_H_
 
+#include <optional>
 #include <string>
 
 #include "build/build_config.h"
@@ -22,7 +23,7 @@ class WebContents;
 
 namespace embedder_support {
 
-// TODO(crbug.com/1330890): Remove this enum along with policy.
+// TODO(crbug.com/40843535): Remove this enum along with policy.
 enum class UserAgentReductionEnterprisePolicyState {
   kDefault = 0,
   kForceDisabled = 1,
@@ -32,15 +33,19 @@ enum class UserAgentReductionEnterprisePolicyState {
 // Returns the product & version string.  Examples:
 //   "Chrome/101.0.0.0"       - if UA reduction is enabled
 //   "Chrome/101.0.4698.0"    - if UA reduction isn't enabled
-// TODO(crbug.com/1291612): modify to accept an optional PrefService*.
+// TODO(crbug.com/40212812): modify to accept an optional PrefService*.
 std::string GetProductAndVersion(
     UserAgentReductionEnterprisePolicyState user_agent_reduction =
         UserAgentReductionEnterprisePolicyState::kDefault);
 
+// Returns a user agent string passed via the kUserAgent command-line argument
+// when it is valid, or std::nullopt if it is not valid.
+std::optional<std::string> GetUserAgentFromCommandLine();
+
 // Returns the full or "reduced" user agent string, depending on the following:
 // 1) UserAgentReduction enterprise policy.
 // 2) Reduce User-Agent reduction phase features.
-// TODO(crbug.com/1291612): modify to accept an optional PrefService*.
+// TODO(crbug.com/40212812): modify to accept an optional PrefService*.
 std::string GetUserAgent(
     UserAgentReductionEnterprisePolicyState user_agent_reduction =
         UserAgentReductionEnterprisePolicyState::kDefault);
@@ -61,24 +66,48 @@ blink::UserAgentMetadata GetUserAgentMetadata(const PrefService* local_state,
                                               bool only_low_entropy_ch = false);
 
 // Return UserAgentBrandList based on the expected output version type.
+// Only use when adding additional brand version pair and overriding the default
+// product brand version, otherwise prefer to
+// GetUserAgentBrandFullVersionList/GetUserAgentBrandMajorVersionList.
 blink::UserAgentBrandList GenerateBrandVersionList(
     int seed,
     std::optional<std::string> brand,
     const std::string& version,
-    std::optional<std::string> maybe_greasey_brand,
-    std::optional<std::string> maybe_greasey_version,
-    bool enable_updated_grease_by_policy,
-    blink::UserAgentBrandVersionType output_version_type);
+    blink::UserAgentBrandVersionType output_version_type,
+    std::optional<blink::UserAgentBrandVersion> additional_brand_version =
+        std::nullopt);
+
+// Return UserAgentBrandList with full versions based on the additional brand
+// version list if provided. It generates a pseudo-random permutation of the
+// following brand/full_version pairs:
+//   1. The base project (i.e. Chromium)
+//   2. The browser brand, if available
+//   3. A randomized string containing GREASE characters to ensure proper
+//      header parsing, along with an arbitrarily low version to ensure proper
+//      version checking.
+//   4. Additional brand/full_version pairs.
+const blink::UserAgentBrandList GetUserAgentBrandFullVersionList(
+    std::optional<blink::UserAgentBrandVersion> additional_brand_version =
+        std::nullopt);
+
+// Return UserAgentBrandList with major versions based on the additional brand
+// version list if provided. It generates a pseudo-random permutation of the
+// following brand/major_version pairs:
+//   1. The base project (i.e. Chromium)
+//   2. The browser brand, if available
+//   3. A randomized string containing GREASE characters to ensure proper
+//      header parsing, along with an arbitrarily low version to ensure proper
+//      version checking.
+//   4. Additional brand/major_version pairs.
+const blink::UserAgentBrandList GetUserAgentBrandMajorVersionList(
+    std::optional<blink::UserAgentBrandVersion> additional_brand_version =
+        std::nullopt);
 
 // Return greased UserAgentBrandVersion to prevent assumptions about the
 // current values being baked into implementations. See
 // https://wicg.github.io/ua-client-hints/#create-arbitrary-brands-section.
 blink::UserAgentBrandVersion GetGreasedUserAgentBrandVersion(
-    std::vector<int> permuted_order,
     int seed,
-    std::optional<std::string> maybe_greasey_brand,
-    std::optional<std::string> maybe_greasey_version,
-    bool enable_updated_grease_by_policy,
     blink::UserAgentBrandVersionType output_version_type);
 
 #if BUILDFLAG(IS_ANDROID)
@@ -97,9 +126,9 @@ int GetHighestKnownUniversalApiContractVersionForTesting();
 
 // Returns the UserAgentReductionEnterprisePolicyState enum value corresponding
 // to the provided integer policy value for UserAgentReduction.
-// TODO(crbug.com/1330890): Remove this function with policy.
-embedder_support::UserAgentReductionEnterprisePolicyState
-GetUserAgentReductionFromPrefs(const PrefService* pref_service);
+// TODO(crbug.com/40843535): Remove this function with policy.
+UserAgentReductionEnterprisePolicyState GetUserAgentReductionFromPrefs(
+    const PrefService* pref_service);
 
 }  // namespace embedder_support
 

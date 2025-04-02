@@ -13,23 +13,22 @@
 
 #include <errno.h>
 
-#include "absl/types/optional.h"
-#include "rtc_base/checks.h"
+#include <cstddef>
+#include <cstdint>
+#include <optional>
 
 #if defined(WEBRTC_POSIX)
 #include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
 #include <sys/types.h>
 #define SOCKET_EACCES EACCES
 #endif
 
-#if defined(WEBRTC_WIN)
-#include "rtc_base/win32.h"
-#endif
-
 #include "api/units/timestamp.h"
 #include "rtc_base/buffer.h"
+#include "rtc_base/checks.h"
+#include "rtc_base/ip_address.h"
+#include "rtc_base/net_helpers.h"
+#include "rtc_base/network/ecn_marking.h"
 #include "rtc_base/socket_address.h"
 #include "rtc_base/system/rtc_export.h"
 #include "rtc_base/third_party/sigslot/sigslot.h"
@@ -89,8 +88,9 @@ class RTC_EXPORT Socket {
   struct ReceiveBuffer {
     ReceiveBuffer(Buffer& payload) : payload(payload) {}
 
-    absl::optional<webrtc::Timestamp> arrival_time;
+    std::optional<webrtc::Timestamp> arrival_time;
     SocketAddress source_address;
+    EcnMarking ecn = EcnMarking::kNotEct;
     Buffer& payload;
   };
   virtual ~Socket() {}
@@ -113,10 +113,10 @@ class RTC_EXPORT Socket {
   // `timestamp` is in units of microseconds.
   virtual int Recv(void* pv, size_t cb, int64_t* timestamp) = 0;
   // TODO(webrtc:15368): Deprecate and remove.
-  virtual int RecvFrom(void* pv,
-                       size_t cb,
-                       SocketAddress* paddr,
-                       int64_t* timestamp) {
+  virtual int RecvFrom(void* /* pv */,
+                       size_t /* cb */,
+                       SocketAddress* /* paddr */,
+                       int64_t* /* timestamp */) {
     // Not implemented. Use RecvFrom(ReceiveBuffer& buffer).
     RTC_CHECK_NOTREACHED();
   }
@@ -144,6 +144,13 @@ class RTC_EXPORT Socket {
     OPT_RTP_SENDTIME_EXTN_ID,  // This is a non-traditional socket option param.
                                // This is specific to libjingle and will be used
                                // if SendTime option is needed at socket level.
+    OPT_SEND_ECN,              // 2-bit ECN
+    OPT_RECV_ECN,
+    OPT_KEEPALIVE,         // Enable socket keep alive
+    OPT_TCP_KEEPCNT,       // Set TCP keep alive count
+    OPT_TCP_KEEPIDLE,      // Set TCP keep alive idle time in seconds
+    OPT_TCP_KEEPINTVL,     // Set TCP keep alive interval in seconds
+    OPT_TCP_USER_TIMEOUT,  // Set TCP user timeout
   };
   virtual int GetOption(Option opt, int* value) = 0;
   virtual int SetOption(Option opt, int value) = 0;

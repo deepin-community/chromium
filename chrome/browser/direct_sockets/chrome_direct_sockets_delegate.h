@@ -10,11 +10,10 @@
 class ChromeDirectSocketsDelegate : public content::DirectSocketsDelegate {
  public:
   // content::DirectSocketsDelegate:
-  bool ValidateAddressAndPort(content::BrowserContext* browser_context,
-                              const GURL& lock_url,
-                              const std::string& address,
-                              uint16_t port,
-                              ProtocolType protocol) const override;
+  bool ValidateRequest(content::RenderFrameHost& rfh,
+                       const RequestDetails&) override;
+  void RequestPrivateNetworkAccess(content::RenderFrameHost& rfh,
+                                   base::OnceCallback<void(bool)>) override;
 };
 
 #endif  // CHROME_BROWSER_DIRECT_SOCKETS_CHROME_DIRECT_SOCKETS_DELEGATE_H_

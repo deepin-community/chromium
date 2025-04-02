@@ -17,6 +17,7 @@
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/layout/geometry/logical_rect.h"
 #include "third_party/blink/renderer/core/layout/geometry/physical_rect.h"
+#include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_node.h"
 #include "third_party/blink/renderer/core/layout/layout_view.h"
 #include "third_party/blink/renderer/core/loader/empty_clients.h"
@@ -199,6 +200,19 @@ constexpr PhysicalSize::PhysicalSize(int width, int height)
     : width(width), height(height) {}
 constexpr PhysicalRect::PhysicalRect(int left, int top, int width, int height)
     : offset(left, top), size(width, height) {}
+
+// Returns the rect that should have raster invalidated whenever this object
+// changes. The rect is in the coordinate space of the document's scrolling
+// contents. This method deals with outlines and overflow.
+PhysicalRect VisualRectInDocument(const LayoutObject& object,
+                                  VisualRectFlags = kDefaultVisualRectFlags);
+
+// Returns the rect that should have raster invalidated whenever the specified
+// object changes. The rect is in the object's local physical coordinate space.
+// This is for non-SVG objects and LayoutSVGRoot only. SVG objects (except
+// LayoutSVGRoot) should use VisualRectInLocalSVGCoordinates() and map with
+// SVG transforms instead.
+PhysicalRect LocalVisualRect(const LayoutObject& object);
 
 }  // namespace blink
 

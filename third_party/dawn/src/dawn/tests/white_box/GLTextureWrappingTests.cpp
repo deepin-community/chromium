@@ -117,8 +117,8 @@ class GLTextureTestBase : public DawnTest {
     }
 
   protected:
-    raw_ptr<native::opengl::Device> mSecondDeviceGL;
     wgpu::Device mSecondDevice;
+    raw_ptr<native::opengl::Device> mSecondDeviceGL;  // Depends on `mSecondDevice`.
 };
 
 // A small fixture used to initialize default data for the GLTexture validation tests.
@@ -191,16 +191,6 @@ TEST_P(GLTextureValidationTests, InvalidTextureDescriptor) {
 // Test an error occurs if the descriptor dimension isn't 2D
 TEST_P(GLTextureValidationTests, InvalidTextureDimension) {
     descriptor.dimension = wgpu::TextureDimension::e3D;
-
-    ScopedGLTexture glTexture = CreateDefaultGLTexture();
-    ASSERT_DEVICE_ERROR(wgpu::Texture texture = WrapGLTexture(&descriptor, glTexture.Get()));
-
-    ASSERT_EQ(texture.Get(), nullptr);
-}
-
-// Test an error occurs if the texture usage contains StorageBinding.
-TEST_P(GLTextureValidationTests, InvalidTextureUsage) {
-    descriptor.usage = wgpu::TextureUsage::StorageBinding;
 
     ScopedGLTexture glTexture = CreateDefaultGLTexture();
     ASSERT_DEVICE_ERROR(wgpu::Texture texture = WrapGLTexture(&descriptor, glTexture.Get()));

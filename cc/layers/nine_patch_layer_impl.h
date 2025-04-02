@@ -34,9 +34,9 @@ class CC_EXPORT NinePatchLayerImpl : public UIResourceLayerImpl {
   void SetLayout(const gfx::Rect& image_aperture,
                  const gfx::Rect& border,
                  const gfx::Rect& layer_occlusion,
-                 bool fill_center,
-                 bool nearest_neighbor);
+                 bool fill_center);
 
+  mojom::LayerType GetLayerType() const override;
   std::unique_ptr<LayerImpl> CreateLayerImpl(
       LayerTreeImpl* tree_impl) const override;
   void PushPropertiesTo(LayerImpl* layer) override;
@@ -50,8 +50,6 @@ class CC_EXPORT NinePatchLayerImpl : public UIResourceLayerImpl {
   NinePatchLayerImpl(LayerTreeImpl* tree_impl, int id);
 
  private:
-  const char* LayerTypeAsString() const override;
-
   NinePatchGenerator quad_generator_;
 };
 

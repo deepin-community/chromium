@@ -5,7 +5,6 @@
 #include "third_party/blink/renderer/core/clipboard/clipboard_utilities.h"
 
 #include "base/containers/span.h"
-#include "mojo/public/cpp/base/big_buffer.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/renderer/platform/image-encoders/image_encoder.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
@@ -41,15 +40,14 @@ TEST(ClipboardUtilitiesTest, URLToImageMarkupEmbeddedNull) {
   const char kTitleWithNull[] = "\0";
   const char kExpectedOutputWithNull[] =
       "<img src=\"http://test.example/%00.png\" alt=\"\0\"/>";
-  EXPECT_EQ(
-      String(kExpectedOutputWithNull, sizeof(kExpectedOutputWithNull) - 1),
-      URLToImageMarkup(
-          KURL(NullURL(), String(kURLWithNull, sizeof(kURLWithNull) - 1)),
-          String(kTitleWithNull, sizeof(kTitleWithNull) - 1)));
+  EXPECT_EQ(String(base::span_from_cstring(kExpectedOutputWithNull)),
+            URLToImageMarkup(
+                KURL(NullURL(), String(base::span_from_cstring(kURLWithNull))),
+                String(base::span_from_cstring(kTitleWithNull))));
 }
 
 TEST(ClipboardUtilitiesTest, PNGToImageMarkupEmpty) {
-  EXPECT_TRUE(PNGToImageMarkup(mojo_base::BigBuffer()).IsNull());
+  EXPECT_TRUE(PNGToImageMarkup({}).IsNull());
 }
 
 TEST(ClipboardUtilitiesTest, PNGToImageMarkup) {
@@ -66,45 +64,9 @@ TEST(ClipboardUtilitiesTest, PNGToImageMarkup) {
   Vector<uint8_t> png_data;
   EXPECT_TRUE(ImageEncoder::Encode(&png_data, pixmap, options));
 
-  mojo_base::BigBuffer png = base::as_bytes(base::make_span(png_data));
   EXPECT_EQ(
       R"HTML(<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAFCAYAAAB8ZH1oAAAADElEQVQYGWNgGEYAAADNAAGVVebMAAAAAElFTkSuQmCC" alt=""/>)HTML",
-      PNGToImageMarkup(png));
-}
-
-TEST(ClipboardUtilitiesTest, AddMetaCharsetTagToHtmlOnMac) {
-  const String html_markup = "<p>Test</p>";
-  const String expected_html_markup = "<meta charset=\"utf-8\"><p>Test</p>";
-#if BUILDFLAG(IS_MAC)
-  EXPECT_EQ(AddMetaCharsetTagToHtmlOnMac(html_markup), expected_html_markup);
-#else
-  EXPECT_EQ(AddMetaCharsetTagToHtmlOnMac(html_markup), html_markup);
-#endif
-}
-
-TEST(ClipboardUtilitiesTest, RemoveMetaTagAndCalcFragmentOffsetsFromHtmlOnMac) {
-#if BUILDFLAG(IS_MAC)
-  const String expected_html_markup = "<p>Test</p>";
-  const String html_markup = "<meta charset=\"utf-8\"><p>Test</p>";
-  unsigned fragment_start = 0;
-  unsigned fragment_end = html_markup.length();
-  const String actual_value = RemoveMetaTagAndCalcFragmentOffsetsFromHtmlOnMac(
-      html_markup, fragment_start, fragment_end);
-  EXPECT_EQ(actual_value, expected_html_markup);
-  EXPECT_EQ(fragment_start, 0u);
-  // Meta tag is not part of the copied fragment.
-  EXPECT_EQ(fragment_end, expected_html_markup.length());
-#else
-  const String html_markup = "<p>Test</p>";
-  unsigned fragment_start = 0;
-  unsigned fragment_end = html_markup.length();
-  const String actual_value = RemoveMetaTagAndCalcFragmentOffsetsFromHtmlOnMac(
-      html_markup, fragment_start, fragment_end);
-  // On non-Mac platforms, the HTML markup is unchanged.
-  EXPECT_EQ(actual_value, html_markup);
-  EXPECT_EQ(fragment_start, 0u);
-  EXPECT_EQ(fragment_end, html_markup.length());
-#endif
+      PNGToImageMarkup(png_data));
 }
 
 }  // namespace blink

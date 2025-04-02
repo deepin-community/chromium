@@ -16,6 +16,7 @@
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 #include "third_party/blink/renderer/platform/testing/url_loader_mock_factory.h"
 #include "third_party/blink/renderer/platform/testing/url_test_helpers.h"
@@ -30,15 +31,16 @@ class TestDocumentSubresourceFilter : public WebDocumentSubresourceFilter {
       : load_policy_(policy) {}
 
   LoadPolicy GetLoadPolicy(const WebURL& resource_url,
-                           mojom::blink::RequestContextType) override {
-    String resource_path = KURL(resource_url).GetPath();
+                           network::mojom::RequestDestination) override {
+    String resource_path = KURL(resource_url).GetPath().ToString();
     if (!base::Contains(queried_subresource_paths_, resource_path)) {
       queried_subresource_paths_.push_back(resource_path);
     }
     String resource_string = resource_url.GetString();
     for (const String& suffix : blocklisted_suffixes_) {
-      if (resource_string.EndsWith(suffix))
+      if (resource_string.EndsWith(suffix)) {
         return load_policy_;
+      }
     }
     return LoadPolicy::kAllow;
   }
@@ -140,6 +142,7 @@ class WebDocumentSubresourceFilterTest : public testing::Test {
     url_test_helpers::UnregisterAllURLsAndClearMemoryCache();
   }
 
+  test::TaskEnvironment task_environment_;
   SubresourceFilteringWebFrameClient client_;
   frame_test_helpers::WebViewHelper web_view_helper_;
   String base_url_;

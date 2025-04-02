@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/filters/audio_file_reader.h"
 
 #include <stddef.h>
@@ -20,6 +25,7 @@
 #include "media/base/media_switches.h"
 #include "media/ffmpeg/ffmpeg_common.h"
 #include "media/ffmpeg/ffmpeg_decoding_loop.h"
+#include "media/ffmpeg/scoped_av_packet.h"
 #include "media/formats/mpeg/mpeg1_audio_stream_parser.h"
 
 namespace media {
@@ -82,14 +88,6 @@ bool AudioFileReader::OpenDemuxer() {
       AVStreamToAVCodecContext(format_context->streams[stream_index_]);
   if (!codec_context_)
     return false;
-
-  // Future versions of ffmpeg may copy the allow list from the format context.
-  if (base::FeatureList::IsEnabled(kFFmpegAllowLists) &&
-      !codec_context_->codec_whitelist) {
-    // Note: FFmpeg will try to free this string, so we must duplicate it.
-    codec_context_->codec_whitelist =
-        av_strdup(FFmpegGlue::GetAllowedAudioDecoders());
-  }
 
   DCHECK_EQ(codec_context_->codec_type, AVMEDIA_TYPE_AUDIO);
   return true;
@@ -160,11 +158,11 @@ int AudioFileReader::Read(
       base::BindRepeating(&AudioFileReader::OnNewFrame, base::Unretained(this),
                           &total_frames, decoded_audio_packets);
 
-  AVPacket packet;
+  auto packet = ScopedAVPacket::Allocate();
   int packets_read = 0;
-  while (packets_read++ < packets_to_read && ReadPacket(&packet)) {
-    const auto status = decode_loop.DecodePacket(&packet, frame_ready_cb);
-    av_packet_unref(&packet);
+  while (packets_read++ < packets_to_read && ReadPacket(packet.get())) {
+    const auto status = decode_loop.DecodePacket(packet.get(), frame_ready_cb);
+    av_packet_unref(packet.get());
 
     if (status != FFmpegDecodingLoop::DecodeStatus::kOkay)
       break;
@@ -331,7 +329,6 @@ bool AudioFileReader::OnNewFrame(
       default:
         NOTREACHED() << "Unsupported bytes per sample encountered: "
                      << bytes_per_sample;
-        audio_bus->ZeroFrames(frames_read);
     }
   }
 

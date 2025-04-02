@@ -2,7 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/gpu/android/ndk_video_encode_accelerator.h"
+
+#include <optional>
 
 #include "base/bits.h"
 #include "base/logging.h"
@@ -13,10 +20,12 @@
 #include "media/base/android/media_codec_util.h"
 #include "media/base/bitstream_buffer.h"
 #include "media/base/encoder_status.h"
-#include "media/base/media_switches.h"
-#include "media/base/video_codecs.h"
+#include "media/base/media_serializers_base.h"
 #include "media/base/video_frame.h"
 #include "media/gpu/android/video_accelerator_util.h"
+#include "media/parsers/h264_level_limits.h"
+#include "media/parsers/h264_parser.h"
+#include "media/parsers/temporal_scalability_id_extractor.h"
 #include "third_party/libyuv/include/libyuv.h"
 
 #pragma clang attribute push DEFAULT_REQUIRES_ANDROID_API( \
@@ -43,10 +52,180 @@ enum PixelFormat {
 
 struct AMediaFormatDeleter {
   inline void operator()(AMediaFormat* ptr) const {
-    if (ptr)
+    if (ptr) {
       AMediaFormat_delete(ptr);
+    }
   }
 };
+
+enum class CodecProfileLevel {
+  // Subset of MediaCodecInfo.CodecProfileLevel
+  AVCProfileBaseline = 0x01,
+  AVCProfileMain = 0x02,
+  AVCProfileExtended = 0x04,
+  AVCProfileHigh = 0x08,
+  AVCProfileHigh10 = 0x10,
+  AVCProfileHigh422 = 0x20,
+  AVCProfileHigh444 = 0x40,
+  AVCProfileConstrainedBaseline = 0x10000,
+  AVCProfileConstrainedHigh = 0x80000,
+
+  AVCLevel1 = 0x01,
+  AVCLevel1b = 0x02,
+  AVCLevel11 = 0x04,
+  AVCLevel12 = 0x08,
+  AVCLevel13 = 0x10,
+  AVCLevel2 = 0x20,
+  AVCLevel21 = 0x40,
+  AVCLevel22 = 0x80,
+  AVCLevel3 = 0x100,
+  AVCLevel31 = 0x200,
+  AVCLevel32 = 0x400,
+  AVCLevel4 = 0x800,
+  AVCLevel41 = 0x1000,
+  AVCLevel42 = 0x2000,
+  AVCLevel5 = 0x4000,
+  AVCLevel51 = 0x8000,
+  AVCLevel52 = 0x10000,
+  AVCLevel6 = 0x20000,
+  AVCLevel61 = 0x40000,
+  AVCLevel62 = 0x80000,
+
+  VP9Profile0 = 0x01,
+  VP9Profile1 = 0x02,
+  VP9Profile2 = 0x04,
+  VP9Profile3 = 0x08,
+  VP9Profile2HDR = 0x1000,
+  VP9Profile3HDR = 0x2000,
+  VP9Profile2HDR10Plus = 0x4000,
+  VP9Profile3HDR10Plus = 0x8000,
+
+  VP8ProfileMain = 0x01,
+
+  AV1ProfileMain8 = 0x1,
+  AV1ProfileMain10 = 0x2,
+  AV1ProfileMain10HDR10 = 0x1000,
+  AV1ProfileMain10HDR10Plus = 0x2000,
+
+  HEVCProfileMain = 0x01,
+  HEVCProfileMain10 = 0x02,
+  HEVCProfileMainStill = 0x04,
+  HEVCProfileMain10HDR10 = 0x1000,
+  HEVCProfileMain10HDR10Plus = 0x2000,
+  Unknown = 0xFFFFFF,
+};
+
+CodecProfileLevel GetAndroidVideoProfile(VideoCodecProfile profile,
+                                         bool constrained) {
+  switch (profile) {
+    case H264PROFILE_BASELINE:
+      return constrained ? CodecProfileLevel::AVCProfileConstrainedBaseline
+                         : CodecProfileLevel::AVCProfileBaseline;
+    case H264PROFILE_MAIN:
+      return CodecProfileLevel::AVCProfileMain;
+    case H264PROFILE_EXTENDED:
+      return CodecProfileLevel::AVCProfileExtended;
+    case H264PROFILE_HIGH:
+      return constrained ? CodecProfileLevel::AVCProfileConstrainedHigh
+                         : CodecProfileLevel::AVCProfileHigh;
+    case H264PROFILE_HIGH10PROFILE:
+      return CodecProfileLevel::AVCProfileHigh10;
+    case H264PROFILE_HIGH422PROFILE:
+      return CodecProfileLevel::AVCProfileHigh422;
+    case H264PROFILE_HIGH444PREDICTIVEPROFILE:
+      return CodecProfileLevel::AVCProfileHigh444;
+    case HEVCPROFILE_MAIN:
+      return CodecProfileLevel::HEVCProfileMain;
+    case HEVCPROFILE_MAIN10:
+      return CodecProfileLevel::HEVCProfileMain10;
+    case HEVCPROFILE_MAIN_STILL_PICTURE:
+      return CodecProfileLevel::HEVCProfileMainStill;
+    case VP8PROFILE_ANY:
+      return CodecProfileLevel::VP8ProfileMain;
+    case VP9PROFILE_PROFILE0:
+      return CodecProfileLevel::VP9Profile0;
+    case VP9PROFILE_PROFILE1:
+      return CodecProfileLevel::VP9Profile1;
+    case VP9PROFILE_PROFILE2:
+      return CodecProfileLevel::VP9Profile2;
+    case VP9PROFILE_PROFILE3:
+      return CodecProfileLevel::VP9Profile3;
+    case AV1PROFILE_PROFILE_MAIN:
+      return CodecProfileLevel::AV1ProfileMain8;
+    default:
+      return CodecProfileLevel::Unknown;
+  }
+}
+
+std::optional<CodecProfileLevel> GetAndroidAvcLevel(
+    std::optional<uint8_t> level) {
+  if (!level.has_value()) {
+    return {};
+  }
+  switch (level.value()) {
+    case H264SPS::kLevelIDC1p0:
+      return CodecProfileLevel::AVCLevel1;
+    case H264SPS::kLevelIDC1B:
+      return CodecProfileLevel::AVCLevel1b;
+    case H264SPS::kLevelIDC1p1:
+      return CodecProfileLevel::AVCLevel11;
+    case H264SPS::kLevelIDC1p2:
+      return CodecProfileLevel::AVCLevel12;
+    case H264SPS::kLevelIDC1p3:
+      return CodecProfileLevel::AVCLevel13;
+    case H264SPS::kLevelIDC2p0:
+      return CodecProfileLevel::AVCLevel2;
+    case H264SPS::kLevelIDC2p1:
+      return CodecProfileLevel::AVCLevel21;
+    case H264SPS::kLevelIDC2p2:
+      return CodecProfileLevel::AVCLevel22;
+    case H264SPS::kLevelIDC3p0:
+      return CodecProfileLevel::AVCLevel3;
+    case H264SPS::kLevelIDC3p1:
+      return CodecProfileLevel::AVCLevel31;
+    case H264SPS::kLevelIDC3p2:
+      return CodecProfileLevel::AVCLevel32;
+    case H264SPS::kLevelIDC4p0:
+      return CodecProfileLevel::AVCLevel4;
+    case H264SPS::kLevelIDC4p1:
+      return CodecProfileLevel::AVCLevel41;
+    case H264SPS::kLevelIDC4p2:
+      return CodecProfileLevel::AVCLevel42;
+    case H264SPS::kLevelIDC5p0:
+      return CodecProfileLevel::AVCLevel5;
+    case H264SPS::kLevelIDC5p1:
+      return CodecProfileLevel::AVCLevel51;
+    case H264SPS::kLevelIDC5p2:
+      return CodecProfileLevel::AVCLevel52;
+    case H264SPS::kLevelIDC6p0:
+      return CodecProfileLevel::AVCLevel6;
+    case H264SPS::kLevelIDC6p1:
+      return CodecProfileLevel::AVCLevel61;
+    case H264SPS::kLevelIDC6p2:
+      return CodecProfileLevel::AVCLevel62;
+    default:
+      return {};
+  }
+}
+
+std::optional<uint8_t> FindSuitableH264Level(
+    const VideoEncodeAccelerator::Config& config,
+    int framerate,
+    const gfx::Size& frame_size,
+    const Bitrate& bitrate) {
+  constexpr uint32_t kH264MbSize = 16;
+  uint32_t mb_width =
+      base::bits::AlignUp(static_cast<uint32_t>(frame_size.width()),
+                          kH264MbSize) /
+      kH264MbSize;
+  uint32_t mb_height =
+      base::bits::AlignUp(static_cast<uint32_t>(frame_size.height()),
+                          kH264MbSize) /
+      kH264MbSize;
+
+  return FindValidH264Level(config.output_profile, bitrate.target_bps(),
+                            framerate, mb_width * mb_height);
+}
 
 bool GetAndroidColorValues(const gfx::ColorSpace& cs,
                            int* standard,
@@ -116,16 +295,35 @@ bool SetFormatColorSpace(AMediaFormat* format, const gfx::ColorSpace& cs) {
 
 using MediaFormatPtr = std::unique_ptr<AMediaFormat, AMediaFormatDeleter>;
 
-MediaFormatPtr CreateVideoFormat(const std::string& mime,
-                                 int iframe_interval,
+MediaFormatPtr CreateVideoFormat(const VideoEncodeAccelerator::Config& config,
                                  int framerate,
-                                 bool require_low_delay,
                                  const gfx::Size& frame_size,
                                  const Bitrate& bitrate,
                                  std::optional<gfx::ColorSpace> cs,
+                                 int num_temporal_layers,
                                  PixelFormat format) {
+  int iframe_interval = config.gop_length.value_or(kDefaultGOPLength);
+  const auto codec = VideoCodecProfileToVideoCodec(config.output_profile);
+  const auto mime = MediaCodecUtil::CodecToAndroidMimeType(codec);
   MediaFormatPtr result(AMediaFormat_new());
   AMediaFormat_setString(result.get(), AMEDIAFORMAT_KEY_MIME, mime.c_str());
+
+  if (codec == VideoCodec::kH264) {
+    std::optional<uint8_t> level = config.h264_output_level;
+    if (!level.has_value()) {
+      level = FindSuitableH264Level(config, framerate, frame_size, bitrate);
+    }
+    auto android_level = GetAndroidAvcLevel(level);
+    if (!android_level.has_value()) {
+      DLOG(ERROR) << "Invalid level, can't create MediaFormat.";
+      return nullptr;
+    }
+    int profile = static_cast<int>(GetAndroidVideoProfile(
+        config.output_profile, config.is_constrained_h264));
+    AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_PROFILE, profile);
+    AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_LEVEL,
+                          static_cast<int>(android_level.value()));
+  }
   AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_WIDTH,
                         frame_size.width());
   AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_HEIGHT,
@@ -135,7 +333,8 @@ MediaFormatPtr CreateVideoFormat(const std::string& mime,
   AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_I_FRAME_INTERVAL,
                         iframe_interval);
   AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_COLOR_FORMAT, format);
-  if (require_low_delay) {
+
+  if (config.require_low_delay) {
     AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_LATENCY, 1);
     // MediaCodec supports two priorities: 0 - realtime, 1 - best effort
     AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_PRIORITY, 0);
@@ -163,7 +362,29 @@ MediaFormatPtr CreateVideoFormat(const std::string& mime,
     SetFormatColorSpace(result.get(), *cs);
   }
 
+  if (num_temporal_layers > 1) {
+    // NDK doesn't have a value for KEY_MAX_B_FRAMES, and temporal SVC can't
+    // function without it. So we make do with a handmade constant.
+    constexpr const char* AMEDIAFORMAT_KEY_MAX_B_FRAMES = "max-bframes";
+    AMediaFormat_setInt32(result.get(), AMEDIAFORMAT_KEY_MAX_B_FRAMES, 0);
+
+    auto svc_layer_config =
+        base::StringPrintf("android.generic.%d", num_temporal_layers);
+    AMediaFormat_setString(result.get(), AMEDIAFORMAT_KEY_TEMPORAL_LAYERING,
+                           svc_layer_config.c_str());
+  }
+
   return result;
+}
+
+bool IsHardwareCodec(const std::string& codec_name) {
+  for (const auto& info : GetEncoderInfoCache()) {
+    if (info.name == codec_name) {
+      return !info.profile.is_software_codec;
+    }
+  }
+  LOG(ERROR) << "Unknown codec name: " << codec_name;
+  return false;
 }
 
 std::optional<std::string> FindMediaCodecFor(
@@ -193,13 +414,11 @@ std::optional<std::string> FindMediaCodecFor(
     // always specify the bitrate mode. Per code inspection, VBR
     // support is announced if a codec doesn't specify anything.
 
-    if (config.initial_framerate) {
-      double max_supported_framerate =
-          static_cast<double>(profile.max_framerate_numerator) /
-          profile.max_framerate_denominator;
-      if (config.initial_framerate.value() > max_supported_framerate) {
-        continue;
-      }
+    double max_supported_framerate =
+        static_cast<double>(profile.max_framerate_numerator) /
+        profile.max_framerate_denominator;
+    if (config.framerate > max_supported_framerate) {
+      continue;
     }
 
     if (profile.is_software_codec) {
@@ -223,6 +442,30 @@ std::optional<std::string> FindMediaCodecFor(
   return encoder_name;
 }
 
+// AVC and HEVC encoders produce parameters sets as a separate buffers
+// with BUFFER_FLAG_CODEC_CONFIG flag, these parameters sets need to be
+// preserved and appended at the beginning of the bitstream.
+// Av1, Vp9 encoders produce extra data describing the stream, but this data
+// is already known via other channels and is not expected by decoders.
+// For such encoders we don't put it into the bitstream.
+// Vp8 doesn't produce configuration buffers.
+// More Info:
+// https://developer.android.com/reference/android/media/MediaCodec#CSD
+bool ProfileNeedsConfigDataInBitstream(VideoCodecProfile profile) {
+  switch (VideoCodecProfileToVideoCodec(profile)) {
+    case VideoCodec::kH264:
+    case VideoCodec::kHEVC:
+      return true;
+    case VideoCodec::kAV1:
+    case VideoCodec::kVP9:
+    case VideoCodec::kVP8:
+      return false;
+    default:
+      NOTREACHED()
+          << "Configuration for unsupported codecs shouldn't come this far.";
+  }
+}
+
 }  // namespace
 
 NdkVideoEncodeAccelerator::NdkVideoEncodeAccelerator(
@@ -241,26 +484,7 @@ NdkVideoEncodeAccelerator::GetSupportedProfiles() {
 
   SupportedProfiles profiles;
   for (auto& info : GetEncoderInfoCache()) {
-    const auto codec = VideoCodecProfileToVideoCodec(info.profile.profile);
-    switch (codec) {
-      case VideoCodec::kHEVC:
-#if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
-        if (base::FeatureList::IsEnabled(kPlatformHEVCEncoderSupport) &&
-            // Currently only 8bit NV12 and I420 encoding is supported, so limit
-            // this to main profile only just like other platforms.
-            info.profile.profile == VideoCodecProfile::HEVCPROFILE_MAIN &&
-            // Some devices may report to have a software HEVC encoder,
-            // however based on tests, they are not always working well,
-            // so limit the support to HW only for now.
-            !info.profile.is_software_codec) {
-          profiles.push_back(info.profile);
-        }
-#endif
-        break;
-      default:
-        profiles.push_back(info.profile);
-        break;
-    }
+    profiles.push_back(info.profile);
   }
   return profiles;
 }
@@ -293,25 +517,69 @@ bool NdkVideoEncodeAccelerator::Initialize(
     return false;
   }
 
-  effective_framerate_ = config.initial_framerate.value_or(kDefaultFramerate);
+  effective_framerate_ = config.framerate;
+  num_temporal_layers_ =
+      config_.HasTemporalLayer()
+          ? config_.spatial_layers.front().num_of_temporal_layers
+          : 1;
+  if (num_temporal_layers_ > 1) {
+    svc_parser_ = std::make_unique<TemporalScalabilityIdExtractor>(
+        codec, num_temporal_layers_);
+  }
+
   if (!ResetMediaCodec()) {
     return false;
   }
 
-  // Conservative upper bound for output buffer size: decoded size + 2KB.
-  // Adding 2KB just in case the frame is really small, we don't want to
-  // end up with no space for a video codec's headers.
-  const size_t output_buffer_capacity =
-      VideoFrame::AllocationSize(config.input_format,
-                                 config.input_visible_size) +
-      2048;
+  const size_t bitstream_buffer_size = EstimateBitstreamBufferSize(
+      config_.bitrate, config_.framerate, config.input_visible_size);
   task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&VideoEncodeAccelerator::Client::RequireBitstreamBuffers,
                      client_ptr_factory_->GetWeakPtr(), 1,
-                     config.input_visible_size, output_buffer_capacity));
+                     config.input_visible_size, bitstream_buffer_size));
 
+  NotifyEncoderInfo();
   return true;
+}
+
+void NdkVideoEncodeAccelerator::NotifyEncoderInfo() {
+  CHECK(media_codec_);
+  std::string codec_name = "unknown";
+  char* name_ptr = nullptr;
+  media_status_t status = AMediaCodec_getName(media_codec_->codec(), &name_ptr);
+  if (status == AMEDIA_OK && name_ptr) {
+    codec_name = std::string(name_ptr);
+    AMediaCodec_releaseName(media_codec_->codec(), name_ptr);
+  }
+
+  for (const auto& info : GetEncoderInfoCache()) {
+    if (info.name == codec_name) {
+      // TODO(crbug.com/382015342): Set the bitrate limits when we can get them
+      // through MediaCodec API.
+      encoder_info_.resolution_rate_limits.emplace_back(
+          info.profile.max_resolution, /*min_start_bitrate_bps=*/0,
+          /*min_bitrate_bps=*/0, /*max_bitrate_bps=*/0,
+          info.profile.max_framerate_numerator,
+          info.profile.max_framerate_denominator);
+    }
+  }
+
+  encoder_info_.implementation_name =
+      "NdkVideoEncodeAccelerator(" + codec_name + ")";
+  encoder_info_.supports_native_handle = false;
+  encoder_info_.has_trusted_rate_controller = false;
+  encoder_info_.is_hardware_accelerated = IsHardwareCodec(codec_name);
+  encoder_info_.supports_simulcast = false;
+  encoder_info_.reports_average_qp = true;
+  if (codec_name == "c2.cr52.avc.encoder") {
+    encoder_info_.reports_average_qp = false;
+  }
+  encoder_info_.supports_frame_size_change = false;
+  task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(&VideoEncodeAccelerator::Client::NotifyEncoderInfoChange,
+                     client_ptr_factory_->GetWeakPtr(), encoder_info_));
 }
 
 void NdkVideoEncodeAccelerator::Encode(scoped_refptr<VideoFrame> frame,
@@ -548,7 +816,7 @@ void NdkVideoEncodeAccelerator::FeedInput() {
   const int dst_stride_uv = input_buffer_stride_;
 
   const gfx::Size uv_plane_size = VideoFrame::PlaneSizeInSamples(
-      PIXEL_FORMAT_NV12, VideoFrame::kUVPlane, visible_size);
+      PIXEL_FORMAT_NV12, VideoFrame::Plane::kUV, visible_size);
   const size_t queued_size =
       // size of Y-plane plus padding till UV-plane
       uv_plane_offset +
@@ -569,18 +837,18 @@ void NdkVideoEncodeAccelerator::FeedInput() {
   bool converted = false;
   if (frame->format() == PIXEL_FORMAT_I420) {
     converted = !libyuv::I420ToNV12(
-        frame->visible_data(VideoFrame::kYPlane),
-        frame->stride(VideoFrame::kYPlane),
-        frame->visible_data(VideoFrame::kUPlane),
-        frame->stride(VideoFrame::kUPlane),
-        frame->visible_data(VideoFrame::kVPlane),
-        frame->stride(VideoFrame::kVPlane), dst_y, dst_stride_y, dst_uv,
+        frame->visible_data(VideoFrame::Plane::kY),
+        frame->stride(VideoFrame::Plane::kY),
+        frame->visible_data(VideoFrame::Plane::kU),
+        frame->stride(VideoFrame::Plane::kU),
+        frame->visible_data(VideoFrame::Plane::kV),
+        frame->stride(VideoFrame::Plane::kV), dst_y, dst_stride_y, dst_uv,
         dst_stride_uv, visible_size.width(), visible_size.height());
   } else if (frame->format() == PIXEL_FORMAT_NV12) {
-    converted = !libyuv::NV12Copy(frame->visible_data(VideoFrame::kYPlane),
-                                  frame->stride(VideoFrame::kYPlane),
-                                  frame->visible_data(VideoFrame::kUVPlane),
-                                  frame->stride(VideoFrame::kUVPlane), dst_y,
+    converted = !libyuv::NV12Copy(frame->visible_data(VideoFrame::Plane::kY),
+                                  frame->stride(VideoFrame::Plane::kY),
+                                  frame->visible_data(VideoFrame::Plane::kUV),
+                                  frame->stride(VideoFrame::Plane::kUV), dst_y,
                                   dst_stride_y, dst_uv, dst_stride_uv,
                                   visible_size.width(), visible_size.height());
   } else {
@@ -631,7 +899,10 @@ void NdkVideoEncodeAccelerator::NotifyErrorStatus(EncoderStatus status) {
              << static_cast<int>(status.code())
              << ", message=" << status.message();
   if (!error_occurred_) {
-    client_ptr_factory_->GetWeakPtr()->NotifyErrorStatus(status);
+    task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(&VideoEncodeAccelerator::Client::NotifyErrorStatus,
+                       client_ptr_factory_->GetWeakPtr(), status));
     error_occurred_ = true;
   }
 }
@@ -687,8 +958,11 @@ bool NdkVideoEncodeAccelerator::DrainConfig() {
     return false;
   }
 
-  config_data_.resize(mc_buffer_size);
-  memcpy(config_data_.data(), buf_data + mc_buffer_info.offset, mc_buffer_size);
+  if (ProfileNeedsConfigDataInBitstream(config_.output_profile)) {
+    config_data_.resize(mc_buffer_size);
+    memcpy(config_data_.data(), buf_data + mc_buffer_info.offset,
+           mc_buffer_size);
+  }
   AMediaCodec_releaseOutputBuffer(media_codec_->codec(),
                                   output_buffer.buffer_index, false);
   return true;
@@ -792,6 +1066,31 @@ void NdkVideoEncodeAccelerator::DrainOutput() {
     metadata.encoded_color_space = *encoder_color_space_;
   }
 
+  if (num_temporal_layers_ > 1) {
+    DCHECK(svc_parser_);
+    if (key_frame) {
+      input_since_keyframe_count_ = 0;
+    }
+
+    TemporalScalabilityIdExtractor::BitstreamMetadata bits_md;
+    if (!svc_parser_->ParseChunk(base::span(output_dst, mc_buffer_size),
+                                 input_since_keyframe_count_, bits_md)) {
+      NotifyErrorStatus({EncoderStatus::Codes::kEncoderHardwareDriverError,
+                         "Parse bitstream failed"});
+      return;
+    }
+
+    switch (VideoCodecProfileToVideoCodec(config_.output_profile)) {
+      case VideoCodec::kH264:
+        metadata.h264.emplace().temporal_idx = bits_md.temporal_id;
+        break;
+      default:
+        NOTIMPLEMENTED() << "SVC is only supported for H.264.";
+        break;
+    }
+    ++input_since_keyframe_count_;
+  }
+
   task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&VideoEncodeAccelerator::Client::BitstreamBufferReady,
@@ -818,13 +1117,16 @@ bool NdkVideoEncodeAccelerator::ResetMediaCodec() {
     return false;
   }
 
-  auto mime = MediaCodecUtil::CodecToAndroidMimeType(
-      VideoCodecProfileToVideoCodec(config_.output_profile));
   auto configured_size = aligned_size_.value_or(config_.input_visible_size);
-  auto media_format = CreateVideoFormat(
-      mime, config_.gop_length.value_or(kDefaultGOPLength),
-      effective_framerate_, config_.require_low_delay, configured_size,
-      effective_bitrate_, encoder_color_space_, COLOR_FORMAT_YUV420_SEMIPLANAR);
+  auto media_format =
+      CreateVideoFormat(config_, effective_framerate_, configured_size,
+                        effective_bitrate_, encoder_color_space_,
+                        num_temporal_layers_, COLOR_FORMAT_YUV420_SEMIPLANAR);
+  if (!media_format) {
+    MEDIA_LOG(ERROR, log_) << "Fail to create media format for: "
+                           << config_.AsHumanReadableString();
+    return false;
+  }
 
   // We do the following in a loop since we may need to recreate the MediaCodec
   // if it doesn't unaligned resolutions.
@@ -853,14 +1155,13 @@ bool NdkVideoEncodeAccelerator::ResetMediaCodec() {
 
     if (aligned_size_.value_or(configured_size) != configured_size) {
       // Give the client a chance to handle realignment itself.
-      VideoEncoderInfo encoder_info;
-      encoder_info.requested_resolution_alignment = 16;
-      encoder_info.apply_alignment_to_all_simulcast_layers = true;
+      encoder_info_.requested_resolution_alignment = 16;
+      encoder_info_.apply_alignment_to_all_simulcast_layers = true;
       task_runner_->PostTask(
           FROM_HERE,
           base::BindOnce(
               &VideoEncodeAccelerator::Client::NotifyEncoderInfoChange,
-              client_ptr_factory_->GetWeakPtr(), encoder_info));
+              client_ptr_factory_->GetWeakPtr(), encoder_info_));
 
       // We must recreate the MediaCodec now since setParameters() doesn't work
       // consistently across devices and versions of Android.

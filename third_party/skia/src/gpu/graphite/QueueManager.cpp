@@ -9,6 +9,7 @@
 
 #include "include/gpu/graphite/Recording.h"
 #include "src/core/SkTraceEvent.h"
+#include "src/gpu/GpuTypesPriv.h"
 #include "src/gpu/RefCntedCallback.h"
 #include "src/gpu/graphite/Buffer.h"
 #include "src/gpu/graphite/Caps.h"
@@ -18,8 +19,8 @@
 #include "src/gpu/graphite/Log.h"
 #include "src/gpu/graphite/RecordingPriv.h"
 #include "src/gpu/graphite/Surface_Graphite.h"
-#include "src/gpu/graphite/Task.h"
 #include "src/gpu/graphite/UploadBufferManager.h"
+#include "src/gpu/graphite/task/Task.h"
 
 namespace skgpu::graphite {
 
@@ -43,18 +44,35 @@ QueueManager::~QueueManager() {
     }
 }
 
-bool QueueManager::setupCommandBuffer(ResourceProvider* resourceProvider) {
+std::vector<std::unique_ptr<CommandBuffer>>*
+QueueManager::getAvailableCommandBufferList(Protected isProtected) {
+    return isProtected == Protected::kNo ? &fAvailableCommandBuffers
+                                         : &fAvailableProtectedCommandBuffers;
+}
+
+
+bool QueueManager::setupCommandBuffer(ResourceProvider* resourceProvider, Protected isProtected) {
     if (!fCurrentCommandBuffer) {
-        if (fAvailableCommandBuffers.size()) {
-            fCurrentCommandBuffer = std::move(fAvailableCommandBuffers.back());
-            fAvailableCommandBuffers.pop_back();
+        std::vector<std::unique_ptr<CommandBuffer>>* bufferList =
+                this->getAvailableCommandBufferList(isProtected);
+        if (!bufferList->empty()) {
+            fCurrentCommandBuffer = std::move(bufferList->back());
+            bufferList->pop_back();
             if (!fCurrentCommandBuffer->setNewCommandBufferResources()) {
                 fCurrentCommandBuffer.reset();
             }
         }
+    } else {
+        if (fCurrentCommandBuffer->isProtected() != isProtected) {
+            // If we're doing things where we are switching between using protected and unprotected
+            // command buffers, it is our job to make sure previous work was submitted.
+            SKGPU_LOG_E("Trying to use a CommandBuffer with protectedness that differs from our "
+                        "current active command buffer.");
+            return false;
+        }
     }
     if (!fCurrentCommandBuffer) {
-        fCurrentCommandBuffer = this->getNewCommandBuffer(resourceProvider);
+        fCurrentCommandBuffer = this->getNewCommandBuffer(resourceProvider, isProtected);
     }
     if (!fCurrentCommandBuffer) {
         return false;
@@ -66,8 +84,16 @@ bool QueueManager::setupCommandBuffer(ResourceProvider* resourceProvider) {
 bool QueueManager::addRecording(const InsertRecordingInfo& info, Context* context) {
     TRACE_EVENT0("skia.gpu", TRACE_FUNC);
 
+    bool addTimerQuery = false;
     sk_sp<RefCntedCallback> callback;
-    if (info.fFinishedProc) {
+    if (info.fFinishedWithStatsProc) {
+        addTimerQuery = info.fGpuStatsFlags & GpuStatsFlags::kElapsedTime;
+        if (addTimerQuery && !(context->supportedGpuStats() & GpuStatsFlags::kElapsedTime)) {
+            addTimerQuery = false;
+            SKGPU_LOG_W("Requested elapsed time reporting but not supported by Context.");
+        }
+        callback = RefCntedCallback::Make(info.fFinishedWithStatsProc, info.fFinishedContext);
+    } else if (info.fFinishedProc) {
         callback = RefCntedCallback::Make(info.fFinishedProc, info.fFinishedContext);
     }
 
@@ -80,10 +106,13 @@ bool QueueManager::addRecording(const InsertRecordingInfo& info, Context* contex
         return false;
     }
 
-    if (this->fSharedContext->caps()->requireOrderedRecordings()) {
+    if (fSharedContext->caps()->requireOrderedRecordings()) {
         uint32_t* recordingID = fLastAddedRecordingIDs.find(info.fRecording->priv().recorderID());
         if (recordingID &&
             info.fRecording->priv().uniqueID() != *recordingID+1) {
+            if (callback) {
+                callback->setFailureResult();
+            }
             SKGPU_LOG_E("Recordings are expected to be replayed in order");
             return false;
         }
@@ -92,11 +121,6 @@ bool QueueManager::addRecording(const InsertRecordingInfo& info, Context* contex
         fLastAddedRecordingIDs.set(info.fRecording->priv().recorderID(),
                                    info.fRecording->priv().uniqueID());
     }
-
-// Merge error, remove later
-//    // Note the new Recording ID.
-//    fLastAddedRecordingIDs.set(info.fRecording->priv().recorderID(),
-//                               info.fRecording->priv().uniqueID());
 
     if (info.fTargetSurface &&
         !static_cast<const SkSurface_Base*>(info.fTargetSurface)->isGraphiteBacked()) {
@@ -109,12 +133,36 @@ bool QueueManager::addRecording(const InsertRecordingInfo& info, Context* contex
     }
 
     auto resourceProvider = context->priv().resourceProvider();
-    if (!this->setupCommandBuffer(resourceProvider)) {
+    if (!this->setupCommandBuffer(resourceProvider, fSharedContext->isProtected())) {
         if (callback) {
             callback->setFailureResult();
         }
         info.fRecording->priv().setFailureResultForFinishedProcs();
         SKGPU_LOG_E("CommandBuffer creation failed");
+        return false;
+    }
+
+    // This must happen before instantiating the lazy proxies, because the target for draws in this
+    // recording may itself be a lazy proxy whose instantiation must be handled specially here.
+    // We must also make sure the lazy proxies are instantiated successfully before we make any
+    // modifications to the current command buffer, so we can't just do all this work in
+    // Recording::addCommands below.
+    TextureProxy* deferredTargetProxy = info.fRecording->priv().deferredTargetProxy();
+    AutoDeinstantiateTextureProxy autoDeinstantiateTargetProxy(deferredTargetProxy);
+    const Texture* replayTarget = nullptr;
+    if (deferredTargetProxy && info.fTargetSurface) {
+        replayTarget = info.fRecording->priv().setupDeferredTarget(
+                resourceProvider,
+                static_cast<Surface*>(info.fTargetSurface),
+                info.fTargetTranslation,
+                info.fTargetClip);
+        if (!replayTarget) {
+            SKGPU_LOG_E("Failed to set up deferred replay target");
+            return false;
+        }
+
+    } else if (deferredTargetProxy && !info.fTargetSurface) {
+        SKGPU_LOG_E("No surface provided to instantiate deferred replay target.");
         return false;
     }
 
@@ -141,11 +189,15 @@ bool QueueManager::addRecording(const InsertRecordingInfo& info, Context* contex
         }
     }
 
+    if (addTimerQuery) {
+        fCurrentCommandBuffer->startTimerQuery();
+    }
     fCurrentCommandBuffer->addWaitSemaphores(info.fNumWaitSemaphores, info.fWaitSemaphores);
     if (!info.fRecording->priv().addCommands(context,
                                              fCurrentCommandBuffer.get(),
-                                             static_cast<Surface*>(info.fTargetSurface),
-                                             info.fTargetTranslation)) {
+                                             replayTarget,
+                                             info.fTargetTranslation,
+                                             info.fTargetClip)) {
         if (callback) {
             callback->setFailureResult();
         }
@@ -159,6 +211,9 @@ bool QueueManager::addRecording(const InsertRecordingInfo& info, Context* contex
         fCurrentCommandBuffer->prepareSurfaceForStateUpdate(info.fTargetSurface,
                                                             info.fTargetTextureState);
     }
+    if (addTimerQuery) {
+        fCurrentCommandBuffer->endTimerQuery();
+    }
 
     if (callback) {
         fCurrentCommandBuffer->addFinishedProc(std::move(callback));
@@ -170,19 +225,20 @@ bool QueueManager::addRecording(const InsertRecordingInfo& info, Context* contex
 }
 
 bool QueueManager::addTask(Task* task,
-                           Context* context) {
+                           Context* context,
+                           Protected isProtected) {
     SkASSERT(task);
     if (!task) {
         SKGPU_LOG_E("No valid Task passed into addTask call");
         return false;
     }
 
-    if (!this->setupCommandBuffer(context->priv().resourceProvider())) {
+    if (!this->setupCommandBuffer(context->priv().resourceProvider(), isProtected)) {
         SKGPU_LOG_E("CommandBuffer creation failed");
         return false;
     }
 
-    if (!task->addCommands(context, fCurrentCommandBuffer.get(), {})) {
+    if (task->addCommands(context, fCurrentCommandBuffer.get(), {}) == Task::Status::kFail) {
         SKGPU_LOG_E("Adding Task commands to the CommandBuffer has failed");
         return false;
     }
@@ -198,7 +254,7 @@ bool QueueManager::addFinishInfo(const InsertFinishInfo& info,
         callback = RefCntedCallback::Make(info.fFinishedProc, info.fFinishedContext);
     }
 
-    if (!this->setupCommandBuffer(resourceProvider)) {
+    if (!this->setupCommandBuffer(resourceProvider, fSharedContext->isProtected())) {
         if (callback) {
             callback->setFailureResult();
         }
@@ -250,7 +306,7 @@ void QueueManager::checkForFinishedWork(SyncToCpu sync) {
         // wait for the last submission to finish
         OutstandingSubmission* back = (OutstandingSubmission*)fOutstandingSubmissions.back();
         if (back) {
-            (*back)->waitUntilFinished();
+            (*back)->waitUntilFinished(fSharedContext);
         }
     }
 
@@ -260,7 +316,7 @@ void QueueManager::checkForFinishedWork(SyncToCpu sync) {
     // Repeat till we find a submission that has not finished yet (and all others afterwards are
     // also guaranteed to not have finished).
     OutstandingSubmission* front = (OutstandingSubmission*)fOutstandingSubmissions.front();
-    while (front && (*front)->isFinished()) {
+    while (front && (*front)->isFinished(fSharedContext)) {
         // Make sure we remove before deleting as deletion might try to kick off another submit
         // (though hopefully *not* in Graphite).
         fOutstandingSubmissions.pop_front();
@@ -272,7 +328,9 @@ void QueueManager::checkForFinishedWork(SyncToCpu sync) {
 }
 
 void QueueManager::returnCommandBuffer(std::unique_ptr<CommandBuffer> commandBuffer) {
-    fAvailableCommandBuffers.push_back(std::move(commandBuffer));
+    std::vector<std::unique_ptr<CommandBuffer>>* bufferList =
+            this->getAvailableCommandBufferList(commandBuffer->isProtected());
+    bufferList->push_back(std::move(commandBuffer));
 }
 
 void QueueManager::addUploadBufferManagerRefs(UploadBufferManager* uploadManager) {

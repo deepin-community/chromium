@@ -5,9 +5,10 @@
 import * as Common from '../../core/common/common.js';
 import * as Host from '../../core/host/host.js';
 import * as Platform from '../../core/platform/platform.js';
+import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
 import {type Action, getRegisteredActionExtensions, KeybindSet} from './ActionRegistration.js';
-import {type ActionRegistry} from './ActionRegistry.js';
+import type {ActionRegistry} from './ActionRegistry.js';
 import {Context} from './Context.js';
 import {Dialog} from './Dialog.js';
 import {KeyboardShortcut, Modifiers, Type} from './KeyboardShortcut.js';
@@ -192,7 +193,7 @@ export class ShortcutRegistry {
 
     if (this.activePrefixTimeout) {
       clearTimeout(this.activePrefixTimeout);
-      const handled = await maybeExecuteActionForKey.call(this);
+      const handled = await maybeExecuteActionForKey.call(this, event);
       this.activePrefixKey = null;
       this.activePrefixTimeout = null;
       if (handled) {
@@ -207,11 +208,11 @@ export class ShortcutRegistry {
       this.consumePrefix = async () => {
         this.activePrefixKey = null;
         this.activePrefixTimeout = null;
-        await maybeExecuteActionForKey.call(this);
+        await maybeExecuteActionForKey.call(this, event);
       };
       this.activePrefixTimeout = window.setTimeout(this.consumePrefix, KeyTimeout);
     } else {
-      await maybeExecuteActionForKey.call(this);
+      await maybeExecuteActionForKey.call(this, event);
     }
 
     function isPossiblyInputKey(): boolean {
@@ -226,29 +227,32 @@ export class ShortcutRegistry {
       const modifiers = Modifiers;
       // Undo/Redo will also cause input, so textual undo should take precedence over DevTools undo when editing.
       if (Host.Platform.isMac()) {
-        if (KeyboardShortcut.makeKey('z', modifiers.Meta) === key) {
+        if (KeyboardShortcut.makeKey('z', modifiers.Meta.value) === key) {
           return true;
         }
-        if (KeyboardShortcut.makeKey('z', modifiers.Meta | modifiers.Shift) === key) {
+        if (KeyboardShortcut.makeKey('z', modifiers.Meta.value | modifiers.Shift.value) === key) {
           return true;
         }
       } else {
-        if (KeyboardShortcut.makeKey('z', modifiers.Ctrl) === key) {
+        if (KeyboardShortcut.makeKey('z', modifiers.Ctrl.value) === key) {
           return true;
         }
-        if (KeyboardShortcut.makeKey('y', modifiers.Ctrl) === key) {
+        if (KeyboardShortcut.makeKey('y', modifiers.Ctrl.value) === key) {
           return true;
         }
-        if (!Host.Platform.isWin() && KeyboardShortcut.makeKey('z', modifiers.Ctrl | modifiers.Shift) === key) {
+        if (!Host.Platform.isWin() &&
+            KeyboardShortcut.makeKey('z', modifiers.Ctrl.value | modifiers.Shift.value) === key) {
           return true;
         }
       }
 
-      if ((keyModifiers & (modifiers.Ctrl | modifiers.Alt)) === (modifiers.Ctrl | modifiers.Alt)) {
+      if ((keyModifiers & (modifiers.Ctrl.value | modifiers.Alt.value)) ===
+          (modifiers.Ctrl.value | modifiers.Alt.value)) {
         return Host.Platform.isWin();
       }
 
-      return !hasModifier(modifiers.Ctrl) && !hasModifier(modifiers.Alt) && !hasModifier(modifiers.Meta);
+      return !hasModifier(modifiers.Ctrl.value) && !hasModifier(modifiers.Alt.value) &&
+          !hasModifier(modifiers.Meta.value);
     }
 
     function hasModifier(mod: number): boolean {
@@ -257,13 +261,16 @@ export class ShortcutRegistry {
 
     /** ;
      */
-    async function maybeExecuteActionForKey(this: ShortcutRegistry): Promise<boolean> {
+    async function maybeExecuteActionForKey(this: ShortcutRegistry, event?: KeyboardEvent): Promise<boolean> {
       const actions = this.applicableActions(key, handlers);
       if (!actions.length) {
         return false;
       }
       for (const action of actions) {
         let handled;
+        if (event) {
+          void VisualLogging.logKeyDown(null, event, action.id());
+        }
         if (handlers && handlers[action.id()]) {
           handled = await handlers[action.id()]();
         }
@@ -299,8 +306,8 @@ export class ShortcutRegistry {
   }
 
   removeShortcut(shortcut: KeyboardShortcut): void {
-    if (shortcut.type === Type.DefaultShortcut || shortcut.type === Type.KeybindSetShortcut) {
-      this.addShortcutToSetting(shortcut.changeType(Type.DisabledDefault));
+    if (shortcut.type === Type.DEFAULT_SHORTCUT || shortcut.type === Type.KEYBIND_SET_SHORTCUT) {
+      this.addShortcutToSetting(shortcut.changeType(Type.DISABLED_DEFAULT));
     } else {
       this.removeShortcutFromSetting(shortcut);
     }
@@ -343,7 +350,7 @@ export class ShortcutRegistry {
     const userShortcuts = this.userShortcutsSetting.get();
     for (const userShortcut of userShortcuts) {
       const shortcut = KeyboardShortcut.createShortcutFromSettingObject(userShortcut);
-      if (shortcut.type === Type.DisabledDefault) {
+      if (shortcut.type === Type.DISABLED_DEFAULT) {
         this.disabledDefaultShortcutsForAction.set(shortcut.action, shortcut);
       } else {
         if (ForwardedActions.has(shortcut.action)) {
@@ -375,13 +382,13 @@ export class ShortcutRegistry {
           }
           if (!keybindSets) {
             this.devToolsDefaultShortcutActions.add(actionId);
-            this.registerShortcut(new KeyboardShortcut(shortcutDescriptors, actionId, Type.DefaultShortcut));
+            this.registerShortcut(new KeyboardShortcut(shortcutDescriptors, actionId, Type.DEFAULT_SHORTCUT));
           } else {
             if (keybindSets.includes(KeybindSet.DEVTOOLS_DEFAULT)) {
               this.devToolsDefaultShortcutActions.add(actionId);
             }
             this.registerShortcut(
-                new KeyboardShortcut(shortcutDescriptors, actionId, Type.KeybindSetShortcut, new Set(keybindSets)));
+                new KeyboardShortcut(shortcutDescriptors, actionId, Type.KEYBIND_SET_SHORTCUT, new Set(keybindSets)));
           }
         }
       }

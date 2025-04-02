@@ -12,9 +12,13 @@
 
 #include <string.h>
 
+#include <optional>
 #include <string>
 
 #include "absl/strings/match.h"
+#include "api/video/video_codec_type.h"
+#include "api/video_codecs/scalability_mode.h"
+#include "api/video_codecs/simulcast_stream.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/strings/string_builder.h"
 
@@ -28,7 +32,6 @@ constexpr char kPayloadNameAv1[] = "AV1";
 constexpr char kPayloadNameAv1x[] = "AV1X";
 constexpr char kPayloadNameH264[] = "H264";
 constexpr char kPayloadNameGeneric[] = "Generic";
-constexpr char kPayloadNameMultiplex[] = "Multiplex";
 constexpr char kPayloadNameH265[] = "H265";
 }  // namespace
 
@@ -83,7 +86,7 @@ std::string VideoCodec::ToString() const {
      << (mode == VideoCodecMode::kRealtimeVideo ? "RealtimeVideo"
                                                 : "Screensharing");
   if (IsSinglecast()) {
-    absl::optional<ScalabilityMode> scalability_mode = GetScalabilityMode();
+    std::optional<ScalabilityMode> scalability_mode = GetScalabilityMode();
     if (scalability_mode.has_value()) {
       ss << ", Singlecast: {" << width << "x" << height << " "
          << ScalabilityModeToString(*scalability_mode)
@@ -93,9 +96,13 @@ std::string VideoCodec::ToString() const {
     ss << ", Simulcast: {";
     for (size_t i = 0; i < numberOfSimulcastStreams; ++i) {
       const SimulcastStream stream = simulcastStream[i];
-      ss << "[" << stream.width << "x" << stream.height << " "
-         << ScalabilityModeToString(stream.GetScalabilityMode())
-         << (stream.active ? ", active" : ", inactive") << "]";
+      std::optional<ScalabilityMode> scalability_mode =
+          stream.GetScalabilityMode();
+      if (scalability_mode.has_value()) {
+        ss << "[" << stream.width << "x" << stream.height << " "
+           << ScalabilityModeToString(*scalability_mode)
+           << (stream.active ? ", active" : ", inactive") << "]";
+      }
     }
     ss << "}";
   }
@@ -153,8 +160,6 @@ const char* CodecTypeToPayloadString(VideoCodecType type) {
       return kPayloadNameAv1;
     case kVideoCodecH264:
       return kPayloadNameH264;
-    case kVideoCodecMultiplex:
-      return kPayloadNameMultiplex;
     case kVideoCodecGeneric:
       return kPayloadNameGeneric;
     case kVideoCodecH265:
@@ -173,8 +178,6 @@ VideoCodecType PayloadStringToCodecType(const std::string& name) {
     return kVideoCodecAV1;
   if (absl::EqualsIgnoreCase(name, kPayloadNameH264))
     return kVideoCodecH264;
-  if (absl::EqualsIgnoreCase(name, kPayloadNameMultiplex))
-    return kVideoCodecMultiplex;
   if (absl::EqualsIgnoreCase(name, kPayloadNameH265))
     return kVideoCodecH265;
   return kVideoCodecGeneric;

@@ -47,6 +47,7 @@ angle_toggleable_extensions = [
 angle_requestable_extensions = [
     "GL_ANGLE_base_vertex_base_instance",
     "GL_ANGLE_base_vertex_base_instance_shader_builtin",
+    "GL_ANGLE_blob_cache",
     "GL_ANGLE_clip_cull_distance",
     "GL_ANGLE_compressed_texture_etc",
     "GL_ANGLE_copy_texture_3d",
@@ -88,11 +89,14 @@ gles_requestable_extensions = [
     "GL_ANGLE_texture_usage",
     "GL_APPLE_clip_distance",
     "GL_ARB_sync",
+    "GL_ARM_rgba8",
     "GL_ARM_shader_framebuffer_fetch",
+    "GL_ARM_shader_framebuffer_fetch_depth_stencil",
     "GL_EXT_base_instance",
     "GL_EXT_blend_func_extended",
     "GL_EXT_blend_minmax",
     "GL_EXT_buffer_storage",
+    "GL_EXT_clear_texture",
     "GL_EXT_clip_control",
     "GL_EXT_clip_cull_distance",
     "GL_EXT_color_buffer_float",
@@ -108,6 +112,7 @@ gles_requestable_extensions = [
     "GL_EXT_EGL_image_array",
     "GL_EXT_EGL_image_external_wrap_modes",
     "GL_EXT_EGL_image_storage",
+    "GL_EXT_EGL_image_storage_compression",
     "GL_EXT_external_buffer",
     "GL_EXT_float_blend",
     "GL_EXT_frag_depth",
@@ -128,6 +133,7 @@ gles_requestable_extensions = [
     "GL_EXT_render_snorm",
     "GL_EXT_semaphore",
     "GL_EXT_semaphore_fd",
+    "GL_EXT_separate_depth_stencil",
     "GL_EXT_separate_shader_objects",
     "GL_EXT_shader_framebuffer_fetch",
     "GL_EXT_shader_framebuffer_fetch_non_coherent",
@@ -152,10 +158,13 @@ gles_requestable_extensions = [
     "GL_EXT_texture_format_BGRA8888",
     "GL_EXT_texture_mirror_clamp_to_edge",
     "GL_EXT_texture_norm16",
+    "GL_EXT_texture_query_lod",
     "GL_EXT_texture_rg",
+    "GL_EXT_texture_shadow_lod",
     "GL_EXT_texture_sRGB_R8",
     "GL_EXT_texture_sRGB_RG8",
     "GL_EXT_texture_storage",
+    "GL_EXT_texture_storage_compression",
     "GL_EXT_texture_type_2_10_10_10_REV",
     "GL_EXT_unpack_subimage",
     "GL_EXT_YUV_target",
@@ -199,7 +208,9 @@ gles_requestable_extensions = [
     "GL_OES_fbo_render_mipmap",
     "GL_OES_geometry_shader",
     "GL_OES_get_program_binary",
+    "GL_OES_gpu_shader5",
     "GL_OES_mapbuffer",
+    "GL_OES_required_internalformat",
     "GL_OES_rgb8_rgba8",
     "GL_OES_sample_shading",
     "GL_OES_sample_variables",
@@ -207,6 +218,7 @@ gles_requestable_extensions = [
     "GL_OES_shader_io_blocks",
     "GL_OES_shader_multisample_interpolation",
     "GL_OES_standard_derivatives",
+    "GL_OES_tessellation_shader",
     "GL_OES_texture_3D",
     "GL_OES_texture_border_clamp",
     "GL_OES_texture_buffer",
@@ -228,6 +240,7 @@ gles_requestable_extensions = [
     "GL_QCOM_render_shared_exponent",
     "GL_QCOM_shading_rate",
     "GL_QCOM_texture_foveated",
+    "GL_QCOM_tiled_rendering",
     "GL_WEBGL_video_texture",
 ]
 
@@ -235,6 +248,7 @@ angle_es_only_extensions = [
     "GL_ANGLE_client_arrays",
     "GL_ANGLE_get_serialized_context_string",
     "GL_ANGLE_program_binary",
+    "GL_ANGLE_program_binary_readiness_query",
     "GL_ANGLE_program_cache_control",
     "GL_ANGLE_relaxed_vertex_attribute_type",
     "GL_ANGLE_request_extension",
@@ -265,9 +279,11 @@ gles_es_only_extensions = [
     "GL_EXT_texture_format_sRGB_override",
     "GL_EXT_texture_sRGB_decode",
     "GL_KHR_blend_equation_advanced",
+    "GL_KHR_blend_equation_advanced_coherent",
     "GL_KHR_debug",
     "GL_KHR_no_error",
     "GL_KHR_robust_buffer_access_behavior",
+    "GL_KHR_robustness",
     "GL_NV_fence",
     "GL_NV_robustness_video_memory_purge",
     "GL_OES_depth24",
@@ -281,6 +297,7 @@ gles_es_only_extensions = [
 
 # ES1 (Possibly the min set of extensions needed by Android)
 gles1_extensions = [
+    "GL_OES_blend_subtract",
     "GL_OES_draw_texture",
     "GL_OES_framebuffer_object",
     "GL_OES_matrix_palette",
@@ -288,6 +305,7 @@ gles1_extensions = [
     "GL_OES_point_sprite",
     "GL_OES_query_matrix",
     "GL_OES_texture_cube_map",
+    "GL_OES_texture_mirrored_repeat",
 ]
 
 
@@ -321,13 +339,18 @@ supported_egl_extensions = [
     "EGL_ANGLE_d3d_share_handle_client_buffer",
     "EGL_ANGLE_device_creation",
     "EGL_ANGLE_device_d3d",
+    "EGL_ANGLE_device_d3d11",
+    "EGL_ANGLE_device_d3d9",
+    "EGL_ANGLE_device_vulkan",
     "EGL_ANGLE_display_semaphore_share_group",
     "EGL_ANGLE_display_texture_share_group",
     "EGL_ANGLE_external_context_and_surface",
     "EGL_ANGLE_feature_control",
     "EGL_ANGLE_ggp_stream_descriptor",
+    "EGL_ANGLE_memory_usage_report",
     "EGL_ANGLE_metal_create_context_ownership_identity",
     "EGL_ANGLE_metal_shared_event_sync",
+    "EGL_ANGLE_no_error",
     "EGL_ANGLE_power_preference",
     "EGL_ANGLE_prepare_swap_buffers",
     "EGL_ANGLE_program_cache_control",
@@ -357,6 +380,7 @@ supported_egl_extensions = [
     "EGL_EXT_platform_base",
     "EGL_EXT_platform_device",
     "EGL_EXT_protected_content",
+    "EGL_EXT_surface_compression",
     "EGL_IMG_context_priority",
     "EGL_KHR_debug",
     "EGL_KHR_fence_sync",
@@ -424,13 +448,8 @@ unsupported_enum_group_names = {
 }
 
 # Versions (major, minor). Note that GLES intentionally places 1.0 last.
-DESKTOP_GL_VERSIONS = [(1, 0), (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (2, 0), (2, 1), (3, 0),
-                       (3, 1), (3, 2), (3, 3), (4, 0), (4, 1), (4, 2), (4, 3), (4, 4), (4, 5),
-                       (4, 6)]
 GLES_VERSIONS = [(2, 0), (3, 0), (3, 1), (3, 2), (1, 0)]
 EGL_VERSIONS = [(1, 0), (1, 1), (1, 2), (1, 3), (1, 4), (1, 5)]
-WGL_VERSIONS = [(1, 0)]
-GLX_VERSIONS = [(1, 0), (1, 1), (1, 2), (1, 3), (1, 4)]
 CL_VERSIONS = [(1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2), (3, 0)]
 
 
@@ -511,6 +530,10 @@ class RegistryXML:
     def _AppendANGLEExts(self, ext_file):
         angle_ext_tree = etree.parse(script_relative(ext_file))
         angle_ext_root = angle_ext_tree.getroot()
+
+        insertion_point = self.root.findall("./types")[0]
+        for t in angle_ext_root.iter('types'):
+            insertion_point.extend(t)
 
         insertion_point = self.root.findall("./commands")[0]
         for command in angle_ext_root.iter('commands'):

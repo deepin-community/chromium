@@ -9,7 +9,6 @@
 #include "base/features.h"
 #include "base/functional/bind.h"
 #include "base/run_loop.h"
-#include "base/rust_buildflags.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
@@ -149,46 +148,123 @@ TEST_F(DataDecoderTest, ParseCborAndFailed) {
   ASSERT_EQ(result.error(), "Error unexpected CBOR value.");
 }
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(BUILD_RUST_JSON_READER)
+TEST_F(DataDecoderTest, ValidateAnInvalidPixCode) {
+  base::RunLoop run_loop;
+  DataDecoder decoder;
+  base::expected<bool, std::string> validation_result;
+
+  decoder.ValidatePixCode(
+      std::string(),
+      base::BindLambdaForTesting([&run_loop, &validation_result](
+                                     base::expected<bool, std::string> result) {
+        validation_result = std::move(result);
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+
+  ASSERT_TRUE(validation_result.has_value());
+  EXPECT_FALSE(validation_result.value());
+}
+
+TEST_F(DataDecoderTest, ValidateAValidPixCode) {
+  base::RunLoop run_loop;
+  DataDecoder decoder;
+  base::expected<bool, std::string> validation_result;
+
+  decoder.ValidatePixCode(
+      "00020126370014br.gov.bcb.pix2515www.example.com6304EA3F",
+      base::BindLambdaForTesting([&run_loop, &validation_result](
+                                     base::expected<bool, std::string> result) {
+        validation_result = std::move(result);
+        run_loop.Quit();
+      }));
+  run_loop.Run();
+
+  ASSERT_TRUE(validation_result.has_value());
+  EXPECT_TRUE(validation_result.value());
+}
+
+// PIX codes are payment related and should be private, so they should not be
+// parsed in the same process.
+TEST_F(DataDecoderTest, SeparateDecoderInstancesMakeSeparateConnectionsForPix) {
+  DataDecoder decoder1;
+  mojo::Remote<payments::facilitated::mojom::PixCodeValidator> validator1;
+  decoder1.GetService()->BindPixCodeValidator(
+      validator1.BindNewPipeAndPassReceiver());
+  validator1.FlushForTesting();
+
+  EXPECT_TRUE(validator1.is_connected());
+  EXPECT_EQ(1u, service().receivers().size());
+
+  DataDecoder decoder2;
+  mojo::Remote<payments::facilitated::mojom::PixCodeValidator> validator2;
+  decoder2.GetService()->BindPixCodeValidator(
+      validator2.BindNewPipeAndPassReceiver());
+  validator2.FlushForTesting();
+
+  EXPECT_TRUE(validator2.is_connected());
+  EXPECT_EQ(2u, service().receivers().size());
+}
 
 class DataDecoderMultiThreadTest : public testing::Test {
  protected:
+  void TestJSONDecode() {
+    base::RunLoop run_loop;
+    DataDecoder decoder;
+    DataDecoder::ValueOrError result;
+    decoder.ParseJson(
+        // The magic 122.416294033786585 number comes from
+        // https://github.com/serde-rs/json/issues/707
+        "[ 122.416294033786585 ]",
+        base::BindLambdaForTesting(
+            [&run_loop, &result](DataDecoder::ValueOrError value_or_error) {
+              result = std::move(value_or_error);
+              run_loop.Quit();
+            }));
+    run_loop.Run();
+    histogram_tester_.ExpectTotalCount("Security.DataDecoder.Json.DecodingTime",
+                                       1);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result->is_list());
+    base::Value::List& list = result->GetList();
+    ASSERT_EQ(1u, list.size());
+    EXPECT_TRUE(list[0].is_double());
+    EXPECT_EQ(122.416294033786585, list[0].GetDouble());
+  }
+
   base::test::TaskEnvironment task_environment_;
   base::HistogramTester histogram_tester_;
 };
 
-TEST_F(DataDecoderMultiThreadTest, JSONDecode) {
-  // Test basic JSON decoding. We test only on Android or if Rust
-  // is enabled, because otherwise this would result in spawning
-  // a process.
-#if !BUILDFLAG(IS_ANDROID)
+// Test basic JSON decoding without using Rust. We test only on Android,
+// because otherwise this would result in spawning a process.
+#if BUILDFLAG(IS_ANDROID)
+#define MAYBE_JSONDecodeNonRust JSONDecodeNonRust
+#else  // BUILDFLAG(IS_ANDROID)
+#define MAYBE_JSONDecodeNonRust DISABLED_JSONDecodeNonRust
+#endif  // BUILDFLAG(IS_ANDROID)
+TEST_F(DataDecoderMultiThreadTest, MAYBE_JSONDecodeNonRust) {
   base::test::ScopedFeatureList scoped_feature_list;
-  scoped_feature_list.InitAndEnableFeature(base::features::kUseRustJsonParser);
-#endif  // !BUILDFLAG(IS_ANDROID)
-
-  base::RunLoop run_loop;
-  DataDecoder decoder;
-  DataDecoder::ValueOrError result;
-  decoder.ParseJson(
-      // The magic 122.416294033786585 number comes from
-      // https://github.com/serde-rs/json/issues/707
-      "[ 122.416294033786585 ]",
-      base::BindLambdaForTesting(
-          [&run_loop, &result](DataDecoder::ValueOrError value_or_error) {
-            result = std::move(value_or_error);
-            run_loop.Quit();
-          }));
-  run_loop.Run();
-  histogram_tester_.ExpectTotalCount("Security.DataDecoder.Json.DecodingTime",
-                                     1);
-  ASSERT_TRUE(result.has_value());
-  ASSERT_TRUE(result->is_list());
-  base::Value::List& list = result->GetList();
-  ASSERT_EQ(1u, list.size());
-  EXPECT_TRUE(list[0].is_double());
-  EXPECT_EQ(122.416294033786585, list[0].GetDouble());
+  scoped_feature_list.InitAndDisableFeature(base::features::kUseRustJsonParser);
+  TestJSONDecode();
 }
 
-#endif  // BUILDFLAG(IS_ANDROID) || BUILDFLAG(BUILD_RUST_JSON_READER)
+// Test basic JSON decoding using Rust, in a threadpool.
+TEST_F(DataDecoderMultiThreadTest, JSONDecodeRustThreadpool) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      base::features::kUseRustJsonParser,
+      {{"UseRustJsonParserInCurrentSequence", "false"}});
+  TestJSONDecode();
+}
+
+// Test basic JSON decoding using Rust, in the main thread.
+TEST_F(DataDecoderMultiThreadTest, JSONDecodeRustCurrentSequence) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeatureWithParameters(
+      base::features::kUseRustJsonParser,
+      {{"UseRustJsonParserInCurrentSequence", "true"}});
+  TestJSONDecode();
+}
 
 }  // namespace data_decoder

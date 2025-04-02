@@ -4,14 +4,14 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import abc
+import datetime as dt
 import logging
 from typing import List, Optional, Sequence, Tuple, Type, TypeVar
 
+from crossbench.parse import ObjectParser
 from crossbench.runner.run import Run
-
-from .story import Story
+from crossbench.stories.story import Story
 
 PressBenchmarkStoryT = TypeVar(
     "PressBenchmarkStoryT", bound="PressBenchmarkStory")
@@ -20,6 +20,7 @@ PressBenchmarkStoryT = TypeVar(
 class PressBenchmarkStory(Story, metaclass=abc.ABCMeta):
   NAME: str = ""
   URL: str = ""
+  URL_OFFICIAL: str = ""
   URL_LOCAL: str = ""
   SUBSTORIES: Tuple[str, ...] = ()
 
@@ -70,9 +71,6 @@ class PressBenchmarkStory(Story, metaclass=abc.ABCMeta):
             **kwargs)
     ]
 
-  _substories: Sequence[str]
-  _url: str
-
   def __init__(self,
                *args,
                substories: Sequence[str] = (),
@@ -83,27 +81,26 @@ class PressBenchmarkStory(Story, metaclass=abc.ABCMeta):
     assert self.SUBSTORIES, f"{cls}.SUBSTORIES is not set."
     assert self.NAME is not None, f"{cls}.NAME is not set."
     self._verify_url(self.URL, "URL")
+    self._verify_url(self.URL_OFFICIAL, "URL_OFFICIAL")
     self._verify_url(self.URL_LOCAL, "URL_LOCAL")
     assert substories, f"No substories provided for {cls}"
-    self._substories = substories
+    self._substories: Sequence[str] = substories
     self._verify_substories()
     kwargs["name"] = self._get_unique_name()
     kwargs["duration"] = duration or self._get_initial_duration()
     super().__init__(*args, **kwargs)
-    if not url:
-      self._url = self.URL
-    else:
-      self._url = url
-    assert self._url, f"Invalid URL for '{self.NAME}' in {type(self)}"
+    # If the _custom_url is empty, we generate a matching URL when the
+    # local file server is used.
+    self._custom_url: Optional[str] = url
 
   def _get_unique_name(self) -> str:
     substories_set = set(self._substories)
     if substories_set == set(self.default_story_names()):
       return self.NAME
     if substories_set == set(self.all_story_names()):
-      name = f"{self.NAME}_all"
+      name = "all"
     else:
-      name = f"{self.NAME}_" + ("_".join(self._substories))
+      name = "_".join(self._substories)
     if len(name) > 220:
       # Crop the name and add some random hash bits
       name = name[:220] + hex(hash(name))[2:10]
@@ -116,9 +113,24 @@ class PressBenchmarkStory(Story, metaclass=abc.ABCMeta):
     story_factor = 0.5 + 1.1 * len(self._substories)
     return startup_delay + (story_factor * self.substory_duration)
 
+  def get_run_url(self, run: Run) -> str:
+    if self._custom_url:
+      # TODO: check that we have a live network / url host matches network host
+      return self._custom_url
+    network = run.browser_session.network
+    # Create a matching URL for a local file server.
+    if network.is_local_file_server and network.http_port:
+      return f"http://{network.host}:{network.http_port}"
+    # Return default URL in case of live network.
+    return self.url
+
   @property
   def substories(self) -> List[str]:
     return list(self._substories)
+
+  @property
+  def has_default_substories(self) -> bool:
+    return tuple(self.substories) == self.default_story_names()
 
   @property
   def fast_duration(self) -> dt.timedelta:
@@ -144,21 +156,14 @@ class PressBenchmarkStory(Story, metaclass=abc.ABCMeta):
 
   @property
   def url(self) -> str:
-    return self._url
+    return self._custom_url or self.URL
 
   def _verify_url(self, url: str, property_name: str) -> None:
     cls = self.__class__
     assert url is not None, f"{cls}.{property_name} is not set."
 
   def _verify_substories(self) -> None:
-    if len(self._substories) != len(set(self._substories)):
-      # Beware of the O(n**2):
-      duplicates = set(
-          substory for substory in self._substories
-          if self._substories.count(substory) > 1)
-      assert duplicates, (
-          f"substories='{self._substories}' contains duplicate entries: "
-          f"{duplicates}")
+    ObjectParser.unique_sequence(self._substories, "substories", ValueError)
     if self._substories == self.SUBSTORIES:
       return
     for substory in self._substories:
@@ -169,6 +174,10 @@ class PressBenchmarkStory(Story, metaclass=abc.ABCMeta):
     super().log_run_details(run)
     self.log_run_test_url(run)
 
+  @property
+  def test_url(self) -> str:
+    return self.URL
+
   def log_run_test_url(self, run: Run):
     del run
-    logging.info("STORY PUBLIC TEST URL: %s", self.URL)
+    logging.info("STORY PUBLIC TEST URL: %s", self.test_url)

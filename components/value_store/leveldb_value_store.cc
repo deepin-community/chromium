@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include <stdint.h>
 
+#include <string_view>
 #include <utility>
 
 #include "base/files/file_util.h"
@@ -24,8 +25,6 @@
 #include "third_party/leveldatabase/env_chromium.h"
 #include "third_party/leveldatabase/src/include/leveldb/iterator.h"
 #include "third_party/leveldatabase/src/include/leveldb/write_batch.h"
-
-using base::StringPiece;
 
 namespace {
 
@@ -56,23 +55,42 @@ LeveldbValueStore::~LeveldbValueStore() {
 size_t LeveldbValueStore::GetBytesInUse(const std::string& key) {
   // Let SettingsStorageQuotaEnforcer implement this.
   NOTREACHED() << "Not implemented";
-  return 0;
 }
 
 size_t LeveldbValueStore::GetBytesInUse(const std::vector<std::string>& keys) {
   // Let SettingsStorageQuotaEnforcer implement this.
   NOTREACHED() << "Not implemented";
-  return 0;
 }
 
 size_t LeveldbValueStore::GetBytesInUse() {
   // Let SettingsStorageQuotaEnforcer implement this.
   NOTREACHED() << "Not implemented";
-  return 0;
 }
 
 ValueStore::ReadResult LeveldbValueStore::Get(const std::string& key) {
   return Get(std::vector<std::string>(1, key));
+}
+
+ValueStore::ReadResult LeveldbValueStore::GetKeys() {
+  Status status = EnsureDbIsOpen();
+  if (!status.ok()) {
+    return ReadResult(std::move(status));
+  }
+
+  base::Value::Dict settings;
+
+  std::unique_ptr<leveldb::Iterator> it(db()->NewIterator(read_options()));
+  for (it->SeekToFirst(); it->Valid(); it->Next()) {
+    std::string key = it->key().ToString();
+    settings.Set(key, base::Value());
+  }
+
+  if (!it->status().ok()) {
+    status.Merge(ToValueStoreError(it->status()));
+    return ReadResult(std::move(status));
+  }
+
+  return ReadResult(std::move(settings), std::move(status));
 }
 
 ValueStore::ReadResult LeveldbValueStore::Get(
@@ -106,7 +124,7 @@ ValueStore::ReadResult LeveldbValueStore::Get() {
   for (it->SeekToFirst(); it->Valid(); it->Next()) {
     std::string key = it->key().ToString();
     std::optional<base::Value> value = base::JSONReader::Read(
-        StringPiece(it->value().data(), it->value().size()));
+        std::string_view(it->value().data(), it->value().size()));
     if (!value) {
       return ReadResult(Status(CORRUPTION,
                                Delete(key).ok() ? VALUE_RESTORE_DELETE_SUCCESS

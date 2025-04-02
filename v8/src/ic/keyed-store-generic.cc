@@ -4,9 +4,12 @@
 
 #include "src/ic/keyed-store-generic.h"
 
+#include <optional>
+
 #include "src/codegen/code-factory.h"
 #include "src/codegen/code-stub-assembler-inl.h"
 #include "src/codegen/interface-descriptors.h"
+#include "src/common/globals.h"
 #include "src/execution/isolate.h"
 #include "src/ic/accessor-assembler.h"
 #include "src/objects/contexts.h"
@@ -15,6 +18,8 @@
 
 namespace v8 {
 namespace internal {
+
+#include "src/codegen/define-code-stub-assembler-macros.inc"
 
 enum class StoreMode {
   // kSet implements [[Set]] in the spec and traverses the prototype
@@ -420,8 +425,9 @@ void KeyedStoreGenericAssembler::StoreElementWithCapacity(
     GotoIf(IsSetWord32(details, PropertyDetails::kAttributesReadOnlyMask),
            slow);
   }
-  static_assert(FixedArray::kHeaderSize == FixedDoubleArray::kHeaderSize);
-  const int kHeaderSize = FixedArray::kHeaderSize - kHeapObjectTag;
+  static_assert(OFFSET_OF_DATA_START(FixedArray) ==
+                OFFSET_OF_DATA_START(FixedDoubleArray));
+  const int kHeaderSize = OFFSET_OF_DATA_START(FixedArray) - kHeapObjectTag;
 
   Label check_double_elements(this), check_cow_elements(this);
   TNode<Map> elements_map = LoadMap(elements);
@@ -488,8 +494,24 @@ void KeyedStoreGenericAssembler::StoreElementWithCapacity(
     {
       Label transition_to_double(this), transition_to_object(this);
       TNode<NativeContext> native_context = LoadNativeContext(context);
+#ifdef V8_ENABLE_EXPERIMENTAL_UNDEFINED_DOUBLE
+      GotoIf(IsHeapNumber(CAST(value)), &transition_to_double);
+      GotoIfNot(IsUndefined(value), &transition_to_object);
+      TryRewriteElements(receiver, receiver_map, elements, native_context,
+                         PACKED_SMI_ELEMENTS, HOLEY_DOUBLE_ELEMENTS, slow);
+      // Reload migrated elements.
+      TNode<FixedArrayBase> double_elements = LoadElements(receiver);
+      TNode<IntPtrT> double_offset =
+          ElementOffsetFromIndex(index, PACKED_DOUBLE_ELEMENTS, kHeaderSize);
+      // Make sure we do not store signalling NaNs into double arrays.
+      StoreNoWriteBarrier(MachineRepresentation::kWord64, double_elements,
+                          double_offset, Uint64Constant(kUndefinedNanInt64));
+      MaybeUpdateLengthAndReturn(receiver, index, value, update_length);
+#else
       Branch(IsHeapNumber(CAST(value)), &transition_to_double,
              &transition_to_object);
+#endif  // V8_ENABLE_EXPERIMENTAL_UNDEFINED_DOUBLE
+
       BIND(&transition_to_double);
       {
         // If we're adding holes at the end, always transition to a holey
@@ -557,8 +579,12 @@ void KeyedStoreGenericAssembler::StoreElementWithCapacity(
     // Try to store the value as a double.
     {
       Label non_number_value(this);
-      TNode<Float64T> double_value =
-          TryTaggedToFloat64(value, &non_number_value);
+      Label undefined_value(this);
+      TNode<Float64T> double_value = TryTaggedToFloat64(value,
+#ifdef V8_ENABLE_EXPERIMENTAL_UNDEFINED_DOUBLE
+                                                        &undefined_value,
+#endif  // V8_ENABLE_EXPERIMENTAL_UNDEFINED_DOUBLE
+                                                        &non_number_value);
 
       // Make sure we do not store signalling NaNs into double arrays.
       double_value = Float64SilenceNaN(double_value);
@@ -570,6 +596,22 @@ void KeyedStoreGenericAssembler::StoreElementWithCapacity(
       StoreNoWriteBarrier(MachineRepresentation::kFloat64, elements, offset,
                           double_value);
       MaybeUpdateLengthAndReturn(receiver, index, value, update_length);
+
+      // Convert undefined to double value.
+#ifdef V8_ENABLE_EXPERIMENTAL_UNDEFINED_DOUBLE
+      BIND(&undefined_value);
+      // FIXME(nicohartmann): Unify with above.
+
+      // If we're about to introduce holes, ensure holey elements.
+      if (update_length == kBumpLengthWithGap) {
+        TryChangeToHoleyMap(receiver, receiver_map, elements_kind, context,
+                            PACKED_DOUBLE_ELEMENTS, slow);
+      }
+      StoreNoWriteBarrier(MachineRepresentation::kWord64, elements, offset,
+                          Uint64Constant(kUndefinedNanInt64));
+      // double_value);
+      MaybeUpdateLengthAndReturn(receiver, index, value, update_length);
+#endif  // V8_ENABLE_EXPERIMENTAL_UNDEFINED_DOUBLE
 
       BIND(&non_number_value);
     }
@@ -847,7 +889,7 @@ TNode<Map> KeyedStoreGenericAssembler::FindCandidateStoreICTransitionMapHandler(
                                       TransitionArray::kEntryKeyIndex) *
                                      kTaggedSize;
       var_transition_map = CAST(GetHeapObjectAssumeWeak(
-          LoadArrayElement(transitions, WeakFixedArray::kHeaderSize,
+          LoadArrayElement(transitions, OFFSET_OF_DATA_START(WeakFixedArray),
                            var_name_index.value(), kKeyToTargetOffset)));
       Goto(&found_handler_candidate);
     }
@@ -960,16 +1002,14 @@ void KeyedStoreGenericAssembler::EmitGenericPropertyStore(
 
     TVARIABLE(IntPtrT, var_name_index);
     Label dictionary_found(this, &var_name_index),
-        not_found_no_insertion_index(this),
-        not_found_with_insertion_index(this, &var_name_index);
+        not_found(this, &var_name_index);
     TNode<PropertyDictionary> properties = CAST(LoadSlowProperties(receiver));
 
     // When dealing with class fields defined with DefineKeyedOwnIC or
     // DefineNamedOwnIC, use the slow path to check the existing property.
     NameDictionaryLookup<PropertyDictionary>(
         properties, name, IsAnyDefineOwn() ? slow : &dictionary_found,
-        &var_name_index, &not_found_no_insertion_index, kFindExisting,
-        &not_found_with_insertion_index);
+        &var_name_index, &not_found, kFindExistingOrInsertionIndex);
 
     if (!IsAnyDefineOwn()) {
       BIND(&dictionary_found);
@@ -1018,12 +1058,7 @@ void KeyedStoreGenericAssembler::EmitGenericPropertyStore(
       }
     }
 
-    BIND(&not_found_no_insertion_index);
-    {
-      FindInsertionEntry<PropertyDictionary>(properties, name, &var_name_index);
-      Goto(&not_found_with_insertion_index);
-    }
-    BIND(&not_found_with_insertion_index);
+    BIND(&not_found);
     {
       // TODO(jkummerow): Also add support to correctly handle integer exotic
       // cases for typed arrays and remove this check here.
@@ -1188,7 +1223,7 @@ void KeyedStoreGenericAssembler::KeyedStoreGeneric(
   {
     Comment("key is unique name");
     StoreICParameters p(context, receiver, var_unique.value(), value,
-                        base::nullopt, slot, maybe_vector,
+                        std::nullopt, slot, maybe_vector,
                         StoreICMode::kDefault);
     ExitPoint direct_exit(this);
     EmitGenericPropertyStore(CAST(receiver), receiver_map, instance_type, &p,
@@ -1221,10 +1256,11 @@ void KeyedStoreGenericAssembler::KeyedStoreGeneric(
       DCHECK(IsDefineKeyedOwnInLiteral());
       TNode<Smi> flags =
           SmiConstant(DefineKeyedOwnPropertyInLiteralFlag::kNoFlags);
-      TNode<TaggedIndex> slot =
+      TNode<TaggedIndex> invalid_slot =
           TaggedIndexConstant(FeedbackSlot::Invalid().ToInt());
       TailCallRuntime(Runtime::kDefineKeyedOwnPropertyInLiteral, context,
-                      receiver, key, value, flags, UndefinedConstant(), slot);
+                      receiver, key, value, flags, UndefinedConstant(),
+                      invalid_slot);
     }
   }
 }
@@ -1283,7 +1319,7 @@ void KeyedStoreGenericAssembler::StoreIC_NoFeedback() {
     // checks, strings and string wrappers, proxies) are handled in the runtime.
     GotoIf(IsSpecialReceiverInstanceType(instance_type), &miss);
     {
-      StoreICParameters p(context, receiver, name, value, base::nullopt, {},
+      StoreICParameters p(context, receiver, name, value, std::nullopt, {},
                           UndefinedConstant(),
                           IsDefineNamedOwn() ? StoreICMode::kDefineNamedOwn
                                              : StoreICMode::kDefault);
@@ -1309,7 +1345,7 @@ void KeyedStoreGenericAssembler::StoreProperty(TNode<Context> context,
                                                TNode<Name> unique_name,
                                                TNode<Object> value,
                                                LanguageMode language_mode) {
-  StoreICParameters p(context, receiver, unique_name, value, base::nullopt, {},
+  StoreICParameters p(context, receiver, unique_name, value, std::nullopt, {},
                       UndefinedConstant(), StoreICMode::kDefault);
 
   Label done(this), slow(this, Label::kDeferred);
@@ -1342,6 +1378,8 @@ void KeyedStoreGenericAssembler::StoreProperty(TNode<Context> context,
 
   BIND(&done);
 }
+
+#include "src/codegen/undef-code-stub-assembler-macros.inc"
 
 }  // namespace internal
 }  // namespace v8

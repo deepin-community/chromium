@@ -4,11 +4,11 @@
 
 #include "chromeos/ash/services/secure_channel/bluetooth_helper_impl.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/time/time.h"
 #include "chromeos/ash/components/multidevice/remote_device_cache.h"
@@ -59,7 +59,7 @@ CreateFakeBackgroundScanFilter() {
 }
 
 std::vector<multidevice::BeaconSeed> CreateFakeBeaconSeeds(int id) {
-  std::string id_str = std::to_string(id);
+  std::string id_str = base::NumberToString(id);
 
   multidevice::BeaconSeed seed1(
       fake_beacon_seed1_data + id_str /* data */,
@@ -140,7 +140,7 @@ class SecureChannelBluetoothHelperImplTest : public testing::Test {
         *multidevice::GetMutableRemoteDevice(test_local_device_1_));
     devices.push_back(
         *multidevice::GetMutableRemoteDevice(test_local_device_2_));
-    base::ranges::transform(
+    std::ranges::transform(
         test_remote_devices_, std::back_inserter(devices),
         [](auto remote_device_ref) {
           return *multidevice::GetMutableRemoteDevice(remote_device_ref);

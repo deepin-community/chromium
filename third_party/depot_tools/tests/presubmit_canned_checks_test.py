@@ -7,14 +7,13 @@ import os.path
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT_DIR)
 
-from testing_support.presubmit_canned_checks_test_mocks import MockFile
-from testing_support.presubmit_canned_checks_test_mocks import (MockInputApi,
-                                                                MockOutputApi)
-from testing_support.presubmit_canned_checks_test_mocks import MockChange
+from testing_support.presubmit_canned_checks_test_mocks import (
+    MockFile, MockAffectedFile, MockInputApi, MockOutputApi, MockChange)
 
 import presubmit_canned_checks
 
@@ -299,6 +298,40 @@ class InclusiveLanguageCheckTest(unittest.TestCase):
             input_api, MockOutputApi())
         self.assertEqual([], errors)
 
+    def testDirExemptWithComment(self):
+        input_api = MockInputApi()
+        input_api.change.RepositoryRoot = lambda: ''
+        input_api.presubmit_local_path = ''
+
+        input_api.files = [
+            MockFile(
+                os.path.normpath(
+                    'infra/inclusive_language_presubmit_exempt_dirs.txt'), [
+                        '# this is a comment',
+                        'dir1',
+                        '# dir2',
+                    ]),
+
+            # this should be excluded
+            MockFile(
+                os.path.normpath('dir1/1.py'),
+                [
+                    'TEST(SomeClassTest, SomeInteraction, blacklist) {',  # nocheck
+                    '}'
+                ]),
+
+            # this should not be excluded
+            MockFile(os.path.normpath('dir2/2.py'),
+                     ['- (void)testSth { V(whitelist); }']),  # nocheck
+        ]
+
+        errors = presubmit_canned_checks.CheckInclusiveLanguage(
+            input_api, MockOutputApi())
+        self.assertEqual(1, len(errors))
+        self.assertTrue(os.path.normpath('dir1/1.py') not in errors[0].message)
+        self.assertTrue(os.path.normpath('dir2/2.py') in errors[0].message)
+
+
 
 class DescriptionChecksTest(unittest.TestCase):
     def testCheckDescriptionUsesColonInsteadOfEquals(self):
@@ -438,6 +471,66 @@ class CheckUpdateOwnersFileReferences(unittest.TestCase):
         ]
         results = presubmit_canned_checks.CheckUpdateOwnersFileReferences(
             input_api, MockOutputApi())
+        self.assertEqual(0, len(results))
+
+
+class CheckNoNewGitFilesAddedInDependenciesTest(unittest.TestCase):
+
+    @mock.patch('presubmit_canned_checks._readDeps')
+    def testNonNested(self, readDeps):
+        readDeps.return_value = '''deps = {
+      'src/foo': {'url': 'bar', 'condition': 'non_git_source'},
+      'src/components/foo/bar': {'url': 'bar', 'condition': 'non_git_source'},
+    }'''
+
+        input_api = MockInputApi()
+        input_api.files = [
+            MockFile('components/foo/file1.java', ['otherFunction']),
+            MockFile('components/foo/file2.java', ['hasSyncConsent']),
+            MockFile('chrome/foo/file3.java', ['canSyncFeatureStart']),
+            MockFile('chrome/foo/file4.java', ['isSyncFeatureEnabled']),
+            MockFile('chrome/foo/file5.java', ['isSyncFeatureActive']),
+        ]
+        results = presubmit_canned_checks.CheckNoNewGitFilesAddedInDependencies(
+            input_api, MockOutputApi())
+
+        self.assertEqual(0, len(results))
+
+    @mock.patch('presubmit_canned_checks._readDeps')
+    def testCollision(self, readDeps):
+        readDeps.return_value = '''deps = {
+      'src/foo': {'url': 'bar', 'condition': 'non_git_source'},
+      'src/baz': {'url': 'baz'},
+    }'''
+
+        input_api = MockInputApi()
+        input_api.files = [
+            MockAffectedFile('fo', 'content'),  # no conflict
+            MockAffectedFile('foo', 'content'),  # conflict
+            MockAffectedFile('foo/bar', 'content'),  # conflict
+            MockAffectedFile('baz/qux', 'content'),  # conflict, but ignored
+        ]
+        results = presubmit_canned_checks.CheckNoNewGitFilesAddedInDependencies(
+            input_api, MockOutputApi())
+
+        self.assertEqual(2, len(results))
+        self.assertIn('File: foo', str(results))
+        self.assertIn('File: foo/bar', str(results))
+
+    @mock.patch('presubmit_canned_checks._readDeps')
+    def testNoDeps(self, readDeps):
+        readDeps.return_value = ''  # Empty deps
+
+        input_api = MockInputApi()
+        input_api.files = [
+            MockAffectedFile('fo', 'content'),  # no conflict
+            MockAffectedFile('foo', 'content'),  # conflict
+            MockAffectedFile('foo/bar', 'content'),  # conflict
+            MockAffectedFile('baz/qux', 'content'),  # conflict, but ignored
+        ]
+        results = presubmit_canned_checks.CheckNoNewGitFilesAddedInDependencies(
+            input_api, MockOutputApi())
+
         self.assertEqual(0, len(results))
 
 

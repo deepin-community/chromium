@@ -20,14 +20,9 @@ class PDFDocumentHelperClient {
  public:
   virtual ~PDFDocumentHelperClient() = default;
 
-  virtual content::RenderFrameHost* FindPdfFrame(
-      content::WebContents* contents) = 0;
-
   virtual void UpdateContentRestrictions(
       content::RenderFrameHost* render_frame_host,
       int content_restrictions) = 0;
-
-  virtual void OnPDFHasUnsupportedFeature(content::WebContents* contents) = 0;
 
   virtual void OnSaveURL(content::WebContents* contents) = 0;
 
@@ -38,6 +33,9 @@ class PDFDocumentHelperClient {
   // Lets the client observe scroll events. Only used for testing.
   virtual void OnDidScroll(const gfx::SelectionBound& start,
                            const gfx::SelectionBound& end) {}
+
+  // Notifies that PDF searchifier started processing pages.
+  virtual void OnSearchifyStarted(content::WebContents* contents) = 0;
 };
 
 }  // namespace pdf

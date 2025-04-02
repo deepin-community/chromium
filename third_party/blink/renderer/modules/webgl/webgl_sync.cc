@@ -58,7 +58,6 @@ GLint WebGLSync::GetCachedResult(GLenum pname) {
   }
 
   NOTREACHED();
-  return 0;
 }
 
 bool WebGLSync::IsSignaled() const {

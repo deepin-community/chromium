@@ -5,9 +5,10 @@
 #ifndef UI_GL_DIRECT_COMPOSITION_SUPPORT_H_
 #define UI_GL_DIRECT_COMPOSITION_SUPPORT_H_
 
+#include <windows.h>
+
 #include <d3d11.h>
 #include <dcomp.h>
-#include <windows.h>
 #include <wrl/client.h>
 
 #include "base/no_destructor.h"
@@ -18,6 +19,22 @@
 #include "ui/gl/gpu_switching_observer.h"
 
 namespace gl {
+
+// Wrapper for DCompositionWaitForCompositorClock Win32 dcomp.h function
+HRESULT DCompositionWaitForCompositorClock(UINT count,
+                                           const HANDLE* handles,
+                                           DWORD timeoutInMs);
+
+// Wrapper for DcompositionGetFrameId Win32 dcomp.h function
+HRESULT DCompositionGetFrameId(COMPOSITION_FRAME_ID_TYPE frameIdType,
+                               COMPOSITION_FRAME_ID* frameId);
+
+// Wrapper for DCompositionGetStatistics Win32 dcomp.h function
+HRESULT DCompositionGetStatistics(COMPOSITION_FRAME_ID frameId,
+                                  COMPOSITION_FRAME_STATS* frameStats,
+                                  UINT targetIdCount,
+                                  COMPOSITION_TARGET_ID* targetIds,
+                                  UINT* actualTargetIdCount);
 
 // Initialize direct composition with the given d3d11 device.
 GL_EXPORT void InitializeDirectComposition(
@@ -64,8 +81,14 @@ GL_EXPORT bool DirectCompositionScaledOverlaysSupported();
 // Returns preferred overlay format set when detecting overlay support.
 GL_EXPORT DXGI_FORMAT GetDirectCompositionSDROverlayFormat();
 
+// Returns true if video processor auto HDR feature is supported.
+GL_EXPORT bool VideoProcessorAutoHDRSupported();
+
 // Returns true if video processor support handling the given format.
 GL_EXPORT bool CheckVideoProcessorFormatSupport(DXGI_FORMAT format);
+
+// Returns true if the given P010 video format is displayable.
+GL_EXPORT bool CheckDisplayableSupportForP010();
 
 // Returns overlay support flags for the given format.
 // Caller should check for DXGI_OVERLAY_SUPPORT_FLAG_DIRECT and
@@ -94,9 +117,8 @@ GL_EXPORT bool DirectCompositionMonitorHDREnabled(HWND window);
 // Returns the collected DXGI information.
 GL_EXPORT gfx::mojom::DXGIInfoPtr GetDirectCompositionHDRMonitorDXGIInfo();
 
-// Set direct composition swap chain failure so that direct composition is
-// marked as unsupported from now on.
-GL_EXPORT void SetDirectCompositionSwapChainFailed();
+// Returns true if there is support for |IDCompositionTexture|.
+GL_EXPORT bool DirectCompositionTextureSupported();
 
 struct DirectCompositionOverlayWorkarounds {
   // Whether software video overlays i.e. swap chains used without hardware

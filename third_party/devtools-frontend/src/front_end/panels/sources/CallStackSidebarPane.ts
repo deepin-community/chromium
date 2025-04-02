@@ -109,6 +109,7 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
 
   private constructor() {
     super(i18nString(UIStrings.callStack), true, 'sources.callstack');
+    this.registerRequiredCSS(callStackSidebarPaneStyles);
 
     this.contentElement.setAttribute('jslog', `${VisualLogging.section('sources.callstack')}`);
     ({element: this.ignoreListMessageElement, checkbox: this.ignoreListCheckboxElement} =
@@ -202,11 +203,11 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
     }
   }
 
-  private update(): void {
+  update(): void {
     void this.updateThrottler.schedule(() => this.doUpdate());
   }
 
-  private async doUpdate(): Promise<void> {
+  async doUpdate(): Promise<void> {
     this.locationPool.disposeAll();
 
     this.callFrameWarningsElement.classList.add('hidden');
@@ -227,11 +228,7 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
     const itemPromises = [];
     const uniqueWarnings: Set<string> = new Set();
     for (const frame of details.callFrames) {
-      const itemPromise =
-          Item.createForDebuggerCallFrame(frame, this.locationPool, this.refreshItem.bind(this)).then(item => {
-            itemToCallFrame.set(item, frame);
-            return item;
-          });
+      const itemPromise = Item.createForDebuggerCallFrame(frame, this.locationPool, this.refreshItem.bind(this));
       itemPromises.push(itemPromise);
       if (frame.missingDebugInfoDetails) {
         uniqueWarnings.add(frame.missingDebugInfoDetails.details);
@@ -336,11 +333,11 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
       if (item.isIgnoreListed) {
         UI.ARIAUtils.setDescription(element, i18nString(UIStrings.onIgnoreList));
       }
-      if (!itemToCallFrame.has(item)) {
+      if (!item.frame) {
         UI.ARIAUtils.setDisabled(element, true);
       }
     }
-    const callframe = itemToCallFrame.get(item);
+    const callframe = item.frame;
     const isSelected = callframe === UI.Context.Context.instance().flavor(SDK.DebuggerModel.CallFrame);
 
     element.classList.toggle('selected', isSelected);
@@ -366,8 +363,8 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
         height: '14px',
       };
       icon.classList.add('call-frame-warning-icon');
-      const messages =
-          callframe.missingDebugInfoDetails.resources.map(r => i18nString(UIStrings.debugFileNotFound, {PH1: r}));
+      const messages = callframe.missingDebugInfoDetails.resources.map(
+          r => i18nString(UIStrings.debugFileNotFound, {PH1: Common.ParsedURL.ParsedURL.extractName(r.resourceUrl)}));
       UI.Tooltip.Tooltip.install(icon, [callframe.missingDebugInfoDetails.details, ...messages].join('\n'));
       element.appendChild(icon);
     }
@@ -406,7 +403,7 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
     element.classList.add('ignore-listed-message');
     const label = element.createChild('label');
     label.classList.add('ignore-listed-message-label');
-    const checkbox = label.createChild('input') as HTMLInputElement;
+    const checkbox = label.createChild('input');
     checkbox.tabIndex = 0;
     checkbox.type = 'checkbox';
     checkbox.classList.add('ignore-listed-checkbox');
@@ -439,8 +436,8 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
     if (!item) {
       return;
     }
-    const contextMenu = new UI.ContextMenu.ContextMenu(event, {jsLogContext: 'call-stack-frame'});
-    const debuggerCallFrame = itemToCallFrame.get(item);
+    const contextMenu = new UI.ContextMenu.ContextMenu(event);
+    const debuggerCallFrame = item.frame;
     if (debuggerCallFrame) {
       contextMenu.defaultSection().appendItem(i18nString(UIStrings.restartFrame), () => {
         Host.userMetrics.actionTaken(Host.UserMetrics.Action.StackFrameRestarted);
@@ -468,7 +465,7 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
       return;
     }
     this.list.selectItem(item);
-    const debuggerCallFrame = itemToCallFrame.get(item);
+    const debuggerCallFrame = item.frame;
     const oldItem = this.activeCallFrameItem();
     if (debuggerCallFrame && oldItem !== item) {
       debuggerCallFrame.debuggerModel.setSelectedCallFrame(debuggerCallFrame);
@@ -485,7 +482,7 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
   activeCallFrameItem(): Item|null {
     const callFrame = UI.Context.Context.instance().flavor(SDK.DebuggerModel.CallFrame);
     if (callFrame) {
-      return this.items.find(callFrameItem => itemToCallFrame.get(callFrameItem) === callFrame) || null;
+      return this.items.find(callFrameItem => callFrameItem.frame === callFrame) || null;
     }
     return null;
   }
@@ -514,7 +511,7 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
     const startIndex = oldItem ? this.items.indexOf(oldItem) + 1 : 0;
     for (let i = startIndex; i < this.items.length; i++) {
       const newItem = this.items.at(i);
-      if (itemToCallFrame.has(newItem)) {
+      if (newItem.frame) {
         this.activateItem(newItem);
         break;
       }
@@ -526,7 +523,7 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
     const startIndex = oldItem ? this.items.indexOf(oldItem) - 1 : this.items.length - 1;
     for (let i = startIndex; i >= 0; i--) {
       const newItem = this.items.at(i);
-      if (itemToCallFrame.has(newItem)) {
+      if (newItem.frame) {
         this.activateItem(newItem);
         break;
       }
@@ -544,13 +541,7 @@ export class CallStackSidebarPane extends UI.View.SimpleView implements UI.Conte
     }
     Host.InspectorFrontendHost.InspectorFrontendHostInstance.copyText(text.join('\n'));
   }
-  override wasShown(): void {
-    super.wasShown();
-    this.registerCSSFiles([callStackSidebarPaneStyles]);
-  }
 }
-
-const itemToCallFrame = new WeakMap<Item, SDK.DebuggerModel.CallFrame>();
 
 export const elementSymbol = Symbol('element');
 export const defaultMaxAsyncStackChainDepth = 32;
@@ -576,12 +567,14 @@ export class Item {
   uiLocation: Workspace.UISourceCode.UILocation|null;
   isAsyncHeader: boolean;
   updateDelegate: (arg0: Item) => void;
+  /** Only set for synchronous frames */
+  readonly frame?: SDK.DebuggerModel.CallFrame;
 
   static async createForDebuggerCallFrame(
       frame: SDK.DebuggerModel.CallFrame, locationPool: Bindings.LiveLocation.LiveLocationPool,
       updateDelegate: (arg0: Item) => void): Promise<Item> {
     const name = frame.functionName;
-    const item = new Item(UI.UIUtils.beautifyFunctionName(name), updateDelegate);
+    const item = new Item(UI.UIUtils.beautifyFunctionName(name), updateDelegate, frame);
     await Bindings.DebuggerWorkspaceBinding.DebuggerWorkspaceBinding.instance().createCallFrameLiveLocation(
         frame.location(), item.update.bind(item), locationPool);
     void SourceMapScopes.NamesResolver.resolveDebuggerFrameFunctionName(frame).then(functionName => {
@@ -641,13 +634,14 @@ export class Item {
     }
   }
 
-  constructor(title: string, updateDelegate: (arg0: Item) => void) {
+  constructor(title: string, updateDelegate: (arg0: Item) => void, frame?: SDK.DebuggerModel.CallFrame) {
     this.isIgnoreListed = false;
     this.title = title;
     this.linkText = '';
     this.uiLocation = null;
     this.isAsyncHeader = false;
     this.updateDelegate = updateDelegate;
+    this.frame = frame;
   }
 
   private async update(liveLocation: Bindings.LiveLocation.LiveLocation): Promise<void> {

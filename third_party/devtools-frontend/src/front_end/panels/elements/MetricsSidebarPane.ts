@@ -36,6 +36,7 @@ import * as SDK from '../../core/sdk/sdk.js';
 import * as UI from '../../ui/legacy/legacy.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
+import type {ComputedStyleModel} from './ComputedStyleModel.js';
 import {ElementsSidebarPane} from './ElementsSidebarPane.js';
 import metricsSidebarPaneStyles from './metricsSidebarPane.css.js';
 
@@ -51,8 +52,9 @@ export class MetricsSidebarPane extends ElementsSidebarPane {
   }[];
   private isEditingMetrics?: boolean;
 
-  constructor() {
-    super();
+  constructor(computedStyleModel: ComputedStyleModel) {
+    super(computedStyleModel);
+    this.registerRequiredCSS(metricsSidebarPaneStyles);
 
     this.originalPropertyData = null;
     this.previousPropertyDataCandidate = null;
@@ -184,7 +186,11 @@ export class MetricsSidebarPane extends ElementsSidebarPane {
       value = Platform.NumberUtilities.toFixedIfFloating(value);
 
       element.textContent = value;
-      element.setAttribute('jslog', `${VisualLogging.value('element-value-modification').track({dblclick: true})}`);
+      element.setAttribute('jslog', `${VisualLogging.value(propertyName).track({
+                             dblclick: true,
+                             keydown: 'Enter|Escape|ArrowUp|ArrowDown|PageUp|PageDown',
+                             change: true,
+                           })}`);
       element.addEventListener('dblclick', this.startEditing.bind(this, element, name, propertyName, style), false);
       return element;
     }
@@ -289,15 +295,21 @@ export class MetricsSidebarPane extends ElementsSidebarPane {
         widthElement.textContent = getContentAreaWidthPx(style);
         widthElement.addEventListener(
             'dblclick', this.startEditing.bind(this, widthElement, 'width', 'width', style), false);
-        widthElement.setAttribute(
-            'jslog', `${VisualLogging.value('element-value-modification').track({'dblclick': true})}`);
+        widthElement.setAttribute('jslog', `${VisualLogging.value('width').track({
+                                    dblclick: true,
+                                    keydown: 'Enter|Escape|ArrowUp|ArrowDown|PageUp|PageDown',
+                                    change: true,
+                                  })}`);
 
         const heightElement = document.createElement('span');
         heightElement.textContent = getContentAreaHeightPx(style);
         heightElement.addEventListener(
             'dblclick', this.startEditing.bind(this, heightElement, 'height', 'height', style), false);
-        heightElement.setAttribute(
-            'jslog', `${VisualLogging.value('element-value-modification').track({'dblclick': true})}`);
+        heightElement.setAttribute('jslog', `${VisualLogging.value('height').track({
+                                     dblclick: true,
+                                     keydown: 'Enter|Escape|ArrowUp|ArrowDown|PageUp|PageDown',
+                                     change: true,
+                                   })}`);
 
         const timesElement = document.createElement('span');
         timesElement.textContent = ' × ';
@@ -418,7 +430,7 @@ export class MetricsSidebarPane extends ElementsSidebarPane {
   }
 
   private applyUserInput(
-      element: Element, userInput: string, previousContent: string, context: {
+      element: Element, userInput: string, previousContent: string|null, context: {
         box: string,
         styleProperty: string,
         computedStyle: Map<string, string>,
@@ -509,17 +521,18 @@ export class MetricsSidebarPane extends ElementsSidebarPane {
     }
   }
 
-  private editingCommitted(element: Element, userInput: string, previousContent: string, context: {
-    box: string,
-    styleProperty: string,
-    computedStyle: Map<string, string>,
-    keyDownHandler: (arg0: Event) => void,
-  }): void {
+  private editingCommitted(
+      element: Element,
+      userInput: string,
+      previousContent: string|null,
+      context: {
+        box: string,
+        styleProperty: string,
+        computedStyle: Map<string, string>,
+        keyDownHandler: (arg0: Event) => void,
+      },
+      ): void {
     this.editingEnded(element, context);
     this.applyUserInput(element, userInput, previousContent, context, true);
-  }
-  override wasShown(): void {
-    super.wasShown();
-    this.registerCSSFiles([metricsSidebarPaneStyles]);
   }
 }

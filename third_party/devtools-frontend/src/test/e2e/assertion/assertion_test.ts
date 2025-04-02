@@ -6,9 +6,8 @@ import {assert} from 'chai';
 
 import {expectedErrors} from '../../conductor/events.js';
 import {getBrowserAndPages, goToResource, step} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 
-describe('Assertions', async function() {
+describe('Assertions', function() {
   it('console.assert', async () => {
     const {frontend} = getBrowserAndPages();
     await step('Check the evaluation results from console', async () => {
@@ -17,7 +16,7 @@ describe('Assertions', async function() {
       });
     });
     await goToResource('cross_tool/default.html');
-    assert.ok(expectedErrors.some(error => error.includes('expected failure 1')));
+    assert.isOk(expectedErrors.some(error => error.includes('expected failure 1')));
   });
 
   it('console.error', async () => {
@@ -31,6 +30,6 @@ describe('Assertions', async function() {
       });
     });
     await goToResource('cross_tool/default.html');
-    assert.ok(expectedErrors.some(error => error.includes('expected failure 2')));
+    assert.isOk(expectedErrors.some(error => error.includes('expected failure 2')));
   });
 });

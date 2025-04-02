@@ -5,15 +5,12 @@
 import {assert} from 'chai';
 
 import {getTestServerPort, goToResource, waitForFunction} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   getStructuredConsoleMessages,
   navigateToConsoleTab,
   showVerboseMessages,
   waitForConsoleMessagesToBeNonEmpty,
 } from '../helpers/console-helpers.js';
-
-/* eslint-disable no-console */
 
 describe('The Console\'s errors', () => {
   it('picks up custom exception names ending with \'Error\' and symbolizes stack traces according to source maps',
@@ -63,10 +60,7 @@ describe('The Console\'s errors', () => {
         source: 'resource-errors.html:20',
         stackPreview: `
 loadXHR @ resource-errors.html:20
-step2 @ resource-errors.html:12
-error (async)
-performActions @ resource-errors.html:7
-(anonymous) @ resource-errors.html:30`,
+step2 @ resource-errors.html:12`,
         wrapperClasses: 'console-message-wrapper console-error-level',
       },
       {
@@ -102,11 +96,28 @@ performActions @ resource-errors.html:7
         repeatCount: null,
         source: 'unknown-scheme://foo:1',
         stackPreview: `
-Image (async)
+Image
 performActions @ resource-errors.html:8
 (anonymous) @ resource-errors.html:30`,
         wrapperClasses: 'console-message-wrapper console-error-level',
       },
     ]);
+  });
+
+  it('shows Error.cause', async () => {
+    await goToResource('sources/error-with-cause.html');
+    await navigateToConsoleTab();
+    await showVerboseMessages();
+    await waitForConsoleMessagesToBeNonEmpty(/* numberOfMessages */ 1);
+
+    const messages = await getStructuredConsoleMessages();
+    assert.lengthOf(messages, 1);
+    assert.strictEqual(messages[0].message, `Uncaught Error: rethrower
+    at caller (error-with-cause.html:20:13)
+    at error-with-cause.html:24:3Caused by: Error: original
+    at foo (error-with-cause.html:9:11)
+    at bar (error-with-cause.html:13:5)
+    at caller (error-with-cause.html:18:7)
+    at error-with-cause.html:24:3`);
   });
 });

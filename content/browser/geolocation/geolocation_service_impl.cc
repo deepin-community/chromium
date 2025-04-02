@@ -14,10 +14,13 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
-#include "services/device/public/cpp/geolocation/geolocation_manager.h"
 #include "services/device/public/mojom/geoposition.mojom.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
 #include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom.h"
+
+#if BUILDFLAG(IS_IOS)
+#include "services/device/public/cpp/geolocation/geolocation_system_permission_manager.h"
+#endif
 
 namespace content {
 
@@ -64,17 +67,22 @@ GeolocationServiceImpl::GeolocationServiceImpl(
   DCHECK(render_frame_host);
 }
 
-GeolocationServiceImpl::~GeolocationServiceImpl() = default;
+GeolocationServiceImpl::~GeolocationServiceImpl() {
+  DecrementActivityCount();
+}
 
 void GeolocationServiceImpl::Bind(
     mojo::PendingReceiver<blink::mojom::GeolocationService> receiver) {
   receiver_set_.Add(this, std::move(receiver),
                     std::make_unique<GeolocationServiceImplContext>());
+  receiver_set_.set_disconnect_handler(base::BindRepeating(
+      &GeolocationServiceImpl::OnDisconnected, base::Unretained(this)));
 #if BUILDFLAG(IS_IOS)
-  if (device::GeolocationManager* geolocation_manager =
-          device::GeolocationManager::GetInstance();
-      geolocation_manager) {
-    geolocation_manager->RequestSystemPermission();
+  device::GeolocationSystemPermissionManager*
+      geolocation_system_permission_manager =
+          device::GeolocationSystemPermissionManager::GetInstance();
+  if (geolocation_system_permission_manager) {
+    geolocation_system_permission_manager->RequestSystemPermission();
   }
 #endif
 }
@@ -84,7 +92,7 @@ void GeolocationServiceImpl::CreateGeolocation(
     bool user_gesture,
     CreateGeolocationCallback callback) {
   if (!render_frame_host_->IsFeatureEnabled(
-          blink::mojom::PermissionsPolicyFeature::kGeolocation)) {
+          network::mojom::PermissionsPolicyFeature::kGeolocation)) {
     std::move(callback).Run(blink::mojom::PermissionStatus::DENIED);
     return;
   }
@@ -112,12 +120,16 @@ void GeolocationServiceImpl::CreateGeolocationWithPermissionStatus(
   if (permission_status != blink::mojom::PermissionStatus::GRANTED)
     return;
 
+  IncrementActivityCount();
+
   requesting_origin_ =
       render_frame_host_->GetMainFrame()->GetLastCommittedOrigin();
   auto requesting_url =
       render_frame_host_->GetMainFrame()->GetLastCommittedURL();
 
-  geolocation_context_->BindGeolocation(std::move(receiver), requesting_url);
+  geolocation_context_->BindGeolocation(
+      std::move(receiver), requesting_url,
+      device::mojom::GeolocationClientId::kGeolocationServiceImpl);
   subscription_id_ =
       PermissionControllerImpl::FromBrowserContext(
           render_frame_host_->GetBrowserContext())
@@ -125,6 +137,7 @@ void GeolocationServiceImpl::CreateGeolocationWithPermissionStatus(
               blink::PermissionType::GEOLOCATION,
               /*render_process_host=*/nullptr, render_frame_host_,
               requesting_url,
+              /*should_include_device_status=*/false,
               base::BindRepeating(
                   &GeolocationServiceImpl::HandlePermissionStatusChange,
                   weak_factory_.GetWeakPtr()));
@@ -138,6 +151,29 @@ void GeolocationServiceImpl::HandlePermissionStatusChange(
         render_frame_host_->GetBrowserContext())
         ->UnsubscribeFromPermissionStatusChange(subscription_id_);
     geolocation_context_->OnPermissionRevoked(requesting_origin_);
+    DecrementActivityCount();
+  }
+}
+
+void GeolocationServiceImpl::OnDisconnected() {
+  if (receiver_set_.empty()) {
+    DecrementActivityCount();
+  }
+}
+
+void GeolocationServiceImpl::IncrementActivityCount() {
+  is_sending_updates_ = true;
+  auto* web_contents = WebContents::FromRenderFrameHost(render_frame_host_);
+  static_cast<WebContentsImpl*>(web_contents)
+      ->IncrementGeolocationActiveFrameCount();
+}
+
+void GeolocationServiceImpl::DecrementActivityCount() {
+  if (is_sending_updates_) {
+    is_sending_updates_ = false;
+    auto* web_contents = WebContents::FromRenderFrameHost(render_frame_host_);
+    static_cast<WebContentsImpl*>(web_contents)
+        ->DecrementGeolocationActiveFrameCount();
   }
 }
 

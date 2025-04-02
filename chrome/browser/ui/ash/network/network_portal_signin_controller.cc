@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/ash/network/network_portal_signin_controller.h"
 
+#include "ash/public/cpp/new_window_delegate.h"
 #include "base/metrics/histogram_functions.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/profiles/signin_profile_handler.h"
@@ -30,6 +31,7 @@
 #include "components/strings/grit/components_strings.h"
 #include "components/user_manager/user_manager.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/views/widget/widget.h"
@@ -55,36 +57,13 @@ bool ProxyActive(Profile* profile) {
   return true;
 }
 
-Profile* GetOTROrActiveProfile() {
-  Profile* profile = ProfileManager::GetActiveUserProfile();
-  DCHECK(profile);
-
-  // In Guest mode, the active profile is OTR. Since we do not support creating
-  // an OTR profile from another OTR profile we use the active profile for
-  // captive portal signin.
-  if (profile->IsOffTheRecord()) {
-    return profile;
-  }
-
-  // When not in Guest mode we use a separate signin OTR profile to avoid
-  // passing existing OTR cookies to the captive portal signin page, see
-  // b/245578628 for details.
-  static base::NoDestructor<Profile::OTRProfileID> otr_profile_id(
-      Profile::OTRProfileID::CreateUniqueForCaptivePortal());
-  Profile* otr_profile =
-      profile->GetOffTheRecordProfile(*otr_profile_id,
-                                      /*create_if_needed=*/true);
-  DCHECK(otr_profile);
-  return otr_profile;
-}
-
 class SigninWebDialogDelegate : public ui::WebDialogDelegate {
  public:
   explicit SigninWebDialogDelegate(GURL url) {
     set_can_close(true);
     set_can_resize(false);
     set_dialog_content_url(url);
-    set_dialog_modal_type(ui::MODAL_TYPE_SYSTEM);
+    set_dialog_modal_type(ui::mojom::ModalType::kSystem);
     set_dialog_title(l10n_util::GetStringUTF16(
         IDS_CAPTIVE_PORTAL_AUTHORIZATION_DIALOG_NAME));
     set_show_dialog_title(true);
@@ -97,7 +76,7 @@ class SigninWebDialogDelegate : public ui::WebDialogDelegate {
   ~SigninWebDialogDelegate() override = default;
 
   void OnLoadingStateChanged(content::WebContents* source) override {
-    network_portal_detector::GetInstance()->RequestCaptivePortalDetection();
+    NetworkHandler::Get()->network_state_handler()->RequestPortalDetection();
   }
 };
 
@@ -122,12 +101,10 @@ void NetworkPortalSigninController::ShowSignin(SigninSource source) {
     NET_LOG(EVENT) << "Show signin mode from: " << source << ": No network.";
     return;
   }
-  auto portal_state = default_network->GetPortalState();
+  auto portal_state = default_network->portal_state();
   if (portal_state != NetworkState::PortalState::kPortal &&
-      portal_state != NetworkState::PortalState::kPortalSuspected &&
-      portal_state != NetworkState::PortalState::kProxyAuthRequired) {
-    // If no portal or proxy signin is required, do not attempt to show the
-    // signin page.
+      portal_state != NetworkState::PortalState::kPortalSuspected) {
+    // If no portal signin is required, do not attempt to show the signin page.
     NET_LOG(EVENT) << "Show signin mode from: " << source << ": Network '"
                    << NetworkId(default_network)
                    << "' is in a non portal state: " << portal_state;
@@ -157,29 +134,21 @@ void NetworkPortalSigninController::ShowSignin(SigninSource source) {
       ShowSigninDialog(url);
       break;
     case SigninMode::kNormalTab:
-      ShowTab(ProfileManager::GetActiveUserProfile(), url);
+      ShowActiveProfileTab(url);
       break;
     case SigninMode::kSigninDefault: {
-      if (chromeos::features::IsCaptivePortalPopupWindowEnabled()) {
-        // An OTR profile will be used with extensions enabled and all proxies
-        // disabled by the proxy service.
-        ShowSigninWindow(url);
-      } else {
-        ShowTab(GetOTROrActiveProfile(), url);
-      }
+      // An OTR profile will be used with extensions enabled and all proxies
+      // disabled by the proxy service.
+      ShowSigninWindow(url);
       break;
     }
     case SigninMode::kIncognitoDisabledByPolicy:
-      ABSL_FALLTHROUGH_INTENDED;
+      ShowTab(ProfileManager::GetActiveUserProfile(), url);
+      break;
     case SigninMode::kIncognitoDisabledByParentalControls: {
-      if (chromeos::features::IsCaptivePortalPopupWindowEnabled()) {
-        // Since the signin window enables extensions and disables navigation,
-        // no special handling is required when Incognito browsing is disabled
-        // by policy.
-        ShowSigninWindow(url);
-      } else {
-        ShowTab(ProfileManager::GetActiveUserProfile(), url);
-      }
+      // Supervised users require SupervisedUserNavigationThrottle, now
+      // available on OTR profiles.
+      ShowSigninWindow(url);
       break;
     }
   }
@@ -199,15 +168,15 @@ NetworkPortalSigninController::GetSigninMode(
     return SigninMode::kSigninDialog;
   }
 
+  if (user_manager::UserManager::Get()->IsLoggedInAsChildUser()) {
+    NET_LOG(DEBUG) << "GetSigninMode: Child User";
+    return SigninMode::kIncognitoDisabledByParentalControls;
+  }
+
   Profile* profile = ProfileManager::GetActiveUserProfile();
   if (!profile) {
     NET_LOG(DEBUG) << "GetSigninMode: No profile";
     return SigninMode::kSigninDialog;
-  }
-
-  // When showing a proxy auth window, use a normal tab with proxies enabled.
-  if (portal_state == NetworkState::PortalState::kProxyAuthRequired) {
-    return SigninMode::kNormalTab;
   }
 
   // This pref defaults to true, but if a policy is active the policy value
@@ -228,11 +197,6 @@ NetworkPortalSigninController::GetSigninMode(
       &availability);
   if (availability == policy::IncognitoModeAvailability::kDisabled) {
     return SigninMode::kIncognitoDisabledByPolicy;
-  }
-
-  if (IncognitoModePrefs::GetAvailability(profile->GetPrefs()) ==
-      policy::IncognitoModeAvailability::kDisabled) {
-    return SigninMode::kIncognitoDisabledByParentalControls;
   }
 
   return SigninMode::kSigninDefault;
@@ -310,7 +274,9 @@ void NetworkPortalSigninController::ShowSigninDialog(const GURL& url) {
 }
 
 void NetworkPortalSigninController::ShowSigninWindow(const GURL& url) {
-  chromeos::NetworkPortalSigninWindow::Get()->Show(url);
+  // Calls NetworkPortalSigninWindow::Show in the appropriate browser (Ash or
+  // Lacros).
+  ash::NewWindowDelegate::GetPrimary()->OpenCaptivePortalSignin(url);
 }
 
 void NetworkPortalSigninController::ShowTab(Profile* profile, const GURL& url) {
@@ -320,8 +286,20 @@ void NetworkPortalSigninController::ShowTab(Profile* profile, const GURL& url) {
   }
 
   NavigateParams params(displayer.browser(), url, ui::PAGE_TRANSITION_LINK);
+  // `captive_portal_window_type = kTab` is used on desktop Chrome to identify
+  // captive portal signin tabs. This disables HTTPS-Upgrades for the captive
+  // portal navigation.
+  params.captive_portal_window_type =
+      captive_portal::CaptivePortalWindowType::kTab;
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   ::Navigate(&params);
+}
+
+void NetworkPortalSigninController::ShowActiveProfileTab(const GURL& url) {
+  // Opens a new tab the appropriate browser (Ash or Lacros).
+  ash::NewWindowDelegate::GetPrimary()->OpenUrl(
+      url, NewWindowDelegate::OpenUrlFrom::kUserInteraction,
+      NewWindowDelegate::Disposition::kNewForegroundTab);
 }
 
 std::ostream& operator<<(

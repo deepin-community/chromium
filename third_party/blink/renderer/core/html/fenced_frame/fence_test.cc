@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_fenceevent_string.h"
 #include "third_party/blink/renderer/core/testing/page_test_base.h"
 #include "third_party/blink/renderer/core/testing/sim/sim_test.h"
+#include "third_party/blink/renderer/platform/testing/runtime_enabled_features_test_helpers.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 
 namespace blink {
@@ -36,13 +37,12 @@ TEST_F(FenceTest, ReportPrivateAggregationEvent) {
       MakeGarbageCollected<Fence>(*(GetDocument().GetFrame()->DomWindow()));
   fence->reportPrivateAggregationEvent("event", scope.GetExceptionState());
 
-  // We expect this to make it past all the other checks, except for the
-  // reporting metadata check. Since this is loaded in a vacuum and not the
-  // result of an ad auction, we expect it to output the reporting metadata
-  // error.
+  // We expect this to make it past all the other checks, except for the fenced
+  // frame properties check. Since this is loaded in a vacuum and not the result
+  // of an ad auction, we expect it to output the reporting metadata error.
   EXPECT_EQ(ConsoleMessages().size(), 1u);
   EXPECT_EQ(ConsoleMessages().front(),
-            "This frame did not register reporting metadata.");
+            "This frame was not loaded with a FencedFrameConfig.");
 }
 
 TEST_F(FenceTest, ReportPrivateAggregationReservedEvent) {

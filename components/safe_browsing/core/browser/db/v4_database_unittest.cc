@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "components/safe_browsing/core/browser/db/v4_database.h"
+
 #include <unordered_map>
 #include <utility>
 
@@ -9,12 +11,12 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/test/test_simple_task_runner.h"
-#include "components/safe_browsing/core/browser/db/v4_database.h"
 #include "components/safe_browsing/core/browser/db/v4_store.h"
 #include "testing/platform_test.h"
 
@@ -27,8 +29,7 @@ class FakeV4Store : public V4Store {
               const bool hash_prefix_matches)
       : V4Store(
             task_runner,
-            base::FilePath(store_path.value() + FILE_PATH_LITERAL(".store")),
-            std::make_unique<InMemoryHashPrefixMap>()),
+            base::FilePath(store_path.value() + FILE_PATH_LITERAL(".store"))),
         hash_prefix_should_match_(hash_prefix_matches) {}
 
   HashPrefixStr GetMatchingHashPrefix(const FullHashStr& full_hash) override {
@@ -110,13 +111,13 @@ class V4DatabaseTest : public PlatformTest {
 
   void SetupInfoMapAndExpectedState() {
     list_infos_.emplace_back(true, "win_url_malware", win_malware_id_,
-                             SB_THREAT_TYPE_URL_MALWARE);
+                             SBThreatType::SB_THREAT_TYPE_URL_MALWARE);
     expected_identifiers_.push_back(win_malware_id_);
     expected_store_paths_.push_back(
         database_dirname_.AppendASCII("win_url_malware.store"));
 
     list_infos_.emplace_back(true, "linux_url_malware", linux_malware_id_,
-                             SB_THREAT_TYPE_URL_MALWARE);
+                             SBThreatType::SB_THREAT_TYPE_URL_MALWARE);
     expected_identifiers_.push_back(linux_malware_id_);
     expected_store_paths_.push_back(
         database_dirname_.AppendASCII("linux_url_malware.store"));
@@ -221,7 +222,8 @@ class V4DatabaseTest : public PlatformTest {
   DatabaseUpdatedCallback callback_db_updated_;
   NewDatabaseReadyCallback callback_db_ready_;
   StoreStateMap expected_store_state_map_;
-  std::unordered_map<ListIdentifier, V4Store*> old_stores_map_;
+  std::unordered_map<ListIdentifier, raw_ptr<V4Store, CtnExperimental>>
+      old_stores_map_;
   const ListIdentifier linux_malware_id_, win_malware_id_;
 };
 

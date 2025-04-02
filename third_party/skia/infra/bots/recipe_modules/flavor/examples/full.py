@@ -54,8 +54,6 @@ def RunSteps(api):
 
     if 'Lottie' in builder:
       api.flavor.install(lotties=True)
-    elif 'Mskp' in builder:
-      api.flavor.install(mskps=True)
     elif all(v in builder for v in ['Perf', 'Android', 'CPU']):
       api.flavor.install(skps=True, images=True, svgs=True,
                          resources=True, texttraces=True)
@@ -81,11 +79,11 @@ def RunSteps(api):
 
 TEST_BUILDERS = [
   'Perf-Android-Clang-AndroidOne-GPU-Mali400MP2-arm-Release-All-Android_SkottieTracing',
-  'Perf-Android-Clang-GalaxyS7_G930FD-GPU-MaliT880-arm64-Debug-All-Android',
-  'Perf-Android-Clang-NVIDIA_Shield-CPU-TegraX1-arm64-Release-All-Android',
-  'Perf-Android-Clang-Nexus5x-GPU-Adreno418-arm64-Debug-All-Android',
-  'Perf-Android-Clang-Pixel2XL-GPU-Adreno540-arm64-Release-All-Android_Skpbench_Mskp',
   'Perf-Android-Clang-GalaxyS20-GPU-MaliG77-arm64-Release-All-Android_Vulkan',
+  'Perf-Android-Clang-GalaxyS7_G930FD-GPU-MaliT880-arm64-Debug-All-Android',
+  'Perf-Android-Clang-MokeyGo32-CPU-Cortex-arm-Release-All-Android',
+  'Perf-Android-Clang-MotoG73-GPU-BXM_8_256-arm64-Release-All-Android',
+  'Perf-Android-Clang-Nexus5x-GPU-Adreno418-arm64-Debug-All-Android',
   'Perf-Android-Clang-Pixel6-GPU-Adreno620-arm64-Release-All-Android',
   'Perf-ChromeOS-Clang-SamsungChromebookPlus-GPU-MaliT860-arm-Release-All',
   'Perf-Debian10-Clang-GCE-CPU-AVX2-x86_64-Debug-All-MSAN',

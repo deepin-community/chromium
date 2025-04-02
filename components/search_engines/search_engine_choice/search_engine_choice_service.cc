@@ -4,27 +4,38 @@
 
 #include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
 
+#include <inttypes.h>
+
 #include <memory>
+#include <optional>
+#include <variant>
 
 #include "base/callback_list.h"
 #include "base/check_deref.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
 #include "base/debug/dump_without_crashing.h"
+#include "base/feature_list.h"
 #include "base/json/json_reader.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/no_destructor.h"
+#include "base/strings/string_util.h"
+#include "base/strings/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/time/time.h"
 #include "base/version.h"
-#include "build/chromeos_buildflags.h"
 #include "components/country_codes/country_codes.h"
+#include "components/crash/core/common/crash_key.h"
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/policy_constants.h"
-#include "components/pref_registry/pref_registry_syncable.h"
+#include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
-#include "components/search_engines/eea_countries_ids.h"
-#include "components/search_engines/search_engine_choice_utils.h"
+#include "components/regional_capabilities/regional_capabilities_service.h"
+#include "components/regional_capabilities/regional_capabilities_utils.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_metrics_service_accessor.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
+#include "components/search_engines/search_engine_type.h"
 #include "components/search_engines/search_engines_pref_names.h"
 #include "components/search_engines/search_engines_switches.h"
 #include "components/search_engines/template_url_prepopulate_data.h"
@@ -32,10 +43,8 @@
 #include "components/signin/public/base/signin_switches.h"
 #include "components/version_info/version_info.h"
 
-#if BUILDFLAG(IS_ANDROID)
-#include "base/android/jni_android.h"
-#include "base/android/jni_string.h"
-#include "components/search_engines/android/jni_headers/SearchEngineChoiceService_jni.h"
+#if !BUILDFLAG(IS_FUCHSIA)
+#include "components/variations/service/variations_service.h"  // nogncheck
 #endif
 
 namespace search_engines {
@@ -71,8 +80,7 @@ bool IsSearchEngineChoiceScreenAllowedByPolicy(
 
 bool IsSetOrBlockedByPolicy(const TemplateURL* default_search_engine) {
   return !default_search_engine ||
-         default_search_engine->created_by_policy() ==
-             TemplateURLData::CreatedByPolicy::kDefaultSearchProvider;
+         default_search_engine->CreatedByDefaultSearchProviderPolicy();
 }
 
 bool IsDefaultSearchProviderSetOrBlockedByPolicy(
@@ -107,6 +115,17 @@ void MarkSearchEngineChoiceCompleted(PrefService& prefs) {
                   version_info::GetVersionNumber());
 }
 
+std::optional<base::Time> GetChoiceScreenCompletionTimestamp(
+    PrefService& prefs) {
+  if (!prefs.HasPrefPath(
+          prefs::kDefaultSearchProviderChoiceScreenCompletionTimestamp)) {
+    return std::nullopt;
+  }
+
+  return base::Time::FromDeltaSinceWindowsEpoch(base::Seconds(prefs.GetInt64(
+      prefs::kDefaultSearchProviderChoiceScreenCompletionTimestamp)));
+}
+
 // Returns true if the version is valid and can be compared to the current
 // Chrome version.
 bool IsValidVersionFormat(const base::Version& version) {
@@ -126,8 +145,10 @@ bool IsValidVersionFormat(const base::Version& version) {
 // Logs the outcome of a reprompt attempt for a specific key (either a specific
 // country or the wildcard).
 void LogSearchRepromptKeyHistograms(RepromptResult result, bool is_wildcard) {
-  // `RepromptResult::kInvalidDictionary` is recorded separately.
+  // `RepromptResult::kInvalidDictionary` and `RepromptResult::kNoReprompt` are
+  // recorded separately.
   CHECK_NE(result, RepromptResult::kInvalidDictionary);
+  CHECK_NE(result, RepromptResult::kNoReprompt);
 
   base::UmaHistogramEnumeration(kSearchEngineChoiceRepromptHistogram, result);
   if (is_wildcard) {
@@ -139,22 +160,58 @@ void LogSearchRepromptKeyHistograms(RepromptResult result, bool is_wildcard) {
   }
 }
 
-using NativeCallbackType = base::OnceCallback<void(int)>;
+int GetVariationsCountryId(variations::VariationsService* variations_service) {
+#if BUILDFLAG(IS_FUCHSIA)
+  // We can't add a dependency from Fuchsia to
+  // `//components/variations/service`.
+  return country_codes::kCountryIDUnknown;
+#else
+  return variations_service
+             ? country_codes::CountryStringToCountryID(
+                   base::ToUpperASCII(variations_service->GetLatestCountry()))
+             : country_codes::kCountryIDUnknown;
+#endif
+}
 
 }  // namespace
 
-SearchEngineChoiceService::SearchEngineChoiceService(PrefService& profile_prefs,
-                                                     int variations_country_id)
+SearchEngineChoiceService::SearchEngineChoiceService(
+    PrefService& profile_prefs,
+    PrefService* local_state,
+    regional_capabilities::RegionalCapabilitiesService& regional_capabilities,
+    bool is_profile_eligbile_for_dse_guest_propagation,
+    int variations_country_id)
     : profile_prefs_(profile_prefs),
+      local_state_(local_state),
+      regional_capabilities_service_(regional_capabilities),
       variations_country_id_(variations_country_id) {
+#if BUILDFLAG(IS_IOS) || BUILDFLAG(IS_ANDROID)
+  // No guest mode on IOS or Android.
+  CHECK(!is_profile_eligible_for_dse_guest_propagation_);
+#endif
+  is_profile_eligible_for_dse_guest_propagation_ =
+      is_profile_eligbile_for_dse_guest_propagation &&
+      base::FeatureList::IsEnabled(
+          switches::kSearchEngineChoiceGuestExperience) &&
+      regional_capabilities_service_->IsInEeaCountry();
+
+  ProcessPendingChoiceScreenDisplayState();
   PreprocessPrefsForReprompt();
 }
 
-SearchEngineChoiceService::~SearchEngineChoiceService() = default;
+SearchEngineChoiceService::SearchEngineChoiceService(
+    PrefService& profile_prefs,
+    PrefService* local_state,
+    regional_capabilities::RegionalCapabilitiesService& regional_capabilities,
+    bool is_profile_eligible_for_dse_guest_propagation,
+    variations::VariationsService* variations_service)
+    : SearchEngineChoiceService(profile_prefs,
+                                local_state,
+                                regional_capabilities,
+                                is_profile_eligible_for_dse_guest_propagation,
+                                GetVariationsCountryId(variations_service)) {}
 
-bool SearchEngineChoiceService::ShouldShowUpdatedSettings() {
-  return IsChoiceScreenFlagEnabled(ChoicePromo::kAny);
-}
+SearchEngineChoiceService::~SearchEngineChoiceService() = default;
 
 SearchEngineChoiceScreenConditions
 SearchEngineChoiceService::GetStaticChoiceScreenConditions(
@@ -166,21 +223,6 @@ SearchEngineChoiceService::GetStaticChoiceScreenConditions(
   // TODO(b/319050536): Remove the function declaration on these platforms.
   return SearchEngineChoiceScreenConditions::kUnsupportedBrowserType;
 #else
-  if (!IsChoiceScreenFlagEnabled(ChoicePromo::kAny)) {
-    return SearchEngineChoiceScreenConditions::kFeatureSuppressed;
-  }
-
-#if !BUILDFLAG(IS_IOS)
-  // `prefs::kDefaultSearchProviderChoicePending` does not get set on
-  // iOS. Instead, the iOS-specific wrapper
-  // `ShouldDisplaySearchEngineChoiceScreen()` handles checking whether
-  // the screen should be displayed based on the promo type.
-  if (switches::kSearchEngineChoiceTriggerForTaggedProfilesOnly.Get() &&
-      !profile_prefs_->GetBoolean(prefs::kDefaultSearchProviderChoicePending)) {
-    return SearchEngineChoiceScreenConditions::kProfileOutOfScope;
-  }
-#endif
-
   if (!is_regular_profile) {
     // Naming not exactly accurate, but still reflect the fact that incognito,
     // kiosk, etc. are not supported and belongs in this bucked more than in
@@ -200,10 +242,7 @@ SearchEngineChoiceService::GetStaticChoiceScreenConditions(
     return SearchEngineChoiceScreenConditions::kAlreadyCompleted;
   }
 
-  int country_id = GetCountryId();
-  DVLOG(1) << "Checking country for choice screen, found: "
-           << country_codes::CountryIDToCountryString(country_id);
-  if (!IsEeaChoiceCountry(country_id)) {
+  if (!regional_capabilities_service_->IsInEeaCountry()) {
     return SearchEngineChoiceScreenConditions::kNotInRegionalScope;
   }
 
@@ -230,6 +269,11 @@ SearchEngineChoiceService::GetDynamicChoiceScreenConditions(
   // TODO(b/319050536): Remove the function declaration on these platforms.
   return SearchEngineChoiceScreenConditions::kUnsupportedBrowserType;
 #else
+  // Don't show the dialog if the choice has already been made.
+  if (IsSearchEngineChoiceCompleted(*profile_prefs_)) {
+    return SearchEngineChoiceScreenConditions::kAlreadyCompleted;
+  }
+
   // Don't show the dialog if the default search engine is set by an extension.
   if (template_url_service.IsExtensionControlledDefaultSearch()) {
     return SearchEngineChoiceScreenConditions::kExtensionControlled;
@@ -247,6 +291,11 @@ SearchEngineChoiceService::GetDynamicChoiceScreenConditions(
     return SearchEngineChoiceScreenConditions::kControlledByPolicy;
   }
   CHECK(default_search_engine);
+
+  if (default_search_engine->GetEngineType(
+          template_url_service.search_terms_data()) != SEARCH_ENGINE_GOOGLE) {
+    return SearchEngineChoiceScreenConditions::kHasNonGoogleSearchEngine;
+  }
 
   if (!template_url_service.IsPrepopulatedOrDefaultProviderByPolicy(
           default_search_engine)) {
@@ -274,34 +323,12 @@ SearchEngineChoiceService::GetDynamicChoiceScreenConditions(
         kHasRemovedPrepopulatedSearchEngine;
   }
 
-  if (IsSearchEngineChoiceCompleted(*profile_prefs_)) {
-    return SearchEngineChoiceScreenConditions::kAlreadyCompleted;
-  }
-
   return SearchEngineChoiceScreenConditions::kEligible;
 #endif
 }
 
 int SearchEngineChoiceService::GetCountryId() {
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kSearchEngineChoiceCountry)) {
-    return country_codes::CountryStringToCountryID(
-        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-            switches::kSearchEngineChoiceCountry));
-  }
-
-  bool force_eea_country =
-      switches::kSearchEngineChoiceTriggerWithForceEeaCountry.Get();
-  if (force_eea_country) {
-    // `kSearchEngineChoiceTriggerWithForceEeaCountry` forces the search engine
-    // choice country to Belgium.
-    return country_codes::CountryStringToCountryID("BE");
-  }
-
-  if (!country_id_cache_.has_value()) {
-    country_id_cache_ = GetCountryIdInternal();
-  }
-  return *country_id_cache_;
+  return regional_capabilities_service_->GetCountryId();
 }
 
 void SearchEngineChoiceService::RecordChoiceMade(
@@ -309,12 +336,8 @@ void SearchEngineChoiceService::RecordChoiceMade(
     TemplateURLService* template_url_service) {
   CHECK_NE(choice_location, ChoiceMadeLocation::kOther);
 
-  if (!IsChoiceScreenFlagEnabled(ChoicePromo::kAny)) {
-    return;
-  }
-
   // Don't modify the pref if the user is not in the EEA region.
-  if (!IsEeaChoiceCountry(GetCountryId())) {
+  if (!regional_capabilities_service_->IsInEeaCountry()) {
     return;
   }
 
@@ -324,20 +347,100 @@ void SearchEngineChoiceService::RecordChoiceMade(
   }
 
   RecordChoiceScreenDefaultSearchProviderType(
-      GetDefaultSearchEngineType(CHECK_DEREF(template_url_service)));
+      GetDefaultSearchEngineType(CHECK_DEREF(template_url_service)),
+      choice_location);
   MarkSearchEngineChoiceCompleted(*profile_prefs_);
+}
 
-  if (profile_prefs_->HasPrefPath(prefs::kDefaultSearchProviderChoicePending)) {
-    DVLOG(1) << "Choice made, removing profile tag.";
-    profile_prefs_->ClearPref(prefs::kDefaultSearchProviderChoicePending);
+void SearchEngineChoiceService::MaybeRecordChoiceScreenDisplayState(
+    const ChoiceScreenDisplayState& display_state,
+    bool is_from_cached_state) {
+  if (!IsEeaChoiceCountry(display_state.country_id)) {
+    // Tests or command line can force this, but we want to avoid polluting the
+    // histograms with unwanted country data.
+    return;
+  }
+
+  // This block adds some debugging data for b/344899110, where the method
+  // is called from the choice moment while a display state is already cached.
+  // TODO(b/344899110): Clean up the debugging info when the bug is fixed.
+  if (!is_from_cached_state) {
+    if (!display_state_record_caller_) {
+      CHECK(!profile_prefs_->HasPrefPath(
+                prefs::kDefaultSearchProviderPendingChoiceScreenDisplayState),
+            base::NotFatalUntil::M131);
+      display_state_record_caller_ =
+          std::make_unique<base::debug::StackTrace>();
+    } else {
+      // Recording a stack trace to crash keys, based on
+      // https://crsrc.org/c/docs/debugging_with_crash_keys.md
+      static crash_reporter::CrashKeyString<1024> caller_trace_key(
+          "ChoiceService-og_caller_trace");
+      crash_reporter::SetCrashKeyStringToStackTrace(
+          &caller_trace_key, *display_state_record_caller_.get());
+
+      SCOPED_CRASH_KEY_BOOL(
+          "ChoiceService", "ds_pref_has_value",
+          profile_prefs_->HasPrefPath(
+              prefs::kDefaultSearchProviderPendingChoiceScreenDisplayState));
+
+      std::optional<ChoiceScreenDisplayState> already_cached_display_state =
+          ChoiceScreenDisplayState::FromDict(profile_prefs_->GetDict(
+              prefs::kDefaultSearchProviderPendingChoiceScreenDisplayState));
+      std::optional<base::Time> completion_time =
+          GetChoiceScreenCompletionTimestamp(profile_prefs_.get());
+
+      SCOPED_CRASH_KEY_STRING64(
+          "ChoiceService", "choice_time_delta",
+          completion_time.has_value()
+              ? base::StringPrintf("%" PRId64 "ms",
+                                   (base::Time::Now() - completion_time.value())
+                                       .InMilliseconds())
+              : "<null>");
+      SCOPED_CRASH_KEY_STRING32(
+          "ChoiceService", "screen_items_equal",
+          already_cached_display_state.has_value()
+              ? (already_cached_display_state.value().search_engines ==
+                         display_state.search_engines
+                     ? "yes"
+                     : "no")
+              : "no value");
+
+      NOTREACHED(base::NotFatalUntil::M135);
+      caller_trace_key.Clear();
+    }
+  }
+
+  if (!is_from_cached_state &&
+      display_state.selected_engine_index.has_value()) {
+    RecordChoiceScreenSelectedIndex(
+        display_state.selected_engine_index.value());
+  }
+
+  if (display_state.country_id != variations_country_id_) {
+    // Not recording if adding position data, which can be used as a proxy for
+    // the profile country, would add new hard to control location info to a
+    // logs session.
+    if (!is_from_cached_state) {
+      // Persist the data so we can attempt to send it later.
+      RecordChoiceScreenPositionsCountryMismatch(true);
+      profile_prefs_->SetDict(
+          prefs::kDefaultSearchProviderPendingChoiceScreenDisplayState,
+          display_state.ToDict());
+    }
+    return;
+  }
+
+  RecordChoiceScreenPositions(display_state.search_engines);
+  if (is_from_cached_state) {
+    profile_prefs_->ClearPref(
+        prefs::kDefaultSearchProviderPendingChoiceScreenDisplayState);
+  } else {
+    RecordChoiceScreenPositionsCountryMismatch(false);
   }
 }
 
 void SearchEngineChoiceService::PreprocessPrefsForReprompt() {
-  if (!IsChoiceScreenFlagEnabled(ChoicePromo::kAny)) {
-    return;
-  }
-
   // Allow re-triggering the choice screen for testing the screen itself.
   // This flag is deliberately only clearing the prefs instead of more
   // forcefully triggering the screen because this allows to more easily test
@@ -348,6 +451,24 @@ void SearchEngineChoiceService::PreprocessPrefsForReprompt() {
   if (command_line->HasSwitch(switches::kForceSearchEngineChoiceScreen)) {
     WipeSearchEngineChoicePrefs(profile_prefs_.get(),
                                 WipeSearchEngineChoiceReason::kCommandLineFlag);
+    return;
+  }
+
+  // Check parameters from `switches::kSearchEngineChoiceTriggerRepromptParams`.
+  const std::string reprompt_params =
+      switches::kSearchEngineChoiceTriggerRepromptParams.Get();
+  if (reprompt_params == switches::kSearchEngineChoiceNoRepromptString) {
+    base::UmaHistogramEnumeration(kSearchEngineChoiceRepromptHistogram,
+                                  RepromptResult::kNoReprompt);
+    return;
+  }
+
+  std::optional<base::Value::Dict> reprompt_params_json =
+      base::JSONReader::ReadDict(reprompt_params);
+  // Not a valid JSON.
+  if (!reprompt_params_json) {
+    base::UmaHistogramEnumeration(kSearchEngineChoiceRepromptHistogram,
+                                  RepromptResult::kInvalidDictionary);
     return;
   }
 
@@ -369,16 +490,6 @@ void SearchEngineChoiceService::PreprocessPrefsForReprompt() {
     return;
   }
 
-  // Check parameters from `switches::kSearchEngineChoiceTriggerRepromptParams`.
-  std::optional<base::Value::Dict> reprompt_params = base::JSONReader::ReadDict(
-      switches::kSearchEngineChoiceTriggerRepromptParams.Get());
-  if (!reprompt_params) {
-    // No valid reprompt parameters.
-    base::UmaHistogramEnumeration(kSearchEngineChoiceRepromptHistogram,
-                                  RepromptResult::kInvalidDictionary);
-    return;
-  }
-
   const base::Version& current_version = version_info::GetVersion();
   int country_id = GetCountryId();
   const std::string wildcard_string("*");
@@ -387,7 +498,7 @@ void SearchEngineChoiceService::PreprocessPrefsForReprompt() {
        {country_codes::CountryIDToCountryString(country_id), wildcard_string}) {
     bool is_wildcard = key == wildcard_string;
     const std::string* reprompt_version_string =
-        reprompt_params->FindString(key);
+        reprompt_params_json->FindString(key);
     if (!reprompt_version_string) {
       // No version string for this country. Fallback to the wildcard.
       LogSearchRepromptKeyHistograms(RepromptResult::kNoDictionaryKey,
@@ -426,63 +537,108 @@ void SearchEngineChoiceService::PreprocessPrefsForReprompt() {
   }
 }
 
-int SearchEngineChoiceService::GetCountryIdInternal() {
-  // `country_codes::kCountryIDAtInstall` may not be set yet.
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
-  // On Android, ChromeOS and Linux, `country_codes::kCountryIDAtInstall` is
-  // computed asynchronously using platform-specific signals, and may not be
-  // available yet.
-  if (!IsChoiceScreenFlagEnabled(ChoicePromo::kAny)) {
-    return country_codes::GetCountryIDFromPrefs(&profile_prefs_.get());
+void SearchEngineChoiceService::ProcessPendingChoiceScreenDisplayState() {
+  if (!profile_prefs_->HasPrefPath(
+          prefs::kDefaultSearchProviderPendingChoiceScreenDisplayState)) {
+    return;
   }
 
-  if (profile_prefs_->HasPrefPath(country_codes::kCountryIDAtInstall)) {
-    return profile_prefs_->GetInteger(country_codes::kCountryIDAtInstall);
-  }
-  // If `country_codes::kCountryIDAtInstall` is not available, attempt to
-  // compute it at startup. On success, it is saved to prefs and never changes
-  // later. Until then, fall back to `country_codes::GetCurrentCountryID()`.
-#if BUILDFLAG(IS_ANDROID)
-  // On Android get it from Play API in Java.
-  // Usage of `WeakPtr` is crucial here, as `SearchEngineChoiceService` is
-  // not guaranteed to be alive when the response from Java arrives.
-  auto heap_callback = std::make_unique<NativeCallbackType>(base::BindOnce(
-      &SearchEngineChoiceService::ProcessGetCountryResponseFromPlayApi,
-      weak_ptr_factory_.GetWeakPtr()));
-  // The ownership of the callback on the heap is passed to Java. It will be
-  // deleted by JNI_SearchEngineChoiceService_ProcessCountryFromPlayApi.
-  Java_SearchEngineChoiceService_requestCountryFromPlayApi(
-      base::android::AttachCurrentThread(),
-      reinterpret_cast<intptr_t>(heap_callback.release()));
-#else  // BUILDFLAG(IS_ANDROID)
-  // On ChromeOS and Linux, get it from `VariationsService`, by polling at every
-  // startup until it is found.
-  if (variations_country_id_ != country_codes::kCountryIDUnknown) {
-    profile_prefs_->SetInteger(country_codes::kCountryIDAtInstall,
-                               variations_country_id_);
-  }
-#endif
+  if (!local_state_) {
+    // `g_browser_process->local_state()` is null in unit tests unless properly
+    // set up.
+    CHECK_IS_TEST();
+  } else if (!SearchEngineChoiceMetricsServiceAccessor::
+                 IsMetricsReportingEnabled(local_state_)) {
+    // The display state should not be cached when UMA is disabled.
 
-  // The preference may have been updated, so we need to re-check.
-  if (!profile_prefs_->HasPrefPath(country_codes::kCountryIDAtInstall)) {
-    // Couldn't get the value from the asynchronous API, fallback to locale.
-    return country_codes::GetCurrentCountryID();
+    profile_prefs_->ClearPref(
+        prefs::kDefaultSearchProviderPendingChoiceScreenDisplayState);
+    return;
   }
-  return profile_prefs_->GetInteger(country_codes::kCountryIDAtInstall);
 
-#else
-  // On other platforms, `country_codes::kCountryIDAtInstall` is computed
-  // synchronously inside `country_codes::GetCountryIDFromPrefs()`.
-  return country_codes::GetCountryIDFromPrefs(&profile_prefs_.get());
+  const base::Value::Dict& dict = profile_prefs_->GetDict(
+      prefs::kDefaultSearchProviderPendingChoiceScreenDisplayState);
+  std::optional<ChoiceScreenDisplayState> display_state =
+      ChoiceScreenDisplayState::FromDict(dict);
+  if (display_state.has_value()) {
+    // Check if the obtained display state is still valid.
+    std::optional<base::Time> completion_time =
+        GetChoiceScreenCompletionTimestamp(profile_prefs_.get());
+    constexpr base::TimeDelta kDisplayStateMaxPendingDuration = base::Days(7);
+    if (base::Time::Now() - completion_time.value_or(base::Time::Min()) >
+        kDisplayStateMaxPendingDuration) {
+      display_state = std::nullopt;
+    }
+  }
+
+  if (!display_state.has_value()) {
+    profile_prefs_->ClearPref(
+        prefs::kDefaultSearchProviderPendingChoiceScreenDisplayState);
+    return;
+  }
+
+  MaybeRecordChoiceScreenDisplayState(display_state.value(),
+                                      /*is_from_cached_state=*/true);
+}
+
+void SearchEngineChoiceService::ResetState() {
+  display_state_record_caller_.reset();
+}
+
+// static
+void SearchEngineChoiceService::RegisterLocalStatePrefs(
+    PrefRegistrySimple* registry) {
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+  registry->RegisterInt64Pref(
+      prefs::kDefaultSearchProviderGuestModePrepopulatedId, 0);
 #endif
 }
 
-#if BUILDFLAG(IS_ANDROID)
-void SearchEngineChoiceService::ProcessGetCountryResponseFromPlayApi(
-    int country_id) {
-  profile_prefs_->SetInteger(country_codes::kCountryIDAtInstall, country_id);
+void SearchEngineChoiceService::ClearCountryIdCacheForTesting() {
+  CHECK_IS_TEST();
+  regional_capabilities_service_->ClearCountryIdCacheForTesting();  // IN-TEST
 }
-#endif
+
+bool SearchEngineChoiceService::IsProfileEligibleForDseGuestPropagation()
+    const {
+  return is_profile_eligible_for_dse_guest_propagation_;
+}
+
+std::optional<int>
+SearchEngineChoiceService::GetSavedSearchEngineBetweenGuestSessions() const {
+  if (!IsProfileEligibleForDseGuestPropagation()) {
+    return std::nullopt;
+  }
+  if (local_state_->HasPrefPath(
+          prefs::kDefaultSearchProviderGuestModePrepopulatedId)) {
+    return local_state_->GetInt64(
+        prefs::kDefaultSearchProviderGuestModePrepopulatedId);
+  } else {
+    return std::nullopt;
+  }
+}
+
+void SearchEngineChoiceService::SetSavedSearchEngineBetweenGuestSessions(
+    std::optional<int> prepopulated_id) {
+  CHECK(!prepopulated_id.has_value() ||
+        (prepopulated_id > 0 &&
+         prepopulated_id <=
+             TemplateURLPrepopulateData::kMaxPrepopulatedEngineID));
+  CHECK(IsProfileEligibleForDseGuestPropagation());
+
+  if (prepopulated_id == GetSavedSearchEngineBetweenGuestSessions()) {
+    return;
+  }
+
+  if (prepopulated_id.has_value()) {
+    local_state_->SetInt64(prefs::kDefaultSearchProviderGuestModePrepopulatedId,
+                           *prepopulated_id);
+  } else {
+    local_state_->ClearPref(
+        prefs::kDefaultSearchProviderGuestModePrepopulatedId);
+  }
+  observers_.Notify(&Observer::OnSavedGuestSearchChanged);
+}
 
 // static
 void MarkSearchEngineChoiceCompletedForTesting(PrefService& prefs) {
@@ -491,28 +647,3 @@ void MarkSearchEngineChoiceCompletedForTesting(PrefService& prefs) {
 }
 
 }  // namespace search_engines
-
-#if BUILDFLAG(IS_ANDROID)
-void JNI_SearchEngineChoiceService_ProcessCountryFromPlayApi(
-    JNIEnv* env,
-    jlong ptr_to_native_callback,
-    const base::android::JavaParamRef<jstring>& j_device_country) {
-  // Using base::WrapUnique ensures that the callback is deleted when this goes
-  // out of scope.
-  std::unique_ptr<search_engines::NativeCallbackType> heap_callback =
-      base::WrapUnique(reinterpret_cast<search_engines::NativeCallbackType*>(
-          ptr_to_native_callback));
-  CHECK(heap_callback);
-  if (!j_device_country) {
-    return;
-  }
-  std::string device_country =
-      base::android::ConvertJavaStringToUTF8(env, j_device_country);
-  int device_country_id =
-      country_codes::CountryStringToCountryID(device_country);
-  if (device_country_id == country_codes::kCountryIDUnknown) {
-    return;
-  }
-  std::move(*heap_callback).Run(device_country_id);
-}
-#endif

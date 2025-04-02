@@ -167,7 +167,6 @@ void HeartbeatRegistrationHelper::OnRegisterAttemptComplete(
     case gcm::GCMClient::TTL_EXCEEDED:
     default:
       NOTREACHED() << "Unexpected GCMDriver::Register() result: " << result;
-      break;
   }
 }
 
@@ -422,7 +421,7 @@ void HeartbeatScheduler::ShutdownHandler() {
 }
 
 void HeartbeatScheduler::OnStoreReset() {
-  // TODO(crbug.com/661660): Tell server that |registration_id_| is no longer
+  // TODO(crbug.com/40491756): Tell server that |registration_id_| is no longer
   // valid. See also crbug.com/516375.
   if (!registration_helper_) {
     ShutdownGCM();

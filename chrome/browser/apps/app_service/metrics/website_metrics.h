@@ -121,8 +121,8 @@ class WebsiteMetrics : public BrowserListObserver,
   void OnWindowDestroying(aura::Window* window) override;
 
   // history::HistoryServiceObserver:
-  void OnURLsDeleted(history::HistoryService* history_service,
-                     const history::DeletionInfo& deletion_info) override;
+  void OnHistoryDeletions(history::HistoryService* history_service,
+                          const history::DeletionInfo& deletion_info) override;
   void HistoryServiceBeingDeleted(
       history::HistoryService* history_service) override;
 
@@ -265,7 +265,8 @@ class WebsiteMetrics : public BrowserListObserver,
   BrowserTabStripTracker browser_tab_strip_tracker_;
 
   // The map from the window to the active tab contents.
-  base::flat_map<aura::Window*, content::WebContents*> window_to_web_contents_;
+  base::flat_map<aura::Window*, raw_ptr<content::WebContents, CtnExperimental>>
+      window_to_web_contents_;
 
   // The map from the root window's activation client to windows.
   std::map<wm::ActivationClient*,

@@ -22,9 +22,11 @@
 #include "include/private/base/SkTo.h"
 #include "src/core/SkFDot6.h"
 #include "src/core/SkSwizzlePriv.h"
+#include "src/core/SkTHash.h"
 
 #include <algorithm>
 #include <utility>
+#include <vector>
 
 #include <ft2build.h>
 #include <freetype/freetype.h>
@@ -1230,7 +1232,7 @@ void colrv1_transform(FT_Face face,
 
 bool colrv1_start_glyph(SkCanvas* canvas,
                         const SkSpan<SkColor>& palette,
-                        const SkColor foregroundColor,
+                        SkColor foregroundColor,
                         FT_Face face,
                         uint16_t glyphId,
                         FT_Color_Root_Transform rootTransform,
@@ -1406,7 +1408,7 @@ SkPath GetClipBoxPath(FT_Face face, uint16_t glyphId, bool untransformed) {
 
 bool colrv1_start_glyph(SkCanvas* canvas,
                         const SkSpan<SkColor>& palette,
-                        const SkColor foregroundColor,
+                        SkColor foregroundColor,
                         FT_Face face,
                         uint16_t glyphId,
                         FT_Color_Root_Transform rootTransform,
@@ -1569,13 +1571,9 @@ bool SkScalerContextFTUtils::drawCOLRv1Glyph(FT_Face face, const SkGlyph& glyph,
     }
 
     VisitedSet activePaints;
-    bool haveLayers =  colrv1_start_glyph(canvas, palette,
-                                          fForegroundColor,
-                                          face, glyph.getGlyphID(),
-                                          FT_COLOR_INCLUDE_ROOT_TRANSFORM,
-                                          &activePaints);
-    SkASSERTF(haveLayers, "Could not get COLRv1 layers from '%s'.", face->family_name);
-    return haveLayers;
+    return colrv1_start_glyph(canvas, palette, fForegroundColor,
+                              face, glyph.getGlyphID(),
+                              FT_COLOR_INCLUDE_ROOT_TRANSFORM, &activePaints);
 }
 #endif  // TT_SUPPORT_COLRV1
 

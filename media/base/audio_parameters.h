@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "base/atomicops.h"
 #include "base/compiler_specific.h"
 #include "base/numerics/checked_math.h"
 #include "base/time/time.h"
@@ -38,7 +39,7 @@ constexpr int kParametersAlignment = 16;
 // ****WARNING****: Do not change the field types or ordering of these fields
 // without checking that alignment is correct. The structs may be concurrently
 // accessed by both 32bit and 64bit process in shmem. http://crbug.com/781095.
-struct MEDIA_SHMEM_EXPORT ALIGNAS(kParametersAlignment)
+struct MEDIA_SHMEM_EXPORT alignas(kParametersAlignment)
     AudioInputBufferParameters {
   double volume;
   int64_t capture_time_us;     // base::TimeTicks in microseconds.
@@ -46,9 +47,12 @@ struct MEDIA_SHMEM_EXPORT ALIGNAS(kParametersAlignment)
   uint32_t glitch_count;
   uint32_t size;
   uint32_t id;
-  bool key_pressed;
+  // Intentionally using deprecated Atomic32 instead of std::atomic to keep the
+  // struct as a trivial type.
+  // TODO(https://crbug.com/40259737): Switch to atomic_ref once it's available.
+  base::subtle::Atomic32 has_unread_data;
 };
-struct MEDIA_SHMEM_EXPORT ALIGNAS(kParametersAlignment)
+struct MEDIA_SHMEM_EXPORT alignas(kParametersAlignment)
     AudioOutputBufferParameters {
   int64_t delay_us;            // base::TimeDelta in microseconds.
   int64_t delay_timestamp_us;  // base::TimeTicks in microseconds.
@@ -90,7 +94,7 @@ class AudioParameters;
 
 // These convenience function safely computes the size required for
 // |shared_memory_count| AudioInputBuffers, with enough memory for AudioBus
-// data, using |paremeters| (or alternatively |channels| and |frames|). The
+// data, using |parameters| (or alternatively |channels| and |frames|). The
 // functions not returning a CheckedNumeric will CHECK on overflow.
 MEDIA_SHMEM_EXPORT base::CheckedNumeric<uint32_t>
 ComputeAudioInputBufferSizeChecked(const AudioParameters& parameters,
@@ -188,6 +192,8 @@ class MEDIA_SHMEM_EXPORT AudioParameters {
 
   // Bitmasks to determine whether certain platform (typically hardware) audio
   // effects should be enabled.
+  // Ensure that EffectsMaskToString() is updated to match the content of this
+  // enumerator when it is updated.
   enum PlatformEffectsMask {
     NO_EFFECTS = 0x0,
     ECHO_CANCELLER = 1 << 0,
@@ -196,9 +202,7 @@ class MEDIA_SHMEM_EXPORT AudioParameters {
     HOTWORD = 1 << 3,
     NOISE_SUPPRESSION = 1 << 4,
     AUTOMATIC_GAIN_CONTROL = 1 << 5,
-    EXPERIMENTAL_ECHO_CANCELLER = 1 << 6,  // Indicates an echo canceller is
-                                           // available that should only
-                                           // experimentally be enabled.
+    // EXPERIMENTAL_ECHO_CANCELLER used to hold 1 << 6, but has been deprecated.
     MULTIZONE = 1 << 7,
     AUDIO_PREFETCH = 1 << 8,
     ALLOW_DSP_ECHO_CANCELLER = 1 << 9,
@@ -226,34 +230,41 @@ class MEDIA_SHMEM_EXPORT AudioParameters {
   };
 
   struct HardwareCapabilities {
-    HardwareCapabilities(int min_frames_per_buffer, int max_frames_per_buffer)
+    HardwareCapabilities(int min_frames_per_buffer,
+                         int max_frames_per_buffer,
+                         int default_frames_per_buffer,
+                         bool require_offload)
         : min_frames_per_buffer(min_frames_per_buffer),
           max_frames_per_buffer(max_frames_per_buffer),
-          bitstream_formats(0),
-          require_encapsulation(false) {}
+          default_frames_per_buffer(default_frames_per_buffer),
+          require_audio_offload(require_offload) {}
+    HardwareCapabilities(int min_frames_per_buffer, int max_frames_per_buffer)
+        : min_frames_per_buffer(min_frames_per_buffer),
+          max_frames_per_buffer(max_frames_per_buffer) {}
     HardwareCapabilities(int bitstream_formats, bool require_encapsulation)
-        : min_frames_per_buffer(0),
-          max_frames_per_buffer(0),
-          bitstream_formats(bitstream_formats),
+        : bitstream_formats(bitstream_formats),
           require_encapsulation(require_encapsulation) {}
-    HardwareCapabilities()
-        : min_frames_per_buffer(0),
-          max_frames_per_buffer(0),
-          bitstream_formats(0),
-          require_encapsulation(false) {}
+    HardwareCapabilities() = default;
 
     // Minimum and maximum buffer sizes supported by the audio hardware. Opening
     // a device with frames_per_buffer set to a value between min and max should
     // result in the audio hardware running close to this buffer size, values
     // above or below will be clamped to the min or max by the audio system.
     // Either value can be 0 and means that the min or max is not known.
-    int min_frames_per_buffer;
-    int max_frames_per_buffer;
+    int min_frames_per_buffer = 0;
+    int max_frames_per_buffer = 0;
+    // The default buffer size that the device will use when frames_per_buffer
+    // is not specified.  Can be `min_frames_per_buffer`,
+    // `max_frames_per_buffer`, or a value in between.  Can be 0 when the
+    // default is unknown.
+    int default_frames_per_buffer = 0;
     // Bitstream formats (OR'ed) supported by audio hardware.
-    int bitstream_formats;
+    int bitstream_formats = 0;
     // Bitstream will need to be encapsulated in IEC61937 to be
     // passed through to the audio hardware.
-    bool require_encapsulation;
+    bool require_encapsulation = false;
+    // Require audio processing offload.
+    bool require_audio_offload = false;
   };
 
   AudioParameters();
@@ -311,6 +322,9 @@ class MEDIA_SHMEM_EXPORT AudioParameters {
   bool IsFormatSupportedByHardware(Format format) const;
 
   bool RequireEncapsulation() const;
+
+  // Return true if offload is requested.
+  bool RequireOffload() const;
 
   void set_format(Format format) { format_ = format; }
   Format format() const { return format_; }

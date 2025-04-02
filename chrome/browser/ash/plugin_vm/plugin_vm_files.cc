@@ -4,13 +4,13 @@
 
 #include "chrome/browser/ash/plugin_vm/plugin_vm_files.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "ash/public/cpp/shelf_model.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/location.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_util.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -18,6 +18,7 @@
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
 #include "chrome/browser/ash/guest_os/guest_os_share_path.h"
+#include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_features.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
@@ -73,7 +74,7 @@ void FocusAllPluginVmWindows() {
   if (!item_controller) {
     return;
   }
-  for (auto* app_window : item_controller->windows()) {
+  for (AppWindowBase* app_window : item_controller->windows()) {
     app_window->Activate();
   }
 }
@@ -103,8 +104,8 @@ void LaunchPluginVmAppImpl(Profile* profile,
   request.set_vm_name(registration->VmName());
   request.set_container_name(registration->ContainerName());
   request.set_desktop_file_id(registration->DesktopFileId());
-  base::ranges::move(file_paths, google::protobuf::RepeatedFieldBackInserter(
-                                     request.mutable_files()));
+  std::ranges::move(file_paths, google::protobuf::RepeatedFieldBackInserter(
+                                    request.mutable_files()));
 
   ash::CiceroneClient::Get()->LaunchContainerApplication(
       std::move(request),
@@ -160,7 +161,7 @@ void LaunchPluginVmApp(Profile* profile,
     return std::move(callback).Run(LaunchPluginVmAppResult::FAILED,
                                    "Could not get PluginVmManager");
   }
-  auto* share_path = guest_os::GuestOsSharePath::GetForProfile(profile);
+  auto* share_path = guest_os::GuestOsSharePathFactory::GetForProfile(profile);
   base::FilePath vm_mount = ChromeOSBaseDirectory();
 
   std::vector<std::string> launch_args;

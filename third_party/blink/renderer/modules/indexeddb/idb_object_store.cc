@@ -33,12 +33,14 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/not_fatal_until.h"
 #include "base/numerics/safe_conversions.h"
 #include "third_party/blink/public/mojom/indexeddb/indexeddb.mojom-blink.h"
 #include "third_party/blink/public/platform/web_blob_info.h"
 #include "third_party/blink/renderer/bindings/core/v8/serialization/serialized_script_value_factory.h"
 #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_binding_for_modules.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_idb_get_all_records_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_union_idbcursor_idbindex_idbobjectstore.h"
 #include "third_party/blink/renderer/core/dom/dom_string_list.h"
 #include "third_party/blink/renderer/core/dom/events/native_event_listener.h"
@@ -54,7 +56,6 @@
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
-#include "third_party/blink/renderer/platform/wtf/shared_buffer.h"
 #include "v8/include/v8.h"
 
 namespace blink {
@@ -225,38 +226,11 @@ IDBRequest* IDBObjectStore::getAll(ScriptState* script_state,
                                    ExceptionState& exception_state) {
   TRACE_EVENT1("IndexedDB", "IDBObjectStore::getAllRequestSetup", "store_name",
                metadata_->name.Utf8());
-  IDBRequest::AsyncTraceState metrics(
-      IDBRequest::TypeForMetrics::kObjectStoreGetAll);
-  if (!max_count)
-    max_count = std::numeric_limits<uint32_t>::max();
 
-  if (IsDeleted()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kInvalidStateError,
-        IDBDatabase::kObjectStoreDeletedErrorMessage);
-    return nullptr;
-  }
-  if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kTransactionInactiveError,
-        transaction_->InactiveErrorMessage());
-    return nullptr;
-  }
-  IDBKeyRange* range = IDBKeyRange::FromScriptValue(
-      ExecutionContext::From(script_state), key_range, exception_state);
-  if (exception_state.HadException())
-    return nullptr;
-  if (!db().IsConnectionOpen()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      IDBDatabase::kDatabaseClosedErrorMessage);
-    return nullptr;
-  }
-
-  IDBRequest* request = IDBRequest::Create(
-      script_state, this, transaction_.Get(), std::move(metrics));
-  db().GetAll(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId, range,
-              max_count, false, request);
-  return request;
+  return CreateGetAllRequest(
+      IDBRequest::TypeForMetrics::kObjectStoreGetAll, script_state, key_range,
+      mojom::blink::IDBGetAllResultType::Values, max_count,
+      mojom::blink::IDBCursorDirection::Next, exception_state);
 }
 
 IDBRequest* IDBObjectStore::getAllKeys(ScriptState* script_state,
@@ -272,38 +246,30 @@ IDBRequest* IDBObjectStore::getAllKeys(ScriptState* script_state,
                                        ExceptionState& exception_state) {
   TRACE_EVENT1("IndexedDB", "IDBObjectStore::getAllKeysRequestSetup",
                "store_name", metadata_->name.Utf8());
-  IDBRequest::AsyncTraceState metrics(
-      IDBRequest::TypeForMetrics::kObjectStoreGetAllKeys);
-  if (!max_count)
-    max_count = std::numeric_limits<uint32_t>::max();
 
-  if (IsDeleted()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kInvalidStateError,
-        IDBDatabase::kObjectStoreDeletedErrorMessage);
-    return nullptr;
-  }
-  if (!transaction_->IsActive()) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kTransactionInactiveError,
-        transaction_->InactiveErrorMessage());
-    return nullptr;
-  }
-  IDBKeyRange* range = IDBKeyRange::FromScriptValue(
-      ExecutionContext::From(script_state), key_range, exception_state);
-  if (exception_state.HadException())
-    return nullptr;
-  if (!db().IsConnectionOpen()) {
-    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
-                                      IDBDatabase::kDatabaseClosedErrorMessage);
-    return nullptr;
-  }
+  return CreateGetAllRequest(
+      IDBRequest::TypeForMetrics::kObjectStoreGetAllKeys, script_state,
+      key_range, mojom::blink::IDBGetAllResultType::Keys, max_count,
+      mojom::blink::IDBCursorDirection::Next, exception_state);
+}
 
-  IDBRequest* request = IDBRequest::Create(
-      script_state, this, transaction_.Get(), std::move(metrics));
-  db().GetAll(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId, range,
-              max_count, true, request);
-  return request;
+IDBRequest* IDBObjectStore::getAllRecords(
+    ScriptState* script_state,
+    const IDBGetAllRecordsOptions* options,
+    ExceptionState& exception_state) {
+  TRACE_EVENT1("IndexedDB", "IDBObjectStore::getAllRecordsRequestSetup",
+               "store_name", metadata_->name.Utf8());
+
+  uint32_t max_count =
+      options->getCountOr(std::numeric_limits<uint32_t>::max());
+
+  mojom::blink::IDBCursorDirection direction =
+      IDBCursor::V8EnumToDirection(options->direction().AsEnum());
+
+  return CreateGetAllRequest(
+      IDBRequest::TypeForMetrics::kObjectStoreGetAllRecords, script_state,
+      options->query(), mojom::blink::IDBGetAllResultType::Records, max_count,
+      direction, exception_state);
 }
 
 static Vector<std::unique_ptr<IDBKey>> GenerateIndexKeysForValue(
@@ -314,9 +280,9 @@ static Vector<std::unique_ptr<IDBKey>> GenerateIndexKeysForValue(
   NonThrowableExceptionState exception_state;
 
   // Look up the key using the index's key path.
-  std::unique_ptr<IDBKey> index_key = ScriptValue::To<std::unique_ptr<IDBKey>>(
-      isolate, object_value, exception_state, store_metadata.key_path,
-      index_metadata.key_path);
+  std::unique_ptr<IDBKey> index_key = CreateIDBKeyFromValueAndKeyPaths(
+      isolate, object_value.V8Value(), store_metadata.key_path,
+      index_metadata.key_path, exception_state);
 
   // No match. (In the special case for a store with a key generator and in-line
   // keys and where the store and index key paths match, the back-end will
@@ -389,8 +355,8 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
   std::unique_ptr<IDBKey> key =
       key_value.IsUndefined()
           ? nullptr
-          : ScriptValue::To<std::unique_ptr<IDBKey>>(
-                script_state->GetIsolate(), key_value, exception_state);
+          : CreateIDBKeyFromValue(script_state->GetIsolate(),
+                                  key_value.V8Value(), exception_state);
   if (exception_state.HadException())
     return nullptr;
   return DoPut(script_state, put_mode,
@@ -478,8 +444,8 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
     value_wrapper.Clone(script_state, &clone);
 
     DCHECK(!key_path_key);
-    key_path_key = ScriptValue::To<std::unique_ptr<IDBKey>>(
-        script_state->GetIsolate(), clone, exception_state, key_path);
+    key_path_key = CreateIDBKeyFromValueAndKeyPath(
+        script_state->GetIsolate(), clone.V8Value(), key_path, exception_state);
     if (exception_state.HadException())
       return nullptr;
     if (!key_path_key || !key_path_key->IsEqual(key)) {
@@ -507,8 +473,9 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
       value_wrapper.Clone(script_state, &clone);
 
       DCHECK(!key_path_key);
-      key_path_key = ScriptValue::To<std::unique_ptr<IDBKey>>(
-          script_state->GetIsolate(), clone, exception_state, key_path);
+      key_path_key = CreateIDBKeyFromValueAndKeyPath(script_state->GetIsolate(),
+                                                     clone.V8Value(), key_path,
+                                                     exception_state);
       if (exception_state.HadException())
         return nullptr;
       if (key_path_key && !key_path_key->IsValid()) {
@@ -584,7 +551,7 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
   // Records 1KB to 1GB.
   UMA_HISTOGRAM_COUNTS_1M(
       "WebCore.IndexedDB.PutValueSize2",
-      base::saturated_cast<base::HistogramBase::Sample>(
+      base::saturated_cast<base::HistogramBase::Sample32>(
           value_wrapper.DataLengthBeforeWrapInBytes() / 1024));
 
   IDBRequest* request = IDBRequest::Create(
@@ -596,7 +563,6 @@ IDBRequest* IDBObjectStore::DoPut(ScriptState* script_state,
       value_wrapper.TakeWireBytes(), value_wrapper.TakeBlobInfo(),
       value_wrapper.TakeFileSystemAccessTransferTokens());
 
-  request->transit_blob_handles() = value_wrapper.TakeBlobDataHandles();
   transaction_->Put(
       Id(), std::move(idb_value), IDBKey::Clone(key), put_mode,
       std::move(index_keys),
@@ -973,7 +939,7 @@ void IDBObjectStore::deleteIndex(const String& name,
 
 IDBRequest* IDBObjectStore::openCursor(ScriptState* script_state,
                                        const ScriptValue& range,
-                                       const String& direction_string,
+                                       const V8IDBCursorDirection& v8_direction,
                                        ExceptionState& exception_state) {
   TRACE_EVENT1("IndexedDB", "IDBObjectStore::openCursorRequestSetup",
                "store_name", metadata_->name.Utf8());
@@ -993,7 +959,7 @@ IDBRequest* IDBObjectStore::openCursor(ScriptState* script_state,
   }
 
   mojom::IDBCursorDirection direction =
-      IDBCursor::StringToDirection(direction_string);
+      IDBCursor::V8EnumToDirection(v8_direction.AsEnum());
   IDBKeyRange* key_range = IDBKeyRange::FromScriptValue(
       ExecutionContext::From(script_state), range, exception_state);
   if (exception_state.HadException())
@@ -1023,10 +989,11 @@ IDBRequest* IDBObjectStore::openCursor(ScriptState* script_state,
   return request;
 }
 
-IDBRequest* IDBObjectStore::openKeyCursor(ScriptState* script_state,
-                                          const ScriptValue& range,
-                                          const String& direction_string,
-                                          ExceptionState& exception_state) {
+IDBRequest* IDBObjectStore::openKeyCursor(
+    ScriptState* script_state,
+    const ScriptValue& range,
+    const V8IDBCursorDirection& v8_direction,
+    ExceptionState& exception_state) {
   TRACE_EVENT1("IndexedDB", "IDBObjectStore::openKeyCursorRequestSetup",
                "store_name", metadata_->name.Utf8());
   IDBRequest::AsyncTraceState metrics(
@@ -1045,7 +1012,7 @@ IDBRequest* IDBObjectStore::openKeyCursor(ScriptState* script_state,
   }
 
   mojom::IDBCursorDirection direction =
-      IDBCursor::StringToDirection(direction_string);
+      IDBCursor::V8EnumToDirection(v8_direction.AsEnum());
   IDBKeyRange* key_range = IDBKeyRange::FromScriptValue(
       ExecutionContext::From(script_state), range, exception_state);
   if (exception_state.HadException())
@@ -1185,7 +1152,9 @@ void IDBObjectStore::RenameIndex(int64_t index_id, const String& new_name) {
   db().RenameIndex(transaction_->Id(), Id(), index_id, new_name);
 
   auto metadata_iterator = metadata_->indexes.find(index_id);
-  DCHECK_NE(metadata_iterator, metadata_->indexes.end()) << "Invalid index_id";
+  CHECK_NE(metadata_iterator, metadata_->indexes.end(),
+           base::NotFatalUntil::M130)
+      << "Invalid index_id";
   const String& old_name = metadata_iterator->value->name;
 
   DCHECK(index_map_.Contains(old_name))
@@ -1204,6 +1173,54 @@ int64_t IDBObjectStore::FindIndexId(const String& name) const {
     }
   }
   return IDBIndexMetadata::kInvalidId;
+}
+
+IDBRequest* IDBObjectStore::CreateGetAllRequest(
+    IDBRequest::TypeForMetrics type_for_metrics,
+    ScriptState* script_state,
+    const ScriptValue& key_range_script_value,
+    mojom::blink::IDBGetAllResultType result_type,
+    uint32_t max_count,
+    mojom::blink::IDBCursorDirection direction,
+    ExceptionState& exception_state) {
+  IDBRequest::AsyncTraceState metrics(type_for_metrics);
+
+  if (!max_count) {
+    max_count = std::numeric_limits<uint32_t>::max();
+  }
+
+  if (IsDeleted()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kInvalidStateError,
+        IDBDatabase::kObjectStoreDeletedErrorMessage);
+    return nullptr;
+  }
+
+  if (!transaction_->IsActive()) {
+    exception_state.ThrowDOMException(
+        DOMExceptionCode::kTransactionInactiveError,
+        transaction_->InactiveErrorMessage());
+    return nullptr;
+  }
+
+  IDBKeyRange* key_range =
+      IDBKeyRange::FromScriptValue(ExecutionContext::From(script_state),
+                                   key_range_script_value, exception_state);
+  if (exception_state.HadException()) {
+    return nullptr;
+  }
+
+  if (!db().IsConnectionOpen()) {
+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                      IDBDatabase::kDatabaseClosedErrorMessage);
+    return nullptr;
+  }
+
+  IDBRequest* request = IDBRequest::Create(
+      script_state, this, transaction_.Get(), std::move(metrics));
+  db().GetAll(transaction_->Id(), Id(), IDBIndexMetadata::kInvalidId, key_range,
+              result_type, max_count, direction, request);
+  return request;
 }
 
 IDBDatabase& IDBObjectStore::db() const {

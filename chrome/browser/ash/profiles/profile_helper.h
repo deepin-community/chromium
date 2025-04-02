@@ -54,11 +54,6 @@ class ProfileHelper {
       const std::string& user_id_hash);
 
   // DEPRECATED: Please use
-  // ash::BrowserContextHelper::GetSigninBrowserContextPath() instead.
-  // Returns the path that corresponds to the sign-in profile.
-  static base::FilePath GetSigninProfileDir();
-
-  // DEPRECATED: Please use
   // ash::BrowserContextHelper::GetSigninBrowserContext() instead.
   // Returns OffTheRecord profile for use during signing phase.
   static Profile* GetSigninProfile();
@@ -79,24 +74,6 @@ class ProfileHelper {
   // construction of the signin Profile to determine if that Profile is the
   // signin Profile.
   static bool IsSigninProfile(const Profile* profile);
-
-  // DEPRECATED. Please use ash::GetSigninBrowserContext() and see if it
-  // returns non-nullptr, instead.
-  // Returns true if the signin profile has been initialized.
-  static bool IsSigninProfileInitialized();
-
-  // DEPRECATED. Please use
-  // ash::BrowserContextHelper::GetLockScreenAppBrowserContextPath() instead.
-  // Returns the path used for the lock screen apps profile - profile used
-  // for launching platform apps that can display windows on top of the lock
-  // screen.
-  static base::FilePath GetLockScreenAppProfilePath();
-
-  // DEPRECATED. Please use ash::IsLockScreenAppBrowserContext() instead.
-  // Returns whether |profile| is the lock screen app profile - the profile used
-  // for launching platform apps that can display a window on top of the lock
-  // screen.
-  static bool IsLockScreenAppProfile(const Profile* profile);
 
   // DEPRECATED. Please use
   // ash::BrowserContextHelper::GetLockScreenBrowserContextPath() instead.

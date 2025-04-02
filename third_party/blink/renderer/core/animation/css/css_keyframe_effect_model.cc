@@ -11,7 +11,6 @@
 #include "third_party/blink/renderer/core/css/properties/computed_style_utils.h"
 #include "third_party/blink/renderer/core/css/properties/css_property.h"
 #include "third_party/blink/renderer/core/css/resolver/style_resolver.h"
-#include "third_party/blink/renderer/core/dom/node_computed_style.h"
 #include "third_party/blink/renderer/core/execution_context/security_context.h"
 
 namespace blink {
@@ -32,17 +31,14 @@ void ResolveUnderlyingPropertyValues(Element& element,
   ActiveInterpolationsMap empty_interpolations_map;
   AnimationUtils::ForEachInterpolatedPropertyValue(
       &element, properties, empty_interpolations_map,
-      WTF::BindRepeating(
-          [](MissingPropertyValueMap* map, PropertyHandle property,
-             const CSSValue* value) {
-            if (property.IsCSSProperty()) {
-              String property_name =
-                  AnimationInputHelpers::PropertyHandleToKeyframeAttribute(
-                      property);
-              map->Set(property_name, value->CssText());
-            }
-          },
-          WTF::Unretained(&map)));
+      [&map](PropertyHandle property, const CSSValue* value) {
+        if (property.IsCSSProperty()) {
+          String property_name =
+              AnimationInputHelpers::PropertyHandleToKeyframeAttribute(
+                  property);
+          map.Set(property_name, value->CssText());
+        }
+      });
 }
 
 void AddMissingProperties(const MissingPropertyValueMap& property_map,

@@ -17,6 +17,7 @@
 #include "components/services/storage/public/mojom/cache_storage_control.mojom-forward.h"
 #include "components/services/storage/public/mojom/local_storage_control.mojom-forward.h"
 #include "content/common/content_export.h"
+#include "media/media_buildflags.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/cert_verifier_service_updater.mojom-forward.h"
 #include "services/network/public/mojom/cookie_manager.mojom-forward.h"
@@ -47,6 +48,7 @@ namespace mojom {
 class CookieManager;
 class NetworkContext;
 class URLLoaderNetworkServiceObserver;
+class DeviceBoundSessionManager;
 }  // namespace mojom
 }  // namespace network
 
@@ -69,6 +71,7 @@ class BackgroundSyncContext;
 class BrowserContext;
 class BrowsingDataFilterBuilder;
 class BrowsingTopicsSiteDataManager;
+class CdmStorageDataModel;
 class ContentIndexContext;
 class CookieDeprecationLabelManager;
 class DedicatedWorkerService;
@@ -123,7 +126,7 @@ class CONTENT_EXPORT StoragePartition {
   // network process restarts.
   //
   // SECURITY NOTE: This browser-process factory relaxes many security features
-  // (e.g. may disable CORB, won't set |request_initiator_origin_lock| or
+  // (e.g. may disable ORB, won't set |request_initiator_origin_lock| or
   // IsolationInfo, etc.).  Network requests that may be initiated or influenced
   // by a web origin should typically use a different factory (e.g.  the one
   // from RenderFrameHost::CreateNetworkServiceDefaultFactory).
@@ -171,6 +174,16 @@ class CONTENT_EXPORT StoragePartition {
   virtual AttributionDataModel* GetAttributionDataModel() = 0;
   virtual PrivateAggregationDataModel* GetPrivateAggregationDataModel() = 0;
   virtual CookieDeprecationLabelManager* GetCookieDeprecationLabelManager() = 0;
+#if BUILDFLAG(ENABLE_LIBRARY_CDMS)
+  virtual CdmStorageDataModel* GetCdmStorageDataModel() = 0;
+#endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
+  virtual network::mojom::DeviceBoundSessionManager*
+  GetDeviceBoundSessionManager() = 0;
+
+  // This clears stale session cookies/storage from the current profile. This
+  // must only be called after session restore has completed to ensure active
+  // session cookies/storage are not cleared.
+  virtual void DeleteStaleSessionData() = 0;
 
   virtual leveldb_proto::ProtoDatabaseProvider* GetProtoDatabaseProvider() = 0;
   // Must be set before the first call to GetProtoDatabaseProvider(), or a new
@@ -209,6 +222,9 @@ class CONTENT_EXPORT StoragePartition {
     REMOVE_DATA_MASK_ATTRIBUTION_REPORTING_INTERNAL = 1 << 16,
     REMOVE_DATA_MASK_PRIVATE_AGGREGATION_INTERNAL = 1 << 17,
     REMOVE_DATA_MASK_INTEREST_GROUPS_INTERNAL = 1 << 18,
+    // Device bound sessions. Public explainer:
+    // https://github.com/WICG/dbsc/blob/main/README.md
+    REMOVE_DATA_MASK_DEVICE_BOUND_SESSIONS = 1 << 19,
 
     REMOVE_DATA_MASK_ALL = 0xFFFFFFFF,
 
@@ -369,6 +385,9 @@ class CONTENT_EXPORT StoragePartition {
   // the function is called again with a new value or a nullptr.
   static void SetDefaultQuotaSettingsForTesting(
       const storage::QuotaSettings* settings);
+
+  virtual void OverrideDeleteStaleSessionOnlyCookiesDelayForTesting(
+      const base::TimeDelta& delay) = 0;
 
  protected:
   virtual ~StoragePartition() {}

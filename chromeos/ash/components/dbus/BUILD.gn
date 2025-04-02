@@ -3,10 +3,9 @@
 # found in the LICENSE file.
 
 import("//build/config/chromebox_for_meetings/buildflags.gni")
-import("//build/config/ui.gni")
 import("//third_party/protobuf/proto_library.gni")
 
-assert(is_chromeos_ash, "Non ChromeOS builds must not depend on //chromeos/ash")
+assert(is_chromeos, "Non ChromeOS builds must not depend on //chromeos/ash")
 
 component("dbus") {
   output_name = "ash_dbus"  # Avoid conflict with //dbus
@@ -48,6 +47,7 @@ source_set("unit_tests") {
     "//base",
     "//base/test:test_support",
     "//chromeos/ash/components/dbus/audio",
+    "//chromeos/ash/components/dbus/audio:unit_tests",
     "//chromeos/ash/components/dbus/biod:test_support",
     "//chromeos/ash/components/dbus/cec_service:unit_tests",
     "//chromeos/ash/components/dbus/chaps:unit_tests",
@@ -63,7 +63,6 @@ source_set("unit_tests") {
     "//chromeos/ash/components/dbus/fwupd:test_support",
     "//chromeos/ash/components/dbus/gnubby:unit_tests",
     "//chromeos/ash/components/dbus/hermes:test_support",
-    "//chromeos/ash/components/dbus/hiberman",
     "//chromeos/ash/components/dbus/lorgnette_manager:unit_tests",
     "//chromeos/ash/components/dbus/oobe_config:unit_tests",
     "//chromeos/ash/components/dbus/printscanmgr:unit_tests",
@@ -71,6 +70,7 @@ source_set("unit_tests") {
     "//chromeos/ash/components/dbus/rmad:test_support",
     "//chromeos/ash/components/dbus/services:unit_tests",
     "//chromeos/ash/components/dbus/session_manager",
+    "//chromeos/ash/components/dbus/session_manager:unit_tests",
     "//chromeos/ash/components/dbus/shill:test_support",
     "//chromeos/ash/components/dbus/system_clock:unit_tests",
     "//chromeos/ash/components/dbus/userdataauth",
@@ -88,7 +88,6 @@ source_set("unit_tests") {
     "biod/biod_client_unittest.cc",
     "biod/fake_biod_client_unittest.cc",
     "dbus_thread_manager_unittest.cc",
-    "hiberman/hiberman_client_unittest.cc",
     "userdataauth/cryptohome_misc_client_unittest.cc",
     "userdataauth/cryptohome_pkcs11_client_unittest.cc",
     "userdataauth/userdataauth_client_unittest.cc",
@@ -103,13 +102,6 @@ source_set("unit_tests") {
 # gen/third_party/cros_system_api/dbus/* and avoids the below cfg.
 config("system_api_proto_include_cfg") {
   include_dirs = [ "${root_gen_dir}/chromeos/ash/components/dbus" ]
-}
-
-proto_library("metrics_event_proto") {
-  sources =
-      [ "//third_party/cros_system_api/dbus/metrics_event/metrics_event.proto" ]
-
-  proto_out_dir = "chromeos/ash/components/dbus/metrics_event"
 }
 
 proto_library("plugin_vm_service_proto") {

@@ -34,9 +34,6 @@ namespace content {
 
 namespace {
 
-const char kBadMessageImproperNotificationImage[] =
-    "Received an unexpected message with image while notification images are "
-    "disabled.";
 const char kBadMessageInvalidNotificationTriggerTimestamp[] =
     "Received an invalid notification trigger timestamp.";
 const char kBadMessageInvalidNotificationActionButtons[] =
@@ -95,7 +92,7 @@ BlinkNotificationServiceImpl::BlinkNotificationServiceImpl(
     : notification_context_(notification_context),
       browser_context_(browser_context),
       service_worker_context_(std::move(service_worker_context)),
-      render_process_host_id_(render_process_host->GetID()),
+      render_process_host_id_(render_process_host->GetDeprecatedID()),
       storage_key_(storage_key),
       storage_key_if_3psp_enabled(
           storage_key.CopyWithForceEnabledThirdPartyStoragePartitioning()),
@@ -207,7 +204,7 @@ void BlinkNotificationServiceImpl::CloseNonPersistentNotification(
   browser_context_->GetPlatformNotificationService()->CloseNotification(
       notification_id);
 
-  // TODO(https://crbug.com/442141): Pass a callback here to focus the tab
+  // TODO(crbug.com/40398221): Pass a callback here to focus the tab
   // which created the notification, unless the event is canceled.
   NotificationEventDispatcherImpl::GetInstance()
       ->DispatchNonPersistentCloseEvent(notification_id, base::DoNothing());
@@ -217,7 +214,7 @@ blink::mojom::PermissionStatus
 BlinkNotificationServiceImpl::CheckPermissionStatus() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  // TODO(crbug.com/987654): It is odd that a service instance can be created
+  // TODO(crbug.com/40637582): It is odd that a service instance can be created
   // for cross-origin subframes, yet the instance is completely oblivious of
   // whether it is serving a top-level browsing context or an embedded one.
   if (creator_type_ ==
@@ -252,16 +249,6 @@ bool BlinkNotificationServiceImpl::ValidateNotificationDataAndResources(
 
   if (!CheckNotificationTriggerRange(platform_notification_data)) {
     receiver_.ReportBadMessage(kBadMessageInvalidNotificationTriggerTimestamp);
-    OnConnectionError();
-    return false;
-  }
-
-  if (!notification_resources.image.drawsNothing() &&
-      !base::FeatureList::IsEnabled(features::kNotificationContentImage)) {
-    receiver_.ReportBadMessage(kBadMessageImproperNotificationImage);
-    // The above ReportBadMessage() closes |binding_| but does not trigger its
-    // connection error handler, so we need to call the error handler explicitly
-    // here to do some necessary work.
     OnConnectionError();
     return false;
   }
@@ -316,7 +303,7 @@ void BlinkNotificationServiceImpl::DisplayPersistentNotification(
   database_data.notification_data = platform_notification_data;
   database_data.notification_resources = notification_resources;
 
-  // TODO(https://crbug.com/870258): Validate resources are not too big (either
+  // TODO(crbug.com/41405589): Validate resources are not too big (either
   // here or in the mojo struct traits).
 
   notification_context_->WriteNotificationData(

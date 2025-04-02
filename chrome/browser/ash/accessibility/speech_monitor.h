@@ -10,11 +10,15 @@
 #include <optional>
 
 #include "base/containers/circular_deque.h"
+#include "base/functional/callback.h"
 #include "base/memory/ref_counted.h"
 #include "content/public/browser/tts_platform.h"
-#include "content/public/test/test_utils.h"
 
 // TODO(katie): This may need to move into Content as part of the TTS refactor.
+
+namespace content {
+class MessageLoopRunner;
+}  // namespace content
 
 namespace ash {
 namespace test {
@@ -163,7 +167,6 @@ class SpeechMonitor : public content::TtsPlatform {
   void Shutdown() override;
   void FinalizeVoiceOrdering(std::vector<content::VoiceData>& voices) override;
   void RefreshVoices() override;
-  content::ExternalPlatformDelegate* GetExternalPlatformDelegate() override;
 
   void MaybeContinueReplay();
   void MaybePrintExpectations();

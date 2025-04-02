@@ -4,27 +4,35 @@
 
 #include "remoting/host/it2me/it2me_host.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
+#include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/strings/string_util.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
-#include "build/chromeos_buildflags.h"
+#include "build/build_config.h"
 #include "components/policy/policy_constants.h"
 #include "components/webrtc/thread_wrapper.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 #include "remoting/base/auto_thread_task_runner.h"
+#include "remoting/base/local_session_policies_provider.h"
 #include "remoting/base/logging.h"
 #include "remoting/base/oauth_token_getter.h"
 #include "remoting/base/rsa_key_pair.h"
+#include "remoting/base/session_policies.h"
 #include "remoting/host/chromeos/chromeos_enterprise_params.h"
 #include "remoting/host/chromoting_host.h"
 #include "remoting/host/chromoting_host_context.h"
+#include "remoting/host/corp_host_status_logger.h"
 #include "remoting/host/ftl_signaling_connector.h"
 #include "remoting/host/host_event_logger.h"
 #include "remoting/host/host_event_reporter.h"
@@ -34,12 +42,13 @@
 #include "remoting/host/it2me/it2me_helpers.h"
 #include "remoting/host/it2me_desktop_environment.h"
 #include "remoting/host/passthrough_register_support_host_request.h"
+#include "remoting/host/session_policies_from_dict.h"
 #include "remoting/proto/ftl/v1/chromoting_message.pb.h"
 #include "remoting/protocol/auth_util.h"
 #include "remoting/protocol/chromium_port_allocator_factory.h"
+#include "remoting/protocol/ice_config_fetcher_default.h"
 #include "remoting/protocol/it2me_host_authenticator_factory.h"
 #include "remoting/protocol/jingle_session_manager.h"
-#include "remoting/protocol/network_settings.h"
 #include "remoting/protocol/transport_context.h"
 #include "remoting/protocol/validating_authenticator.h"
 #include "remoting/signaling/log_to_server.h"
@@ -47,7 +56,7 @@
 #include "remoting/signaling/signaling_id_util.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "base/feature_list.h"
 #include "remoting/host/chromeos/features.h"
 #endif
@@ -72,9 +81,37 @@ typedef ValidatingAuthenticator::Result ValidationResult;
 typedef ValidatingAuthenticator::ValidationCallback ValidationCallback;
 typedef ValidatingAuthenticator::ResultCallback ValidationResultCallback;
 
-// The amount of time to wait before destroying the signal strategy.  This delay
-// ensures there is time for the session-terminate message to be sent.
-constexpr base::TimeDelta kDestroySignalingDelay = base::Seconds(2);
+// The amount of time to wait before destroying objects that send messages over
+// the network, such as the signal strategy. This delay ensures there is time
+// for messages (such as session-terminate) to be sent.
+constexpr base::TimeDelta kDestroyMessagingObjectDelay = base::Seconds(2);
+
+// STL containers do not have a defined destruction orders for their elements.
+// Post(Delayed)Task relies on these containers so the destruction order is also
+// undefined, causing problems when there are dependencies between objects to be
+// delayed destructed. This class takes ownership of the objects passed to the
+// constructor, and destroys them in their order in the parameter list when
+// the destructor is called.
+template <typename... T>
+class OrderedDestruction {
+ public:
+  explicit OrderedDestruction(std::unique_ptr<T>... objects)
+      : destruction_callbacks_{base::OnceClosure(base::DoNothingWithBoundArgs(
+            std::forward<std::unique_ptr<T>>(objects)))...} {}
+
+  OrderedDestruction(OrderedDestruction&&) = default;
+
+  ~OrderedDestruction() {
+    for (base::OnceClosure& callback : destruction_callbacks_) {
+      callback.Reset();
+    }
+  }
+
+ private:
+  // We use OnceClosure to hold the objects to be deleted, since unique_ptr does
+  // not have a non-generic base class.
+  std::array<base::OnceClosure, sizeof...(T)> destruction_callbacks_;
+};
 
 }  // namespace
 
@@ -83,7 +120,7 @@ It2MeHost::DeferredConnectContext::DeferredConnectContext() = default;
 It2MeHost::DeferredConnectContext::~DeferredConnectContext() = default;
 
 It2MeHost::It2MeHost() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   host_event_reporter_factory_ =
       base::BindRepeating(&HostEventReporter::Create);
 #endif
@@ -96,11 +133,11 @@ It2MeHost::~It2MeHost() {
 
 void It2MeHost::set_chrome_os_enterprise_params(
     ChromeOsEnterpriseParams params) {
-#if BUILDFLAG(IS_CHROMEOS_ASH) || !defined(NDEBUG)
+#if BUILDFLAG(IS_CHROMEOS) || !defined(NDEBUG)
   chrome_os_enterprise_params_ = std::move(params);
 #else
   NOTREACHED() << "It2MeHost::set_chrome_os_enterprise_params is only "
-               << "supported on ChromeOS";
+                  "supported on ChromeOS";
 #endif
 }
 
@@ -109,7 +146,7 @@ void It2MeHost::set_authorized_helper(const std::string& authorized_helper) {
 }
 
 void It2MeHost::set_reconnect_params(ReconnectParams reconnect_params) {
-#if BUILDFLAG(IS_CHROMEOS_ASH) || !defined(NDEBUG)
+#if BUILDFLAG(IS_CHROMEOS) || !defined(NDEBUG)
   reconnect_params_.emplace(std::move(reconnect_params));
 #else
   NOTREACHED() << "It2MeHost::set_reconnect_params is only supported on CrOS";
@@ -117,7 +154,7 @@ void It2MeHost::set_reconnect_params(ReconnectParams reconnect_params) {
 }
 
 bool It2MeHost::SessionSupportsReconnections() const {
-#if BUILDFLAG(IS_CHROMEOS_ASH) || !defined(NDEBUG)
+#if BUILDFLAG(IS_CHROMEOS) || !defined(NDEBUG)
   return is_enterprise_session() &&
          chrome_os_enterprise_params_->allow_reconnections;
 #else
@@ -125,9 +162,9 @@ bool It2MeHost::SessionSupportsReconnections() const {
 #endif
 }
 
-absl::optional<ReconnectParams> It2MeHost::CreateReconnectParams() const {
-  absl::optional<ReconnectParams> reconnect_params;
-#if BUILDFLAG(IS_CHROMEOS_ASH) || !defined(NDEBUG)
+std::optional<ReconnectParams> It2MeHost::CreateReconnectParams() const {
+  std::optional<ReconnectParams> reconnect_params;
+#if BUILDFLAG(IS_CHROMEOS) || !defined(NDEBUG)
   if (!SessionSupportsReconnections()) {
     return reconnect_params;
   }
@@ -175,6 +212,15 @@ void It2MeHost::Connect(
   host_context_ = std::move(host_context);
   observer_ = std::move(observer);
   confirmation_dialog_factory_ = std::move(dialog_factory);
+  local_session_policies_provider_ =
+      std::make_unique<LocalSessionPoliciesProvider>();
+
+  if (is_enterprise_session()) {
+    // Don't notify on local policy changes for Admin sessions as the policies
+    // can change as they log into different sessions and this should not cause
+    // them to be disconnected: See crbug.com/380421478.
+    local_session_policies_provider_->send_policy_change_notifications(false);
+  }
 
   OnPolicyUpdate(std::move(policies));
 
@@ -223,7 +269,7 @@ void It2MeHost::ConnectOnNetworkThread(
   auto connection_context = std::move(create_context).Run(host_context_.get());
   log_to_server_ = std::move(connection_context->log_to_server);
   signal_strategy_ = std::move(connection_context->signal_strategy);
-  oauth_token_getter_ = std::move(connection_context->oauth_token_getter);
+  api_token_getter_ = std::move(connection_context->api_token_getter);
   DCHECK(log_to_server_);
   DCHECK(signal_strategy_);
 
@@ -259,18 +305,28 @@ void It2MeHost::ConnectOnNetworkThread(
     }
   }
 
+  if (connection_context->use_corp_session_authz) {
+    use_corp_session_authz_ = true;
+  }
+
   if (!reconnect_params_.has_value()) {
     // Generate a key pair for the Host to use.
     host_key_pair_ = RsaKeyPair::Generate();
 
-    // Generate a new host secret for this instance.
-    host_secret_ = GenerateSupportHostSecret();
+    // Shared secret auth is not supported when SessionAuthz is in use.
+    if (!use_corp_session_authz_) {
+      // Generate a new host secret for this instance.
+      host_secret_ = GenerateSupportHostSecret();
+    }
 
     // Register this host instance in the backend service.
     register_request_ = std::move(connection_context->register_request);
   } else {
     // Reconnections are only allowed for Chrome OS enterprise sessions.
     CHECK(SessionSupportsReconnections());
+
+    // Reconnections are not allowed when SessionAuthz is in use.
+    CHECK(!use_corp_session_authz_);
 
     // Regenerate the key pair from the private key.
     host_key_pair_ = RsaKeyPair::FromString(reconnect_params_->private_key);
@@ -289,38 +345,12 @@ void It2MeHost::ConnectOnNetworkThread(
       base::BindOnce(&It2MeHost::OnReceivedSupportID,
                      weak_factory_.GetWeakPtr()));
 
-  HOST_LOG << "NAT traversal enabled: " << nat_traversal_enabled_;
-  HOST_LOG << "Relay connections allowed: " << relay_connections_allowed_;
-
-  uint32_t network_flags = protocol::NetworkSettings::NAT_TRAVERSAL_DISABLED;
-  if (nat_traversal_enabled_) {
-    network_flags = protocol::NetworkSettings::NAT_TRAVERSAL_STUN |
-                    protocol::NetworkSettings::NAT_TRAVERSAL_OUTGOING;
-    if (relay_connections_allowed_) {
-      network_flags |= protocol::NetworkSettings::NAT_TRAVERSAL_RELAY;
-    }
-  }
-
-  protocol::NetworkSettings network_settings(network_flags);
-
-  if (!udp_port_range_.is_null()) {
-    network_settings.port_range = udp_port_range_;
-  } else if (!nat_traversal_enabled_) {
-    // For legacy reasons we have to restrict the port range to a set of default
-    // values when nat traversal is disabled, even if the port range was not
-    // set in policy.
-    network_settings.port_range.min_port =
-        protocol::NetworkSettings::kDefaultMinPort;
-    network_settings.port_range.max_port =
-        protocol::NetworkSettings::kDefaultMaxPort;
-  }
-
-  scoped_refptr<protocol::TransportContext> transport_context =
-      new protocol::TransportContext(
-          std::make_unique<protocol::ChromiumPortAllocatorFactory>(),
-          webrtc::ThreadWrapper::current()->SocketServer(),
-          host_context_->url_loader_factory(), oauth_token_getter_.get(),
-          network_settings, protocol::TransportRole::SERVER);
+  auto ice_config_fetcher = std::make_unique<protocol::IceConfigFetcherDefault>(
+      host_context_->url_loader_factory(), api_token_getter_.get());
+  auto transport_context = base::MakeRefCounted<protocol::TransportContext>(
+      std::make_unique<protocol::ChromiumPortAllocatorFactory>(),
+      webrtc::ThreadWrapper::current()->SocketServer(),
+      std::move(ice_config_fetcher), protocol::TransportRole::SERVER);
   if (!ice_config.is_null()) {
     transport_context->set_turn_ice_config(ice_config);
   }
@@ -336,6 +366,14 @@ void It2MeHost::ConnectOnNetworkThread(
   protocol_config->set_webrtc_supported(true);
   session_manager->set_protocol_config(std::move(protocol_config));
 
+  if (use_corp_session_authz_) {
+    corp_host_status_logger_ = CorpHostStatusLogger::CreateForRemoteSupport(
+        host_context_->url_loader_factory(),
+        local_session_policies_provider_.get(),
+        api_token_getter_->GetWeakPtr());
+    corp_host_status_logger_->StartObserving(*session_manager);
+  }
+
   // Set up the desktop environment options.
   DesktopEnvironmentOptions options(DesktopEnvironmentOptions::CreateDefault());
 #if BUILDFLAG(IS_LINUX)
@@ -344,31 +382,24 @@ void It2MeHost::ConnectOnNetworkThread(
   }
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) || !defined(NDEBUG)
-  if (chrome_os_enterprise_params_.has_value()) {
+#if BUILDFLAG(IS_CHROMEOS) || !defined(NDEBUG)
+  if (is_enterprise_session()) {
     options.set_enable_user_interface(
         !chrome_os_enterprise_params_->suppress_user_dialogs);
     options.set_enable_notifications(
         !chrome_os_enterprise_params_->suppress_notifications);
     options.set_terminate_upon_input(
         chrome_os_enterprise_params_->terminate_upon_input);
-    options.set_enable_curtaining(
-        chrome_os_enterprise_params_->curtain_local_user_session);
-    options.set_enable_file_transfer(
-        chrome_os_enterprise_params_->allow_file_transfer &&
-        enterprise_file_transfer_allowed_);
   }
 #endif
-
-  if (max_clipboard_size_.has_value()) {
-    options.set_clipboard_size(max_clipboard_size_.value());
-  }
 
   // Create the host.
   host_ = std::make_unique<ChromotingHost>(
       desktop_environment_factory_.get(), std::move(session_manager),
       transport_context, host_context_->audio_task_runner(),
-      host_context_->video_encode_task_runner(), options);
+      host_context_->video_encode_task_runner(), options,
+      /* extra_session_policies_validator= */ base::NullCallback(),
+      local_session_policies_provider_.get());
   host_->status_monitor()->AddStatusObserver(this);
   host_status_logger_ = std::make_unique<HostStatusLogger>(
       host_->status_monitor(), log_to_server_.get());
@@ -376,10 +407,10 @@ void It2MeHost::ConnectOnNetworkThread(
   // Create event logger.
   host_event_logger_ =
       HostEventLogger::Create(host_->status_monitor(), kApplicationName);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   host_event_reporter_ =
       host_event_reporter_factory_.Run(host_->status_monitor());
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Connect signaling and start the host.
   signal_strategy_->Connect();
@@ -446,12 +477,12 @@ ValidationCallback It2MeHost::GetValidationCallbackForTesting() {
                              base::Unretained(this));
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 void It2MeHost::SetHostEventReporterFactoryForTesting(
     HostEventReporterFactory factory) {
   host_event_reporter_factory_ = factory;
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 void It2MeHost::OnPolicyUpdate(base::Value::Dict policies) {
   // The policy watcher runs on the |ui_task_runner|.
@@ -462,21 +493,19 @@ void It2MeHost::OnPolicyUpdate(base::Value::Dict policies) {
     return;
   }
 
+  if (is_enterprise_session() && IsRunning()) {
+    // Don't notify on policy changes for Admin sessions as the policies can
+    // change as they log into different sessions and this should not cause
+    // them to be disconnected: See crbug.com/380421478.
+    HOST_LOG << "Dropping policy update during enterprise connection.";
+    return;
+  }
+
   // Retrieve the policy value on whether to allow connections but don't apply
   // it until after we've finished reading the rest of the policies and started
   // the connection process.
   remote_support_connections_allowed_ =
       policies.FindBool(GetRemoteSupportPolicyKey()).value_or(true);
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  enterprise_file_transfer_allowed_ =
-      policies
-          .FindBool(policy::key::kRemoteAccessHostAllowEnterpriseFileTransfer)
-          .value_or(false);
-
-  HOST_LOG << "RemoteAccessHostEnterpriseFileTransfer capability is enabled: "
-           << enterprise_file_transfer_allowed_;
-#endif
 
   std::optional<bool> nat_policy_value =
       policies.FindBool(policy::key::kRemoteAccessHostFirewallTraversal);
@@ -490,7 +519,7 @@ void It2MeHost::OnPolicyUpdate(base::Value::Dict policies) {
     HOST_LOG << "Failed to read kRemoteAccessHostAllowRelayedConnection policy";
     relay_policy_value = relay_connections_allowed_;
   }
-  UpdateNatPolicies(nat_policy_value.value(), relay_policy_value.value());
+  UpdateNatPolicies(*nat_policy_value, *relay_policy_value);
 
   const base::Value::List* host_domain_list =
       policies.FindList(policy::key::kRemoteAccessHostDomainList);
@@ -512,24 +541,18 @@ void It2MeHost::OnPolicyUpdate(base::Value::Dict policies) {
     UpdateClientDomainListPolicy(std::move(client_domain_list_vector));
   }
 
-  const std::string* port_range_string =
-      policies.FindString(policy::key::kRemoteAccessHostUdpPortRange);
-  if (port_range_string) {
-    UpdateHostUdpPortRangePolicy(*port_range_string);
-  }
-
-  std::optional<int> max_clipboard_size =
-      policies.FindInt(policy::key::kRemoteAccessHostClipboardSizeBytes);
-  if (max_clipboard_size.has_value()) {
-    if (max_clipboard_size.value() >= 0) {
-      max_clipboard_size_ = max_clipboard_size.value();
-    }
-  }
+  UpdateSessionPolicies(policies);
 }
 
 void It2MeHost::UpdateNatPolicies(bool nat_policy_value,
                                   bool relay_policy_value) {
   DCHECK(host_context_->network_task_runner()->BelongsToCurrentThread());
+
+  // This method is needed simply because we need to notify the website of the
+  // setting change. This only works if the NAT policies are configured locally.
+  // This will not work if we add SessionAuthz policies to IT2ME in the future.
+  // TODO: yuweih - Fix this, or remove this altogether if we don't think it's
+  // useful.
 
   VLOG(2) << "UpdateNatPolicies: nat_policy_value: " << nat_policy_value;
   bool nat_traversal_value_changed = nat_traversal_enabled_ != nat_policy_value;
@@ -583,20 +606,49 @@ void It2MeHost::UpdateClientDomainListPolicy(
   required_client_domain_list_ = std::move(client_domain_list);
 }
 
-void It2MeHost::UpdateHostUdpPortRangePolicy(
-    const std::string& port_range_string) {
-  DCHECK(host_context_->network_task_runner()->BelongsToCurrentThread());
-
-  VLOG(2) << "UpdateHostUdpPortRangePolicy: " << port_range_string;
-
-  if (IsRunning()) {
-    DisconnectOnNetworkThread();
+void It2MeHost::UpdateSessionPolicies(
+    const base::Value::Dict& platform_policies) {
+  // |local_session_policies_provider_| is null if there is no active
+  // connection. Connect() calls OnPolicyUpdate() with the platform policies, so
+  // we don't need to track session policies when there is no active connection.
+  if (!local_session_policies_provider_) {
+    return;
   }
 
-  if (!PortRange::Parse(port_range_string, &udp_port_range_)) {
-    // PolicyWatcher verifies that the value is formatted correctly.
-    LOG(FATAL) << "Invalid port range: " << port_range_string;
+  std::optional<SessionPolicies> local_session_policies =
+      SessionPoliciesFromDict(platform_policies);
+  if (!local_session_policies.has_value()) {
+    LOG(FATAL) << "Failed to parse local session policies.";
   }
+
+  // These are currently disallowed for IT2ME connections by default.
+  // TODO: yuweih - Figure out what should be done when we add SessionAuthz
+  // policies support for IT2ME. Given the current logic, these features can be
+  // enabled by SessionAuthz policies, which is not possible by local Chrome
+  // policies.
+  local_session_policies->allow_file_transfer = false;
+  local_session_policies->allow_uri_forwarding = false;
+
+#if BUILDFLAG(IS_CHROMEOS) || !defined(NDEBUG)
+  if (is_enterprise_session()) {
+    local_session_policies->curtain_required =
+        chrome_os_enterprise_params_->curtain_local_user_session;
+
+#if BUILDFLAG(IS_CHROMEOS)
+    bool enterprise_file_transfer_allowed =
+        platform_policies
+            .FindBool(policy::key::kRemoteAccessHostAllowEnterpriseFileTransfer)
+            .value_or(false);
+#else
+    bool enterprise_file_transfer_allowed = false;
+#endif
+    local_session_policies->allow_file_transfer =
+        chrome_os_enterprise_params_->allow_file_transfer &&
+        enterprise_file_transfer_allowed;
+  }
+#endif
+
+  local_session_policies_provider_->set_local_policies(*local_session_policies);
 }
 
 void It2MeHost::SetState(It2MeHostState state, ErrorCode error_code) {
@@ -676,8 +728,6 @@ void It2MeHost::OnReceivedSupportID(const std::string& support_id,
 
   support_id_ = support_id;
   std::string access_code = support_id_ + host_secret_;
-  std::string access_code_hash =
-      protocol::GetSharedSecretHash(support_id_, access_code);
 
   std::string local_certificate = host_key_pair_->GenerateCertificate();
   if (local_certificate.empty()) {
@@ -687,11 +737,21 @@ void It2MeHost::OnReceivedSupportID(const std::string& support_id,
     return;
   }
 
-  std::unique_ptr<protocol::AuthenticatorFactory> factory(
-      new protocol::It2MeHostAuthenticatorFactory(
-          local_certificate, host_key_pair_, access_code_hash,
-          base::BindRepeating(&It2MeHost::ValidateConnectionDetails,
-                              base::Unretained(this))));
+  auto factory = std::make_unique<protocol::It2MeHostAuthenticatorFactory>(
+      local_certificate, host_key_pair_,
+      base::BindRepeating(&It2MeHost::ValidateConnectionDetails,
+                          base::Unretained(this)));
+  if (use_corp_session_authz_) {
+    factory->AddSessionAuthzAuth(
+        base::MakeRefCounted<CorpSessionAuthzServiceClientFactory>(
+            host_context_->url_loader_factory(),
+            api_token_getter_->GetWeakPtr(), support_id_));
+  } else {
+    CHECK(!host_secret_.empty());
+    std::string access_code_hash =
+        protocol::GetSharedSecretHash(support_id_, access_code);
+    factory->AddSharedSecretAuth(access_code_hash);
+  }
   host_->SetAuthenticatorFactory(std::move(factory));
 
   // Pass the Access Code to the script object before changing state.
@@ -736,19 +796,21 @@ void It2MeHost::DisconnectOnNetworkThread(protocol::ErrorCode error_code) {
   ftl_signaling_connector_ = nullptr;
   reconnect_params_.reset();
 
-  if (signal_strategy_) {
-    // Delay destruction of the signaling strategy by a few seconds to give it
-    // a chance to send any outgoing messages (e.g. session-terminate) so the
-    // other end of the connection can display and log an accurate disconnect
-    // reason.
-    host_context_->network_task_runner()->PostDelayedTask(
-        FROM_HERE, base::DoNothingWithBoundArgs(std::move(signal_strategy_)),
-        kDestroySignalingDelay);
-  }
+  // Delay destruction of the objects that send messages over the network by a
+  // few seconds to give them a chance to send any outgoing messages (e.g.
+  // session-terminate) so the other end of the connection can display and log
+  // an accurate disconnect reason.
+  OrderedDestruction ordered_destruction{
+      std::move(signal_strategy_), std::move(corp_host_status_logger_),
+      // Needed by |corp_host_status_logger_|.
+      std::move(local_session_policies_provider_)};
+  host_context_->network_task_runner()->PostDelayedTask(
+      FROM_HERE, base::DoNothingWithBoundArgs(std::move(ordered_destruction)),
+      kDestroyMessagingObjectDelay);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   host_event_reporter_.reset();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
   host_event_logger_ = nullptr;
 
   // Post tasks to delete UI objects on the UI thread.

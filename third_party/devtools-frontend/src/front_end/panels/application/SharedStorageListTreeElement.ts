@@ -9,7 +9,7 @@ import type * as Protocol from '../../generated/protocol.js';
 import * as IconButton from '../../ui/components/icon_button/icon_button.js';
 
 import {ApplicationPanelTreeElement} from './ApplicationPanelTreeElement.js';
-import {type ResourcesPanel} from './ResourcesPanel.js';
+import type {ResourcesPanel} from './ResourcesPanel.js';
 import {SharedStorageEventsView} from './SharedStorageEventsView.js';
 
 const UIStrings = {
@@ -26,7 +26,7 @@ export class SharedStorageListTreeElement extends ApplicationPanelTreeElement {
   readonly view: SharedStorageEventsView;
 
   constructor(resourcesPanel: ResourcesPanel, expandedSettingsDefault = false) {
-    super(resourcesPanel, i18nString(UIStrings.sharedStorage), false);
+    super(resourcesPanel, i18nString(UIStrings.sharedStorage), false, 'shared-storage');
     this.#expandedSetting =
         Common.Settings.Settings.instance().createSetting('resources-shared-storage-expanded', expandedSettingsDefault);
     const sharedStorageIcon = IconButton.Icon.create('database');

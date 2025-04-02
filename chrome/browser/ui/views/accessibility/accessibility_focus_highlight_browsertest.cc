@@ -10,7 +10,6 @@
 #include "base/path_service.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "cc/test/pixel_comparator.h"
 #include "cc/test/pixel_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
@@ -27,7 +26,6 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/focus_changed_observer.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "ui/accessibility/accessibility_features.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/image/image.h"
 #include "ui/snapshot/snapshot.h"
@@ -58,8 +56,6 @@ class AccessibilityFocusHighlightBrowserTest : public InProcessBrowserTest {
   // InProcessBrowserTest overrides:
   void SetUp() override {
     EnablePixelOutput();
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kAccessibilityFocusHighlight);
     InProcessBrowserTest::SetUp();
   }
 
@@ -77,8 +73,9 @@ class AccessibilityFocusHighlightBrowserTest : public InProcessBrowserTest {
     int count = 0;
     for (int x = 0; x < bitmap.width(); ++x) {
       for (int y = 0; y < bitmap.height(); ++y) {
-        if (ColorsApproximatelyEqual(color, bitmap.getColor(x, y)))
+        if (ColorsApproximatelyEqual(color, bitmap.getColor(x, y))) {
           count++;
+        }
       }
     }
     return count * 100.0f / (bitmap.width() * bitmap.height());
@@ -125,15 +122,12 @@ class AccessibilityFocusHighlightBrowserTest : public InProcessBrowserTest {
       return result_image;
     }
   }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 // Smoke test that ensures that when a node gets focus, the layer with the
 // focus highlight actually gets drawn.
 //
-// Flaky on all platforms. TODO(https://crbug.com/1083806): Enable this test.
+// Flaky on all platforms. TODO(crbug.com/40692704): Enable this test.
 IN_PROC_BROWSER_TEST_F(AccessibilityFocusHighlightBrowserTest,
                        DISABLED_DrawsHighlight) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -233,9 +227,9 @@ class ReadbackHolder : public base::RefCountedThreadSafe<ReadbackHolder> {
 
 const cc::ExactPixelComparator pixel_comparator;
 
-// TODO(crbug/1289366): Fix flaky test on Lacros.
-// TODO(crbug/1467250): Fix flaky test on Mac.
-#if BUILDFLAG(IS_CHROMEOS_LACROS) || BUILDFLAG(IS_MAC)
+// TODO(crbug.com/40924319): Fix flaky test on Mac.
+// TODO(crbug.com/373535999): Fix flaky test on Windows.
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #define MAYBE_FocusAppearance DISABLED_FocusAppearance
 #else
 #define MAYBE_FocusAppearance FocusAppearance

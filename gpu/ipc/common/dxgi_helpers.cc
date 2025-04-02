@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "gpu/ipc/common/dxgi_helpers.h"
 
 #include "base/check.h"
@@ -157,23 +162,13 @@ bool CopyD3D11TexToMem(
 
     // Key equal to 0 is also used by the producer. Therefore, this keyed
     // mutex acts purely as a regular mutex.
-    //
-    // TODO(crbug.com/323751343): 5000ms is a temporary workaround to
-    // detect hangs. It should be `INFINITE` after the hang rootcause is
-    // fixed. Wait duration calculation and histogram reporting is also
-    // temporary.
-    base::Time before = base::Time::Now();
-    hr = keyed_mutex->AcquireSync(0, 5000);
-    int wait_duration_ms = (base::Time::Now() - before).InMilliseconds();
-    base::UmaHistogramCounts10000(
-        "Media.VideoCapture.Win.MappingAcquireMutexDelayMs", wait_duration_ms);
-    if (hr == WAIT_TIMEOUT) {
-      // Waited too long, likely a deadlock has happened. Crash report will
-      // have all the threads.
-      SCOPED_CRASH_KEY_NUMBER("KeyedMutexHangDebugging", "wait duration",
-                              wait_duration_ms);
-      base::debug::DumpWithoutCrashing();
-    }
+    // 300ms is long enough to get the mutex in 99.999% of cases. Yet we
+    // don't want to stall the callee indefinitely if the mutex is held by
+    // e.g. GpuMain thread while it's blocked on driver waiting for shader
+    // compilation.
+    // It's better to drop a frame in this case.
+    hr = keyed_mutex->AcquireSync(0, 300);
+
     // Can't check FAILED(hr), because AcquireSync may return e.g. WAIT_TIMEOUT
     // value.
     if (hr != S_OK) {

@@ -96,7 +96,7 @@ ReadJSONRulesResult ParseRulesFromJSON(const RulesetID& ruleset_id,
   if (rules_list.size() > rule_limit && !is_dynamic_ruleset) {
     result.status = ReadJSONRulesResult::Status::kRuleCountLimitExceeded;
     result.error = ErrorUtils::FormatErrorMessage(
-        kIndexingRuleLimitExceeded, std::to_string(ruleset_id.value()));
+        kIndexingRuleLimitExceeded, base::NumberToString(ruleset_id.value()));
 
     return result;
   }
@@ -126,15 +126,13 @@ ReadJSONRulesResult ParseRulesFromJSON(const RulesetID& ruleset_id,
       continue;
     }
 
-    std::string rule_location;
-
-    // If possible use the rule ID in the install warning.
-    if (auto id = rules_list[i].GetDict().FindInt(kIDKey)) {
-      rule_location = base::StringPrintf("id %d", *id);
-    } else {
-      // Use one-based indices.
-      rule_location = base::StringPrintf("index %zu", i + 1);
-    }
+    // If possible use the rule ID in the install warning. Otherwise, use a one
+    // based index.
+    auto id = rules_list[i].is_dict() ? rules_list[i].GetDict().FindInt(kIDKey)
+                                      : std::nullopt;
+    std::string rule_location = id.has_value()
+                                    ? base::StringPrintf("id %d", *id)
+                                    : base::StringPrintf("index %zu", i + 1);
 
     result.rule_parse_warnings.push_back(CreateInstallWarning(
         json_path, ErrorUtils::FormatErrorMessage(
@@ -198,9 +196,10 @@ IndexAndPersistJSONRulesetResult IndexAndPersistRuleset(
     warnings.erase(warnings.begin() + kMaxUnparsedRulesWarnings,
                    warnings.end());
     warnings.push_back(CreateInstallWarning(
-        source.json_path(), ErrorUtils::FormatErrorMessage(
-                                kTooManyParseFailuresWarning,
-                                std::to_string(kMaxUnparsedRulesWarnings))));
+        source.json_path(),
+        ErrorUtils::FormatErrorMessage(
+            kTooManyParseFailuresWarning,
+            base::NumberToString(kMaxUnparsedRulesWarnings))));
   }
 
   return IndexAndPersistJSONRulesetResult::CreateSuccessResult(
@@ -301,8 +300,9 @@ std::vector<FileBackedRulesetSource> FileBackedRulesetSource::CreateStatic(
 
   std::vector<FileBackedRulesetSource> sources;
   for (const auto& info : rulesets) {
-    if (!only_enabled || info.enabled)
+    if (!only_enabled || info.enabled) {
       sources.push_back(CreateStatic(extension, info));
+    }
   }
 
   return sources;
@@ -439,15 +439,18 @@ LoadRulesetResult FileBackedRulesetSource::CreateVerifiedMatcher(
 
   base::ElapsedTimer timer;
 
-  if (!base::PathExists(indexed_path()))
+  if (!base::PathExists(indexed_path())) {
     return LoadRulesetResult::kErrorInvalidPath;
+  }
 
   std::string ruleset_data;
-  if (!base::ReadFileToString(indexed_path(), &ruleset_data))
+  if (!base::ReadFileToString(indexed_path(), &ruleset_data)) {
     return LoadRulesetResult::kErrorCannotReadFile;
+  }
 
-  if (!StripVersionHeaderAndParseVersion(&ruleset_data))
+  if (!StripVersionHeaderAndParseVersion(&ruleset_data)) {
     return LoadRulesetResult::kErrorVersionMismatch;
+  }
 
   if (expected_ruleset_checksum !=
       GetChecksum(base::as_byte_span(ruleset_data))) {

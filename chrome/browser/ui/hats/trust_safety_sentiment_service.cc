@@ -5,6 +5,7 @@
 #include "chrome/browser/ui/hats/trust_safety_sentiment_service.h"
 
 #include <map>
+#include <vector>
 
 #include "base/metrics/histogram_functions.h"
 #include "base/rand_util.h"
@@ -13,6 +14,10 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/ui/hats/hats_service.h"
 #include "chrome/browser/ui/hats/hats_service_factory.h"
+#include "chrome/browser/ui/hats/survey_config.h"
+#include "chrome/browser/ui/safety_hub/card_data_helper.h"
+#include "chrome/browser/ui/safety_hub/menu_notification_service_factory.h"
+#include "chrome/browser/ui/safety_hub/safety_hub_constants.h"
 #include "chrome/browser/ui/webui/settings/site_settings_helper.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/chrome_features.h"
@@ -26,6 +31,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
 #include "components/privacy_sandbox/tracking_protection_prefs.h"
+#include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/signin/public/base/signin_pref_names.h"
 #include "components/unified_consent/pref_names.h"
@@ -109,18 +115,16 @@ bool HasNonDefaultPrivacySetting(Profile* profile) {
 
   for (auto content_setting_type :
        site_settings::GetVisiblePermissionCategories()) {
-    std::string content_setting_provider;
+    content_settings::ProviderType content_setting_provider;
     auto current_value = map->GetDefaultContentSetting(
         content_setting_type, &content_setting_provider);
     auto content_setting_source =
-        HostContentSettingsMap::GetSettingSourceFromProviderName(
+        content_settings::GetSettingSourceFromProviderType(
             content_setting_provider);
 
     const bool user_controlled =
-        content_setting_source ==
-            content_settings::SettingSource::SETTING_SOURCE_NONE ||
-        content_setting_source ==
-            content_settings::SettingSource::SETTING_SOURCE_USER;
+        content_setting_source == content_settings::SettingSource::kNone ||
+        content_setting_source == content_settings::SettingSource::kUser;
 
     auto default_value = static_cast<ContentSetting>(
         content_settings::WebsiteSettingsRegistry::GetInstance()
@@ -156,11 +160,11 @@ std::map<std::string, bool> GetPrivacySettingsProductSpecificData(
 // software, or billing threat categories.
 bool IsOtherSBInterstitialCategory(safe_browsing::SBThreatType threat_type) {
   switch (threat_type) {
-    case safe_browsing::SB_THREAT_TYPE_URL_PHISHING:
-    case safe_browsing::SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING:
-    case safe_browsing::SB_THREAT_TYPE_URL_MALWARE:
-    case safe_browsing::SB_THREAT_TYPE_URL_UNWANTED:
-    case safe_browsing::SB_THREAT_TYPE_BILLING:
+    case safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_PHISHING:
+    case safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING:
+    case safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_MALWARE:
+    case safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_UNWANTED:
+    case safe_browsing::SBThreatType::SB_THREAT_TYPE_BILLING:
       return false;
     default:
       return true;
@@ -242,14 +246,16 @@ TrustSafetySentimentService::~TrustSafetySentimentService() {
 void TrustSafetySentimentService::OpenedNewTabPage() {
   // Explicit early exit for the common path, where the user has not performed
   // any of the trigger actions.
-  if (pending_triggers_.size() == 0)
+  if (pending_triggers_.size() == 0) {
     return;
+  }
 
   // Reduce the NTPs to open count for all the active triggers.
   for (auto& area_trigger : pending_triggers_) {
     auto& trigger = area_trigger.second;
-    if (trigger.remaining_ntps_to_open > 0)
+    if (trigger.remaining_ntps_to_open > 0) {
       trigger.remaining_ntps_to_open--;
+    }
   }
 
   // Cleanup any triggers which are no longer relevant. This will be every
@@ -265,19 +271,22 @@ void TrustSafetySentimentService::OpenedNewTabPage() {
                 });
 
   // This may have emptied the set of pending triggers.
-  if (pending_triggers_.size() == 0)
+  if (pending_triggers_.size() == 0) {
     return;
+  }
 
   // A primary OTR profile (incognito) existing will prevent any surveys from
   // being shown.
-  if (profile_->HasPrimaryOTRProfile())
+  if (profile_->HasPrimaryOTRProfile()) {
     return;
+  }
 
   // Check if any of the triggers make the user not yet eligible to receive a
   // survey.
   for (const auto& area_trigger : pending_triggers_) {
-    if (ShouldBlockSurvey(area_trigger.second))
+    if (ShouldBlockSurvey(area_trigger.second)) {
       return;
+    }
   }
 
   // Choose a trigger at random to avoid any order biasing.
@@ -312,8 +321,9 @@ void TrustSafetySentimentService::InteractedWithPrivacySettings(
   // simpler. As interactions with settings (visiting password manager and using
   // the privacy card) can occur independently, there is also little risk of
   // starving one interaction.
-  if (settings_watcher_)
+  if (settings_watcher_) {
     return;
+  }
 
   settings_watcher_ = std::make_unique<SettingsWatcher>(
       web_contents,
@@ -349,7 +359,9 @@ void TrustSafetySentimentService::InteractedWithPageInfo() {
 }
 
 void TrustSafetySentimentService::PageInfoClosed() {
-  DCHECK(page_info_state_);
+  if (!page_info_state_) {
+    return;
+  }
 
   base::TimeDelta threshold =
       base::FeatureList::IsEnabled(features::kTrustSafetySentimentSurveyV2)
@@ -373,8 +385,9 @@ void TrustSafetySentimentService::SavedPassword() {
 
 void TrustSafetySentimentService::OpenedPasswordManager(
     content::WebContents* web_contents) {
-  if (settings_watcher_)
+  if (settings_watcher_) {
     return;
+  }
 
   std::map<std::string, bool> product_specific_data = {
       {"Saved password", false}};
@@ -424,11 +437,6 @@ void TrustSafetySentimentService::FinishedPrivacyGuide() {
   TriggerOccurred(FeatureArea::kPrivacyGuide, {});
 }
 
-void TrustSafetySentimentService::InteractedWithPrivacySandbox4(
-    FeatureArea feature_area) {
-  TriggerOccurred(feature_area, {});
-}
-
 void TrustSafetySentimentService::InteractedWithSafeBrowsingInterstitial(
     bool did_proceed,
     safe_browsing::SBThreatType threat_type) {
@@ -437,14 +445,15 @@ void TrustSafetySentimentService::InteractedWithSafeBrowsingInterstitial(
   product_specific_data["Enhanced protection enabled"] =
       safe_browsing::IsEnhancedProtectionEnabled(*profile_->GetPrefs());
   product_specific_data["Threat is phishing"] =
-      threat_type == safe_browsing::SB_THREAT_TYPE_URL_PHISHING ||
-      threat_type == safe_browsing::SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING;
+      threat_type == safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_PHISHING ||
+      threat_type ==
+          safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_CLIENT_SIDE_PHISHING;
   product_specific_data["Threat is malware"] =
-      threat_type == safe_browsing::SB_THREAT_TYPE_URL_MALWARE;
+      threat_type == safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_MALWARE;
   product_specific_data["Threat is unwanted software"] =
-      threat_type == safe_browsing::SB_THREAT_TYPE_URL_UNWANTED;
+      threat_type == safe_browsing::SBThreatType::SB_THREAT_TYPE_URL_UNWANTED;
   product_specific_data["Threat is billing"] =
-      threat_type == safe_browsing::SB_THREAT_TYPE_BILLING;
+      threat_type == safe_browsing::SBThreatType::SB_THREAT_TYPE_BILLING;
   DCHECK(!IsOtherSBInterstitialCategory(threat_type));
   TriggerOccurred(FeatureArea::kSafeBrowsingInterstitial,
                   product_specific_data);
@@ -528,8 +537,9 @@ void TrustSafetySentimentService::OnOffTheRecordProfileCreated(
   // Only interested in the primary OTR profile i.e. the one used for incognito
   // browsing. Non-primary OTR profiles are often used as implementation details
   // of other features, and are not inherintly relevant to Trust & Safety.
-  if (off_the_record->GetOTRProfileID() == Profile::OTRProfileID::PrimaryID())
+  if (off_the_record->GetOTRProfileID() == Profile::OTRProfileID::PrimaryID()) {
     observed_profiles_.AddObservation(off_the_record);
+  }
 }
 
 void TrustSafetySentimentService::OnProfileWillBeDestroyed(Profile* profile) {
@@ -599,8 +609,9 @@ void TrustSafetySentimentService::SettingsWatcher::TimerComplete() {
       web_contents_->GetVisibility() == content::Visibility::VISIBLE &&
       web_contents_->GetLastCommittedURL().host_piece() ==
           chrome::kChromeUISettingsHost;
-  if (stayed_on_settings)
+  if (stayed_on_settings) {
     std::move(success_callback_).Run();
+  }
 
   std::move(complete_callback_).Run();
 }
@@ -623,8 +634,9 @@ void TrustSafetySentimentService::TriggerOccurred(
   // Log histogram that verifies infrastructure works as intended.
   base::UmaHistogramEnumeration(
       "Feedback.TrustSafetySentiment.CallTriggerOccurred", feature_area);
-  if (!ProbabilityCheck(feature_area))
+  if (!ProbabilityCheck(feature_area)) {
     return;
+  }
 
   base::UmaHistogramEnumeration("Feedback.TrustSafetySentiment.TriggerOccurred",
                                 feature_area);
@@ -674,6 +686,23 @@ void TrustSafetySentimentService::MaybeTriggerPasswordProtectionSurvey(
   TriggerOccurred(FeatureArea::kPasswordProtectionUI, product_specific_data);
 }
 
+void TrustSafetySentimentService::TriggerSafetyHubSurvey(
+    TrustSafetySentimentService::FeatureArea feature_area,
+    std::map<std::string, bool> product_specific_data) {
+  if (!base::FeatureList::IsEnabled(
+          features::kSafetyHubTrustSafetySentimentSurvey)) {
+    return;
+  }
+  // Delay the trigger to determine whether the user interacted with Safety Hub
+  // soon after the trigger occurred.
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(&TrustSafetySentimentService::TriggerOccurred,
+                     weak_ptr_factory_.GetWeakPtr(), feature_area,
+                     product_specific_data),
+      kSafetyHubSurveyDelay);
+}
+
 // static
 bool TrustSafetySentimentService::VersionCheck(FeatureArea feature_area) {
   bool isV2 =
@@ -685,6 +714,8 @@ bool TrustSafetySentimentService::VersionCheck(FeatureArea feature_area) {
       return isV2 == false;
     // Version 2 only
     case (FeatureArea::kSafetyCheck):
+    case (FeatureArea::kSafetyHubInteracted):
+    case (FeatureArea::kSafetyHubNotification):
     case (FeatureArea::kPasswordCheck):
     case (FeatureArea::kBrowsingData):
     case (FeatureArea::kPrivacyGuide):
@@ -695,17 +726,12 @@ bool TrustSafetySentimentService::VersionCheck(FeatureArea feature_area) {
       return isV2 == true;
     // Both Versions
     case (FeatureArea::kTrustedSurface):
-    case (FeatureArea::kPrivacySandbox4ConsentAccept):
-    case (FeatureArea::kPrivacySandbox4ConsentDecline):
-    case (FeatureArea::kPrivacySandbox4NoticeOk):
-    case (FeatureArea::kPrivacySandbox4NoticeSettings):
       return true;
     // None
     case (FeatureArea::kIneligible):
       return false;
     default:
       NOTREACHED();
-      return false;
   }
 }
 
@@ -718,6 +744,10 @@ std::string TrustSafetySentimentService::GetHatsTriggerForFeatureArea(
         return kHatsSurveyTriggerTrustSafetyV2TrustedSurface;
       case (FeatureArea::kSafetyCheck):
         return kHatsSurveyTriggerTrustSafetyV2SafetyCheck;
+      case (FeatureArea::kSafetyHubInteracted):
+        return kHatsSurveyTriggerTrustSafetyV2SafetyHubInteraction;
+      case (FeatureArea::kSafetyHubNotification):
+        return kHatsSurveyTriggerTrustSafetyV2SafetyHubNotification;
       case (FeatureArea::kPasswordCheck):
         return kHatsSurveyTriggerTrustSafetyV2PasswordCheck;
       case (FeatureArea::kBrowsingData):
@@ -726,14 +756,6 @@ std::string TrustSafetySentimentService::GetHatsTriggerForFeatureArea(
         return kHatsSurveyTriggerTrustSafetyV2PrivacyGuide;
       case (FeatureArea::kControlGroup):
         return kHatsSurveyTriggerTrustSafetyV2ControlGroup;
-      case (FeatureArea::kPrivacySandbox4ConsentAccept):
-        return kHatsSurveyTriggerTrustSafetyV2PrivacySandbox4ConsentAccept;
-      case (FeatureArea::kPrivacySandbox4ConsentDecline):
-        return kHatsSurveyTriggerTrustSafetyV2PrivacySandbox4ConsentDecline;
-      case (FeatureArea::kPrivacySandbox4NoticeOk):
-        return kHatsSurveyTriggerTrustSafetyV2PrivacySandbox4NoticeOk;
-      case (FeatureArea::kPrivacySandbox4NoticeSettings):
-        return kHatsSurveyTriggerTrustSafetyV2PrivacySandbox4NoticeSettings;
       case (FeatureArea::kSafeBrowsingInterstitial):
         return kHatsSurveyTriggerTrustSafetyV2SafeBrowsingInterstitial;
       case (FeatureArea::kDownloadWarningUI):
@@ -742,7 +764,6 @@ std::string TrustSafetySentimentService::GetHatsTriggerForFeatureArea(
         return kHatsSurveyTriggerTrustSafetyV2PasswordProtectionUI;
       default:
         NOTREACHED();
-        return "";
     }
   }
   switch (feature_area) {
@@ -752,17 +773,8 @@ std::string TrustSafetySentimentService::GetHatsTriggerForFeatureArea(
       return kHatsSurveyTriggerTrustSafetyTrustedSurface;
     case (FeatureArea::kTransactions):
       return kHatsSurveyTriggerTrustSafetyTransactions;
-    case (FeatureArea::kPrivacySandbox4ConsentAccept):
-      return kHatsSurveyTriggerTrustSafetyPrivacySandbox4ConsentAccept;
-    case (FeatureArea::kPrivacySandbox4ConsentDecline):
-      return kHatsSurveyTriggerTrustSafetyPrivacySandbox4ConsentDecline;
-    case (FeatureArea::kPrivacySandbox4NoticeOk):
-      return kHatsSurveyTriggerTrustSafetyPrivacySandbox4NoticeOk;
-    case (FeatureArea::kPrivacySandbox4NoticeSettings):
-      return kHatsSurveyTriggerTrustSafetyPrivacySandbox4NoticeSettings;
     default:
       NOTREACHED();
-      return "";
   }
 }
 
@@ -782,6 +794,16 @@ bool TrustSafetySentimentService::ProbabilityCheck(FeatureArea feature_area) {
         return base::RandDouble() <
                features::kTrustSafetySentimentSurveyV2SafetyCheckProbability
                    .Get();
+      case (FeatureArea::kSafetyHubInteracted):
+        return base::RandDouble() <
+               features::
+                   kTrustSafetySentimentSurveyV2SafetyHubInteractionProbability
+                       .Get();
+      case (FeatureArea::kSafetyHubNotification):
+        return base::RandDouble() <
+               features::
+                   kTrustSafetySentimentSurveyV2SafetyHubNotificationProbability
+                       .Get();
       case (FeatureArea::kPasswordCheck):
         return base::RandDouble() <
                features::kTrustSafetySentimentSurveyV2PasswordCheckProbability
@@ -798,26 +820,6 @@ bool TrustSafetySentimentService::ProbabilityCheck(FeatureArea feature_area) {
         return base::RandDouble() <
                features::kTrustSafetySentimentSurveyV2ControlGroupProbability
                    .Get();
-      case (FeatureArea::kPrivacySandbox4ConsentAccept):
-        return base::RandDouble() <
-               features::
-                   kTrustSafetySentimentSurveyV2PrivacySandbox4ConsentAcceptProbability
-                       .Get();
-      case (FeatureArea::kPrivacySandbox4ConsentDecline):
-        return base::RandDouble() <
-               features::
-                   kTrustSafetySentimentSurveyV2PrivacySandbox4ConsentDeclineProbability
-                       .Get();
-      case (FeatureArea::kPrivacySandbox4NoticeOk):
-        return base::RandDouble() <
-               features::
-                   kTrustSafetySentimentSurveyV2PrivacySandbox4NoticeOkProbability
-                       .Get();
-      case (FeatureArea::kPrivacySandbox4NoticeSettings):
-        return base::RandDouble() <
-               features::
-                   kTrustSafetySentimentSurveyV2PrivacySandbox4NoticeSettingsProbability
-                       .Get();
       case (FeatureArea::kSafeBrowsingInterstitial):
         return base::RandDouble() <
                features::
@@ -835,7 +837,6 @@ bool TrustSafetySentimentService::ProbabilityCheck(FeatureArea feature_area) {
                        .Get();
       default:
         NOTREACHED();
-        return false;
     }
   }
 
@@ -851,28 +852,7 @@ bool TrustSafetySentimentService::ProbabilityCheck(FeatureArea feature_area) {
     case (FeatureArea::kTransactions):
       return base::RandDouble() <
              features::kTrustSafetySentimentSurveyTransactionsProbability.Get();
-    case (FeatureArea::kPrivacySandbox4ConsentAccept):
-      return base::RandDouble() <
-             features::
-                 kTrustSafetySentimentSurveyPrivacySandbox4ConsentAcceptProbability
-                     .Get();
-    case (FeatureArea::kPrivacySandbox4ConsentDecline):
-      return base::RandDouble() <
-             features::
-                 kTrustSafetySentimentSurveyPrivacySandbox4ConsentDeclineProbability
-                     .Get();
-    case (FeatureArea::kPrivacySandbox4NoticeOk):
-      return base::RandDouble() <
-             features::
-                 kTrustSafetySentimentSurveyPrivacySandbox4NoticeOkProbability
-                     .Get();
-    case (FeatureArea::kPrivacySandbox4NoticeSettings):
-      return base::RandDouble() <
-             features::
-                 kTrustSafetySentimentSurveyPrivacySandbox4NoticeSettingsProbability
-                     .Get();
     default:
       NOTREACHED();
-      return false;
   }
 }

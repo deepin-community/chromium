@@ -6,18 +6,18 @@
 
 #include "base/memory/scoped_refptr.h"
 #include "base/version.h"
-#include "chrome/browser/component_updater/cros_component_manager.h"
+#include "chromeos/crosapi/mojom/crosapi.mojom.h"
+#include "components/component_updater/ash/component_manager_ash.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace {
 
-class MockCrOSComponentManager
-    : public component_updater::CrOSComponentManager {
+class MockComponentManagerAsh : public component_updater::ComponentManagerAsh {
  public:
-  MockCrOSComponentManager() = default;
+  MockComponentManagerAsh() = default;
 
-  MockCrOSComponentManager(const MockCrOSComponentManager&) = delete;
-  MockCrOSComponentManager& operator=(const MockCrOSComponentManager&) = delete;
+  MockComponentManagerAsh(const MockComponentManagerAsh&) = delete;
+  MockComponentManagerAsh& operator=(const MockComponentManagerAsh&) = delete;
 
   MOCK_METHOD(void, SetDelegate, (Delegate * delegate), (override));
   MOCK_METHOD(void,
@@ -53,52 +53,15 @@ class MockCrOSComponentManager
   MOCK_METHOD(void, RegisterInstalled, (), (override));
 
  protected:
-  ~MockCrOSComponentManager() override = default;
+  ~MockComponentManagerAsh() override = default;
 };
 
 }  // namespace
 
 namespace crosapi {
 
-FakeBrowserManager::FakeBrowserManager()
-    : BrowserManager(base::MakeRefCounted<MockCrOSComponentManager>()) {}
-
+FakeBrowserManager::FakeBrowserManager() = default;
 FakeBrowserManager::~FakeBrowserManager() = default;
-
-void FakeBrowserManager::SetGetFeedbackDataResponse(
-    base::Value::Dict response) {
-  feedback_response_ = std::move(response);
-}
-
-void FakeBrowserManager::SignalMojoDisconnected() {
-  SetState(State::TERMINATING);
-}
-
-void FakeBrowserManager::StartRunning() {
-  SetState(State::RUNNING);
-}
-
-void FakeBrowserManager::StopRunning() {
-  SetState(State::STOPPED);
-}
-
-void FakeBrowserManager::NewFullscreenWindow(
-    const GURL& url,
-    BrowserManager::NewFullscreenWindowCallback callback) {
-  std::move(callback).Run(new_fullscreen_window_creation_result_);
-}
-
-void FakeBrowserManager::GetFeedbackData(GetFeedbackDataCallback callback) {
-  // Run |callback| with the pre-set |feedback_responses_|, unless testing
-  // client requests waiting for crosapi mojo disconnected event being observed.
-  if (!wait_for_mojo_disconnect_) {
-    std::move(callback).Run(std::move(feedback_response_));
-  }
-}
-
-void FakeBrowserManager::InitializeAndStartIfNeeded() {
-  StartRunning();
-}
 
 void FakeBrowserManager::OnSessionStateChanged() {}
 

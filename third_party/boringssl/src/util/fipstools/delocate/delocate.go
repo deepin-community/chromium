@@ -1,16 +1,16 @@
-// Copyright (c) 2017, Google Inc.
+// Copyright 2017 The BoringSSL Authors
 //
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
-// SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
-// OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
-// CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // delocate performs several transformations of textual assembly code. See
 // crypto/fipsmodule/FIPS.md for an overview.
@@ -35,7 +35,7 @@ import (
 // inputFile represents a textual assembly file.
 type inputFile struct {
 	path string
-	// index is a unique identifer given to this file. It's used for
+	// index is a unique identifier given to this file. It's used for
 	// mapping local symbols.
 	index int
 	// isArchive indicates that the input should be processed as an ar
@@ -195,7 +195,7 @@ func (d *delocation) processDirective(statement, directive *node32) (*node32, er
 		if len(args) < 1 {
 			return nil, errors.New("comm directive has no arguments")
 		}
-		d.bssAccessorsNeeded[args[0]] = args[0]
+		d.bssAccessorsNeeded[demangle(args[0])] = args[0]
 		d.writeNode(statement)
 
 	case "data":
@@ -589,11 +589,15 @@ func (d *delocation) processAarch64Instruction(statement, instruction *node32) (
 							panic("Symbol reference outside of ldr instruction")
 						}
 
-						if skipWS(parts.next) != nil || parts.up.next != nil {
-							panic("can't handle tweak or post-increment with symbol references")
-						}
-
-						// Suppress the offset; adrp loaded the full address.
+						// Suppress the offset; adrp loaded the full address. This assumes the
+						// the compiler does not emit code like the following:
+						//
+						//   adrp x0, symbol
+						//   ldr x1, [x0, :lo12:symbol]
+						//   ldr x2, [x0, :lo12:symbol+4]
+						//
+						// Such code would only work if lo12(symbol+4) = lo12(symbol) + 4, but
+						// this is true when symbol is sufficiently aligned.
 						args = append(args, "["+baseAddrReg+"]")
 						changed = true
 						continue
@@ -610,6 +614,15 @@ func (d *delocation) processAarch64Instruction(statement, instruction *node32) (
 				// The adrp instruction will have been turned into a sequence that loads
 				// the full address, above, thus the offset is turned into zero. If that
 				// results in the instruction being a nop, then it is deleted.
+				//
+				// This assumes the compiler does not emit code like the following:
+				//
+				//   adrp x0, symbol
+				//   add x1, x0, :lo12:symbol
+				//   add x2, x0, :lo12:symbol+4
+				//
+				// Such code would only work if lo12(symbol+4) = lo12(symbol) + 4, but
+				// this is true when symbol is sufficiently aligned.
 				if instructionName != "add" {
 					panic(fmt.Sprintf("unsure how to handle %q instruction using lo12", instructionName))
 				}
@@ -923,6 +936,12 @@ func (d *delocation) isRIPRelative(node *node32) bool {
 }
 
 func (d *delocation) processIntelInstruction(statement, instruction *node32) (*node32, error) {
+	var prefix string
+	if instruction.pegRule == ruleInstructionPrefix {
+		prefix = d.contents(instruction)
+		instruction = skipWS(instruction.next)
+	}
+
 	assertNodeType(instruction, ruleInstructionName)
 	instructionName := d.contents(instruction)
 
@@ -1240,6 +1259,9 @@ Args:
 	if changed {
 		d.writeCommentedNode(statement)
 		replacement := "\t" + instructionName + "\t" + strings.Join(args, ", ") + "\n"
+		if len(prefix) != 0 {
+			replacement = "\t" + prefix + replacement
+		}
 		wrappers.do(func() {
 			d.output.WriteString(replacement)
 		})
@@ -1281,7 +1303,7 @@ func (d *delocation) handleBSS(statement *node32) (*node32, error) {
 				localSymbol := localTargetName(symbol)
 				d.output.WriteString(fmt.Sprintf("\n%s:\n", localSymbol))
 
-				d.bssAccessorsNeeded[symbol] = localSymbol
+				d.bssAccessorsNeeded[demangle(symbol)] = localSymbol
 			}
 
 		case ruleLabelContainingDirective:
@@ -1789,6 +1811,42 @@ func isSynthesized(symbol string) bool {
 
 func redirectorName(symbol string) string {
 	return "bcm_redirector_" + symbol
+}
+
+// Optionally demangle C++ local variable names.
+func demangle(symbol string) string {
+	if !strings.HasPrefix(symbol, "_Z") {
+		return symbol
+	}
+
+	// The names must have the form "_ZL", followed by the length of the name
+	// in base 10, followed by the name.
+	if !strings.HasPrefix(symbol, "_ZL") {
+		panic("malformed symbol: starts with _Z but not _ZL")
+	}
+
+	if len(symbol) < 4 {
+		panic("malformed symbol: too short")
+	}
+
+	pos := 3
+	for pos < len(symbol) && '0' <= symbol[pos] && symbol[pos] <= '9' {
+		pos++
+	}
+	if pos == 3 {
+		panic("malformed symbol: no length digits")
+	}
+
+	length, err := strconv.Atoi(symbol[3:pos])
+	if err != nil {
+		panic("malformed symbol: invalid length")
+	}
+
+	if len(symbol[pos:]) != length {
+		panic("malformed symbol: length mismatch")
+	}
+
+	return symbol[pos:]
 }
 
 // sectionType returns the type of a section. I.e. a section called “.text.foo”

@@ -2,15 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/webauthn/android/cable_module_android.h"
 
 #include "base/android/jni_array.h"
 #include "base/base64.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/no_destructor.h"
-#include "base/sys_byteorder.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "chrome/browser/browser_process.h"
@@ -306,33 +311,7 @@ GetSyncDataIfRegisteredInternal() {
     }
   }
 
-  if (!state->device_supports_cable()) {
-    return syncer::DeviceInfo::PhoneAsASecurityKeyInfo::NoSupport();
-  }
-
-  syncer::DeviceInfo::PhoneAsASecurityKeyInfo paask_info;
-  paask_info.tunnel_server_domain = device::cablev2::kTunnelServer.value();
-  paask_info.contact_id = *state->sync_registration()->contact_id();
-  const uint32_t pairing_id = device::cablev2::sync::IDNow();
-  paask_info.id = pairing_id;
-
-  std::array<uint8_t, device::cablev2::kPairingIDSize> pairing_id_bytes = {0};
-  static_assert(sizeof(pairing_id) <= EXTENT(pairing_id_bytes), "");
-  memcpy(pairing_id_bytes.data(), &pairing_id, sizeof(pairing_id));
-
-  paask_info.secret = device::cablev2::Derive<EXTENT(paask_info.secret)>(
-      state->secret(), pairing_id_bytes,
-      device::cablev2::DerivedValueType::kPairedSecret);
-
-  CHECK_EQ(paask_info.peer_public_key_x962.size(),
-           EC_POINT_point2oct(EC_KEY_get0_group(state->identity_key()),
-                              EC_KEY_get0_public_key(state->identity_key()),
-                              POINT_CONVERSION_UNCOMPRESSED,
-                              paask_info.peer_public_key_x962.data(),
-                              paask_info.peer_public_key_x962.size(),
-                              /*ctx=*/nullptr));
-
-  return paask_info;
+  return syncer::DeviceInfo::PhoneAsASecurityKeyInfo::NoSupport();
 }
 
 void SetPrefIfDifferent(PrefService* state,
@@ -450,7 +429,7 @@ syncer::DeviceInfo::PhoneAsASecurityKeyInfo::StatusOrInfo CacheResult(
     return result;
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 }  // namespace internal

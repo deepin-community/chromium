@@ -114,8 +114,8 @@ void PushMessagingNotificationManager::EnforceUserVisibleOnlyRequirements(
     bool requested_user_visible_only) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
-  if (ShouldSkipUserVisibleOnlyRequirements(origin,
-                                            requested_user_visible_only)) {
+  if (ShouldBypassUserVisibleOnlyRequirement(origin,
+                                             requested_user_visible_only)) {
     std::move(message_handled_callback)
         .Run(/* did_show_generic_notification= */ false);
     LogSilentPushEvent(SilentPushEvent::kNotificationEnforcementSkipped);
@@ -145,7 +145,7 @@ void PushMessagingNotificationManager::DidCountVisibleNotifications(
   // user-visible action done in response to a push message - but make sure that
   // sending two messages in rapid succession which show then hide a
   // notification doesn't count.
-  // TODO(crbug.com/891339): Scheduling a notification should count as a
+  // TODO(crbug.com/40596304): Scheduling a notification should count as a
   // user-visible action, if it is not immediately cancelled or the |origin|
   // schedules too many notifications too far in the future.
   bool notification_shown = notification_count > 0;
@@ -275,12 +275,12 @@ void PushMessagingNotificationManager::DidWriteNotificationData(
   LogSilentPushEvent(SilentPushEvent::kAllowedWithGenericNotification);
 }
 
-bool PushMessagingNotificationManager::ShouldSkipUserVisibleOnlyRequirements(
+bool PushMessagingNotificationManager::ShouldBypassUserVisibleOnlyRequirement(
     const GURL& origin,
     bool requested_user_visible_only) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   if (origin.SchemeIs(extensions::kExtensionScheme)) {
-    return ShouldSkipExtensionUserVisibleOnlyRequirements(
+    return ShouldExtensionsBypassUserVisibleOnlyRequirement(
         origin, requested_user_visible_only);
   }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
@@ -297,7 +297,7 @@ void PushMessagingNotificationManager::LogSilentPushEvent(
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 bool PushMessagingNotificationManager::
-    ShouldSkipExtensionUserVisibleOnlyRequirements(
+    ShouldExtensionsBypassUserVisibleOnlyRequirement(
         const GURL& origin,
         bool requested_user_visible_only) {
   // Worker based extensions are exempt from the user visible requirement only

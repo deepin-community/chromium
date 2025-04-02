@@ -56,30 +56,25 @@ EligibleHostDevicesProviderImpl::~EligibleHostDevicesProviderImpl() {
 
 multidevice::RemoteDeviceRefList
 EligibleHostDevicesProviderImpl::GetEligibleHostDevices() const {
-  // When enabled, this is equivalent to GetEligibleActiveHostDevices() without
+  // This is equivalent to GetEligibleActiveHostDevices() without
   // the connectivity data.
   // TODO(https://crbug.com/1229876): Consolidate GetEligibleHostDevices() and
   // GetEligibleActiveHostDevices().
-  if (base::FeatureList::IsEnabled(
-          features::kCryptAuthV2AlwaysUseActiveEligibleHosts)) {
-    multidevice::RemoteDeviceRefList eligible_active_devices;
-    for (const auto& device : eligible_active_devices_from_last_sync_) {
-      if (device.remote_device.instance_id().empty() &&
-          device.remote_device.GetDeviceId().empty()) {
-        // TODO(b/207089877): Add a metric to capture the frequency of missing
-        // device id.
-        PA_LOG(WARNING) << __func__
-                        << ": encountered device with missing Instance ID and "
-                           "legacy device ID";
-        continue;
-      }
-      eligible_active_devices.push_back(device.remote_device);
+  multidevice::RemoteDeviceRefList eligible_active_devices;
+  for (const auto& device : eligible_active_devices_from_last_sync_) {
+    if (device.remote_device.instance_id().empty() &&
+        device.remote_device.GetDeviceId().empty()) {
+      // TODO(b/207089877): Add a metric to capture the frequency of missing
+      // device id.
+      PA_LOG(WARNING) << __func__
+                      << ": encountered device with missing Instance ID and "
+                         "legacy device ID";
+      continue;
     }
-
-    return eligible_active_devices;
+    eligible_active_devices.push_back(device.remote_device);
   }
 
-  return eligible_devices_from_last_sync_;
+  return eligible_active_devices;
 }
 
 multidevice::DeviceWithConnectivityStatusList
@@ -138,6 +133,8 @@ void EligibleHostDevicesProviderImpl::UpdateEligibleDevicesSet() {
     device_sync_client_->GetDevicesActivityStatus(base::BindOnce(
         &EligibleHostDevicesProviderImpl::OnGetDevicesActivityStatus,
         base::Unretained(this)));
+  } else {
+    NotifyObserversEligibleDevicesSynced();
   }
 }
 
@@ -147,6 +144,7 @@ void EligibleHostDevicesProviderImpl::OnGetDevicesActivityStatus(
         devices_activity_status_optional) {
   if (network_result != device_sync::mojom::NetworkRequestResult::kSuccess ||
       !devices_activity_status_optional) {
+    NotifyObserversEligibleDevicesSynced();
     return;
   }
 
@@ -277,41 +275,69 @@ void EligibleHostDevicesProviderImpl::OnGetDevicesActivityStatus(
   // the device with the most recent |last_update_time| or
   // |last_update_time_millis|. Note: |eligible_active_devices_from_last_sync_|
   // is already sorted in the preferred order.
-  if (base::FeatureList::IsEnabled(
-          features::kCryptAuthV2DedupDeviceLastActivityTime)) {
-    base::flat_set<base::Time> set_of_same_last_activity_time;
-    eligible_active_devices_from_last_sync_.erase(
-        std::remove_if(
-            eligible_active_devices_from_last_sync_.begin(),
-            eligible_active_devices_from_last_sync_.end(),
-            [&id_to_activity_status_map, &set_of_same_last_activity_time](
-                const multidevice::DeviceWithConnectivityStatus& device) {
-              auto it = id_to_activity_status_map.find(
-                  device.remote_device.instance_id());
+  base::flat_set<base::Time> set_of_same_last_activity_time;
+  eligible_active_devices_from_last_sync_.erase(
+      std::remove_if(
+          eligible_active_devices_from_last_sync_.begin(),
+          eligible_active_devices_from_last_sync_.end(),
+          [&id_to_activity_status_map, &set_of_same_last_activity_time](
+              const multidevice::DeviceWithConnectivityStatus& device) {
+            auto it = id_to_activity_status_map.find(
+                device.remote_device.instance_id());
 
-              if (it == id_to_activity_status_map.end()) {
-                return false;
-              }
-
-              base::Time last_activity_time =
-                  std::get<1>(*it)->last_activity_time;
-
-              // Do not filter out devices if the last activity time was not set
-              // by the server, as indicated by a trivial base::Time value.
-              if (last_activity_time.is_null()) {
-                return false;
-              }
-
-              if (set_of_same_last_activity_time.contains(last_activity_time)) {
-                return true;
-              }
-
-              set_of_same_last_activity_time.insert(last_activity_time);
-
+            if (it == id_to_activity_status_map.end()) {
               return false;
-            }),
-        eligible_active_devices_from_last_sync_.end());
-  }
+            }
+
+            base::Time last_activity_time =
+                std::get<1>(*it)->last_activity_time;
+
+            // Do not filter out devices if the last activity time was not set
+            // by the server, as indicated by a trivial base::Time value.
+            if (last_activity_time.is_null()) {
+              return false;
+            }
+
+            if (set_of_same_last_activity_time.contains(last_activity_time)) {
+              return true;
+            }
+
+            set_of_same_last_activity_time.insert(last_activity_time);
+            return false;
+          }),
+      eligible_active_devices_from_last_sync_.end());
+
+  // Remove devices that have duplicate `bluetooth_public_addresses`, which
+  // indicate they are the same device. Filter after the other sorting happens
+  // to keep the most recent version of the phone when there's duplicates
+  base::flat_set<std::string> set_of_same_public_bluetooth_address;
+  eligible_active_devices_from_last_sync_.erase(
+      std::remove_if(
+          eligible_active_devices_from_last_sync_.begin(),
+          eligible_active_devices_from_last_sync_.end(),
+          [&set_of_same_public_bluetooth_address](
+              const multidevice::DeviceWithConnectivityStatus& device) {
+            const std::string& bluetooth_public_address =
+                device.remote_device.bluetooth_public_address();
+
+            // Do not filter out devices if the `bluetooth_public_address`
+            // is not available.
+            if (bluetooth_public_address.empty()) {
+              return false;
+            }
+
+            if (set_of_same_public_bluetooth_address.contains(
+                    bluetooth_public_address)) {
+              return true;
+            }
+
+            set_of_same_public_bluetooth_address.insert(
+                bluetooth_public_address);
+            return false;
+          }),
+      eligible_active_devices_from_last_sync_.end());
+
+  NotifyObserversEligibleDevicesSynced();
 }
 
 }  // namespace multidevice_setup

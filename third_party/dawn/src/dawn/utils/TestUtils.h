@@ -28,10 +28,12 @@
 #ifndef SRC_DAWN_UTILS_TESTUTILS_H_
 #define SRC_DAWN_UTILS_TESTUTILS_H_
 
+#include <webgpu/webgpu_cpp.h>
+
 #include <functional>
 #include <ostream>
 
-#include "dawn/webgpu_cpp.h"
+#include "dawn/common/Constants.h"
 
 namespace dawn::utils {
 
@@ -66,7 +68,9 @@ struct TextureDataCopyLayout {
     wgpu::Extent3D mipSize;
 };
 
-uint32_t GetMinimumBytesPerRow(wgpu::TextureFormat format, uint32_t width);
+uint32_t GetMinimumBytesPerRow(wgpu::TextureFormat format,
+                               uint32_t width,
+                               uint32_t textureBytesPerRowAlignment = kTextureBytesPerRowAlignment);
 TextureDataCopyLayout GetTextureDataCopyLayoutForTextureAtLevel(
     wgpu::TextureFormat format,
     wgpu::Extent3D textureSizeAtLevel0,

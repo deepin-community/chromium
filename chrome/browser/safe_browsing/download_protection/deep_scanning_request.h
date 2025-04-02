@@ -14,6 +14,7 @@
 #include "base/observer_list.h"
 #include "base/time/time.h"
 #include "base/types/optional_ref.h"
+#include "chrome/browser/download/download_item_warning_data.h"
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/binary_upload_service.h"
@@ -22,6 +23,7 @@
 #include "chrome/browser/safe_browsing/cloud_content_scanning/file_opening_job.h"
 #include "chrome/browser/safe_browsing/download_protection/download_protection_util.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/enterprise/obfuscation/core/download_obfuscator.h"
 
 namespace download {
 class DownloadItem;
@@ -36,23 +38,6 @@ class DownloadRequestMaker;
 // deep scanning and reporting the result.
 class DeepScanningRequest : public download::DownloadItem::Observer {
  public:
-  // Enum representing the trigger of the scan request.
-  // These values are persisted to logs. Entries should not be renumbered and
-  // numeric values should never be reused.
-  enum class DeepScanTrigger {
-    // The trigger is unknown.
-    TRIGGER_UNKNOWN = 0,
-
-    // The trigger is the prompt in the download shelf, shown for Advanced
-    // Protection or Enhanced Protection users.
-    TRIGGER_CONSUMER_PROMPT = 1,
-
-    // The trigger is the enterprise policy.
-    TRIGGER_POLICY = 2,
-
-    kMaxValue = TRIGGER_POLICY,
-  };
-
   // Enum representing the type of constructor that initiated scanning.
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
@@ -84,7 +69,7 @@ class DeepScanningRequest : public download::DownloadItem::Observer {
   // will be provided through `callback`. Take a references to the owning
   // `download_service`.
   DeepScanningRequest(download::DownloadItem* item,
-                      DeepScanTrigger trigger,
+                      DownloadItemWarningData::DeepScanTrigger trigger,
                       DownloadCheckResult pre_scan_download_check_result,
                       CheckDownloadRepeatingCallback callback,
                       DownloadProtectionService* download_service,
@@ -155,12 +140,9 @@ class DeepScanningRequest : public download::DownloadItem::Observer {
   // notifying |download_service_|.
   void FinishRequest(DownloadCheckResult result);
 
-  // Called to attempt to show the modal dialog for scan failure. Returns
-  // whether the dialog was successfully shown.
-  bool MaybeShowDeepScanFailureModalDialog(base::OnceClosure accept_callback,
-                                           base::OnceClosure cancel_callback,
-                                           base::OnceClosure close_callback,
-                                           base::OnceClosure open_now_callback);
+  // Called to verify if `result` is considered as a failure and the scan should
+  // end early.
+  bool ShouldTerminateEarly(BinaryUploadService::Result result);
 
   // Called to open the download. This is triggered by the timeout modal dialog.
   void OpenDownload();
@@ -177,27 +159,46 @@ class DeepScanningRequest : public download::DownloadItem::Observer {
       const base::FilePath& current_path,
       std::unique_ptr<FileAnalysisRequest> deep_scan_request);
 
-  // Wrapper around OnDownloadRequestReady to facilitate opening files in
-  // parallel for save package scans.
-  void OnGotRequestData(const base::FilePath& final_path,
-                        const base::FilePath& current_path,
-                        std::unique_ptr<FileAnalysisRequest> request,
-                        BinaryUploadService::Result result,
-                        BinaryUploadService::Request::Data data);
+  // Callback invoked in `StartSingleFileScan` to check if `data` has been
+  // successfully fetched and ready for deep scanning if needed.
+  void OnGetFileRequestData(const base::FilePath& file_path,
+                            std::unique_ptr<FileAnalysisRequest> request,
+                            BinaryUploadService::Result result,
+                            BinaryUploadService::Request::Data data);
+
+  // Callback invoked in `StartSavePackageScan` to check if `data` of a file in
+  // package has been successfully fetched and ready for deep scanning if
+  // needed.
+  void OnGetPackageFileRequestData(const base::FilePath& final_path,
+                                   const base::FilePath& current_path,
+                                   std::unique_ptr<FileAnalysisRequest> request,
+                                   BinaryUploadService::Result result,
+                                   BinaryUploadService::Request::Data data);
 
   // Helper function to simplify checking if the report-only feature is set in
   // conjunction with the corresponding policy value.
   bool ReportOnlyScan();
 
   // Acknowledge the request's handling to the service provider.
-  void AcknowledgeRequest(EventResult event_result);
+  void AcknowledgeRequest(enterprise_connectors::EventResult event_result);
+
+  bool IsEnterpriseTriggered() const;
+  bool IsConsumerTriggered() const;
+
+  // Callback for when deobfuscation of the file is completed.
+  void OnDeobfuscationComplete(
+      DownloadCheckResult download_result,
+      base::expected<void, enterprise_obfuscation::Error> result);
+
+  // Provides scan result to `callback_` and clean up.
+  void CallbackAndCleanup(DownloadCheckResult result);
 
   // The download item to scan. This is unowned, and could become nullptr if the
   // download is destroyed.
   raw_ptr<download::DownloadItem> item_;
 
   // The reason for deep scanning.
-  DeepScanTrigger trigger_;
+  DownloadItemWarningData::DeepScanTrigger trigger_;
 
   // The callback to provide the scan result to.
   CheckDownloadRepeatingCallback callback_;
@@ -256,7 +257,8 @@ class DeepScanningRequest : public download::DownloadItem::Observer {
 
   // Cached callbacks to report scanning results until the final `event_result_`
   // is known. The callbacks in this list should be called in FinishRequest.
-  base::OnceCallbackList<void(EventResult result)> report_callbacks_;
+  base::OnceCallbackList<void(enterprise_connectors::EventResult result)>
+      report_callbacks_;
 
   // The request tokens of all the requests that make up the user action
   // represented by this ContentAnalysisDelegate instance.

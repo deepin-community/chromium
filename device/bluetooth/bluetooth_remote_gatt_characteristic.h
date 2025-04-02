@@ -134,7 +134,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattCharacteristic
   virtual void StartNotifySession(NotifySessionCallback callback,
                                   ErrorCallback error_callback);
 #if BUILDFLAG(IS_CHROMEOS)
-  // TODO(https://crbug.com/849359): This method should also be implemented on
+  // TODO(crbug.com/40579213): This method should also be implemented on
   // Android and Windows.
   // macOS does not support specifying a notification type. According to macOS
   // documentation if the characteristic supports both notify and indicate, only
@@ -153,7 +153,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattCharacteristic
   // using the specified |write_type|. |callback| is called to signal success
   // and |error_callback| for failures. This method only applies to remote
   // characteristics and will fail for those that are locally hosted.
-  virtual void WriteRemoteCharacteristic(const std::vector<uint8_t>& value,
+  virtual void WriteRemoteCharacteristic(base::span<const uint8_t> value,
                                          WriteType write_type,
                                          base::OnceClosure callback,
                                          ErrorCallback error_callback) = 0;
@@ -165,7 +165,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattCharacteristic
   // This method only applies to remote characteristics and will fail for those
   // that are locally hosted.
   virtual void DeprecatedWriteRemoteCharacteristic(
-      const std::vector<uint8_t>& value,
+      base::span<const uint8_t> value,
       base::OnceClosure callback,
       ErrorCallback error_callback) = 0;
 
@@ -177,7 +177,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattCharacteristic
   // Callers should use BluetoothDevice::ExecuteWrite() to commit or
   // BluetoothDevice::AbortWrite() to abort the change.
   virtual void PrepareWriteRemoteCharacteristic(
-      const std::vector<uint8_t>& value,
+      base::span<const uint8_t> value,
       base::OnceClosure callback,
       ErrorCallback error_callback) = 0;
 #endif  // BUILDFLAG(IS_CHROMEOS)
@@ -196,7 +196,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothRemoteGattCharacteristic
 #if BUILDFLAG(IS_CHROMEOS)
   // |notification_type| specifies the type of notifications that will be
   // enabled: notifications or indications.
-  // TODO(https://crbug.com/849359): This method should also be implemented on
+  // TODO(crbug.com/40579213): This method should also be implemented on
   // Android and Windows.
   virtual void SubscribeToNotifications(
       BluetoothRemoteGattDescriptor* ccc_descriptor,

@@ -30,8 +30,10 @@ String LinearTimingFunction::ToString() const {
   return builder.ReleaseString();
 }
 
-double LinearTimingFunction::Evaluate(double fraction) const {
-  return linear_->GetValue(fraction);
+double LinearTimingFunction::Evaluate(
+    double fraction,
+    TimingFunction::LimitDirection limit_direction) const {
+  return linear_->GetValue(fraction, limit_direction);
 }
 
 void LinearTimingFunction::Range(double* min_value, double* max_value) const {
@@ -102,7 +104,6 @@ CubicBezierTimingFunction* CubicBezierTimingFunction::Preset(
       return ease_in_out;
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -123,11 +124,12 @@ String CubicBezierTimingFunction::ToString() const {
              String::NumberToStringECMAScript(Y2()) + ")";
     default:
       NOTREACHED();
-      return "";
   }
 }
 
-double CubicBezierTimingFunction::Evaluate(double fraction) const {
+double CubicBezierTimingFunction::Evaluate(
+    double fraction,
+    TimingFunction::LimitDirection limit_direction) const {
   return bezier_->bezier().Solve(fraction);
 }
 
@@ -199,12 +201,7 @@ void StepsTimingFunction::Range(double* min_value, double* max_value) const {
 
 double StepsTimingFunction::Evaluate(double fraction,
                                      LimitDirection limit_direction) const {
-  return steps_->GetPreciseValue(fraction, limit_direction);
-}
-
-double StepsTimingFunction::Evaluate(double fraction) const {
-  NOTREACHED() << "Use Evaluate(fraction, limit_direction) instead.";
-  return steps_->GetPreciseValue(fraction, LimitDirection::RIGHT);
+  return steps_->GetValue(fraction, limit_direction);
 }
 
 std::unique_ptr<gfx::TimingFunction> StepsTimingFunction::CloneToCC() const {
@@ -249,7 +246,6 @@ scoped_refptr<TimingFunction> CreateCompositorTimingFunctionFromCC(
 
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -303,7 +299,6 @@ bool operator==(const TimingFunction& lhs, const TimingFunction& rhs) {
     default:
       NOTREACHED();
   }
-  return false;
 }
 
 // No need to define specific operator!= as they can all come via this function.

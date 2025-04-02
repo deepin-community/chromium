@@ -8,8 +8,8 @@ build_webui("build") {
   grd_prefix = "optimization_guide_internals"
 
   static_files = [
-    "optimization_guide_internals.html",
     "optimization_guide_internals.css",
+    "optimization_guide_internals.html",
   ]
 
   non_web_component_files = [
@@ -32,5 +32,6 @@ build_webui("build") {
     "//ui/webui/resources/mojo:build_ts",
   ]
 
+  webui_context_type = "trusted"
   grit_output_dir = "$root_gen_dir/components"
 }

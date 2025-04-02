@@ -108,7 +108,7 @@ bool LoadMetafileDataFromFile(const std::string& file_name,
     if (!base::ReadFileToString(data_file, &data))
       return false;
   }
-  return metafile.InitFromData(base::as_bytes(base::make_span(data)));
+  return metafile.InitFromData(base::as_byte_span(data));
 }
 
 }  // namespace
@@ -273,7 +273,7 @@ class PrintBackendBrowserTest : public InProcessBrowserTest {
   }
 #endif  // BUILDFLAG(IS_WIN)
 
-// TODO(crbug.com/1008222)  Include Windows once XPS print pipeline is enabled.
+// TODO(crbug.com/40100562)  Include Windows once XPS print pipeline is enabled.
 #if !BUILDFLAG(IS_WIN)
   std::optional<mojom::ResultCode> RenderDocumentAndWait() {
     // Load a sample PDF file for a single page for testing handling.
@@ -746,7 +746,7 @@ IN_PROC_BROWSER_TEST_F(PrintBackendBrowserTest, RenderPrintedPage) {
 }
 #endif  // BUILDFLAG(IS_WIN)
 
-// TODO(crbug.com/1008222)  Include Windows for this test once XPS print
+// TODO(crbug.com/40100562)  Include Windows for this test once XPS print
 // pipeline is enabled.
 #if !BUILDFLAG(IS_WIN)
 IN_PROC_BROWSER_TEST_F(PrintBackendBrowserTest, RenderPrintedDocument) {
@@ -780,7 +780,7 @@ IN_PROC_BROWSER_TEST_F(PrintBackendBrowserTest, DocumentDone) {
   ASSERT_EQ(StartPrintingAndWait(context_id, print_settings),
             mojom::ResultCode::kSuccess);
 
-  // TODO(crbug.com/1008222)  Include Windows coverage for RenderDocument()
+  // TODO(crbug.com/40100562)  Include Windows coverage for RenderDocument()
   // path once XPS print pipeline is enabled.
 #if BUILDFLAG(IS_WIN)
   std::optional<mojom::ResultCode> result = RenderPageAndWait();

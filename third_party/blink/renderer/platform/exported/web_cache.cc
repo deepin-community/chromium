@@ -28,6 +28,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "third_party/blink/public/platform/web_cache.h"
 
 #include "base/feature_list.h"
@@ -43,12 +48,6 @@ static void ToResourceTypeStat(const MemoryCache::TypeStatistic& from,
   to.count = from.count;
   to.size = from.size;
   to.decoded_size = from.decoded_size;
-}
-
-void WebCache::SetCapacity(size_t capacity) {
-  MemoryCache* cache = MemoryCache::Get();
-  if (cache)
-    cache->SetCapacity(static_cast<unsigned>(capacity));
 }
 
 void WebCache::Clear() {

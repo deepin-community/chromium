@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/credential_provider/extension/app_inventory_manager.h"
+
 #include <windows.h>
 
 #include <memory>
@@ -13,7 +15,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_path_override.h"
-#include "chrome/credential_provider/extension/app_inventory_manager.h"
 #include "chrome/credential_provider/extension/user_device_context.h"
 #include "chrome/credential_provider/gaiacp/gcpw_strings.h"
 #include "chrome/credential_provider/gaiacp/mdm_utils.h"
@@ -45,8 +46,7 @@ std::wstring AppInventoryManagerBaseTest::CreateUser() {
   CComBSTR sid_str;
   EXPECT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
                       kDefaultUsername, L"password", L"Full Name", L"comment",
-                      base::UTF8ToWide(kDefaultGaiaId), L"user@company.com",
-                      &sid_str));
+                      kDefaultGaiaId, L"user@company.com", &sid_str));
   return OLE2W(sid_str);
 }
 
@@ -110,8 +110,7 @@ TEST_P(AppInventoryManagerTest, uploadAppInventory) {
     CComBSTR sid_str;
     ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
                         kDefaultUsername, L"password", L"Full Name", L"comment",
-                        base::UTF8ToWide(kDefaultGaiaId), L"user@company.com",
-                        &sid_str));
+                        kDefaultGaiaId, L"user@company.com", &sid_str));
     user_sid = OLE2W(sid_str);
   }
 

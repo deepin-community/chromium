@@ -45,7 +45,6 @@ scoped_refptr<Importer> CreateImporterByType(ImporterType type) {
 #endif
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 

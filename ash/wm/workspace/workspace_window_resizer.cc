@@ -3,18 +3,17 @@
 // found in the LICENSE file.
 
 #include "ash/wm/workspace/workspace_window_resizer.h"
-#include "base/memory/raw_ptr.h"
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_features.h"
 #include "ash/metrics/pip_uma.h"
+#include "ash/public/cpp/presentation_time_recorder.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/root_window_controller.h"
-#include "ash/scoped_animation_disabler.h"
 #include "ash/screen_util.h"
 #include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
@@ -23,7 +22,9 @@
 #include "ash/wm/drag_window_resizer.h"
 #include "ash/wm/float/tablet_mode_float_window_resizer.h"
 #include "ash/wm/overview/overview_controller.h"
+#include "ash/wm/pip/pip_controller.h"
 #include "ash/wm/pip/pip_window_resizer.h"
+#include "ash/wm/splitview/split_view_utils.h"
 #include "ash/wm/tile_group/window_splitter.h"
 #include "ash/wm/toplevel_window_event_handler.h"
 #include "ash/wm/window_animations.h"
@@ -34,12 +35,13 @@
 #include "ash/wm/workspace/phantom_window_controller.h"
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
-#include "base/ranges/algorithm.h"
+#include "chromeos/ui/base/app_types.h"
 #include "chromeos/ui/base/window_properties.h"
+#include "chromeos/ui/frame/caption_buttons/snap_controller.h"
 #include "chromeos/utils/haptics_util.h"
-#include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/window_types.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_delegate.h"
@@ -52,6 +54,7 @@
 #include "ui/gfx/geometry/transform.h"
 #include "ui/wm/core/coordinate_conversion.h"
 #include "ui/wm/core/cursor_manager.h"
+#include "ui/wm/core/scoped_animation_disabler.h"
 
 namespace ash {
 
@@ -160,7 +163,6 @@ int CoordinateAlongSecondaryAxis(SecondaryMagnetismEdge edge,
       return none;
   }
   NOTREACHED();
-  return none;
 }
 
 // Returns the origin for |src| when magnetically attaching to |attach_to| along
@@ -514,9 +516,14 @@ std::unique_ptr<WindowResizer> CreateWindowResizer(
   }
 
   if (window_state->IsPip()) {
-    window_state->CreateDragDetails(point_in_parent, window_component, source);
-    MaybeRecordResizeHandleUsage(window, point_in_parent);
-    return std::make_unique<PipWindowResizer>(window_state);
+    if (Shell::Get()->pip_controller()->CanResizePip()) {
+      window_state->CreateDragDetails(point_in_parent, window_component,
+                                      source);
+      MaybeRecordResizeHandleUsage(window, point_in_parent);
+      return std::make_unique<PipWindowResizer>(window_state);
+    } else {
+      return nullptr;
+    }
   }
 
   if (display::Screen::GetScreen()->InTabletMode()) {
@@ -539,8 +546,8 @@ std::unique_ptr<WindowResizer> CreateWindowResizer(
   // from the caption. This is because ARC does not currently handle setting
   // bounds on a maximized window well.
   if (maximized &&
-      window_state->window()->GetProperty(aura::client::kAppType) ==
-          static_cast<int>(AppType::ARC_APP) &&
+      window_state->window()->GetProperty(chromeos::kAppTypeKey) ==
+          chromeos::AppType::ARC_APP &&
       window_component == HTCAPTION) {
     return nullptr;
   }
@@ -726,13 +733,19 @@ void WorkspaceWindowResizer::Drag(const gfx::PointF& location_in_parent,
   if (!attached_windows_.empty()) {
     LayoutAttachedWindows(&bounds);
   }
-  if (bounds != GetTarget()->bounds()) {
+  if (aura::Window* window = GetTarget(); bounds != window->bounds()) {
     // SetBounds needs to be called to update the layout which affects where the
     // phantom window is drawn. Keep track if the window was destroyed during
     // the drag and quit early if so.
     base::WeakPtr<WorkspaceWindowResizer> resizer(
         weak_ptr_factory_.GetWeakPtr());
+    // If a window is snapped, then starts drag to unsnap, at this point its
+    // state type hasn't been updated yet. Suppress from force updating the snap
+    // ratio which would be using the restore or normal bounds.
+    auto* window_state = WindowState::Get(window);
+    window_state->set_can_update_snap_ratio(false);
     SetBoundsDuringResize(bounds);
+    window_state->set_can_update_snap_ratio(true);
     if (!resizer) {
       return;
     }
@@ -863,12 +876,16 @@ void WorkspaceWindowResizer::CompleteDrag() {
 
     // TODO(oshima): Add event source type to WMEvent and move
     // metrics recording inside WindowState::OnWMEvent.
+    // Use the target auto-snap ratio.
     WMEventType type;
+    aura::Window* window = window_state()->window();
     switch (snap_type_) {
       case SnapType::kPrimary: {
         base::RecordAction(base::UserMetricsAction("WindowDrag_MaximizeLeft"));
         const WindowSnapWMEvent snap_primary_event(
             WM_EVENT_SNAP_PRIMARY,
+            GetAutoSnapRatio(window, window->GetRootWindow(),
+                             SnapViewType::kPrimary),
             WindowSnapActionSource::kDragWindowToEdgeToSnap);
         window_state()->OnWMEvent(&snap_primary_event);
         return;
@@ -877,6 +894,8 @@ void WorkspaceWindowResizer::CompleteDrag() {
         base::RecordAction(base::UserMetricsAction("WindowDrag_MaximizeRight"));
         const WindowSnapWMEvent snap_secondary_event(
             WM_EVENT_SNAP_SECONDARY,
+            GetAutoSnapRatio(window, window->GetRootWindow(),
+                             SnapViewType::kSecondary),
             WindowSnapActionSource::kDragWindowToEdgeToSnap);
         window_state()->OnWMEvent(&snap_secondary_event);
         return;
@@ -889,7 +908,6 @@ void WorkspaceWindowResizer::CompleteDrag() {
         // window is still maximized, telling window state to maximize will be a
         // no-op, so reset the bounds manually here.
         if (window_state()->IsMaximized()) {
-          aura::Window* window = window_state()->window();
           CrossFadeAnimation(
               window, screen_util::GetMaximizedWindowBoundsInParent(window),
               /*maximize=*/true);
@@ -899,8 +917,6 @@ void WorkspaceWindowResizer::CompleteDrag() {
         break;
       default:
         NOTREACHED();
-        type = WM_EVENT_MAXIMIZE;
-        break;
     }
 
     const WMEvent event(type);
@@ -926,14 +942,14 @@ void WorkspaceWindowResizer::CompleteDrag() {
       // Since we saved the current bounds to the restore bounds, the restore
       // animation will use the current bounds as the target bounds, so we can
       // disable the animation here.
-      ScopedAnimationDisabler disabler(window_state()->window());
+      wm::ScopedAnimationDisabler disabler(window_state()->window());
       window_state()->Restore();
     }
     return;
   }
 
-  // Maximized to normal. State doesn't change during a drag so restore the
-  // window here.
+  // Maximized to normal. State doesn't change during a drag so set the
+  // window to normal state here.
   if (window_state()->IsMaximized()) {
     DCHECK_EQ(HTCAPTION, details().window_component);
     // Reaching here the only running animation should be the drag to
@@ -946,8 +962,12 @@ void WorkspaceWindowResizer::CompleteDrag() {
     // Since we saved the current bounds to the restore bounds, the restore
     // animation will use the current bounds as the target bounds, so we can
     // disable the animation here.
-    ScopedAnimationDisabler disabler(window_state()->window());
-    window_state()->Restore();
+    wm::ScopedAnimationDisabler disabler(window_state()->window());
+
+    // Set the maximized window to normal state since it's being resized/dragged
+    // by the user now.
+    const WMEvent event(WM_EVENT_NORMAL);
+    window_state()->OnWMEvent(&event);
     return;
   }
 
@@ -1007,12 +1027,12 @@ void WorkspaceWindowResizer::RevertDrag() {
 }
 
 void WorkspaceWindowResizer::FlingOrSwipe(ui::GestureEvent* event) {
-  if (event->type() != ui::ET_SCROLL_FLING_START &&
-      event->type() != ui::ET_GESTURE_SWIPE) {
+  if (event->type() != ui::EventType::kScrollFlingStart &&
+      event->type() != ui::EventType::kGestureSwipe) {
     return;
   }
 
-  if (event->type() == ui::ET_SCROLL_FLING_START) {
+  if (event->type() == ui::EventType::kScrollFlingStart) {
     CompleteDrag();
 
     if (details().bounds_change != WindowResizer::kBoundsChange_Repositions ||
@@ -1035,7 +1055,7 @@ void WorkspaceWindowResizer::FlingOrSwipe(ui::GestureEvent* event) {
                                     WindowStateType::kPrimarySnapped);
     }
   } else {
-    DCHECK_EQ(event->type(), ui::ET_GESTURE_SWIPE);
+    DCHECK_EQ(event->type(), ui::EventType::kGestureSwipe);
     DCHECK_GT(event->details().touch_points(), 0);
     if (event->details().touch_points() == 1) {
       return;
@@ -1125,17 +1145,11 @@ WorkspaceWindowResizer::WorkspaceWindowResizer(
     window_splitter_ = std::make_unique<WindowSplitter>(window_state->window());
   }
 
-  std::unique_ptr<ash::PresentationTimeRecorder> recorder =
-      window_state->OnDragStarted(details().window_component);
-  if (recorder) {
-    SetPresentationTimeRecorder(std::move(recorder));
-  } else {
-    // Default to use compositor based recorder.
-    SetPresentationTimeRecorder(
-        PresentationTimeRecorder::CreateCompositorRecorder(
-            GetTarget(), "Ash.InteractiveWindowResize.TimeToPresent",
-            "Ash.InteractiveWindowResize.TimeToPresent.MaxLatency"));
-  }
+  window_state->OnDragStarted(details().window_component);
+  SetPresentationTimeRecorder(
+      PresentationTimeRecorder::CreateCompositorRecorder(
+          GetTarget(), "Ash.InteractiveWindowResize.TimeToPresent",
+          "Ash.InteractiveWindowResize.TimeToPresent.MaxLatency"));
 
   StartDragForAttachedWindows();
 
@@ -1287,7 +1301,9 @@ void WorkspaceWindowResizer::CreateBucketsForAttached(
     int min = PrimaryAxisSize(
         window_delegate ? window_delegate->GetMinimumSize() : gfx::Size());
     int max = PrimaryAxisSize(
-        window_delegate ? window_delegate->GetMaximumSize() : gfx::Size());
+        window_delegate
+            ? window_delegate->GetMaximumSize().value_or(gfx::Size())
+            : gfx::Size());
 
     sizes->push_back(WindowSize(initial_size, min, max));
   }
@@ -1512,7 +1528,6 @@ int WorkspaceWindowResizer::PrimaryAxisCoordinate(int x, int y) const {
     default:
       NOTREACHED();
   }
-  return 0;
 }
 
 bool WorkspaceWindowResizer::IsSnapTopOrMaximize(
@@ -1568,23 +1583,27 @@ void WorkspaceWindowResizer::UpdateSnapPhantomWindow(
   }
 
   gfx::Rect phantom_bounds;
+  // Note that `target_root` is of the target display, not the currently dragged
+  // window of `GetTarget()`.
+  aura::Window* window = GetTarget();
+  aura::Window* target_root =
+      Shell::Get()->GetRootWindowForDisplayId(display.id());
   switch (snap_type_) {
     case SnapType::kPrimary:
       phantom_bounds = GetSnappedWindowBounds(
-          display.work_area(), display, GetTarget(), SnapViewType::kPrimary,
-          chromeos::kDefaultSnapRatio);
+          display.work_area(), display, window, SnapViewType::kPrimary,
+          GetAutoSnapRatio(window, target_root, SnapViewType::kPrimary));
       break;
     case SnapType::kSecondary:
       phantom_bounds = GetSnappedWindowBounds(
-          display.work_area(), display, GetTarget(), SnapViewType::kSecondary,
-          chromeos::kDefaultSnapRatio);
+          display.work_area(), display, window, SnapViewType::kSecondary,
+          GetAutoSnapRatio(window, target_root, SnapViewType::kSecondary));
       break;
     case SnapType::kMaximize:
       phantom_bounds = display.work_area();
       break;
     case SnapType::kNone:
       NOTREACHED();
-      break;
   }
 
   const bool need_haptic_feedback =
@@ -1625,13 +1644,13 @@ void WorkspaceWindowResizer::RestackWindows() {
   aura::Window* parent = GetTarget()->parent();
   const std::vector<raw_ptr<aura::Window, VectorExperimental>>& windows(
       parent->children());
-  map[base::ranges::find(windows, GetTarget()) - windows.begin()] = GetTarget();
+  map[std::ranges::find(windows, GetTarget()) - windows.begin()] = GetTarget();
   for (aura::Window* attached_window : attached_windows_) {
     if (attached_window->parent() != parent) {
       return;
     }
     size_t index =
-        base::ranges::find(windows, attached_window) - windows.begin();
+        std::ranges::find(windows, attached_window) - windows.begin();
     map[index] = attached_window;
   }
 

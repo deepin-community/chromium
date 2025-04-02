@@ -4,12 +4,11 @@
 
 #include "components/omnibox/browser/actions/history_clusters_action.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/ranges/algorithm.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/history/core/test/history_service_test_util.h"
@@ -41,7 +40,7 @@ struct MatchData {
 ACMatches CreateACMatches(std::vector<MatchData> matches_data) {
   ACMatches matches;
   matches.reserve(matches_data.size());
-  base::ranges::transform(
+  std::ranges::transform(
       matches_data, std::back_inserter(matches), [](const auto& match_data) {
         AutocompleteMatch match(nullptr, match_data.relevance, true,
                                 match_data.type);
@@ -62,22 +61,20 @@ class HistoryClustersActionTest : public testing::Test {
 
   // `history_dir_` needs to be initialized once only.
   void SetUp() override {
-    scoped_feature_list_.InitAndDisableFeature(
-        history_clusters::kRenameJourneys);
-
     CHECK(history_dir_.CreateUniqueTempDir());
     history_service_ =
         history::CreateHistoryService(history_dir_.GetPath(), true);
 
     prefs_enabled_.registry()->RegisterBooleanPref(
         history_clusters::prefs::kVisible, true);
+    prefs_enabled_.registry()->RegisterDictionaryPref(
+        history_clusters::prefs::kShortCache);
+    prefs_enabled_.registry()->RegisterDictionaryPref(
+        history_clusters::prefs::kAllCache);
 
     search_actions_config_.is_journeys_enabled_no_locale_check = true;
     search_actions_config_.omnibox_action = true;
     search_actions_config_.omnibox_action_on_navigation_intents = false;
-    // Setting this to false even though users see true behavior so that we do
-    // not need to register history clusters specific prefs in this test.
-    search_actions_config_.persist_caches_to_prefs = false;
     SetConfigForTesting(search_actions_config_);
   }
 
@@ -88,7 +85,6 @@ class HistoryClustersActionTest : public testing::Test {
 
     history_clusters_service_ = std::make_unique<HistoryClustersService>(
         "en-US", history_service_.get(),
-        /*entity_metadata_provider=*/nullptr,
         /*url_loader_factory=*/nullptr,
         /*engagement_score_provider=*/nullptr,
         /*template_url_service=*/nullptr,
@@ -130,11 +126,12 @@ class HistoryClustersActionTest : public testing::Test {
 
   void SetHistoryClustersVisiblePref(bool value) {
     prefs_enabled_.SetBoolean(history_clusters::prefs::kVisible, value);
+    // Make the history clusters visible pref managed.
+    prefs_enabled_.SetManagedPref(history_clusters::prefs::kVisible,
+                                  std::make_unique<base::Value>(value));
   }
 
   base::test::TaskEnvironment task_environment_;
-
-  base::test::ScopedFeatureList scoped_feature_list_;
 
   base::ScopedTempDir history_dir_;
   std::unique_ptr<history::HistoryService> history_service_;

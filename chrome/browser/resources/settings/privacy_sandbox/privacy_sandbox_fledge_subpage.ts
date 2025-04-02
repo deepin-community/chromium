@@ -2,28 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'chrome://resources/cr_components/settings_prefs/prefs.js';
+import '/shared/settings/prefs/prefs.js';
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
+import 'chrome://resources/cr_elements/cr_collapse/cr_collapse.js';
 import 'chrome://resources/cr_elements/cr_dialog/cr_dialog.js';
 import 'chrome://resources/cr_elements/cr_expand_button/cr_expand_button.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
-import 'chrome://resources/polymer/v3_0/iron-collapse/iron-collapse.js';
 import '../controls/settings_toggle_button.js';
 import './privacy_sandbox_interest_item.js';
 
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/cr_elements/i18n_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {afterNextRender, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
-import {HatsBrowserProxyImpl, TrustSafetyInteraction} from '../hats_browser_proxy.js';
 import {loadTimeData} from '../i18n_setup.js';
 import type {MetricsBrowserProxy} from '../metrics_browser_proxy.js';
 import {MetricsBrowserProxyImpl} from '../metrics_browser_proxy.js';
-import {routes} from '../route.js';
-import type {Route} from '../router.js';
-import {RouteObserverMixin} from '../router.js';
 
 import type {FledgeState, PrivacySandboxBrowserProxy, PrivacySandboxInterest} from './privacy_sandbox_browser_proxy.js';
 import {PrivacySandboxBrowserProxyImpl} from './privacy_sandbox_browser_proxy.js';
@@ -32,15 +28,13 @@ import {getTemplate} from './privacy_sandbox_fledge_subpage.html.js';
 export interface SettingsPrivacySandboxFledgeSubpageElement {
   $: {
     fledgeToggle: SettingsToggleButtonElement,
-    footer: HTMLElement,
-    footerV2: HTMLElement,
   };
 }
 
 const maxFledgeSitesCount: number = 15;
 
 const SettingsPrivacySandboxFledgeSubpageElementBase =
-    RouteObserverMixin(I18nMixin(PrefsMixin(PolymerElement)));
+    I18nMixin(PrefsMixin(PolymerElement));
 
 export class SettingsPrivacySandboxFledgeSubpageElement extends
     SettingsPrivacySandboxFledgeSubpageElementBase {
@@ -128,10 +122,15 @@ export class SettingsPrivacySandboxFledgeSubpageElement extends
         observer: 'onBlockedSitesExpanded_',
       },
 
+      /**
+       * If true, the Ads API UX Enhancement should be shown.
+       */
       shouldShowV2_: {
         type: Boolean,
-        value: () =>
-            loadTimeData.getBoolean('isProactiveTopicsBlockingEnabled'),
+        value: () => {
+          return loadTimeData.getBoolean(
+              'isPrivacySandboxAdsApiUxEnhancementsEnabled');
+        },
       },
     };
   }
@@ -152,28 +151,12 @@ export class SettingsPrivacySandboxFledgeSubpageElement extends
       PrivacySandboxBrowserProxyImpl.getInstance();
   private metricsBrowserProxy_: MetricsBrowserProxy =
       MetricsBrowserProxyImpl.getInstance();
-  private shouldShowV2_: boolean;
 
   override ready() {
     super.ready();
 
     this.privacySandboxBrowserProxy_.getFledgeState().then(
         state => this.onFledgeStateChanged_(state));
-
-    this.$.footer.querySelectorAll('a').forEach(
-        link =>
-            link.setAttribute('aria-description', this.i18n('opensInNewTab')));
-
-    this.$.footerV2.querySelectorAll('a').forEach(
-        link =>
-            link.setAttribute('aria-description', this.i18n('opensInNewTab')));
-  }
-
-  override currentRouteChanged(newRoute: Route) {
-    if (newRoute === routes.PRIVACY_SANDBOX_FLEDGE) {
-      HatsBrowserProxyImpl.getInstance().trustSafetyInteractionOccurred(
-          TrustSafetyInteraction.OPENED_FLEDGE_SUBPAGE);
-    }
   }
 
   private isFledgePrefManaged_(): boolean {
@@ -301,6 +284,11 @@ export class SettingsPrivacySandboxFledgeSubpageElement extends
       this.metricsBrowserProxy_.recordAction(
           'Settings.PrivacySandbox.Fledge.BlockedSitesOpened');
     }
+  }
+
+  private onPrivacyPolicyLinkClicked_() {
+    this.metricsBrowserProxy_.recordAction(
+        'Settings.PrivacySandbox.SiteSuggestedAds.PrivacyPolicyLinkClicked');
   }
 }
 

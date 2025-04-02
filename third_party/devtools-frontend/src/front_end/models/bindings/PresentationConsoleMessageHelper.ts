@@ -29,16 +29,15 @@
  */
 
 import type * as Common from '../../core/common/common.js';
+import type * as Platform from '../../core/platform/platform.js';
 import * as SDK from '../../core/sdk/sdk.js';
+import * as Protocol from '../../generated/protocol.js';
 import * as TextUtils from '../text_utils/text_utils.js';
 import * as Workspace from '../workspace/workspace.js';
-import * as Protocol from '../../generated/protocol.js';
-import type * as Platform from '../../core/platform/platform.js';
 
-import {DebuggerWorkspaceBinding} from './DebuggerWorkspaceBinding.js';
-
-import {LiveLocationPool, LiveLocationWithPool, type LiveLocation} from './LiveLocation.js';
 import {CSSWorkspaceBinding} from './CSSWorkspaceBinding.js';
+import {DebuggerWorkspaceBinding} from './DebuggerWorkspaceBinding.js';
+import {type LiveLocation, LiveLocationPool, LiveLocationWithPool} from './LiveLocation.js';
 
 export interface MessageSource {
   url?: Platform.DevToolsPath.UrlString;
@@ -107,8 +106,8 @@ export class PresentationConsoleMessageManager {
       return;
     }
     const level = consoleMessage.level === Protocol.Log.LogEntryLevel.Error ?
-        Workspace.UISourceCode.Message.Level.Error :
-        Workspace.UISourceCode.Message.Level.Warning;
+        Workspace.UISourceCode.Message.Level.ERROR :
+        Workspace.UISourceCode.Message.Level.WARNING;
     this.#sourceFrameMessageManager.addMessage(
         new Workspace.UISourceCode.Message(level, consoleMessage.messageText), consoleMessage, runtimeModel.target());
   }

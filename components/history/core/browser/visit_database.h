@@ -140,6 +140,8 @@ class VisitDatabase {
   // Fills some foreign visits (i.e. with a non-empty `originator_cache_guid`)
   // into `visits` - at most `max_visits` of them, and only those with a (local)
   // visit_id <= `max_visit_id`. Returns true on success and false otherwise.
+  // NOTE: This returns only redirect-chain-ends (including individual visits
+  // without redirects).
   bool GetSomeForeignVisits(VisitID max_visit_id,
                             int max_results,
                             VisitVector* visits);
@@ -148,6 +150,10 @@ class VisitDatabase {
   // success and false otherwise.
   bool GetAllURLIDsForTransition(ui::PageTransition transition,
                                  std::vector<URLID>* urls);
+
+  // Looks up all the app IDs found in the database entries. Returns a struct
+  // containing the list of the IDs.
+  GetAllAppIdsResult GetAllAppIds();
 
   // Fills all visits in the given time range into the given vector that should
   // be user-visible, which excludes things like redirects and subframes. The
@@ -272,6 +278,10 @@ class VisitDatabase {
   std::vector<DomainVisit> GetGoogleDomainVisitsFromSearchesInRange(
       base::Time begin_time,
       base::Time end_time);
+
+  // Gets whether the URL is known to sync. A URL is considered known to sync
+  // if there is at least one visit with the URL that is known to sync.
+  bool GetIsUrlKnownToSync(URLID url_id, bool* is_known_to_sync);
 
  protected:
   // Returns the database for the functions in this interface.

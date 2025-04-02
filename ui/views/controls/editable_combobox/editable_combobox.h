@@ -16,10 +16,12 @@
 #include "build/build_config.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/ui_base_types.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/layout/animating_layout_manager.h"
 #include "ui/views/layout/box_layout_view.h"
+#include "ui/views/layout/delegating_layout_manager.h"
+#include "ui/views/metadata/view_factory.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view.h"
 #include "ui/views/view_observer.h"
@@ -46,11 +48,11 @@ class InteractionTestUtilSimulatorViews;
 }  // namespace test
 
 // Textfield that also shows a drop-down list with suggestions.
-class VIEWS_EXPORT EditableCombobox
-    : public View,
-      public TextfieldController,
-      public ViewObserver,
-      public views::AnimatingLayoutManager::Observer {
+class VIEWS_EXPORT EditableCombobox : public View,
+                                      public TextfieldController,
+                                      public ViewObserver,
+                                      public AnimatingLayoutManager::Observer,
+                                      public LayoutDelegate {
   METADATA_HEADER(EditableCombobox, View)
 
  public:
@@ -69,7 +71,7 @@ class VIEWS_EXPORT EditableCombobox
   EditableCombobox();
 
   // |combobox_model|: The ComboboxModel that gives us the items to show in the
-  // menu.
+  // drop-down list.
   // |filter_on_edit|: Whether to only show the items that are case-insensitive
   // completions of the current textfield content.
   // |show_on_empty|: Whether to show the drop-down list when there is no
@@ -93,6 +95,8 @@ class VIEWS_EXPORT EditableCombobox
 
   const std::u16string& GetText() const;
   void SetText(const std::u16string& text);
+
+  void SetInvalid(bool invalid);
 
   const std::u16string& GetPlaceholderText() const;
   void SetPlaceholderText(const std::u16string& text);
@@ -129,6 +133,10 @@ class VIEWS_EXPORT EditableCombobox
 
   Button* GetArrowButtonForTesting() { return arrow_; }
 
+  // View:
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& available_size) const override;
+
  private:
   friend class EditableComboboxTest;
   friend class EditablePasswordComboboxTest;
@@ -150,7 +158,8 @@ class VIEWS_EXPORT EditableCombobox
   void ArrowButtonPressed(const ui::Event& event);
 
   // Shows the drop-down menu.
-  void ShowDropDownMenu(ui::MenuSourceType source_type = ui::MENU_SOURCE_NONE);
+  void ShowDropDownMenu(
+      ui::mojom::MenuSourceType source_type = ui::mojom::MenuSourceType::kNone);
 
   // Recalculates the extra insets of the textfield based on the size of the
   // controls container.
@@ -164,9 +173,6 @@ class VIEWS_EXPORT EditableCombobox
   // `ui::test::InteractionTestUtil`.
   const ui::ComboboxModel* GetComboboxModel() const;
 
-  // Overridden from View:
-  void Layout(PassKey) override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void RequestFocus() override;
   bool GetNeedsNotificationWhenVisibleBoundsChange() const override;
   void OnVisibleBoundsChanged() override;
@@ -184,6 +190,10 @@ class VIEWS_EXPORT EditableCombobox
   // Overridden from views::AnimatingLayoutManager::Observer:
   void OnLayoutIsAnimatingChanged(views::AnimatingLayoutManager* source,
                                   bool is_animating) override;
+
+  // Overridden from LayoutDelegate:
+  ProposedLayout CalculateProposedLayout(
+      const SizeBounds& size_bounds) const override;
 
   bool ShouldApplyInkDropEffects();
 
@@ -223,6 +233,15 @@ class VIEWS_EXPORT EditableCombobox
   base::ScopedObservation<View, ViewObserver> observation_{this};
 };
 
+BEGIN_VIEW_BUILDER(VIEWS_EXPORT, EditableCombobox, View)
+VIEW_BUILDER_PROPERTY(base::RepeatingClosure, Callback)
+VIEW_BUILDER_PROPERTY(std::unique_ptr<ui::ComboboxModel>, Model)
+VIEW_BUILDER_PROPERTY(std::u16string, PlaceholderText)
+VIEW_BUILDER_PROPERTY(std::u16string, Text)
+END_VIEW_BUILDER
+
 }  // namespace views
+
+DEFINE_VIEW_BUILDER(VIEWS_EXPORT, EditableCombobox)
 
 #endif  // UI_VIEWS_CONTROLS_EDITABLE_COMBOBOX_EDITABLE_COMBOBOX_H_

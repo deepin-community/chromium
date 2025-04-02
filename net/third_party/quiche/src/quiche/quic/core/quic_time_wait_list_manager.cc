@@ -7,7 +7,9 @@
 #include <errno.h>
 
 #include <memory>
+#include <ostream>
 #include <utility>
+#include <vector>
 
 #include "absl/strings/string_view.h"
 #include "quiche/quic/core/crypto/crypto_protocol.h"
@@ -117,7 +119,7 @@ void QuicTimeWaitListManager::RemoveConnectionDataFromMap(
 void QuicTimeWaitListManager::AddConnectionIdToTimeWait(
     TimeWaitAction action, TimeWaitConnectionInfo info) {
   QUICHE_DCHECK(!info.active_connection_ids.empty());
-  const QuicConnectionId& canonical_connection_id =
+  const QuicConnectionId canonical_connection_id =
       info.active_connection_ids.front();
   QUICHE_DCHECK(action != SEND_TERMINATION_PACKETS ||
                 !info.termination_packets.empty());
@@ -133,11 +135,6 @@ void QuicTimeWaitListManager::AddConnectionIdToTimeWait(
   int64_t max_connections = GetQuicFlag(quic_time_wait_list_max_connections);
   QUICHE_DCHECK(connection_id_map_.empty() ||
                 num_connections() < static_cast<size_t>(max_connections));
-  if (new_connection_id) {
-    for (const auto& cid : info.active_connection_ids) {
-      visitor_->OnConnectionAddedToTimeWaitList(cid);
-    }
-  }
   AddConnectionIdDataToMap(canonical_connection_id, num_packets, action,
                            std::move(info));
 }

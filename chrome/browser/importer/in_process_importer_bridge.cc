@@ -55,7 +55,6 @@ history::VisitSource ConvertImporterVisitSourceToHistoryVisitSource(
       return history::SOURCE_SAFARI_IMPORTED;
   }
   NOTREACHED();
-  return history::SOURCE_SYNCED;
 }
 
 password_manager::PasswordForm::Scheme ConvertToPasswordFormScheme(
@@ -68,7 +67,6 @@ password_manager::PasswordForm::Scheme ConvertToPasswordFormScheme(
   }
 
   NOTREACHED();
-  return password_manager::PasswordForm::Scheme::kHtml;
 }
 
 password_manager::PasswordForm ConvertImportedPasswordForm(
@@ -190,4 +188,4 @@ std::u16string InProcessImporterBridge::GetLocalizedString(int message_id) {
   return l10n_util::GetStringUTF16(message_id);
 }
 
-InProcessImporterBridge::~InProcessImporterBridge() {}
+InProcessImporterBridge::~InProcessImporterBridge() = default;

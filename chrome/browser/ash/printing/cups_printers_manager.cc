@@ -8,7 +8,6 @@
 #include <optional>
 #include <utility>
 
-#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/network_config_service.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/containers/flat_set.h"
@@ -24,12 +23,12 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/printing/automatic_usb_printer_configurer.h"
 #include "chrome/browser/ash/printing/cups_printer_status_creator.h"
-#include "chrome/browser/ash/printing/enterprise_printers_provider.h"
+#include "chrome/browser/ash/printing/enterprise/enterprise_printers_provider.h"
+#include "chrome/browser/ash/printing/enterprise/print_servers_policy_provider.h"
+#include "chrome/browser/ash/printing/enterprise/print_servers_provider.h"
 #include "chrome/browser/ash/printing/oauth2/client_ids_database.h"
 #include "chrome/browser/ash/printing/ppd_provider_factory.h"
 #include "chrome/browser/ash/printing/ppd_resolution_tracker.h"
-#include "chrome/browser/ash/printing/print_servers_policy_provider.h"
-#include "chrome/browser/ash/printing/print_servers_provider.h"
 #include "chrome/browser/ash/printing/printer_configurer.h"
 #include "chrome/browser/ash/printing/printer_event_tracker.h"
 #include "chrome/browser/ash/printing/printer_event_tracker_factory.h"
@@ -42,13 +41,12 @@
 #include "chrome/browser/ash/printing/usb_printer_notification_controller.h"
 #include "chrome/browser/ash/printing/zeroconf_printer_detector.h"
 #include "chrome/browser/ash/scanning/zeroconf_scanner_detector.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/printing/print_preview_sticky_settings.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
 #include "chromeos/ash/components/dbus/printscanmgr/printscanmgr_client.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/printing/cups_printer_status.h"
 #include "chromeos/printing/printing_constants.h"
 #include "chromeos/printing/uri.h"
@@ -279,7 +277,6 @@ class CupsPrintersManagerImpl
   // Public API function.
   void AddLocalPrintersObserver(
       CupsPrintersManager::LocalPrintersObserver* observer) override {
-    CHECK(base::FeatureList::IsEnabled(::features::kLocalPrinterObserving));
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_);
 
     if (!local_printers_observer_list_.HasObserver(observer)) {
@@ -294,8 +291,6 @@ class CupsPrintersManagerImpl
   // Public API function.
   void RemoveLocalPrintersObserver(
       CupsPrintersManager::LocalPrintersObserver* observer) override {
-    CHECK(base::FeatureList::IsEnabled(::features::kLocalPrinterObserving));
-
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_);
     local_printers_observer_list_.RemoveObserver(observer);
   }
@@ -454,7 +449,6 @@ class CupsPrintersManagerImpl
   // Resets the overall polling timer then executes the first round of printer
   // status queries for good and unreachable printers.
   void StartPrinterStatusPolling() {
-    CHECK(base::FeatureList::IsEnabled(::features::kLocalPrinterObserving));
     printer_status_polling_total_duration_timer_ =
         std::make_unique<base::ElapsedTimer>();
     OnPrinterStatusTimerElapsed(/*for_unreachable_printers=*/true);
@@ -555,8 +549,9 @@ class CupsPrintersManagerImpl
                           PrinterStatusCallback cb) override {
     std::optional<Printer> printer = GetPrinter(printer_id);
     if (!printer) {
-      PRINTER_LOG(ERROR) << "Unable to complete printer status request. "
-                         << "Printer not found. Printer id: " << printer_id;
+      PRINTER_LOG(ERROR) << printer_id
+                         << ": Unable to complete printer status request: "
+                         << "GetPrinter failed.";
       CupsPrinterStatus printer_status(printer_id);
       printer_status.AddStatusReason(
           CupsPrinterStatus::CupsPrinterStatusReason::Reason::
@@ -589,9 +584,11 @@ class CupsPrintersManagerImpl
 
     // Behavior for querying a non-IPP uri is undefined and disallowed.
     if (!IsIppUri(printer->uri())) {
-      PRINTER_LOG(DEBUG) << "Unable to complete printer status request. "
-                         << "Printer uri is invalid. Printer id: "
-                         << printer_id;
+      PRINTER_LOG(DEBUG) << printer_id
+                         << ": Cannot send status request to non-IPP URI for "
+                         << printer->make_and_model() << ": "
+                         << printer->uri().GetNormalized(
+                                /*always_include_port=*/true);
       CupsPrinterStatus printer_status(printer_id);
       printer_status.AddStatusReason(
           CupsPrinterStatus::CupsPrinterStatusReason::Reason::kUnknownReason,
@@ -601,6 +598,10 @@ class CupsPrintersManagerImpl
       return;
     }
 
+    PRINTER_LOG(DEBUG) << printer_id << ": Sending status request for "
+                       << printer->make_and_model() << ": "
+                       << printer->uri().GetNormalized(
+                              /*always_include_port=*/true);
     QueryIppPrinter(
         printer->uri().GetHostEncoded(), printer->uri().GetPort(),
         printer->uri().GetPathEncodedAsString(),
@@ -662,8 +663,11 @@ class CupsPrintersManagerImpl
       case PrinterQueryResult::kHostnameResolution:
       case PrinterQueryResult::kUnreachable: {
         PRINTER_LOG(ERROR)
-            << "Printer status request failed. Could not reach printer "
-            << printer_id;
+            << printer_id
+            << ": Printer status request failed. Could not reach printer: "
+            << (result == PrinterQueryResult::kHostnameResolution
+                    ? "hostname resolution failed"
+                    : "device unreachable");
         CupsPrinterStatus error_printer_status(printer_id);
         error_printer_status.AddStatusReason(
             CupsPrinterStatus::CupsPrinterStatusReason::Reason::
@@ -674,9 +678,9 @@ class CupsPrintersManagerImpl
         break;
       }
       case PrinterQueryResult::kUnknownFailure: {
-        PRINTER_LOG(ERROR) << "Printer status request failed. Unknown failure "
-                              "trying to reach printer "
-                           << printer_id;
+        PRINTER_LOG(ERROR) << printer_id
+                           << ": Printer status request failed. Unknown "
+                              "failure trying to reach printer";
         CupsPrinterStatus error_printer_status(printer_id);
         error_printer_status.AddStatusReason(
             CupsPrinterStatus::CupsPrinterStatusReason::Reason::kUnknownReason,
@@ -727,8 +731,6 @@ class CupsPrintersManagerImpl
   void QueryPrinterForAutoConf(
       const Printer& printer,
       base::OnceCallback<void(bool)> callback) override {
-    CHECK(ash::features::IsPrintPreviewDiscoveredPrintersEnabled());
-
     if (!IsIppUri(printer.uri())) {
       std::move(callback).Run(false);
       return;
@@ -939,15 +941,13 @@ class CupsPrintersManagerImpl
                                const Printer& printer) {
     printers_.Insert(printer_class, printer);
 
-    if (base::FeatureList::IsEnabled(::features::kLocalPrinterObserving)) {
-      // If we've seen this printer before, don't trigger a new detection event.
-      if (detected_printers_seen_.contains(printer.id())) {
-        return;
-      }
-
-      detected_printers_seen_.insert(printer.id());
-      NotifyLocalPrinterObservers();
+    // If we've seen this printer before, don't trigger a new detection event.
+    if (detected_printers_seen_.contains(printer.id())) {
+      return;
     }
+
+    detected_printers_seen_.insert(printer.id());
+    NotifyLocalPrinterObservers();
   }
 
   // Returns true if we've disconnected from our current network. Updates
@@ -1031,7 +1031,8 @@ class CupsPrintersManagerImpl
     if (code == PpdProvider::SUCCESS) {
       ppd_resolution_tracker_.MarkResolutionSuccessful(printer_id, ref);
     } else {
-      LOG(WARNING) << "Failed to resolve PPD reference for " << printer_id;
+      LOG(WARNING) << printer_id << ": Failed to resolve PPD reference: "
+                   << PpdProvider::CallbackResultCodeName(code);
       ppd_resolution_tracker_.MarkResolutionFailed(printer_id);
       if (!usb_manufacturer.empty()) {
         ppd_resolution_tracker_.SetManufacturer(printer_id, usb_manufacturer);

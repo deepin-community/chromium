@@ -5,7 +5,7 @@
 -- Checks if slice has an ancestor with provided name.
 CREATE PERFETTO FUNCTION _has_parent_slice_with_name(
   -- Id of the slice to check parents of.
-  id INT,
+  id LONG,
   -- Name of potential ancestor slice.
   parent_name STRING)
 -- Whether `parent_name` is a name of an ancestor slice.
@@ -21,8 +21,8 @@ SELECT EXISTS(
 -- argument of descendant ScopedSetIpcHash slice.
 -- This is relevant only for the older Chrome traces, where mojo IPC
 -- hash was reported in a separate ScopedSetIpcHash slice.
-CREATE PERFETTO FUNCTION _extract_mojo_ipc_hash(slice_id INT)
-RETURNS INT AS
+CREATE PERFETTO FUNCTION _extract_mojo_ipc_hash(slice_id LONG)
+RETURNS LONG AS
 SELECT EXTRACT_ARG(arg_set_id, "chrome_mojo_event_info.ipc_hash")
 FROM descendant_slice($slice_id)
 WHERE name="ScopedSetIpcHash"
@@ -31,8 +31,8 @@ LIMIT 1;
 
 -- Returns the frame type (main frame vs subframe) for key navigation tasks
 -- which capture the associated RenderFrameHost in an argument.
-CREATE PERFETTO FUNCTION _extract_frame_type(slice_id INT)
-RETURNS INT AS
+CREATE PERFETTO FUNCTION _extract_frame_type(slice_id LONG)
+RETURNS LONG AS
 SELECT EXTRACT_ARG(arg_set_id, "render_frame_host.frame_type")
 FROM descendant_slice($slice_id)
 WHERE name IN (
@@ -105,7 +105,7 @@ SELECT
 --
 -- Note: this might include messages received within a sync mojo call.
 -- TODO(altimin): This should use EXTEND_TABLE when it becomes available.
-CREATE TABLE _chrome_mojo_slices AS
+CREATE PERFETTO TABLE _chrome_mojo_slices AS
 WITH
 -- Select all new-style (post crrev.com/c/3270337) mojo slices and
 -- generate |task_name| for them.
@@ -153,17 +153,16 @@ old_non_associated_mojo_slices AS (
   FROM slice
   WHERE
     category GLOB "*toplevel*" AND name = "Connector::DispatchMessage"
-)
+),
+merged AS (
 -- Merge all mojo slices.
 SELECT * FROM new_mojo_slices
 UNION ALL
 SELECT * FROM old_associated_mojo_slices
 UNION ALL
-SELECT * FROM old_non_associated_mojo_slices;
-
--- As we lookup by ID on |_chrome_mojo_slices| table, add an index on
--- id to make lookups fast.
-CREATE INDEX _chrome_mojo_slices_idx ON _chrome_mojo_slices(id);
+SELECT * FROM old_non_associated_mojo_slices
+)
+SELECT * FROM merged ORDER BY id;
 
 -- This table contains a list of slices corresponding to the _representative_
 -- Chrome Java view operations.
@@ -178,7 +177,7 @@ CREATE INDEX _chrome_mojo_slices_idx ON _chrome_mojo_slices(id);
 --                                      capture toolbar screenshot.
 -- @column is_hardware_screenshot BOOL  Whether this slice is a part of accelerated
 --                                      capture toolbar screenshot.
-CREATE TABLE _chrome_java_views AS
+CREATE PERFETTO TABLE _chrome_java_views AS
 WITH
 -- .draw, .onLayout and .onMeasure parts of the java view names don't add much, strip them.
 java_slices_with_trimmed_names AS (
@@ -271,7 +270,7 @@ CREATE PERFETTO VIEW chrome_java_views(
   -- Whether this slice is a part of accelerated capture toolbar screenshot.
   is_hardware_screenshot BOOL,
   -- Slice id.
-  slice_id INT
+  slice_id LONG
 ) AS
 SELECT
   java_view.name AS filtered_name,
@@ -294,7 +293,7 @@ FROM slice
 WHERE name GLOB "Looper.dispatch: android.view.Choreographer$FrameHandler*";
 
 -- Extract task's posted_from information from task's arguments.
-CREATE PERFETTO FUNCTION _get_posted_from(arg_set_id INT)
+CREATE PERFETTO FUNCTION _get_posted_from(arg_set_id LONG)
 RETURNS STRING AS
 WITH posted_from as (
   SELECT
@@ -318,7 +317,7 @@ FROM posted_from;
 -- @column name          The name of the slice.
 CREATE PERFETTO FUNCTION _select_begin_main_frame_java_slices(
   name STRING)
-RETURNS TABLE(id INT, kind STRING, ts LONG, dur LONG, name STRING) AS
+RETURNS TABLE(id LONG, kind STRING, ts TIMESTAMP, dur DURATION, name STRING) AS
 SELECT
   id,
   "SingleThreadProxy::BeginMainFrame" AS kind,
@@ -363,7 +362,7 @@ LEFT JOIN root_slice_and_java_view_not_grouped java_view USING (id)
 GROUP BY root.id;
 
 -- A list of tasks executed by Chrome scheduler.
-CREATE TABLE _chrome_scheduler_tasks AS
+CREATE PERFETTO TABLE _chrome_scheduler_tasks AS
 SELECT
   id
 FROM slice
@@ -375,37 +374,37 @@ ORDER BY id;
 -- A list of tasks executed by Chrome scheduler.
 CREATE PERFETTO VIEW chrome_scheduler_tasks(
   -- Slice id.
-  id INT,
+  id LONG,
   -- Type.
   type STRING,
   -- Name of the task.
   name STRING,
   -- Timestamp.
-  ts INT,
+  ts TIMESTAMP,
   -- Duration.
-  dur INT,
+  dur DURATION,
   -- Utid of the thread this task run on.
-  utid INT,
+  utid LONG,
   -- Name of the thread this task run on.
   thread_name STRING,
   -- Upid of the process of this task.
-  upid INT,
+  upid LONG,
   -- Name of the process of this task.
   process_name STRING,
   -- Same as slice.track_id.
-  track_id INT,
+  track_id LONG,
   -- Same as slice.category.
   category STRING,
   -- Same as slice.depth.
-  depth INT,
+  depth LONG,
   -- Same as slice.parent_id.
-  parent_id INT,
+  parent_id LONG,
   -- Same as slice.arg_set_id.
-  arg_set_id INT,
+  arg_set_id LONG,
   -- Same as slice.thread_ts.
-  thread_ts INT,
+  thread_ts TIMESTAMP,
   -- Same as slice.thread_dur.
-  thread_dur INT,
+  thread_dur DURATION,
   -- Source location where the PostTask was called.
   posted_from STRING
 ) AS
@@ -438,9 +437,9 @@ ORDER BY task.id;
 -- Select the slice that might be the descendant mojo slice for the given task
 -- slice if it exists.
 CREATE PERFETTO FUNCTION _get_descendant_mojo_slice_candidate(
-  slice_id INT
+  slice_id LONG
 )
-RETURNS INT AS
+RETURNS LONG AS
 SELECT
   id
 FROM descendant_slice($slice_id)
@@ -459,7 +458,7 @@ WHERE
 ORDER by depth, ts
 LIMIT 1;
 
-CREATE PERFETTO FUNCTION _descendant_mojo_slice(slice_id INT)
+CREATE PERFETTO FUNCTION _descendant_mojo_slice(slice_id LONG)
 RETURNS TABLE(task_name STRING) AS
 SELECT
   printf("%s %s (hash=%d)",
@@ -475,8 +474,8 @@ WHERE task.id = $slice_id;
 --
 -- @column task_name STRING  Name for the given task.
 -- @column task_type STRING  Type of the task (e.g. "scheduler").
--- @column scheduling_delay INT
-CREATE TABLE _chrome_tasks AS
+-- @column scheduling_delay LONG
+CREATE PERFETTO TABLE _chrome_tasks AS
 WITH
 -- Select slices from "toplevel" category which do not have another
 -- "toplevel" slice as ancestor. The possible cases include sync mojo messages
@@ -594,7 +593,7 @@ ORDER BY id;
 -- corresponding to these tasks will not intersect.
 CREATE PERFETTO VIEW chrome_tasks(
   -- Id for the given task, also the id of the slice this task corresponds to.
-  id INT,
+  id LONG,
   -- Name for the given task.
   name STRING,
   -- Type of the task (e.g. "scheduler").
@@ -602,25 +601,25 @@ CREATE PERFETTO VIEW chrome_tasks(
   -- Thread name.
   thread_name STRING,
   -- Utid.
-  utid INT,
+  utid LONG,
   -- Process name.
   process_name STRING,
   -- Upid.
-  upid INT,
+  upid LONG,
   -- Alias of |slice.ts|.
-  ts INT,
+  ts TIMESTAMP,
   -- Alias of |slice.dur|.
-  dur INT,
+  dur DURATION,
   -- Alias of |slice.track_id|.
-  track_id INT,
+  track_id LONG,
   -- Alias of |slice.category|.
-  category INT,
+  category STRING,
   -- Alias of |slice.arg_set_id|.
-  arg_set_id INT,
+  arg_set_id LONG,
   -- Alias of |slice.thread_ts|.
-  thread_ts INT,
+  thread_ts TIMESTAMP,
   -- Alias of |slice.thread_dur|.
-  thread_dur INT,
+  thread_dur DURATION,
   -- STRING    Legacy alias for |name|.
   full_name STRING
 ) AS

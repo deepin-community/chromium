@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/task/sequence_manager/task_queue_selector.h"
 
 #include <stddef.h>
@@ -27,11 +32,8 @@ using testing::_;
 using testing::ElementsAre;
 using testing::NotNull;
 
-namespace base {
-namespace sequence_manager {
-namespace internal {
 // To avoid symbol collisions in jumbo builds.
-namespace task_queue_selector_unittest {
+namespace base::sequence_manager::internal::task_queue_selector_unittest {
 
 namespace {
 const TaskQueue::QueuePriority kHighestPriority = 0;
@@ -361,8 +363,9 @@ class TaskQueueSelectorStarvationTest : public TaskQueueSelectorTest {
 TEST_F(TaskQueueSelectorStarvationTest,
        HigherPriorityWorkStarvesLowerPriorityWork) {
   size_t queue_order[kTaskQueueCount];
-  for (size_t i = 0; i < kTaskQueueCount; i++)
+  for (size_t i = 0; i < kTaskQueueCount; i++) {
     queue_order[i] = i;
+  }
   TestPriorityOrder(queue_order, kTaskQueueCount);
 }
 
@@ -371,8 +374,9 @@ TEST_F(TaskQueueSelectorStarvationTest,
   // Enqueue tasks in order from lowest to highest priority, and check that they
   // still run in order from highest to lowest priority.
   size_t queue_order[kTaskQueueCount];
-  for (size_t i = 0; i < kTaskQueueCount; i++)
+  for (size_t i = 0; i < kTaskQueueCount; i++) {
     queue_order[i] = (kTaskQueueCount - i) - 1;
+  }
   TestPriorityOrder(queue_order, kTaskQueueCount);
 }
 
@@ -675,7 +679,4 @@ TEST_F(ActivePriorityTrackerTest, HighestActivePriority) {
   EXPECT_FALSE(active_priority_tracker_.HasActivePriority());
 }
 
-}  // namespace task_queue_selector_unittest
-}  // namespace internal
-}  // namespace sequence_manager
-}  // namespace base
+}  // namespace base::sequence_manager::internal::task_queue_selector_unittest

@@ -24,7 +24,7 @@ namespace base {
 // Deprecated: Computes a hash of a memory buffer, use FastHash() instead.
 // If you need to persist a change on disk or between computers, use
 // PersistentHash().
-// TODO(https://crbug.com/1025358): Migrate client code to new hash function.
+// TODO(crbug.com/40107835): Migrate client code to new hash function.
 BASE_EXPORT uint32_t Hash(const std::string& str);
 
 // Really *fast* and high quality hash.
@@ -35,7 +35,7 @@ BASE_EXPORT uint32_t Hash(const std::string& str);
 // May changed without warning, do not expect stability of outputs.
 BASE_EXPORT size_t FastHash(base::span<const uint8_t> data);
 inline size_t FastHash(std::string_view str) {
-  return FastHash(as_bytes(make_span(str)));
+  return FastHash(as_byte_span(str));
 }
 
 // Computes a hash of a memory buffer. This hash function must not change so
@@ -55,8 +55,9 @@ template <typename T1, typename T2>
 inline size_t HashInts(T1 value1, T2 value2) {
   // This condition is expected to be compile-time evaluated and optimised away
   // in release builds.
-  if (sizeof(T1) > sizeof(uint32_t) || (sizeof(T2) > sizeof(uint32_t)))
+  if (sizeof(T1) > sizeof(uint32_t) || (sizeof(T2) > sizeof(uint32_t))) {
     return HashInts64(value1, value2);
+  }
 
   return HashInts32(static_cast<uint32_t>(value1),
                     static_cast<uint32_t>(value2));

@@ -8,14 +8,7 @@
 #include <string>
 #include <utility>
 
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_session_runner.h"
-#include "ash/components/arc/test/arc_util_test_support.h"
-#include "ash/components/arc/test/connection_holder_util.h"
-#include "ash/components/arc/test/fake_arc_session.h"
-#include "ash/components/arc/test/fake_policy_instance.h"
+#include "ash/constants/ash_switches.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
@@ -27,6 +20,7 @@
 #include "base/test/scoped_command_line.h"
 #include "base/values.h"
 #include "chrome/browser/ash/arc/enterprise/cert_store/cert_store_service.h"
+#include "chrome/browser/ash/arc/enterprise/cert_store/cert_store_service_factory.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/test/test_arc_session_manager.h"
 #include "chrome/browser/ash/login/users/fake_chrome_user_manager.h"
@@ -39,6 +33,14 @@
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "chromeos/ash/components/dbus/upstart/fake_upstart_client.h"
 #include "chromeos/ash/components/system/fake_statistics_provider.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_session_runner.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
+#include "chromeos/ash/experiences/arc/test/connection_holder_util.h"
+#include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
+#include "chromeos/ash/experiences/arc/test/fake_policy_instance.h"
 #include "components/keyed_service/content/browser_context_keyed_service_factory.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/policy/core/common/mock_policy_service.h"
@@ -47,11 +49,13 @@
 #include "components/policy/core/common/policy_types.h"
 #include "components/policy/core/common/remote_commands/remote_commands_queue.h"
 #include "components/policy/policy_constants.h"
+#include "components/session_manager/core/session_manager.h"
 #include "components/signin/public/identity_manager/identity_test_environment.h"
 #include "components/supervised_user/core/common/supervised_user_constants.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/test/browser_task_environment.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -147,7 +151,7 @@ class MockArcPolicyBridgeObserver : public ArcPolicyBridge::Observer {
 // |true| before destruction.
 class CheckedBoolean {
  public:
-  CheckedBoolean() {}
+  CheckedBoolean() = default;
 
   CheckedBoolean(const CheckedBoolean&) = delete;
   CheckedBoolean& operator=(const CheckedBoolean&) = delete;
@@ -220,7 +224,7 @@ class ArcPolicyBridgeTestBase {
     // Set up user profile for ReportCompliance() tests.
     fake_user_manager_.Reset(std::make_unique<ash::FakeChromeUserManager>());
     const AccountId account_id(
-        AccountId::FromUserEmailGaiaId(kTestUserEmail, "1111111111"));
+        AccountId::FromUserEmailGaiaId(kTestUserEmail, GaiaId("1111111111")));
     fake_user_manager_->AddUserWithAffiliation(account_id, is_affiliated);
     fake_user_manager_->LoginUser(account_id);
     testing_profile_manager_ = std::make_unique<TestingProfileManager>(
@@ -322,7 +326,7 @@ class ArcPolicyBridgeTestBase {
   // Override if the test wants to use a real cert store service.
   virtual CertStoreService* GetCertStoreService() {
     return static_cast<CertStoreService*>(
-        CertStoreService::GetFactory()->SetTestingFactoryAndUse(
+        CertStoreServiceFactory::GetInstance()->SetTestingFactoryAndUse(
             profile(),
             base::BindRepeating(
                 [](content::BrowserContext* profile)
@@ -347,6 +351,7 @@ class ArcPolicyBridgeTestBase {
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
   user_manager::TypedScopedUserManager<ash::FakeChromeUserManager>
       fake_user_manager_;
+  session_manager::SessionManager session_manager_;
   std::unique_ptr<TestingProfileManager> testing_profile_manager_;
   base::RunLoop run_loop_;
   raw_ptr<TestingProfile, DanglingUntriaged> profile_;
@@ -399,7 +404,7 @@ class ArcPolicyBridgeCertStoreTest : public ArcPolicyBridgeTest {
  protected:
   CertStoreService* GetCertStoreService() override {
     return static_cast<CertStoreService*>(
-        CertStoreService::GetFactory()->SetTestingFactoryAndUse(
+        CertStoreServiceFactory::GetInstance()->SetTestingFactoryAndUse(
             profile(),
             base::BindRepeating([](content::BrowserContext* profile)
                                     -> std::unique_ptr<KeyedService> {
@@ -907,6 +912,42 @@ TEST_F(ArcPolicyBridgeCertStoreTest, KeyPermissionsNoCertsTest) {
       base::StrCat({"{\"apkCacheEnabled\":true,\"guid\":\"", instance_guid(),
                     "\",", kMountPhysicalMediaDisabledPolicySetting, ",",
                     kRequiredKeyPairsEmpty, "}"}));
+}
+
+TEST_F(ArcPolicyBridgeTest, ConfigureRevenPoliciesTest) {
+  base::CommandLine& command_line = *base::CommandLine::ForCurrentProcess();
+  command_line.AppendSwitch(ash::switches::kRevenBranding);
+
+  policy_map().Set(
+      policy::key::kArcPolicy, policy::POLICY_LEVEL_MANDATORY,
+      policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_CLOUD,
+      base::Value("{\"applications\":"
+                  "["
+                  "{\"packageName\":\"com.google.android.apps.youtube.kids\","
+                  "\"installType\":\"REQUIRED\","
+                  "\"lockTaskAllowed\":false,"
+                  "\"permissionGrants\":[]"
+                  "},"
+                  "{\"packageName\":\"com.zimperium.zips\","
+                  "\"installType\":\"REQUIRED\","
+                  "\"lockTaskAllowed\":false,"
+                  "\"permissionGrants\":[]"
+                  "}"
+                  "],"
+                  "\"defaultPermissionPolicy\":\"GRANT\"}"),
+      nullptr);
+
+  GetPoliciesAndVerifyResult(
+      "{\"apkCacheEnabled\":true,\"applications\":"
+      "[{\"installType\":\"REQUIRED\","
+      "\"lockTaskAllowed\":false,"
+      "\"packageName\":\"com.zimperium.zips\","
+      "\"permissionGrants\":[]"
+      "}],"
+      "\"defaultPermissionPolicy\":\"GRANT\","
+      "\"guid\":\"" +
+      instance_guid() + "\"," + kMountPhysicalMediaDisabledPolicySetting + "," +
+      "\"playStoreMode\":\"WHITELIST\"" + "}"); // nocheck
 }
 
 }  // namespace arc

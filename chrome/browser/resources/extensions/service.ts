@@ -11,6 +11,7 @@ import type {ErrorPageDelegate} from './error_page.js';
 import type {ItemDelegate} from './item.js';
 import type {KeyboardShortcutDelegate} from './keyboard_shortcut_delegate.js';
 import type {LoadErrorDelegate} from './load_error.js';
+import type {Mv2DeprecationDelegate} from './mv2_deprecation_delegate.js';
 import {Dialog, navigation, Page} from './navigation_helper.js';
 import type {PackDialogDelegate} from './pack_dialog.js';
 import type {SiteSettingsDelegate} from './site_permissions/site_settings_mixin.js';
@@ -20,7 +21,9 @@ export interface ServiceInterface extends ActivityLogDelegate,
                                           ActivityLogEventDelegate,
                                           ErrorPageDelegate, ItemDelegate,
                                           KeyboardShortcutDelegate,
-                                          LoadErrorDelegate, PackDialogDelegate,
+                                          LoadErrorDelegate,
+                                          Mv2DeprecationDelegate,
+                                          PackDialogDelegate,
                                           SiteSettingsDelegate,
                                           ToolbarDelegate {
   notifyDragInstallInProgress(): void;
@@ -32,6 +35,10 @@ export interface ServiceInterface extends ActivityLogDelegate,
   getExtensionsInfo(): Promise<chrome.developerPrivate.ExtensionInfo[]>;
   getExtensionSize(id: string): Promise<string>;
   dismissSafetyHubExtensionsMenuNotification(): void;
+  dismissMv2DeprecationNotice(): void;
+  shouldIgnoreUpdate(
+      extensionId: string,
+      eventType: chrome.developerPrivate.EventType): boolean;
 }
 
 export class Service implements ServiceInterface {
@@ -187,10 +194,12 @@ export class Service implements ServiceInterface {
     });
   }
 
-  setItemSafetyCheckWarningAcknowledged(id: string): Promise<void> {
+  setItemSafetyCheckWarningAcknowledged(
+      id: string,
+      reason: chrome.developerPrivate.SafetyCheckWarningReason): Promise<void> {
     return chrome.developerPrivate.updateExtensionConfiguration({
       extensionId: id,
-      acknowledgeSafetyCheckWarning: true,
+      acknowledgeSafetyCheckWarningReason: reason,
     });
   }
 
@@ -198,7 +207,13 @@ export class Service implements ServiceInterface {
     chrome.metricsPrivate.recordUserAction(
         isEnabled ? 'Extensions.ExtensionEnabled' :
                     'Extensions.ExtensionDisabled');
-    chrome.management.setEnabled(id, isEnabled);
+    return chrome.management.setEnabled(id, isEnabled)
+        .catch(
+            _ => {
+                // The `setEnabled` call can reasonably fail for a number of
+                // reasons, including that the user chose to deny a re-enable
+                // dialog. Silently ignore these errors.
+            });
   }
 
   setItemAllowedIncognito(id: string, isAllowedIncognito: boolean) {
@@ -497,6 +512,19 @@ export class Service implements ServiceInterface {
 
   dismissSafetyHubExtensionsMenuNotification() {
     chrome.developerPrivate.dismissSafetyHubExtensionsMenuNotification();
+  }
+
+  dismissMv2DeprecationNotice(): void {
+    chrome.developerPrivate.updateProfileConfiguration(
+        {isMv2DeprecationNoticeDismissed: true});
+  }
+
+  dismissMv2DeprecationNoticeForExtension(id: string): Promise<void> {
+    return chrome.developerPrivate.dismissMv2DeprecationNoticeForExtension(id);
+  }
+
+  uploadItemToAccount(id: string): Promise<void> {
+    return chrome.developerPrivate.uploadExtensionToAccount(id);
   }
 
   static getInstance(): ServiceInterface {

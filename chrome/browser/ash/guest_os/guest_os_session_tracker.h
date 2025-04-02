@@ -48,7 +48,6 @@ class GuestOsSessionTracker : protected ash::ConciergeClient::VmObserver,
                               protected ash::CiceroneClient::Observer,
                               public KeyedService {
  public:
-  static GuestOsSessionTracker* GetForProfile(Profile* profile);
   explicit GuestOsSessionTracker(std::string owner_id);
   ~GuestOsSessionTracker() override;
 
@@ -108,8 +107,6 @@ class GuestOsSessionTracker : protected ash::ConciergeClient::VmObserver,
       const vm_tools::cicerone::ContainerStartedSignal& signal) override;
   void OnContainerShutdown(
       const vm_tools::cicerone::ContainerShutdownSignal& signal) override;
-  void OnLxdContainerStopping(
-      const vm_tools::cicerone::LxdContainerStoppingSignal& signal) override;
 
  private:
   void OnListVms(std::optional<vm_tools::concierge::ListVmsResponse> response);

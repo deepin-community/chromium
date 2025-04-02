@@ -16,14 +16,15 @@
 
 namespace metrics {
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 constexpr auto kSyncDemographicsPrefFlags =
     user_prefs::PrefRegistrySyncable::SYNCABLE_PRIORITY_PREF;
 #else
 constexpr auto kSyncOsDemographicsPrefFlags =
     user_prefs::PrefRegistrySyncable::SYNCABLE_OS_PRIORITY_PREF;
-// TODO(crbug/1367338): Make this non-syncable (on Ash only) after full rollout
-// of the syncable os priority pref; then delete it locally from Ash devices.
+// TODO(crbug.com/40240008): Make this non-syncable (on Ash only) after full
+// rollout of the syncable os priority pref; then delete it locally from Ash
+// devices.
 constexpr auto kSyncDemographicsPrefFlags =
     user_prefs::PrefRegistrySyncable::SYNCABLE_PRIORITY_PREF;
 #endif
@@ -36,8 +37,8 @@ constexpr auto kDeprecatedDemographicsBirthYearOffsetPrefFlags =
 namespace {
 
 const base::Value::Dict& GetDemographicsDict(PrefService* profile_prefs) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // TODO(crbug/1367338): On Ash only, clear sync demographics pref once
+#if BUILDFLAG(IS_CHROMEOS)
+  // TODO(crbug.com/40240008): On Ash only, clear sync demographics pref once
   // os-level syncable pref is fully rolled out and Ash drops support for
   // non-os-level syncable prefs.
   if (profile_prefs->HasPrefPath(kSyncOsDemographicsPrefName)) {
@@ -54,7 +55,7 @@ void MigrateBirthYearOffset(PrefService* to_local_state,
   if (profile_offset == kUserDemographicsBirthYearNoiseOffsetDefaultValue)
     return;
 
-  // TODO(crbug/1367338): clear/remove deprecated pref after 2023/09
+  // TODO(crbug.com/40240008): clear/remove deprecated pref after 2023/09
 
   const int local_offset =
       to_local_state->GetInteger(kUserDemographicsBirthYearOffsetPrefName);
@@ -192,7 +193,7 @@ void RegisterDemographicsLocalStatePrefs(PrefRegistrySimple* registry) {
 }
 
 void RegisterDemographicsProfilePrefs(PrefRegistrySimple* registry) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   registry->RegisterDictionaryPref(kSyncOsDemographicsPrefName,
                                    kSyncOsDemographicsPrefFlags);
 #endif
@@ -213,7 +214,7 @@ void ClearDemographicsPrefs(PrefService* profile_prefs) {
   // to change for a given user + client id, then the min/max noisy birth year
   // values could both be reported, revealing the true value in the middle.
   profile_prefs->ClearPref(kSyncDemographicsPrefName);
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   profile_prefs->ClearPref(kSyncOsDemographicsPrefName);
 #endif
 }
@@ -254,7 +255,7 @@ UserDemographicsResult GetUserNoisedBirthYearAndGenderFromPrefs(
 
   // Get the offset from local_state/profile_prefs and do one last check that
   // the birth year is eligible.
-  // TODO(crbug/1367338): remove profile_prefs after 2023/09
+  // TODO(crbug.com/40240008): remove profile_prefs after 2023/09
   MigrateBirthYearOffset(local_state, profile_prefs);
   int offset = GetBirthYearOffset(local_state);
   if (!HasEligibleBirthYear(now, *birth_year, offset)) {

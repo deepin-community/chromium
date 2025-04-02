@@ -19,27 +19,31 @@ limitations under the License.
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <string_view>
 #include <vector>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "llvm/Target/TargetMachine.h"
+#include "xla/backends/cpu/codegen/target_machine_features.h"
 #include "xla/cpu_function_runtime.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_module_group.h"
+#include "xla/hlo/ir/hlo_schedule.h"
 #include "xla/service/buffer_assignment.h"
 #include "xla/service/compiler.h"
 #include "xla/service/cpu/executable.pb.h"
-#include "xla/service/cpu/target_machine_features.h"
-#include "xla/service/cpu/xla_framework.h"
 #include "xla/service/executable.h"
 #include "xla/service/hlo.pb.h"
 #include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/hlo_profile_printer_data.pb.h"
 #include "xla/service/llvm_compiler.h"
-#include "xla/status.h"
-#include "xla/statusor.h"
+#include "xla/stream_executor/platform.h"
 #include "xla/stream_executor/stream_executor.h"
 #include "xla/util.h"
+
+namespace mlir {
+class DialectRegistry;
+}  // namespace mlir
 
 namespace xla {
 namespace cpu {
@@ -84,16 +88,12 @@ class CpuAotCompilationOptions : public AotCompilationOptions {
   // The relocation model used for compilation.
   RelocationModel relocation_model() const { return relocation_model_; }
 
-  bool use_mlir_hlo_lowering() const { return use_mlir_hlo_lowering_; }
-  void set_use_mlir_hlo_lowering(bool value) { use_mlir_hlo_lowering_ = value; }
-
  private:
   const std::string triple_;
   const std::string cpu_name_;
   const std::string features_;
   const std::string entry_point_name_;
   const RelocationModel relocation_model_;
-  bool use_mlir_hlo_lowering_ = false;
 };
 
 class CpuAotCompilationResult : public AotCompilationResult {
@@ -147,26 +147,22 @@ class CpuAotCompilationResult : public AotCompilationResult {
 class CpuCompiler : public LLVMCompiler {
  public:
   CpuCompiler();
-  explicit CpuCompiler(bool allow_sparse_shapes);
   ~CpuCompiler() override = default;
 
-  StatusOr<std::vector<std::unique_ptr<Executable>>> Compile(
+  absl::StatusOr<std::vector<std::unique_ptr<Executable>>> Compile(
       std::unique_ptr<HloModuleGroup> module_group,
       std::vector<std::vector<se::StreamExecutor*>> stream_execs,
       const CompileOptions& options) override;
 
-  StatusOr<std::unique_ptr<HloModule>> RunHloPasses(
+  absl::StatusOr<std::unique_ptr<HloModule>> RunHloPasses(
       std::unique_ptr<HloModule> module, se::StreamExecutor* stream_exec,
       const CompileOptions& options) override;
 
-  StatusOr<std::unique_ptr<BufferAssignment>> AssignBuffers(
-      HloModule* module, const se::StreamExecutor* stream_exec) override;
-
-  StatusOr<std::unique_ptr<Executable>> RunBackend(
+  absl::StatusOr<std::unique_ptr<Executable>> RunBackend(
       std::unique_ptr<HloModule> module, se::StreamExecutor* stream_exec,
       const CompileOptions& options) override;
 
-  StatusOr<std::vector<std::unique_ptr<AotCompilationResult>>>
+  absl::StatusOr<std::vector<std::unique_ptr<AotCompilationResult>>>
   CompileAheadOfTime(std::unique_ptr<HloModuleGroup> module_group,
                      const AotCompilationOptions& options) override;
 
@@ -174,16 +170,19 @@ class CpuCompiler : public LLVMCompiler {
 
   HloCostAnalysis::ShapeSizeFunction ShapeSizeBytesFunction() const override;
 
-  StatusOr<std::unique_ptr<AotCompilationResult>> Export(
+  absl::StatusOr<std::unique_ptr<AotCompilationResult>> Export(
       Executable* executable) const override;
 
   // Returns a (deserialized) AotCompilationResult from a serialized
   // AotCompilationResult.
-  StatusOr<std::unique_ptr<AotCompilationResult>> LoadAotCompilationResult(
-      const std::string& serialized_aot_result) override;
+  absl::StatusOr<std::unique_ptr<AotCompilationResult>>
+  LoadAotCompilationResult(const std::string& serialized_aot_result) override;
 
-  StatusOr<std::unique_ptr<CpuExecutable>> CompileXlaRuntimeCpuExecutable(
-      std::unique_ptr<HloModule> module);
+  absl::StatusOr<HloSchedule> CreateHloSchedule(
+      const HloModule& hlo_module) const;
+
+  absl::StatusOr<std::unique_ptr<BufferAssignment>> CreateBufferAssignment(
+      const HloModule& module) const;
 
  private:
   // Initialize the LLVM target.
@@ -191,32 +190,26 @@ class CpuCompiler : public LLVMCompiler {
 
   // Runs the HLO passes which are necessary for both optimizations and
   // correctness.
-  Status RunHloPasses(HloModule* module, bool is_aot_compile,
-                      llvm::TargetMachine* target_machine,
-                      const CompileOptions& compile_options,
-                      bool is_mlir_compile = false);
+  absl::Status RunHloPasses(HloModule* module, bool is_aot_compile,
+                            llvm::TargetMachine* target_machine,
+                            const CompileOptions& compile_options);
 
   // Runs HLO passes up to and including layout assignment.
-  Status RunHloPassesThroughLayoutAssn(
+  absl::Status RunHloPassesThroughLayoutAssn(
       HloModule* module, bool /*is_aot_compile*/,
-      LLVMTargetMachineFeatures* target_machine_features,
-      bool is_mlir_compile = false);
+      TargetMachineFeatures* target_machine_features);
 
   // Runs HLO passes after layout assignment.
-  Status RunHloPassesAfterLayoutAssn(
+  absl::Status RunHloPassesAfterLayoutAssn(
       HloModule* module, bool is_aot_compile,
-      LLVMTargetMachineFeatures* target_machine_features,
-      const CompileOptions& compile_options, bool is_mlir_compile);
+      TargetMachineFeatures* target_machine_features,
+      const CompileOptions& compile_options);
 
-  StatusOr<std::unique_ptr<CpuExecutable>> CompileLegacyCpuExecutable(
+  absl::StatusOr<std::unique_ptr<CpuExecutable>> CompileCpuExecutable(
       std::unique_ptr<HloModule> module);
 
   CpuCompiler(const CpuCompiler&) = delete;
   CpuCompiler& operator=(const CpuCompiler&) = delete;
-
-  // Flag that can be used to override bail-out on sparse shapes.
-  // When set, buffer assignment assigns zero sizes to these shapes.
-  const bool allow_sparse_shapes_ = false;
 };
 
 }  // namespace cpu

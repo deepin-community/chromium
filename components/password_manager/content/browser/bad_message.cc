@@ -32,9 +32,9 @@ void ReceivedBadMessage(content::RenderProcessHost* host,
 
 }  // namespace
 
-bool CheckChildProcessSecurityPolicyForURL(content::RenderFrameHost* frame,
-                                           const GURL& form_url,
-                                           BadMessageReason reason) {
+bool CheckForIllegalURL(content::RenderFrameHost* frame,
+                        const GURL& form_url,
+                        BadMessageReason reason) {
   if (form_url.SchemeIs(url::kAboutScheme) ||
       form_url.SchemeIs(url::kDataScheme)) {
     SYSLOG(WARNING) << "Killing renderer: illegal password access from about: "
@@ -43,9 +43,19 @@ bool CheckChildProcessSecurityPolicyForURL(content::RenderFrameHost* frame,
     return false;
   }
 
+  return true;
+}
+
+bool CheckChildProcessSecurityPolicyForURL(content::RenderFrameHost* frame,
+                                           const GURL& form_url,
+                                           BadMessageReason reason) {
+  if (!CheckForIllegalURL(frame, form_url, reason)) {
+    return false;
+  }
+
   content::ChildProcessSecurityPolicy* policy =
       content::ChildProcessSecurityPolicy::GetInstance();
-  if (!policy->CanAccessDataForOrigin(frame->GetProcess()->GetID(),
+  if (!policy->CanAccessDataForOrigin(frame->GetProcess()->GetDeprecatedID(),
                                       url::Origin::Create(form_url))) {
     SYSLOG(WARNING) << "Killing renderer: illegal password access. Reason: "
                     << static_cast<int>(reason);

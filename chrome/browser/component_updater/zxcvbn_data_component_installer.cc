@@ -4,11 +4,13 @@
 
 #include "chrome/browser/component_updater/zxcvbn_data_component_installer.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_map.h"
@@ -22,8 +24,6 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/ranges/algorithm.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
@@ -100,7 +100,7 @@ bool ZxcvbnDataComponentInstallerPolicy::VerifyInstallation(
     return false;
   }
 
-  if (base::ranges::any_of(kFileNames, [&install_dir](const auto& file_name) {
+  if (std::ranges::any_of(kFileNames, [&install_dir](const auto& file_name) {
         return !base::PathExists(install_dir.Append(file_name));
       })) {
     return false;

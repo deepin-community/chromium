@@ -39,7 +39,7 @@ class GlyphRunList;
 
     The drawing context for the XPS backend.
 */
-class SkXPSDevice : public SkClipStackDevice {
+class SkXPSDevice final : public SkClipStackDevice {
 public:
     SK_SPI SkXPSDevice(SkISize);
     SK_SPI ~SkXPSDevice() override;
@@ -115,8 +115,7 @@ private:
     };
     friend HRESULT subset_typeface(const TypefaceUse& current);
 
-    void onDrawGlyphRunList(
-            SkCanvas*, const sktext::GlyphRunList&, const SkPaint&, const SkPaint&) override;
+    void onDrawGlyphRunList(SkCanvas*, const sktext::GlyphRunList&, const SkPaint&) override;
 
     bool createCanvasForLayer();
 

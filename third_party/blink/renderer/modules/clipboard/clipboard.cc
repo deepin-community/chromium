@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "third_party/blink/renderer/modules/clipboard/clipboard.h"
 
 #include <utility>
@@ -30,30 +35,46 @@ Clipboard* Clipboard::clipboard(Navigator& navigator) {
 
 Clipboard::Clipboard(Navigator& navigator) : Supplement<Navigator>(navigator) {}
 
-ScriptPromiseTyped<IDLSequence<ClipboardItem>> Clipboard::read(
+ScriptPromise<IDLSequence<ClipboardItem>> Clipboard::read(
     ScriptState* script_state,
     ClipboardUnsanitizedFormats* formats,
     ExceptionState& exception_state) {
+  LocalDOMWindow* window = GetSupplementable()->DomWindow();
+  LocalFrame* local_frame = window ? window->GetFrame() : nullptr;
+  if (local_frame && local_frame->IsAdScriptInStack()) {
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kAdScriptInStackOnClipboardRead);
+  }
+
   return ClipboardPromise::CreateForRead(GetExecutionContext(), script_state,
                                          formats, exception_state);
 }
 
-ScriptPromise Clipboard::readText(ScriptState* script_state,
-                                  ExceptionState& exception_state) {
+ScriptPromise<IDLString> Clipboard::readText(ScriptState* script_state,
+                                             ExceptionState& exception_state) {
+  LocalDOMWindow* window = GetSupplementable()->DomWindow();
+  LocalFrame* local_frame = window ? window->GetFrame() : nullptr;
+  if (local_frame && local_frame->IsAdScriptInStack()) {
+    UseCounter::Count(GetExecutionContext(),
+                      WebFeature::kAdScriptInStackOnClipboardRead);
+  }
+
   return ClipboardPromise::CreateForReadText(GetExecutionContext(),
                                              script_state, exception_state);
 }
 
-ScriptPromise Clipboard::write(ScriptState* script_state,
-                               const HeapVector<Member<ClipboardItem>>& data,
-                               ExceptionState& exception_state) {
+ScriptPromise<IDLUndefined> Clipboard::write(
+    ScriptState* script_state,
+    const HeapVector<Member<ClipboardItem>>& data,
+    ExceptionState& exception_state) {
   return ClipboardPromise::CreateForWrite(GetExecutionContext(), script_state,
                                           std::move(data), exception_state);
 }
 
-ScriptPromise Clipboard::writeText(ScriptState* script_state,
-                                   const String& data,
-                                   ExceptionState& exception_state) {
+ScriptPromise<IDLUndefined> Clipboard::writeText(
+    ScriptState* script_state,
+    const String& data,
+    ExceptionState& exception_state) {
   return ClipboardPromise::CreateForWriteText(
       GetExecutionContext(), script_state, data, exception_state);
 }

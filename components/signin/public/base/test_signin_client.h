@@ -14,7 +14,6 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
-#include "build/chromeos_buildflags.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_client.h"
 #include "components/signin/public/base/wait_for_network_callback_helper.h"
@@ -23,12 +22,6 @@
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/test/test_network_context.h"
 #include "services/network/test/test_url_loader_factory.h"
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include <optional>
-
-#include "components/account_manager_core/account.h"
-#endif
 
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
 #include "components/signin/public/base/bound_session_oauth_multilogin_delegate.h"
@@ -101,6 +94,10 @@ class TestSigninClient : public SigninClient {
     are_signin_cookies_allowed_ = value;
   }
 
+  void set_are_signin_cookies_deleted_on_exit(bool value) {
+    are_signin_cookies_deleted_on_exit_ = value;
+  }
+
   // When |value| is true, network calls posted through DelayNetworkCall() are
   // delayed indefinitely.
   // When |value| is false, all pending calls are unblocked, and new calls are
@@ -120,10 +117,8 @@ class TestSigninClient : public SigninClient {
       GaiaAuthConsumer* consumer,
       gaia::GaiaSource source) override;
   version_info::Channel GetClientChannel() override;
-  void OnPrimaryAccountChangedWithEventSource(
-      signin::PrimaryAccountChangeEvent event_details,
-      absl::variant<signin_metrics::AccessPoint, signin_metrics::ProfileSignout>
-          event_source) override;
+  void OnPrimaryAccountChanged(
+      signin::PrimaryAccountChangeEvent event_details) override;
 
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
   std::unique_ptr<signin::BoundSessionOAuthMultiLoginDelegate>
@@ -134,17 +129,6 @@ class TestSigninClient : public SigninClient {
           std::unique_ptr<signin::BoundSessionOAuthMultiLoginDelegate>()>
           factory);
 #endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  std::optional<account_manager::Account> GetInitialPrimaryAccount() override;
-  std::optional<bool> IsInitialPrimaryAccountChild() const override;
-
-  void SetInitialPrimaryAccountForTests(const account_manager::Account& account,
-                                        const std::optional<bool>& is_child);
-  void RemoveAccount(const account_manager::AccountKey& account_key) override;
-
-  void RemoveAllAccounts() override;
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 
  private:
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
@@ -162,15 +146,11 @@ class TestSigninClient : public SigninClient {
   std::unique_ptr<network::mojom::CookieManager> cookie_manager_;
   std::unique_ptr<network::mojom::NetworkContext> network_context_;
   bool are_signin_cookies_allowed_;
+  bool are_signin_cookies_deleted_on_exit_ = false;
 
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
   BoundSessionOauthMultiloginDelegateFactory bound_session_delegate_factory_;
 #endif  //  BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  std::optional<account_manager::Account> initial_primary_account_;
-  std::optional<bool> is_initial_primary_account_child_;
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
 };
 
 #endif  // COMPONENTS_SIGNIN_PUBLIC_BASE_TEST_SIGNIN_CLIENT_H_

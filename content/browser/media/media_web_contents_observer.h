@@ -96,6 +96,9 @@ class CONTENT_EXPORT MediaWebContentsObserver
   void RenderFrameDeleted(RenderFrameHost* render_frame_host) override;
   void MediaPictureInPictureChanged(bool is_picture_in_picture) override;
   void DidUpdateAudioMutingState(bool muted) override;
+  void DidStartNavigation(NavigationHandle* navigation_handle) override;
+  void RenderFrameHostChanged(RenderFrameHost* old_host,
+                              RenderFrameHost* new_host) override;
 
   // MediaPlayerObserverClient implementation.
   void GetHasPlayedBefore(GetHasPlayedBeforeCallback callback) override;
@@ -215,6 +218,7 @@ class CONTENT_EXPORT MediaWebContentsObserver
     void OnRemotePlaybackMetadataChange(
         media_session::mojom::RemotePlaybackMetadataPtr
             remote_playback_metadata) override;
+    void OnVideoVisibilityChanged(bool meets_visibility_threshold) override;
 
    private:
     PlayerInfo* GetPlayerInfo();

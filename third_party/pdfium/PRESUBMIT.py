@@ -63,7 +63,7 @@ _BANNED_CPP_FUNCTIONS = (
         [_THIRD_PARTY],
     ),
     (
-        r'/v8::Isolate::(?:|Try)GetCurrent()',
+        r'/v8::Isolate::(?:|Try)GetCurrent\(\)',
         (
             'v8::Isolate::GetCurrent() and v8::Isolate::TryGetCurrent() are',
             'banned. Hold a pointer to the v8::Isolate that was entered. Use',
@@ -72,6 +72,30 @@ _BANNED_CPP_FUNCTIONS = (
         ),
         True,
         (),
+    ),
+    (
+        r'/\bmemcpy\(',
+        ('Use FXSYS_memcpy() in place of memcpy().',),
+        True,
+        [_THIRD_PARTY],
+    ),
+    (
+        r'/\bmemmove\(',
+        ('Use FXSYS_memmove() in place of memmove().',),
+        True,
+        [_THIRD_PARTY],
+    ),
+    (
+        r'/\bmemset\(',
+        ('Use FXSYS_memset() in place of memset().',),
+        True,
+        [_THIRD_PARTY],
+    ),
+    (
+        r'/\bmemclr\(',
+        ('Use FXSYS_memclr() in place of memclr().',),
+        True,
+        [_THIRD_PARTY],
     ),
 )
 
@@ -513,6 +537,8 @@ def ChecksCommon(input_api, output_api):
           project_name='PDFium',
           source_file_filter=lambda x: input_api.FilterSourceFile(
               x, files_to_check=files_to_check)))
+  results.extend(
+      input_api.canned_checks.CheckInclusiveLanguage(input_api, output_api))
 
   return results
 

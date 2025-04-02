@@ -11,7 +11,6 @@ import {
   goToResource,
   waitFor,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   getGroupByKindChecked,
   getHiddenIssuesRow,
@@ -31,12 +30,12 @@ describe('Hide issues menu', () => {
     const {frontend} = getBrowserAndPages();
     frontend.evaluate(() => {
       const issue = {
-        'code': 'HeavyAdIssue',
-        'details': {
-          'heavyAdIssueDetails': {
-            'resolution': 'HeavyAdBlocked',
-            'reason': 'NetworkTotalLimit',
-            'frame': {frameId: 'main'},
+        code: 'HeavyAdIssue',
+        details: {
+          heavyAdIssueDetails: {
+            resolution: 'HeavyAdBlocked',
+            reason: 'NetworkTotalLimit',
+            frame: {frameId: 'main'},
           },
         },
       };
@@ -84,7 +83,7 @@ describe('Hide issues menu', () => {
                         .toString()
                         .replace('localhost', 'devtools.oopif.test');
         await fetch(url, {credentials: 'include'});
-      } catch (e) {
+      } catch {
       }
     });
     await navigateToIssuesTab();
@@ -186,7 +185,7 @@ describe('Hide issues menu', () => {
   });
 });
 
-describe('After enabling grouping by IssueKind, Hide issues menu', async () => {
+describe('After enabling grouping by IssueKind, Hide issues menu', () => {
   it('should be appended to the issue kinds group header', async () => {
     await goToResource('elements/element-reveal-inline-issue.html');
     await navigateToIssuesTab();

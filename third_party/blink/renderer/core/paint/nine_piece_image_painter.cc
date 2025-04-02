@@ -70,7 +70,6 @@ std::optional<TileParameters> ComputeTileParameters(
     default:
       NOTREACHED();
   }
-  return std::nullopt;
 }
 
 bool ShouldTile(const NinePieceImageGrid::NinePieceDrawInfo& draw_info) {
@@ -88,7 +87,6 @@ bool ShouldTile(const NinePieceImageGrid::NinePieceDrawInfo& draw_info) {
 void PaintPieces(GraphicsContext& context,
                  const PhysicalRect& border_image_rect,
                  const ComputedStyle& style,
-                 const Document& document,
                  const NinePieceImage& nine_piece_image,
                  Image& image,
                  const gfx::SizeF& unzoomed_image_size,
@@ -107,11 +105,10 @@ void PaintPieces(GraphicsContext& context,
       image_size.width() / unzoomed_image_size.width(),
       image_size.height() / unzoomed_image_size.height());
 
-  auto border_widths = gfx::Outsets()
-                           .set_left_right(style.BorderLeftWidth().ToInt(),
-                                           style.BorderRightWidth().ToInt())
-                           .set_top_bottom(style.BorderTopWidth().ToInt(),
-                                           style.BorderBottomWidth().ToInt());
+  auto border_widths =
+      gfx::Outsets()
+          .set_left_right(style.BorderLeftWidth(), style.BorderRightWidth())
+          .set_top_bottom(style.BorderTopWidth(), style.BorderBottomWidth());
   NinePieceImageGrid grid(
       nine_piece_image, image_size, slice_scale, style.EffectiveZoom(),
       ToPixelSnappedRect(border_image_rect), border_widths, sides_to_include);
@@ -232,8 +229,8 @@ bool NinePieceImagePainter::Paint(GraphicsContext& graphics_context,
       TRACE_DISABLED_BY_DEFAULT("devtools.timeline"), "PaintImage",
       inspector_paint_image_event::Data, node, *style_image,
       gfx::RectF(image->Rect()), gfx::RectF(border_image_rect));
-  PaintPieces(graphics_context, border_image_rect, style, document,
-              nine_piece_image, *image, unzoomed_image_size, sides_to_include);
+  PaintPieces(graphics_context, border_image_rect, style, nine_piece_image,
+              *image, unzoomed_image_size, sides_to_include);
   return true;
 }
 

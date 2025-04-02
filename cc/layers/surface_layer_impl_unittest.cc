@@ -5,10 +5,13 @@
 #include "cc/layers/surface_layer_impl.h"
 
 #include <stddef.h>
+
 #include <utility>
 
 #include "base/test/bind.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/threading/thread.h"
+#include "cc/base/features.h"
 #include "cc/layers/append_quads_data.h"
 #include "cc/test/layer_tree_impl_test_base.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -29,7 +32,8 @@ TEST(SurfaceLayerImplTest, Occlusion) {
 
   LayerTreeImplTestBase impl;
 
-  SurfaceLayerImpl* surface_layer_impl = impl.AddLayer<SurfaceLayerImpl>();
+  SurfaceLayerImpl* surface_layer_impl =
+      impl.AddLayerInActiveTree<SurfaceLayerImpl>();
   surface_layer_impl->SetBounds(layer_size);
   surface_layer_impl->SetDrawsContent(true);
   viz::SurfaceId surface_id(kArbitraryFrameSinkId, kArbitraryLocalSurfaceId);
@@ -78,7 +82,8 @@ TEST(SurfaceLayerImplTest, Occlusion) {
 // are populated correctly if primary and fallback surfaces differ.
 TEST(SurfaceLayerImplTest, SurfaceLayerImplWithTwoDifferentSurfaces) {
   LayerTreeImplTestBase impl;
-  SurfaceLayerImpl* surface_layer_impl = impl.AddLayer<SurfaceLayerImpl>();
+  SurfaceLayerImpl* surface_layer_impl =
+      impl.AddLayerInActiveTree<SurfaceLayerImpl>();
 
   // Populate the primary viz::SurfaceInfo.
   const viz::LocalSurfaceId kArbitraryLocalSurfaceId1(
@@ -176,10 +181,12 @@ TEST(SurfaceLayerImplTest, SurfaceLayerImplWithTwoDifferentSurfaces) {
 // correctly.
 TEST(SurfaceLayerImplTest, SurfaceLayerImplsWithDeadlines) {
   LayerTreeImplTestBase impl;
-  SurfaceLayerImpl* surface_layer_impl = impl.AddLayer<SurfaceLayerImpl>();
+  SurfaceLayerImpl* surface_layer_impl =
+      impl.AddLayerInActiveTree<SurfaceLayerImpl>();
   CopyProperties(impl.root_layer(), surface_layer_impl);
 
-  SurfaceLayerImpl* surface_layer_impl2 = impl.AddLayer<SurfaceLayerImpl>();
+  SurfaceLayerImpl* surface_layer_impl2 =
+      impl.AddLayerInActiveTree<SurfaceLayerImpl>();
   CopyProperties(impl.root_layer(), surface_layer_impl2);
 
   const viz::LocalSurfaceId kArbitraryLocalSurfaceId1(
@@ -220,7 +227,8 @@ TEST(SurfaceLayerImplTest, SurfaceLayerImplsWithDeadlines) {
 // and fallback viz::SurfaceInfo.
 TEST(SurfaceLayerImplTest, SurfaceLayerImplWithMatchingPrimaryAndFallback) {
   LayerTreeImplTestBase impl;
-  SurfaceLayerImpl* surface_layer_impl = impl.AddLayer<SurfaceLayerImpl>();
+  SurfaceLayerImpl* surface_layer_impl =
+      impl.AddLayerInActiveTree<SurfaceLayerImpl>();
 
   // Populate the primary viz::SurfaceId.
   const viz::LocalSurfaceId kArbitraryLocalSurfaceId1(
@@ -261,7 +269,8 @@ TEST(SurfaceLayerImplTest, GetEnclosingRectInTargetSpace) {
   gfx::Size layer_size(902, 1000);
   gfx::Size viewport_size(902, 1000);
   LayerTreeImplTestBase impl;
-  SurfaceLayerImpl* surface_layer_impl = impl.AddLayer<SurfaceLayerImpl>();
+  SurfaceLayerImpl* surface_layer_impl =
+      impl.AddLayerInActiveTree<SurfaceLayerImpl>();
   surface_layer_impl->SetBounds(layer_size);
   surface_layer_impl->SetDrawsContent(true);
   CopyProperties(impl.root_layer(), surface_layer_impl);
@@ -315,7 +324,7 @@ TEST(SurfaceLayerImplTest, WillDrawNotifiesSynchronouslyInCompositeImmediate) {
   impl.host_impl()->client()->set_is_synchronous_composite(true);
 
   SurfaceLayerImpl* surface_layer_impl =
-      impl.AddLayer<SurfaceLayerImpl>(std::move(callback));
+      impl.AddLayerInActiveTree<SurfaceLayerImpl>(std::move(callback));
   surface_layer_impl->SetBounds(gfx::Size(500, 500));
   surface_layer_impl->SetDrawsContent(true);
 
@@ -353,7 +362,7 @@ TEST(SurfaceLayerImplTest, WillDrawNotifiesAsynchronously) {
   impl.host_impl()->client()->set_is_synchronous_composite(false);
 
   SurfaceLayerImpl* surface_layer_impl =
-      impl.AddLayer<SurfaceLayerImpl>(std::move(callback));
+      impl.AddLayerInActiveTree<SurfaceLayerImpl>(std::move(callback));
   surface_layer_impl->SetBounds(gfx::Size(500, 500));
   surface_layer_impl->SetDrawsContent(true);
 
@@ -363,6 +372,101 @@ TEST(SurfaceLayerImplTest, WillDrawNotifiesAsynchronously) {
   surface_layer_impl->WillDraw(DRAW_MODE_SOFTWARE, nullptr);
   // We should have called the callback, which would set `updated` to true.
   EXPECT_TRUE(updated);
+}
+
+class SurfaceLayerImplAlignToPixelGridTest : public testing::Test {
+ public:
+  SurfaceLayerImplAlignToPixelGridTest() {
+    scoped_feature_list_.InitWithFeatures(
+        {features::kAlignSurfaceLayerImplToPixelGrid}, {});
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+
+TEST_F(SurfaceLayerImplAlignToPixelGridTest, FractionalOffsetSnapsToPixelGrid) {
+  gfx::Size layer_size(200, 200);
+  gfx::Size viewport_size(1000, 1000);
+  LayerTreeImplTestBase impl;
+  SurfaceLayerImpl* surface_layer_impl =
+      impl.AddLayerInActiveTree<SurfaceLayerImpl>();
+  surface_layer_impl->SetBounds(layer_size);
+  surface_layer_impl->SetDrawsContent(true);
+  CopyProperties(impl.root_layer(), surface_layer_impl);
+
+  // Create transform with fractional translation.
+  gfx::Transform transform;
+  transform.PostTranslate(0.3, 0.7);
+  EXPECT_FALSE(transform.IsIdentityOrIntegerTranslation());
+
+  impl.CalcDrawProps(viewport_size);
+  surface_layer_impl->draw_properties().target_space_transform = transform;
+
+  // Compute RenderPass, with DrawQuads for SurfaceLayer.
+  auto render_pass = viz::CompositorRenderPass::Create();
+  AppendQuadsData data;
+  surface_layer_impl->AppendQuads(render_pass.get(), &data);
+
+  // Verify that the DrawQuads for the SurfaceLayer have an integral offset.
+  ASSERT_EQ(1U, render_pass->shared_quad_state_list.size());
+  viz::SharedQuadState* state =
+      render_pass->shared_quad_state_list.ElementAt(0);
+  gfx::Transform quad_to_target_transform = state->quad_to_target_transform;
+  EXPECT_TRUE(quad_to_target_transform.IsIdentityOrIntegerTranslation());
+}
+
+// This test verifies that paint flag overrides are propagated to the
+// viz::SurfaceDrawQuad.
+TEST(SurfaceLayerImplTest, OverrideChildPaintFlags) {
+  LayerTreeImplTestBase impl;
+  SurfaceLayerImpl* surface_layer_impl =
+      impl.AddLayerInActiveTree<SurfaceLayerImpl>();
+  CopyProperties(impl.root_layer(), surface_layer_impl);
+
+  gfx::Size viewport_size(1000, 1000);
+  impl.CalcDrawProps(viewport_size);
+
+  {
+    const viz::LocalSurfaceId kArbitraryLocalSurfaceId1(
+        1, base::UnguessableToken::Create());
+    viz::SurfaceId surface_id1(kArbitraryFrameSinkId,
+                               kArbitraryLocalSurfaceId1);
+
+    gfx::Size layer_size(400, 100);
+    surface_layer_impl->SetBounds(layer_size);
+    surface_layer_impl->SetDrawsContent(true);
+    surface_layer_impl->SetRange(viz::SurfaceRange(surface_id1), 1u);
+    surface_layer_impl->SetFilterQuality(PaintFlags::FilterQuality::kNone);
+  }
+
+  // By default, surfaces don't override their child paint flags.
+  {
+    auto render_pass = viz::CompositorRenderPass::Create();
+    AppendQuadsData data;
+    surface_layer_impl->AppendQuads(render_pass.get(), &data);
+    const viz::SurfaceDrawQuad* surface_draw_quad =
+        viz::SurfaceDrawQuad::MaterialCast(render_pass->quad_list.ElementAt(0));
+    EXPECT_EQ(surface_draw_quad->override_child_filter_quality, std::nullopt);
+    EXPECT_EQ(surface_draw_quad->override_child_dynamic_range_limit,
+              std::nullopt);
+  }
+
+  // When specified, surfaces will propagate their paint flags (using the
+  // default when none has been set on the layer).
+  {
+    surface_layer_impl->SetOverrideChildPaintFlags(true);
+
+    auto render_pass = viz::CompositorRenderPass::Create();
+    AppendQuadsData data;
+    surface_layer_impl->AppendQuads(render_pass.get(), &data);
+    const viz::SurfaceDrawQuad* surface_draw_quad =
+        viz::SurfaceDrawQuad::MaterialCast(render_pass->quad_list.ElementAt(0));
+    EXPECT_EQ(surface_draw_quad->override_child_filter_quality,
+              PaintFlags::FilterQuality::kNone);
+    EXPECT_EQ(surface_draw_quad->override_child_dynamic_range_limit,
+              PaintFlags::DynamicRangeLimitMixture());
+  }
 }
 
 }  // namespace

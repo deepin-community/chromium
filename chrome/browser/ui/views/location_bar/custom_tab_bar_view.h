@@ -12,7 +12,8 @@
 #include "chrome/browser/ui/views/location_bar/location_icon_view.h"
 #include "chrome/browser/ui/views/web_apps/frame_toolbar/web_app_menu_button.h"
 #include "ui/base/metadata/metadata_header_macros.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/accessible_pane_view.h"
 #include "ui/views/context_menu_controller.h"
 
@@ -24,7 +25,7 @@ namespace views {
 class FlexLayout;
 class MenuRunner;
 class ImageButton;
-}
+}  // namespace views
 
 class BrowserView;
 class CustomTabBarTitleOriginView;
@@ -56,7 +57,8 @@ class CustomTabBarView : public views::AccessiblePaneView,
   // views::AccessiblePaneView:
   gfx::Rect GetAnchorBoundsInScreen() const override;
   void SetVisible(bool visible) override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   void OnPaintBackground(gfx::Canvas* canvas) override;
   void ChildPreferredSizeChanged(views::View* child) override;
   void OnThemeChanged() override;
@@ -108,9 +110,10 @@ class CustomTabBarView : public views::AccessiblePaneView,
   void ExecuteCommand(int command_id, int event_flags) override;
 
   // views::ContextMenuController:
-  void ShowContextMenuForViewImpl(View* source,
-                                  const gfx::Point& point,
-                                  ui::MenuSourceType source_type) override;
+  void ShowContextMenuForViewImpl(
+      View* source,
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type) override;
 
   // Get the app controller associated with the browser, if any.
   web_app::AppBrowserController* app_controller() const {
@@ -122,8 +125,8 @@ class CustomTabBarView : public views::AccessiblePaneView,
 
   bool GetShowTitle() const;
 
-  SkColor title_bar_color_;
-  SkColor background_color_;
+  SkColor title_bar_color_ = SK_ColorTRANSPARENT;
+  SkColor background_color_ = SK_ColorTRANSPARENT;
 
   std::u16string last_title_;
   std::u16string last_location_;

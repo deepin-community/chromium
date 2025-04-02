@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/ash/login/quick_unlock/quick_unlock_utils.h"
 
 #include <string>
@@ -194,7 +199,6 @@ base::TimeDelta PasswordConfirmationFrequencyToTimeDelta(
       return base::Days(7);
   }
   NOTREACHED();
-  return base::TimeDelta();
 }
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {
@@ -217,9 +221,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterIntegerPref(prefs::kPinUnlockMaximumLength, 0);
   registry->RegisterBooleanPref(prefs::kPinUnlockWeakPinsAllowed, true);
 
-  // Register as true by default only when the feature is enabled.
-  registry->RegisterBooleanPref(::prefs::kPinUnlockAutosubmitEnabled,
-                                features::IsPinAutosubmitFeatureEnabled());
+  registry->RegisterBooleanPref(::prefs::kPinUnlockAutosubmitEnabled, true);
 }
 
 bool IsPinDisabledByPolicy(PrefService* pref_service, Purpose purpose) {
@@ -264,7 +266,6 @@ FingerprintLocation GetFingerprintLocation() {
   if (location_info == "left-of-power-button-top-right")
     return FingerprintLocation::LEFT_OF_POWER_BUTTON_TOP_RIGHT;
   NOTREACHED() << "Not handled value: " << location_info;
-  return default_location;
 }
 
 bool IsFingerprintSupported() {
@@ -336,7 +337,7 @@ void AddFingerprintResources(content::WebUIDataSource* html_source) {
 
 FingerprintDescriptionStrings GetFingerprintDescriptionStrings(
     FingerprintLocation location) {
-  auto* location_string_it = kFingerprintLocationToStringsMap.find(location);
+  auto location_string_it = kFingerprintLocationToStringsMap.find(location);
   CHECK(location_string_it != kFingerprintLocationToStringsMap.end());
   return location_string_it->second;
 }

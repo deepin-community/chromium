@@ -14,7 +14,6 @@
 #include "ash/wm/desks/desks_util.h"
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
@@ -95,9 +94,7 @@ class SystemUIComponentsStyleViewerView::ComponentButton
       : views::LabelButton(std::move(pressed_callback), name) {
     SetHorizontalAlignment(gfx::HorizontalAlignment::ALIGN_CENTER);
     SetBorder(std::make_unique<views::HighlightBorder>(
-        0, chromeos::features::IsJellyrollEnabled()
-               ? views::HighlightBorder::Type::kHighlightBorderNoShadow
-               : views::HighlightBorder::Type::kHighlightBorder1));
+        0, views::HighlightBorder::Type::kHighlightBorderNoShadow));
     label()->SetSubpixelRenderingEnabled(false);
     label()->SetFontList(views::Label::GetDefaultFontList().Derive(
         1, gfx::Font::NORMAL, gfx::Font::Weight::MEDIUM));
@@ -121,11 +118,10 @@ class SystemUIComponentsStyleViewerView::ComponentButton
         GetColorProvider()->GetColor(background_color_id_)));
   }
 
-  gfx::Size CalculatePreferredSize() const override {
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
     return gfx::Size(kMenuWidth, kDefaultButtonHeight);
   }
-
-  int GetHeightForWidth(int w) const override { return kDefaultButtonHeight; }
 
   void OnThemeChanged() override {
     views::LabelButton::OnThemeChanged();
@@ -214,14 +210,17 @@ void SystemUIComponentsStyleViewerView::CreateAndShowWidget() {
       u"Combobox", base::BindRepeating(&CreateComboboxInstancesGridView));
   viewer_view->AddComponent(
       u"Typography", base::BindRepeating(&CreateTypographyInstancesGridView));
+  viewer_view->AddComponent(u"Cutouts",
+                            base::BindRepeating(&CreateCutoutsGridView));
 
   // Show PillButton on start.
   viewer_view->ShowComponentInstances(u"PillButton");
 
-  views::Widget::InitParams params;
+  views::Widget::InitParams params(
+      views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+      views::Widget::InitParams::TYPE_WINDOW);
   params.parent =
       desks_util::GetActiveDeskContainerForRoot(Shell::GetPrimaryRootWindow());
-  params.type = views::Widget::InitParams::TYPE_WINDOW;
   params.delegate = viewer_view;
 
   // The widget is owned by the native widget.
@@ -259,6 +258,7 @@ void SystemUIComponentsStyleViewerView::ShowComponentInstances(
   }
 
   // Toggle corresponding components grid view.
+  components_grid_view_ = nullptr;
   components_grid_view_ = component_instances_scroll_view_->SetContents(
       components_grid_view_factories_[name].Run());
 }

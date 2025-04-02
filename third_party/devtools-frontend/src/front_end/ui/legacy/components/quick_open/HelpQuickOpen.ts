@@ -12,25 +12,23 @@ export class HelpQuickOpen extends Provider {
   private providers: {
     prefix: string,
     iconName: string,
-    iconWidth: string,
     title: string,
+    jslogContext: string,
   }[];
 
-  constructor() {
-    super();
+  constructor(jslogContext: string) {
+    super(jslogContext);
     this.providers = [];
     getRegisteredProviders().forEach(this.addProvider.bind(this));
   }
 
-  private addProvider(extension: ProviderRegistration): void {
-    if (extension.titleSuggestion) {
-      this.providers.push({
-        prefix: extension.prefix || '',
-        iconName: extension.iconName,
-        iconWidth: extension.iconWidth,
-        title: extension.titlePrefix() + ' ' + extension.titleSuggestion(),
-      });
-    }
+  private async addProvider(extension: ProviderRegistration): Promise<void> {
+    this.providers.push({
+      prefix: extension.prefix || '',
+      iconName: extension.iconName,
+      title: extension.helpTitle(),
+      jslogContext: (await extension.provider()).jslogContext,
+    });
   }
 
   override itemCount(): number {
@@ -52,11 +50,15 @@ export class HelpQuickOpen extends Provider {
     iconElement.data = {
       iconName: provider.iconName,
       color: 'var(--icon-default)',
-      width: provider.iconWidth,
+      width: '18px',
     };
     titleElement.parentElement?.parentElement?.insertBefore(iconElement, titleElement.parentElement);
 
     UI.UIUtils.createTextChild(titleElement, provider.title);
+  }
+
+  override jslogContextAt(itemIndex: number): string {
+    return this.providers[itemIndex].jslogContext;
   }
 
   override selectItem(itemIndex: number|null, _promptValue: string): void {
@@ -73,8 +75,8 @@ export class HelpQuickOpen extends Provider {
 registerProvider({
   prefix: '?',
   iconName: 'help',
-  iconWidth: '20px',
-  provider: () => Promise.resolve(new HelpQuickOpen()),
+  provider: () => Promise.resolve(new HelpQuickOpen('help')),
+  helpTitle: () => 'Help',
   titlePrefix: () => 'Help',
   titleSuggestion: undefined,
 });

@@ -336,7 +336,6 @@ ResultExpr RestrictKillTarget(pid_t target_pid, int sysno) {
       return CrashSIGSYSKill();
     default:
       NOTREACHED();
-      return CrashSIGSYS();
   }
 }
 
@@ -385,7 +384,6 @@ ResultExpr RestrictSchedTarget(pid_t target_pid, int sysno) {
     }
     default:
       NOTREACHED();
-      return CrashSIGSYS();
   }
 }
 

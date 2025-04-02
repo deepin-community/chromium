@@ -36,7 +36,7 @@ PrefetchProxyConfigurator::MaybeCreatePrefetchProxyConfigurator(
 }
 
 PrefetchProxyConfigurator::PrefetchProxyConfigurator(const GURL& proxy_url,
-                                                     const std::string api_key)
+                                                     const std::string& api_key)
     : prefetch_proxy_chain_(net::GetSchemeFromUriScheme(proxy_url.scheme()),
                             net::HostPortPair::FromURL(proxy_url)),
       clock_(base::DefaultClock::GetInstance()) {
@@ -183,7 +183,7 @@ void PrefetchProxyConfigurator::OnTunnelProxyConnectionError(
   }
   DCHECK(prefetch_proxy_not_available_until_);
 
-  // TODO(crbug/1136114): Consider persisting to prefs.
+  // TODO(crbug.com/40152136): Consider persisting to prefs.
 }
 
 }  // namespace content

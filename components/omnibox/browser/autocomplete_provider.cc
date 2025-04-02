@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "components/omnibox/browser/autocomplete_provider.h"
 
 #include <algorithm>
@@ -76,8 +81,15 @@ const char* AutocompleteProvider::TypeToString(Type type) {
       return "Calculator";
     case TYPE_FEATURED_SEARCH:
       return "FeaturedSearch";
+    case TYPE_HISTORY_EMBEDDINGS:
+      return "HistoryEmbeddings";
+    case TYPE_ENTERPRISE_SEARCH_AGGREGATOR:
+      return "EnterpriseSearchAggregator";
+    case TYPE_UNSCOPED_EXTENSION:
+      return "UnscopedExtension";
     default:
-      NOTREACHED() << "Unhandled AutocompleteProvider::Type " << type;
+      DUMP_WILL_BE_NOTREACHED()
+          << "Unhandled AutocompleteProvider::Type " << type;
       return "Unknown";
   }
 }
@@ -151,19 +163,22 @@ AutocompleteProvider::AsOmniboxEventProviderType() const {
     case TYPE_HISTORY_CLUSTER_PROVIDER:
       return metrics::OmniboxEventProto::HISTORY_CLUSTER;
     case TYPE_CALCULATOR:
-      // TODO(manukh): Since there's a high likelihood the calc provider won't
-      //   launch, log as search provider to avoid the adding then deprecating
-      //   the provider in the proto and histograms.
-      return metrics::OmniboxEventProto::SEARCH;
+      return metrics::OmniboxEventProto::CALCULATOR;
     case TYPE_FEATURED_SEARCH:
       return metrics::OmniboxEventProto::FEATURED_SEARCH;
+    case TYPE_HISTORY_EMBEDDINGS:
+      return metrics::OmniboxEventProto::HISTORY_EMBEDDINGS;
+    case TYPE_ENTERPRISE_SEARCH_AGGREGATOR:
+      return metrics::OmniboxEventProto::ENTERPRISE_SEARCH_AGGREGATOR;
+    case TYPE_UNSCOPED_EXTENSION:
+      return metrics::OmniboxEventProto::UNSCOPED_EXTENSION;
     default:
-      // TODO(crbug.com/1499235) This was a NOTREACHED that we converted to help
-      //   debug crbug.com/1499235 since NOTREACHED's don't log their message in
-      //   crash reports. Should be reverted back to a NOTREACHED or
-      //   NOTREACHED_NORETURN if their logs eventually begin being logged to
+      // TODO(crbug.com/40940012) This was a NOTREACHED that we converted to
+      //   help debug crbug.com/1499235 since NOTREACHED's don't log their
+      //   message in crash reports. Should be reverted back to a NOTREACHED or
+      //   NOTREACHED if their logs eventually begin being logged to
       //   crash reports.
-      DUMP_WILL_BE_NOTREACHED_NORETURN()
+      DUMP_WILL_BE_NOTREACHED()
           << "[NOTREACHED] Unhandled AutocompleteProvider::Type " << type_;
       return metrics::OmniboxEventProto::UNKNOWN_PROVIDER;
   }
@@ -189,6 +204,23 @@ size_t AutocompleteProvider::EstimateMemoryUsage() const {
 
 AutocompleteProvider::~AutocompleteProvider() {
   Stop(false, false);
+}
+
+// static
+AutocompleteProvider::AdjustedInputAndStarterPackKeyword
+AutocompleteProvider::AdjustInputForStarterPackKeyword(
+    const AutocompleteInput& input,
+    TemplateURLService* turl_service) {
+  if (input.prefer_keyword()) {
+    AutocompleteInput keyword_input = input;
+    const TemplateURL* template_url =
+        AutocompleteInput::GetSubstitutingTemplateURLForInput(turl_service,
+                                                              &keyword_input);
+    if (template_url && template_url->starter_pack_id() > 0) {
+      return {keyword_input, template_url};
+    }
+  }
+  return {input, nullptr};
 }
 
 // static
@@ -306,9 +338,9 @@ void AutocompleteProvider::ResizeMatches(size_t max_matches,
   // The provider should pass all match candidates to the controller if ML
   // scoring is enabled. Mark any matches over `max_matches` with zero relevance
   // and `culled_by_provider` set to true to simulate the resizing.
-  base::ranges::for_each(std::next(matches_.begin(), max_matches),
-                         matches_.end(), [&](auto& match) {
-                           match.relevance = 0;
-                           match.culled_by_provider = true;
-                         });
+  std::ranges::for_each(std::next(matches_.begin(), max_matches),
+                        matches_.end(), [&](auto& match) {
+                          match.relevance = 0;
+                          match.culled_by_provider = true;
+                        });
 }

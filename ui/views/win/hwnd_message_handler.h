@@ -5,8 +5,9 @@
 #ifndef UI_VIEWS_WIN_HWND_MESSAGE_HANDLER_H_
 #define UI_VIEWS_WIN_HWND_MESSAGE_HANDLER_H_
 
-#include <stddef.h>
 #include <windows.h>
+
+#include <stddef.h>
 
 #include <map>
 #include <memory>
@@ -25,7 +26,8 @@
 #include "ui/accessibility/platform/ax_fragment_root_delegate_win.h"
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/input_method_observer.h"
-#include "ui/base/ui_base_types.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
 #include "ui/base/win/window_event_target.h"
 #include "ui/events/event.h"
 #include "ui/gfx/geometry/point.h"
@@ -100,7 +102,7 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
   ~HWNDMessageHandler() override;
 
   virtual void Init(HWND parent, const gfx::Rect& bounds);
-  virtual void InitModalType(ui::ModalType modal_type);
+  virtual void InitModalType(ui::mojom::ModalType modal_type);
 
   virtual void Close();
   virtual void CloseNow();
@@ -112,7 +114,7 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
   virtual gfx::Rect GetClientAreaBounds() const;
 
   virtual void GetWindowPlacement(gfx::Rect* bounds,
-                                  ui::WindowShowState* show_state) const;
+                                  ui::mojom::WindowShowState* show_state) const;
 
   // Sets the bounds of the HWND to |bounds_in_pixels|. If the HWND size is not
   // changed, |force_size_changed| determines if we should pretend it is.
@@ -133,7 +135,7 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
 
   // Shows the window. If |show_state| is maximized, |pixel_restore_bounds| is
   // the bounds to restore the window to when going back to normal.
-  virtual void Show(ui::WindowShowState show_state,
+  virtual void Show(ui::mojom::WindowShowState show_state,
                     const gfx::Rect& pixel_restore_bounds);
   virtual void Hide();
 
@@ -184,8 +186,6 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
 
   virtual void SetWindowIcons(const gfx::ImageSkia& window_icon,
                               const gfx::ImageSkia& app_icon);
-
-  virtual void set_use_system_default_icon(bool use_system_default_icon);
 
   // Set the fullscreen state. `target_display_id` indicates the display where
   // the window should be shown fullscreen; display::kInvalidDisplayId indicates
@@ -646,8 +646,6 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
   // Set to true in Close() and false is CloseNow().
   bool waiting_for_close_now_;
 
-  bool use_system_default_icon_;
-
   // Whether all ancestors have been enabled. This is only used if is_modal_ is
   // true.
   bool restored_enabled_;
@@ -656,10 +654,10 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
   scoped_refptr<ui::WinCursor> current_cursor_;
 
   // The icon created from the bitmap image of the window icon.
-  base::win::ScopedHICON window_icon_;
+  base::win::ScopedGDIObject<HICON> window_icon_;
 
   // The icon created from the bitmap image of the app icon.
-  base::win::ScopedHICON app_icon_;
+  base::win::ScopedGDIObject<HICON> app_icon_;
 
   // The aspect ratio for the window. This is only used for sizing operations
   // for the non-client area.
@@ -721,7 +719,7 @@ class VIEWS_EXPORT HWNDMessageHandler : public gfx::WindowImpl,
   bool is_first_nccalc_;
 
   // Copy of custom window region specified via SetRegion(), if any.
-  base::win::ScopedRegion custom_window_region_;
+  base::win::ScopedGDIObject<HRGN> custom_window_region_;
 
   // If > 0 indicates a menu is running (we're showing a native menu).
   int menu_depth_;

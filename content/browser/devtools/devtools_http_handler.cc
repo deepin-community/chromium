@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/browser/devtools/devtools_http_handler.h"
 
 #include <stddef.h>
@@ -10,6 +15,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/command_line.h"
@@ -20,6 +26,7 @@
 #include "base/json/json_writer.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/metrics/histogram_macros.h"
@@ -32,7 +39,6 @@
 #include "base/threading/thread.h"
 #include "base/uuid.h"
 #include "base/values.h"
-#include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "content/browser/devtools/devtools_manager.h"
 #include "content/public/browser/browser_task_traits.h"
@@ -92,12 +98,7 @@ const int32_t kSendBufferSizeForDevTools = 256 * 1024 * 1024;  // 256Mb
 const int32_t kReceiveBufferSizeForDevTools = 100 * 1024 * 1024;  // 100Mb
 
 const char kRemoteUrlPattern[] =
-#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-    "https://chrome-devtools-frontend.appspot.com/serve_internal_file/%s/"
-    "%s.html";
-#else
     "https://chrome-devtools-frontend.appspot.com/serve_rev/%s/%s.html";
-#endif
 
 constexpr net::NetworkTrafficAnnotationTag
     kDevtoolsHttpHandlerTrafficAnnotation =
@@ -354,8 +355,7 @@ class DevToolsAgentHostClientImpl : public DevToolsAgentHostClient {
     constexpr char kMsg[] =
         "{\"method\":\"Inspector.detached\","
         "\"params\":{\"reason\":\"target_closed\"}}";
-    DispatchProtocolMessage(
-        agent_host, base::as_bytes(base::make_span(kMsg, strlen(kMsg))));
+    DispatchProtocolMessage(agent_host, base::byte_span_from_cstring(kMsg));
 
     agent_host_ = nullptr;
     task_runner_->PostTask(
@@ -383,7 +383,7 @@ class DevToolsAgentHostClientImpl : public DevToolsAgentHostClient {
 
  private:
   const scoped_refptr<base::SingleThreadTaskRunner> task_runner_;
-  ServerWrapper* const server_wrapper_;
+  const raw_ptr<ServerWrapper> server_wrapper_;
   const int connection_id_;
   scoped_refptr<DevToolsAgentHost> agent_host_;
 };
@@ -418,6 +418,8 @@ static std::string GetMimeType(const std::string& filename) {
                             base::CompareCase::INSENSITIVE_ASCII)) {
     return "text/css";
   } else if (base::EndsWith(filename, ".js",
+                            base::CompareCase::INSENSITIVE_ASCII) ||
+             base::EndsWith(filename, ".mjs",
                             base::CompareCase::INSENSITIVE_ASCII)) {
     return "text/javascript";
   } else if (base::EndsWith(filename, ".png",
@@ -608,7 +610,7 @@ void DevToolsHttpHandler::OnJsonRequest(
     DecompressAndSendJsonProtocol(connection_id);
     return;
   }
-  std::vector<base::StringPiece> query_components = base::SplitStringPiece(
+  std::vector<std::string_view> query_components = base::SplitStringPiece(
       query, "&", base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
 
   bool for_tab = base::Contains(query_components, "for_tab");
@@ -637,7 +639,7 @@ void DevToolsHttpHandler::OnJsonRequest(
       return;
     }
 
-    base::StringPiece escaped_url =
+    std::string_view escaped_url =
         query_components.empty() ? "" : query_components[0];
     GURL url(base::UnescapeBinaryURLComponent(escaped_url));
     if (!url.is_valid())
@@ -699,11 +701,10 @@ void DevToolsHttpHandler::DecompressAndSendJsonProtocol(int connection_id) {
   scoped_refptr<base::RefCountedMemory> bytes =
       GetContentClient()->GetDataResourceBytes(kCcompressedProtocolJSON);
   CHECK(bytes) << "Could not load protocol";
-  std::string json_protocol(reinterpret_cast<const char*>(bytes->front()),
-                            bytes->size());
 
   net::HttpServerResponseInfo response(net::HTTP_OK);
-  response.SetBody(json_protocol, "application/json; charset=UTF-8");
+  response.SetBody(std::string(base::as_string_view(*bytes)),
+                   "application/json; charset=UTF-8");
 
   thread_->task_runner()->PostTask(
       FROM_HERE, base::BindOnce(&ServerWrapper::SendResponse,
@@ -741,7 +742,7 @@ void DevToolsHttpHandler::OnDiscoveryPageRequest(int connection_id) {
 
 void DevToolsHttpHandler::OnFrontendResourceRequest(
     int connection_id, const std::string& path) {
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS) || BUILDFLAG(IS_FUCHSIA)
   Send404(connection_id);
 #else
   Send200(connection_id,
@@ -811,7 +812,7 @@ void DevToolsHttpHandler::OnWebSocketMessage(int connection_id,
                                              std::string data) {
   auto it = connection_to_client_.find(connection_id);
   if (it != connection_to_client_.end()) {
-    it->second->OnMessage(base::as_bytes(base::make_span(data)));
+    it->second->OnMessage(base::as_byte_span(data));
   }
 }
 

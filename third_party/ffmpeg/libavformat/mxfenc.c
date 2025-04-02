@@ -40,6 +40,7 @@
 #include <inttypes.h>
 #include <time.h>
 
+#include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/random_seed.h"
 #include "libavutil/timecode.h"
@@ -59,6 +60,7 @@
 #include "avio_internal.h"
 #include "internal.h"
 #include "avc.h"
+#include "nal.h"
 #include "mux.h"
 #include "mxf.h"
 #include "config.h"
@@ -1486,8 +1488,12 @@ static void mxf_write_jpeg2000_subdesc(AVFormatContext *s, AVStream *st)
     MXFStreamContext *sc = st->priv_data;
     AVIOContext *pb = s->pb;
     int64_t pos;
-    int component_count = av_pix_fmt_count_planes(st->codecpar->format);
-    int comp = 0;
+    const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(st->codecpar->format);
+
+    if (!pix_desc) {
+        av_log(s, AV_LOG_ERROR, "Pixel format not set - not writing JPEG2000SubDescriptor\n");
+        return;
+    }
 
     /* JPEG2000 subdescriptor key */
     avio_write(pb, mxf_jpeg2000_subdescriptor_key, 16);
@@ -1526,15 +1532,15 @@ static void mxf_write_jpeg2000_subdesc(AVFormatContext *s, AVStream *st)
     avio_wb32(pb, sc->j2k_info.j2k_yt0siz);
     /* Image components number (Csiz) */
     mxf_write_local_tag(s, 2, 0x840A);
-    avio_wb16(pb, component_count);
+    avio_wb16(pb, pix_desc->nb_components);
     /* Array of picture components where each component comprises 3 bytes named Ssiz(i) (Pixel bitdepth - 1),
        XRSiz(i) (Horizontal sampling), YRSiz(i) (Vertical sampling). The array of 3-byte groups is preceded
        by the array header comprising a 4-byte value of the number of components followed by a 4-byte
        value of 3. */
-    mxf_write_local_tag(s, 8 + 3*component_count, 0x840B);
-    avio_wb32(pb, component_count);
+    mxf_write_local_tag(s, 8 + 3*pix_desc->nb_components, 0x840B);
+    avio_wb32(pb, pix_desc->nb_components);
     avio_wb32(pb, 3);
-    avio_write(pb, sc->j2k_info.j2k_comp_desc, 3*component_count);
+    avio_write(pb, sc->j2k_info.j2k_comp_desc, 3*pix_desc->nb_components);
 
     mxf_update_klv_size(pb, pos);
 }
@@ -2477,7 +2483,7 @@ static int mxf_parse_h264_frame(AVFormatContext *s, AVStream *st,
             if (mxf->header_written)
                 break;
 
-            nal_end = ff_avc_find_startcode(buf, buf_end);
+            nal_end = ff_nal_find_startcode(buf, buf_end);
             ret = ff_avc_decode_sps(sps, buf, nal_end - buf);
             if (ret < 0) {
                 av_log(s, AV_LOG_ERROR, "error parsing sps\n");
@@ -2607,9 +2613,6 @@ static int mxf_parse_ffv1_frame(AVFormatContext *s, AVStream *st, AVPacket *pkt)
         v = get_ffv1_unsigned_symbol(&c, state);
         av_assert0(v >= 2);
         if (v > 4) {
-            return 0;
-        }
-        if (v > 4) {
             av_log(s, AV_LOG_ERROR, "unsupported ffv1 version %d\n", v);
             return 0;
         }
@@ -2640,11 +2643,14 @@ static int mxf_parse_jpeg2000_frame(AVFormatContext *s, AVStream *st, AVPacket *
 {
     MXFContext *mxf = s->priv_data;
     MXFStreamContext *sc = st->priv_data;
-    AVIOContext *pb = s->pb;
-    int component_count = av_pix_fmt_count_planes(st->codecpar->format);
+    const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(st->codecpar->format);
     GetByteContext g;
     uint32_t j2k_ncomponents;
-    int comp;
+
+    if (!pix_desc) {
+        av_log(s, AV_LOG_ERROR, "Pixel format not set\n");
+        return AVERROR(EINVAL);
+    }
 
     if (mxf->header_written)
         return 1;
@@ -2656,13 +2662,13 @@ static int mxf_parse_jpeg2000_frame(AVFormatContext *s, AVStream *st, AVPacket *
 
     if (bytestream2_get_be16u(&g) != JPEG2000_SOC) {
         av_log(s, AV_LOG_ERROR, "Mandatory SOC marker is not present\n");
-        return AVERROR(AVERROR_INVALIDDATA);
+        return AVERROR_INVALIDDATA;
     }
 
     /* Extract usefull size information from the SIZ marker */
     if (bytestream2_get_be16u(&g) != JPEG2000_SIZ) {
         av_log(s, AV_LOG_ERROR, "Mandatory SIZ marker is not present\n");
-        return AVERROR(AVERROR_INVALIDDATA);
+        return AVERROR_INVALIDDATA;
     }
     bytestream2_skip(&g, 2); // Skip Lsiz
     sc->j2k_info.j2k_cap = bytestream2_get_be16u(&g);
@@ -2675,9 +2681,9 @@ static int mxf_parse_jpeg2000_frame(AVFormatContext *s, AVStream *st, AVPacket *
     sc->j2k_info.j2k_xt0siz = bytestream2_get_be32u(&g);
     sc->j2k_info.j2k_yt0siz = bytestream2_get_be32u(&g);
     j2k_ncomponents = bytestream2_get_be16u(&g);
-    if (j2k_ncomponents != component_count) {
+    if (j2k_ncomponents != pix_desc->nb_components) {
         av_log(s, AV_LOG_ERROR, "Incoherence about components image number.\n");
-        return AVERROR(AVERROR_INVALIDDATA);
+        return AVERROR_INVALIDDATA;
     }
     bytestream2_get_bufferu(&g, sc->j2k_info.j2k_comp_desc, 3 * j2k_ncomponents);
 
@@ -2898,8 +2904,12 @@ static int mxf_init(AVFormatContext *s)
 
         if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
             const AVPixFmtDescriptor *pix_desc = av_pix_fmt_desc_get(st->codecpar->format);
-            // TODO: should be avg_frame_rate
-            AVRational tbc = st->time_base;
+            AVRational tbc = (AVRational){ 0, 0 };
+            if (st->avg_frame_rate.num > 0 && st->avg_frame_rate.den > 0)
+                tbc = av_inv_q(st->avg_frame_rate);
+            else if (st->r_frame_rate.num > 0 && st->r_frame_rate.den > 0)
+                tbc = av_inv_q(st->r_frame_rate);
+
             // Default component depth to 8
             sc->component_depth = 8;
             sc->h_chroma_sub_sample = 2;
@@ -3545,23 +3555,33 @@ static int mxf_interleave(AVFormatContext *s, AVPacket *pkt,
     return mxf_interleave_get_packet(s, pkt, flush);
 }
 
+static int mxf_check_bitstream(AVFormatContext *s, AVStream *st, const AVPacket *pkt)
+{
+    if (st->codecpar->codec_id == AV_CODEC_ID_H264) {
+        if (pkt->size >= 5 && AV_RB32(pkt->data) != 0x0000001 &&
+                              AV_RB24(pkt->data) != 0x000001)
+            return ff_stream_add_bitstream_filter(st, "h264_mp4toannexb", NULL);
+    }
+    return 1;
+}
+
 #define MXF_COMMON_OPTIONS \
     { "signal_standard", "Force/set Signal Standard",\
-      offsetof(MXFContext, signal_standard), AV_OPT_TYPE_INT, {.i64 = -1}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, "signal_standard"},\
+      offsetof(MXFContext, signal_standard), AV_OPT_TYPE_INT, {.i64 = -1}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, .unit = "signal_standard"},\
     { "bt601", "ITU-R BT.601 and BT.656, also SMPTE 125M (525 and 625 line interlaced)",\
-      0, AV_OPT_TYPE_CONST, {.i64 = 1}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, "signal_standard"},\
+      0, AV_OPT_TYPE_CONST, {.i64 = 1}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, .unit = "signal_standard"},\
     { "bt1358", "ITU-R BT.1358 and ITU-R BT.799-3, also SMPTE 293M (525 and 625 line progressive)",\
-      0, AV_OPT_TYPE_CONST, {.i64 = 2}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, "signal_standard"},\
+      0, AV_OPT_TYPE_CONST, {.i64 = 2}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, .unit = "signal_standard"},\
     { "smpte347m", "SMPTE 347M (540 Mbps mappings)",\
-      0, AV_OPT_TYPE_CONST, {.i64 = 3}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, "signal_standard"},\
+      0, AV_OPT_TYPE_CONST, {.i64 = 3}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, .unit = "signal_standard"},\
     { "smpte274m", "SMPTE 274M (1125 line)",\
-      0, AV_OPT_TYPE_CONST, {.i64 = 4}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, "signal_standard"},\
+      0, AV_OPT_TYPE_CONST, {.i64 = 4}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, .unit = "signal_standard"},\
     { "smpte296m", "SMPTE 296M (750 line progressive)",\
-      0, AV_OPT_TYPE_CONST, {.i64 = 5}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, "signal_standard"},\
+      0, AV_OPT_TYPE_CONST, {.i64 = 5}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, .unit = "signal_standard"},\
     { "smpte349m", "SMPTE 349M (1485 Mbps mappings)",\
-      0, AV_OPT_TYPE_CONST, {.i64 = 6}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, "signal_standard"},\
+      0, AV_OPT_TYPE_CONST, {.i64 = 6}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, .unit = "signal_standard"},\
     { "smpte428", "SMPTE 428-1 DCDM",\
-      0, AV_OPT_TYPE_CONST, {.i64 = 7}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, "signal_standard"},
+      0, AV_OPT_TYPE_CONST, {.i64 = 7}, -1, 7, AV_OPT_FLAG_ENCODING_PARAM, .unit = "signal_standard"},
 
 
 
@@ -3574,6 +3594,7 @@ static const AVOption mxf_options[] = {
 
 static const AVClass mxf_muxer_class = {
     .class_name     = "MXF muxer",
+    .item_name      = av_default_item_name,
     .option         = mxf_options,
     .version        = LIBAVUTIL_VERSION_INT,
 };
@@ -3589,6 +3610,7 @@ static const AVOption d10_options[] = {
 
 static const AVClass mxf_d10_muxer_class = {
     .class_name     = "MXF-D10 muxer",
+    .item_name      = av_default_item_name,
     .option         = d10_options,
     .version        = LIBAVUTIL_VERSION_INT,
 };
@@ -3604,6 +3626,7 @@ static const AVOption opatom_options[] = {
 
 static const AVClass mxf_opatom_muxer_class = {
     .class_name     = "MXF-OPAtom muxer",
+    .item_name      = av_default_item_name,
     .option         = opatom_options,
     .version        = LIBAVUTIL_VERSION_INT,
 };
@@ -3623,6 +3646,7 @@ const FFOutputFormat ff_mxf_muxer = {
     .p.flags           = AVFMT_NOTIMESTAMPS,
     .interleave_packet = mxf_interleave,
     .p.priv_class      = &mxf_muxer_class,
+    .check_bitstream   = mxf_check_bitstream,
 };
 
 const FFOutputFormat ff_mxf_d10_muxer = {
@@ -3656,4 +3680,5 @@ const FFOutputFormat ff_mxf_opatom_muxer = {
     .p.flags           = AVFMT_NOTIMESTAMPS,
     .interleave_packet = mxf_interleave,
     .p.priv_class      = &mxf_opatom_muxer_class,
+    .check_bitstream   = mxf_check_bitstream,
 };

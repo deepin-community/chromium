@@ -47,7 +47,6 @@ class CSSCustomTransformFunctionInterpolationType
   InterpolationValue MaybeConvertStandardPropertyUnderlyingValue(
       const ComputedStyle&) const final {
     NOTREACHED();
-    return nullptr;
   }
   void ApplyStandardPropertyValue(const InterpolableValue&,
                                   const NonInterpolableValue*,
@@ -57,12 +56,10 @@ class CSSCustomTransformFunctionInterpolationType
   InterpolationValue MaybeConvertInitial(const StyleResolverState&,
                                          ConversionCheckers&) const final {
     NOTREACHED();
-    return nullptr;
   }
   InterpolationValue MaybeConvertInherit(const StyleResolverState&,
                                          ConversionCheckers&) const final {
     NOTREACHED();
-    return nullptr;
   }
 };
 

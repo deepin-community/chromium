@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/compiler_specific.h"
@@ -74,11 +75,9 @@ class SSLClientSocketImpl : public SSLClientSocket,
   std::vector<uint8_t> GetECHRetryConfigs() override;
 
   // SSLSocket implementation.
-  int ExportKeyingMaterial(base::StringPiece label,
-                           bool has_context,
-                           base::StringPiece context,
-                           unsigned char* out,
-                           unsigned int outlen) override;
+  int ExportKeyingMaterial(std::string_view label,
+                           std::optional<base::span<const uint8_t>> context,
+                           base::span<uint8_t> out) override;
 
   // StreamSocket implementation.
   int Connect(CompletionOnceCallback callback) override;
@@ -91,7 +90,7 @@ class SSLClientSocketImpl : public SSLClientSocket,
   const NetLogWithSource& NetLog() const override;
   bool WasEverUsed() const override;
   NextProto GetNegotiatedProtocol() const override;
-  std::optional<base::StringPiece> GetPeerApplicationSettings() const override;
+  std::optional<std::string_view> GetPeerApplicationSettings() const override;
   bool GetSSLInfo(SSLInfo* ssl_info) override;
   int64_t GetTotalReceivedBytes() const override;
   void GetSSLCertRequestInfo(
@@ -202,7 +201,7 @@ class SSLClientSocketImpl : public SSLClientSocket,
                           OpenSSLErrorInfo* info);
 
   // Wraps SSL_get0_ech_name_override. See documentation for that function.
-  base::StringPiece GetECHNameOverride() const;
+  std::string_view GetECHNameOverride() const;
 
   // Returns true if |cert| is one of the certs in |allowed_bad_certs|.
   // The expected cert status is written to |cert_status|. |*cert_status| can
@@ -221,7 +220,6 @@ class SSLClientSocketImpl : public SSLClientSocket,
   // Used by Write function.
   scoped_refptr<IOBuffer> user_write_buf_;
   int user_write_buf_len_;
-  bool first_post_handshake_write_ = true;
 
   // True if we've already handled the result of our attempt to use early data.
   bool handled_early_data_result_ = false;
@@ -284,7 +282,7 @@ class SSLClientSocketImpl : public SSLClientSocket,
   // True if certificate verification used an ECH name override.
   bool used_ech_name_override_ = false;
 
-  NextProto negotiated_protocol_ = kProtoUnknown;
+  NextProto negotiated_protocol_ = NextProto::kProtoUnknown;
 
   // Set to true if a CertificateRequest was received.
   bool certificate_requested_ = false;

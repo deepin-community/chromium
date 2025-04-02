@@ -10,7 +10,6 @@
 #include <memory>
 
 #include "base/memory/ptr_util.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/crx_file/id_util.h"
 #include "extensions/common/api/extensions_manifest_types.h"
@@ -50,11 +49,9 @@ std::vector<T> Sorted(const std::vector<T>& in) {
 
 }  // namespace
 
-ExternallyConnectableHandler::ExternallyConnectableHandler() {
-}
+ExternallyConnectableHandler::ExternallyConnectableHandler() = default;
 
-ExternallyConnectableHandler::~ExternallyConnectableHandler() {
-}
+ExternallyConnectableHandler::~ExternallyConnectableHandler() = default;
 
 bool ExternallyConnectableHandler::Parse(Extension* extension,
                                          std::u16string* error) {
@@ -168,7 +165,7 @@ ExternallyConnectableInfo::ExternallyConnectableInfo(
 bool ExternallyConnectableInfo::IdCanConnect(const ExtensionId& id) {
   if (all_ids)
     return true;
-  DCHECK(base::ranges::is_sorted(ids));
+  DCHECK(std::ranges::is_sorted(ids));
   return std::binary_search(ids.begin(), ids.end(), id);
 }
 

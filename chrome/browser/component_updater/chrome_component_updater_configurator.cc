@@ -79,7 +79,6 @@ class ChromeConfigurator : public update_client::Configurator {
       override;
   scoped_refptr<update_client::UnzipperFactory> GetUnzipperFactory() override;
   scoped_refptr<update_client::PatcherFactory> GetPatcherFactory() override;
-  bool EnabledDeltas() const override;
   bool EnabledBackgroundDownloader() const override;
   bool EnabledCupSigning() const override;
   PrefService* GetPrefService() const override;
@@ -95,6 +94,8 @@ class ChromeConfigurator : public update_client::Configurator {
  private:
   friend class base::RefCountedThreadSafe<ChromeConfigurator>;
 
+  ~ChromeConfigurator() override = default;
+
   std::optional<base::FilePath> GetBackgroundDownloaderCache() const;
 
   SEQUENCE_CHECKER(sequence_checker_);
@@ -105,8 +106,6 @@ class ChromeConfigurator : public update_client::Configurator {
   scoped_refptr<update_client::CrxDownloaderFactory> crx_downloader_factory_;
   scoped_refptr<update_client::UnzipperFactory> unzip_factory_;
   scoped_refptr<update_client::PatcherFactory> patch_factory_;
-
-  ~ChromeConfigurator() override = default;
 };
 
 // Allows the component updater to use non-encrypted communication with the
@@ -117,8 +116,11 @@ ChromeConfigurator::ChromeConfigurator(const base::CommandLine* cmdline,
     : configurator_impl_(ComponentUpdaterCommandLineConfigPolicy(cmdline),
                          /*require_encryption=*/false),
       pref_service_(pref_service),
-      persisted_data_(
-          update_client::CreatePersistedData(pref_service, nullptr)) {
+      persisted_data_(update_client::CreatePersistedData(
+          base::BindRepeating(
+              [](PrefService* pref_service) { return pref_service; },
+              pref_service),
+          nullptr)) {
   CHECK(pref_service_);
 }
 
@@ -243,11 +245,6 @@ ChromeConfigurator::GetPatcherFactory() {
   return patch_factory_;
 }
 
-bool ChromeConfigurator::EnabledDeltas() const {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return configurator_impl_.EnabledDeltas();
-}
-
 bool ChromeConfigurator::EnabledBackgroundDownloader() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return configurator_impl_.EnabledBackgroundDownloader();
@@ -303,7 +300,6 @@ std::optional<base::FilePath> ChromeConfigurator::GetCrxCachePath() const {
                 : std::nullopt;
 }
 
-// TODO(crbug/1496582): Consolidate the cache path getters.
 std::optional<base::FilePath> ChromeConfigurator::GetBackgroundDownloaderCache()
     const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

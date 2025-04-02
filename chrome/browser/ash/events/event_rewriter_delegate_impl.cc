@@ -14,10 +14,10 @@
 #include "ash/system/input_device_settings/input_device_settings_notification_controller.h"
 #include "base/containers/fixed_flat_map.h"
 #include "base/notreached.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/notifications/deprecation_notification_controller.h"
 #include "chrome/browser/extensions/extension_commands_global_registry.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user_manager.h"
@@ -51,7 +51,7 @@ EventRewriterDelegateImpl::EventRewriterDelegateImpl(
           std::move(input_device_settings_notification_controller)),
       input_device_settings_controller_(input_device_settings_controller) {}
 
-EventRewriterDelegateImpl::~EventRewriterDelegateImpl() {}
+EventRewriterDelegateImpl::~EventRewriterDelegateImpl() = default;
 
 bool EventRewriterDelegateImpl::RewriteModifierKeys() {
   // Do nothing if we have just logged in as guest but have not restarted chrome
@@ -75,6 +75,10 @@ EventRewriterDelegateImpl::GetKeyboardRemappedModifierValue(
     const std::string& pref_name) const {
   // `modifier_key` and `device_id` are unused when the flag is disabled.
   if (!ash::features::IsInputDeviceSettingsSplitEnabled()) {
+    if (pref_name.empty()) {
+      return std::nullopt;
+    }
+
     // If we're at the login screen, try to get the pref from the global prefs
     // dictionary.
     int value;
@@ -114,29 +118,31 @@ EventRewriterDelegateImpl::GetKeyboardRemappedModifierValue(
 }
 
 bool EventRewriterDelegateImpl::TopRowKeysAreFunctionKeys(int device_id) const {
-  // When the flag is disabled, `device_id` is unused.
-  if (!ash::features::IsInputDeviceSettingsSplitEnabled()) {
-    const PrefService* pref_service = GetPrefService();
-    if (!pref_service) {
-      return false;
+  if (ash::features::IsInputDeviceSettingsSplitEnabled()) {
+    const mojom::KeyboardSettings* settings =
+        input_device_settings_controller_->GetKeyboardSettings(device_id);
+    if (settings) {
+      return settings->top_row_are_fkeys;
     }
-    return pref_service->GetBoolean(prefs::kSendFunctionKeys);
-  }
-
-  const mojom::KeyboardSettings* settings =
-      input_device_settings_controller_->GetKeyboardSettings(device_id);
-  if (settings) {
-    return settings->top_row_are_fkeys;
   }
 
   if (ash::features::IsPeripheralCustomizationEnabled()) {
-    // If it is a mouse or graphics tablet, do not rewrite function keys.
-    return input_device_settings_controller_->GetMouseSettings(device_id) ||
-           input_device_settings_controller_->GetGraphicsTabletSettings(
-               device_id);
+    bool is_mouse_or_tablet =
+        input_device_settings_controller_->GetMouseSettings(device_id) ||
+        input_device_settings_controller_->GetGraphicsTabletSettings(device_id);
+    if (is_mouse_or_tablet) {
+      // If it is a mouse or graphics tablet, do not rewrite function keys.
+      return true;
+    }
   }
 
-  return false;
+  // If we really don't know what device this is, fall back to respecting the
+  // global preference.
+  const PrefService* pref_service = GetPrefService();
+  if (!pref_service) {
+    return false;
+  }
+  return pref_service->GetBoolean(prefs::kSendFunctionKeys);
 }
 
 bool EventRewriterDelegateImpl::IsExtensionCommandRegistered(
@@ -241,7 +247,7 @@ void EventRewriterDelegateImpl::RecordSixPackEventRewrite(
           {ui::KeyboardCode::VKEY_NEXT,
            prefs::kKeyEventRemappedToSixPackPageUp},
       });
-  auto* it = kSixPackKeyToPrefMap.find(key_code);
+  auto it = kSixPackKeyToPrefMap.find(key_code);
   CHECK(it != kSixPackKeyToPrefMap.end());
   int count = pref_service->GetInteger(it->second);
   // `alt_based` tells us whether this "six pack" event was produced by an
@@ -284,7 +290,7 @@ EventRewriterDelegateImpl::GetShortcutModifierForSixPackKey(
     case ui::KeyboardCode::VKEY_INSERT:
       return settings->six_pack_key_remappings->insert;
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 
@@ -347,6 +353,17 @@ EventRewriterDelegateImpl::GetExtendedFkeySetting(int device_id,
     return settings->f11;
   }
   return settings->f12;
+}
+
+void EventRewriterDelegateImpl::NotifySixPackRewriteBlockedByFnKey(
+    ui::KeyboardCode key_code,
+    ui::mojom::SixPackShortcutModifier modifier) {
+  input_device_settings_notification_controller_->ShowSixPackKeyRewritingNudge(
+      key_code, modifier);
+}
+
+void EventRewriterDelegateImpl::NotifyTopRowRewriteBlockedByFnKey() {
+  input_device_settings_notification_controller_->ShowTopRowRewritingNudge();
 }
 
 }  // namespace ash

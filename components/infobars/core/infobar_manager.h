@@ -32,8 +32,7 @@ class InfoBarManager {
 
     virtual void OnInfoBarAdded(InfoBar* infobar);
     virtual void OnInfoBarRemoved(InfoBar* infobar, bool animate);
-    virtual void OnInfoBarReplaced(InfoBar* old_infobar,
-                                   InfoBar* new_infobar);
+    virtual void OnInfoBarReplaced(InfoBar* old_infobar, InfoBar* new_infobar);
     virtual void OnManagerShuttingDown(InfoBarManager* manager);
   };
 
@@ -107,6 +106,8 @@ class InfoBarManager {
   void set_animations_enabled(bool animations_enabled) {
     animations_enabled_ = animations_enabled;
   }
+
+  bool ShouldShowInfoBar(const InfoBar* infobar) const;
 
  private:
   friend class ::TestInfoBar;

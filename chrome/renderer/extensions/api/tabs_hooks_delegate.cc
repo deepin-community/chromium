@@ -4,6 +4,8 @@
 
 #include "chrome/renderer/extensions/api/tabs_hooks_delegate.h"
 
+#include <string_view>
+
 #include "content/public/renderer/v8_value_converter.h"
 #include "extensions/common/api/messaging/message.h"
 #include "extensions/common/extension.h"
@@ -32,7 +34,7 @@ constexpr char kSendTabsRequest[] = "tabs.sendRequest";
 TabsHooksDelegate::TabsHooksDelegate(
     NativeRendererMessagingService* messaging_service)
     : messaging_service_(messaging_service) {}
-TabsHooksDelegate::~TabsHooksDelegate() {}
+TabsHooksDelegate::~TabsHooksDelegate() = default;
 
 RequestResult TabsHooksDelegate::HandleRequest(
     const std::string& method_name,
@@ -46,7 +48,7 @@ RequestResult TabsHooksDelegate::HandleRequest(
       ScriptContext*, const APISignature::V8ParseResult&);
   static const struct {
     Handler handler;
-    base::StringPiece method;
+    std::string_view method;
   } kHandlers[] = {
       {&TabsHooksDelegate::HandleSendMessage, kSendMessage},
       {&TabsHooksDelegate::HandleSendRequest, kSendTabsRequest},

@@ -8,7 +8,7 @@
 //
 
 #include "WindowSurfaceVkHeadless.h"
-#include "libANGLE/renderer/vulkan/RendererVk.h"
+#include "libANGLE/renderer/vulkan/vk_renderer.h"
 
 namespace rx
 {
@@ -20,10 +20,10 @@ WindowSurfaceVkHeadless::WindowSurfaceVkHeadless(const egl::SurfaceState &surfac
 
 WindowSurfaceVkHeadless::~WindowSurfaceVkHeadless() {}
 
-angle::Result WindowSurfaceVkHeadless::createSurfaceVk(vk::Context *context,
+angle::Result WindowSurfaceVkHeadless::createSurfaceVk(vk::ErrorContext *context,
                                                        gl::Extents *extentsOut)
 {
-    RendererVk *renderer = context->getRenderer();
+    vk::Renderer *renderer = context->getRenderer();
     ASSERT(renderer != nullptr);
     VkInstance instance = renderer->getInstance();
 
@@ -35,7 +35,7 @@ angle::Result WindowSurfaceVkHeadless::createSurfaceVk(vk::Context *context,
     return getCurrentWindowSize(context, extentsOut);
 }
 
-angle::Result WindowSurfaceVkHeadless::getCurrentWindowSize(vk::Context *context,
+angle::Result WindowSurfaceVkHeadless::getCurrentWindowSize(vk::ErrorContext *context,
                                                             gl::Extents *extentsOut)
 {
     const VkPhysicalDevice &physicalDevice = context->getRenderer()->getPhysicalDevice();

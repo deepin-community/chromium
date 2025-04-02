@@ -11,7 +11,7 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "chrome/browser/ui/web_applications/web_app_controller_browsertest.h"
+#include "chrome/browser/ui/web_applications/web_app_browsertest_base.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/test/content_mock_cert_verifier.h"
@@ -29,7 +29,7 @@ class WebContents;
 
 namespace web_app {
 
-class WebAppNavigationBrowserTest : public WebAppControllerBrowserTest {
+class WebAppNavigationBrowserTest : public WebAppBrowserTestBase {
  public:
   enum class LinkTarget {
     SELF,
@@ -123,6 +123,7 @@ class WebAppNavigationBrowserTest : public WebAppControllerBrowserTest {
                                                 const GURL& target_url,
                                                 const std::string& rel = "");
 
+  const net::EmbeddedTestServer& https_server() const { return https_server_; }
   net::EmbeddedTestServer& https_server() { return https_server_; }
 
   const webapps::AppId& test_web_app_id() const { return test_web_app_; }

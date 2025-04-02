@@ -53,6 +53,7 @@ class ASH_PUBLIC_EXPORT LoginScreenTestApi {
   static void SubmitPassword(const AccountId& account_id,
                              const std::string& password,
                              bool check_if_submittable);
+  static void SubmitPin(const AccountId& account_id, const std::string& pin);
   static std::u16string GetChallengeResponseLabel(const AccountId& account_id);
   static bool IsChallengeResponseButtonClickable(const AccountId& account_id);
   static void ClickChallengeResponseButton(const AccountId& account_id);
@@ -66,7 +67,6 @@ class ASH_PUBLIC_EXPORT LoginScreenTestApi {
   static bool ClickEnterpriseEnrollmentButton();
   static bool ClickOsInstallButton();
   static bool PressAccelerator(const ui::Accelerator& accelerator);
-  static bool SendAcceleratorNatively(const ui::Accelerator& accelerator);
   static bool WaitForUiUpdate(int64_t previous_update_count);
   static int GetUsersCount();
   static bool FocusKioskDefaultMessage();
@@ -98,6 +98,7 @@ class ASH_PUBLIC_EXPORT LoginScreenTestApi {
   static std::u16string GetShutDownButtonLabel();
   static gfx::Rect GetShutDownButtonTargetBounds();
   static gfx::Rect GetShutDownButtonMirroredBounds();
+  static std::string GetAppsButtonClassName();
 
   static void SetPinRequestWidgetShownCallback(
       base::RepeatingClosure on_pin_request_widget_shown);
@@ -110,6 +111,7 @@ class ASH_PUBLIC_EXPORT LoginScreenTestApi {
   static void CancelLocalAuthenticationDialog();
   static void SubmitPasswordLocalAuthenticationDialog(
       const std::string& password);
+  static void SubmitPinLocalAuthenticationDialog(const std::string& pin);
 
   // AuthErrorBubble methods.
   static bool IsAuthErrorBubbleShown();

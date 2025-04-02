@@ -8,6 +8,7 @@
 
 #include "base/containers/fixed_flat_map.h"
 #include "base/no_destructor.h"
+#include "components/autofill/core/browser/field_types.h"
 
 namespace autofill {
 
@@ -30,7 +31,7 @@ std::u16string GetHomeStreetAddressPattern(std::string_view country_code) {
         u"${ADDRESS_HOME_STREET_NAME} ${ADDRESS_HOME_HOUSE_NUMBER}"
         u"${ADDRESS_HOME_FLOOR;, ;º}${ADDRESS_HOME_APT_NUM;, ;ª}"}});
 
-  if (auto* it = kHomeStreetAddressCountryMap.find(country_code);
+  if (auto it = kHomeStreetAddressCountryMap.find(country_code);
       it != kHomeStreetAddressCountryMap.end()) {
     return std::u16string(it->second);
   }
@@ -45,6 +46,14 @@ std::u16string GetFullNamePattern(bool name_has_cjk_characteristics) {
     return u"${NAME_LAST}${NAME_FIRST}";
   }
   return u"${NAME_FIRST} ${NAME_MIDDLE} ${NAME_LAST}";
+}
+
+std::u16string GetAlternativeFullNamePattern(
+    bool name_has_cjk_characteristics) {
+  if (name_has_cjk_characteristics) {
+    return u"${ALTERNATIVE_FAMILY_NAME} ${ALTERNATIVE_GIVEN_NAME}";
+  }
+  return u"${ALTERNATIVE_GIVEN_NAME} ${ALTERNATIVE_FAMILY_NAME}";
 }
 
 }  // namespace
@@ -69,6 +78,8 @@ std::u16string StructuredAddressesFormatProvider::GetPattern(
       return GetHomeStreetAddressPattern(country_code);
     case NAME_FULL:
       return GetFullNamePattern(info.name_has_cjk_characteristics);
+    case ALTERNATIVE_FULL_NAME:
+      return GetAlternativeFullNamePattern(info.name_has_cjk_characteristics);
     default:
       return u"";
   }

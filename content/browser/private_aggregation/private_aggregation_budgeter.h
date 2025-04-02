@@ -78,15 +78,6 @@ class CONTENT_EXPORT PrivateAggregationBudgeter {
     kMaxValue = kContainsNonPositiveValue,
   };
 
-  // Indicates the desired behavior when budget is denied for a report request.
-  enum class BudgetDeniedBehavior {
-    // Still send a report, but remove all requested contributions.
-    kSendNullReport,
-
-    // Drop the report.
-    kDontSendReport,
-  };
-
   // Represents the two different types of budgets, which differ on the duration
   // of time that they apply to and what the allowable budget for that time is.
   enum class BudgetScope {
@@ -164,10 +155,18 @@ class CONTENT_EXPORT PrivateAggregationBudgeter {
   // successful. May clean up stale budget storage. Note that this call assumes
   // that budget time windows are non-decreasing. In very rare cases, a network
   // time update could allow budget to be used slightly early. Virtual for
-  // testing.
+  // testing. `minimum_value_for_metrics` is the minimum value for any of the
+  // histogram contributions summed in `budget`; it is only used for metrics.
   virtual void ConsumeBudget(int budget,
                              const PrivateAggregationBudgetKey& budget_key,
+                             int minimum_value_for_metrics,
                              base::OnceCallback<void(RequestResult)> on_done);
+  // Overload to allow minimum_value_for_metrics to have a default of 0 without
+  // compiler complaints about the function being virtual. Used mainly to
+  // simplify testing.
+  void ConsumeBudget(int budget,
+                     const PrivateAggregationBudgetKey& budget_key,
+                     base::OnceCallback<void(RequestResult)> on_done);
 
   // Deletes all data in storage for any budgets that could have been set
   // between `delete_begin` and `delete_end` time (inclusive). Note that the
@@ -213,6 +212,7 @@ class CONTENT_EXPORT PrivateAggregationBudgeter {
 
   void ConsumeBudgetImpl(int additional_budget,
                          const PrivateAggregationBudgetKey& budget_key,
+                         int minimum_value_for_metrics,
                          base::OnceCallback<void(RequestResult)> on_done);
   void ClearDataImpl(base::Time delete_begin,
                      base::Time delete_end,

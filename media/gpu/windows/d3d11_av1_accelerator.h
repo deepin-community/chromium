@@ -12,17 +12,18 @@
 #include "base/functional/callback_helpers.h"
 #include "media/base/media_log.h"
 #include "media/gpu/av1_decoder.h"
-#include "media/gpu/windows/d3d_accelerator.h"
+#include "media/gpu/windows/d3d11_video_decoder_client.h"
 
 typedef struct _DXVA_PicParams_AV1 DXVA_PicParams_AV1;
 typedef struct _DXVA_Tile_AV1 DXVA_Tile_AV1;
 
 namespace media {
 
-class D3D11AV1Accelerator : public D3DAccelerator,
-                            public AV1Decoder::AV1Accelerator {
+class D3D11AV1Accelerator : public AV1Decoder::AV1Accelerator {
  public:
-  D3D11AV1Accelerator(D3D11VideoDecoderClient* client, MediaLog* media_log);
+  D3D11AV1Accelerator(D3D11VideoDecoderClient* client,
+                      MediaLog* media_log,
+                      bool disable_invalid_ref);
 
   D3D11AV1Accelerator(const D3D11AV1Accelerator&) = delete;
   D3D11AV1Accelerator& operator=(const D3D11AV1Accelerator&) = delete;
@@ -50,6 +51,12 @@ class D3D11AV1Accelerator : public D3DAccelerator,
                      const libgav1::ObuSequenceHeader& seq_header,
                      const AV1ReferenceFrameVector& ref_frames,
                      DXVA_PicParams_AV1* pp);
+
+  std::unique_ptr<MediaLog> media_log_;
+  raw_ptr<D3D11VideoDecoderClient> client_;
+  // When set to true, the accelerator will use current frame for the missing
+  // reference.
+  bool disable_invalid_ref_ = false;
 };
 
 }  // namespace media

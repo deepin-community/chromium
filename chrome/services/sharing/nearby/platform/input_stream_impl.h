@@ -21,8 +21,7 @@ namespace base {
 class SequencedTaskRunner;
 }  // namespace base
 
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 // An implementation of a Nearby Connections InputStream that reads from the
 // Mojo DataPipe, |receive_stream|, passed into the constructor by the specified
@@ -66,12 +65,11 @@ class InputStreamImpl : public InputStream {
   mojo::SimpleWatcher receive_stream_watcher_;
 
   std::unique_ptr<ByteArray> pending_read_buffer_;
-  uint32_t pending_read_buffer_pos_ = 0;
+  size_t pending_read_buffer_pos_ = 0;
   ExceptionOr<ByteArray> exception_or_received_byte_array_;
   base::WaitableEvent read_waitable_event_;
 };
 
-}  // namespace chrome
-}  // namespace nearby
+}  // namespace nearby::chrome
 
 #endif  // CHROME_SERVICES_SHARING_NEARBY_PLATFORM_INPUT_STREAM_IMPL_H_

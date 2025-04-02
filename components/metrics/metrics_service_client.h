@@ -6,8 +6,10 @@
 #define COMPONENTS_METRICS_METRICS_SERVICE_CLIENT_H_
 
 #include <stdint.h>
+
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/callback_list.h"
 #include "base/functional/callback.h"
@@ -21,6 +23,10 @@
 
 namespace ukm {
 class UkmService;
+}
+
+namespace metrics::dwa {
+class DwaService;
 }
 
 namespace network_time {
@@ -65,6 +71,9 @@ class MetricsServiceClient {
 
   // Returns the UkmService instance that this client is associated with.
   virtual ukm::UkmService* GetUkmService();
+
+  // Returns the DwaService instance that this client is associated with.
+  virtual metrics::dwa::DwaService* GetDwaService();
 
   // Returns the IdentifiabilityStudyState instance that this client is
   // associated with. Might be nullptr.
@@ -133,16 +142,22 @@ class MetricsServiceClient {
   virtual std::unique_ptr<MetricsLogUploader> CreateUploader(
       const GURL& server_url,
       const GURL& insecure_server_url,
-      base::StringPiece mime_type,
+      std::string_view mime_type,
       metrics::MetricsLogUploader::MetricServiceType service_type,
       const MetricsLogUploader::UploadCallback& on_upload_complete) = 0;
 
   // Returns the interval between upload attempts. Checks if debugging flags
-  // have been set, otherwise defaults to GetStandardUploadInterval().
+  // have been set, if there the is a custom interval, otherwise defaults to
+  // GetStandardUploadInterval().
   base::TimeDelta GetUploadInterval();
 
   // Returns the standard interval between upload attempts.
   virtual base::TimeDelta GetStandardUploadInterval() = 0;
+
+  // Returns a custom interval between upload attempts. This interval will be
+  // used instead of the standard interval returned by GetStandardUploadInterval
+  // if it is set.
+  virtual std::optional<base::TimeDelta> GetCustomUploadInterval() const;
 
   // Whether or not the MetricsService should start up quickly and upload the
   // initial report quickly. By default, this work may be delayed by some
@@ -167,6 +182,10 @@ class MetricsServiceClient {
   // Returns true iff UKM is allowed for all profiles.
   // See //components/ukm/observers/ukm_consent_state_observer.h for details.
   virtual bool IsUkmAllowedForAllProfiles();
+
+  // Returns true iff DWA is allowed for all profiles.
+  // DWA is allowed if all applicable UKM consents for a platform are given.
+  virtual bool IsDwaAllowedForAllProfiles();
 
   // Returns whether UKM notification listeners were attached to all profiles.
   virtual bool AreNotificationListenersEnabledOnAllProfiles();

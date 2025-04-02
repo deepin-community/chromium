@@ -2,15 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/win/atl.h"
-
-#include <atlcomcli.h>
 #include <wrl/client.h>
 
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/win/atl.h"
 #include "chrome/browser/ui/startup/credential_provider_signin_dialog_win_test_data.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
@@ -25,6 +23,7 @@
 #include "chrome/credential_provider/test/gls_runner_test_base.h"
 #include "chrome/credential_provider/test/test_credential.h"
 #include "content/public/common/content_switches.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/gaia_switches.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -123,8 +122,7 @@ TEST_F(GcpGaiaCredentialOtherUserTest, OnUserAuthenticated_DiffPassword) {
           L"foo_bar",
           base::UTF8ToWide(test_data_storage.GetSuccessPassword()).c_str(),
           base::UTF8ToWide(test_data_storage.GetSuccessFullName()).c_str(),
-          L"comment",
-          base::UTF8ToWide(test_data_storage.GetSuccessId()).c_str(),
+          L"comment", GaiaId(test_data_storage.GetSuccessId()),
           base::UTF8ToWide(test_data_storage.GetSuccessEmail()).c_str(), &sid));
   Microsoft::WRL::ComPtr<ICredentialProviderCredential> cred;
 

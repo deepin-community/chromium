@@ -18,11 +18,13 @@
 #include "chrome/browser/ui/views/tabs/tab_strip_types.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/tab_groups/tab_group_color.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom-forward.h"
+#include "ui/menus/simple_menu_model.h"
 
 class Browser;
 class BrowserNonClientFrameView;
 class Tab;
+class TabGroup;
 
 namespace content {
 class WebContents;
@@ -56,24 +58,30 @@ class BrowserTabStripController : public TabStripController,
   TabStripModel* model() const { return model_; }
 
   bool IsCommandEnabledForTab(TabStripModel::ContextMenuCommand command_id,
-                              Tab* tab) const;
+                              const Tab* tab) const;
   void ExecuteCommandForTab(TabStripModel::ContextMenuCommand command_id,
-                            Tab* tab);
-  bool IsTabPinned(Tab* tab) const;
+                            const Tab* tab);
+  bool IsTabPinned(const Tab* tab) const;
 
   // TabStripController implementation:
   const ui::ListSelectionModel& GetSelectionModel() const override;
   int GetCount() const override;
+  bool CanShowModalUI() const override;
+  std::unique_ptr<ScopedTabStripModalUI> ShowModalUI() override;
   bool IsValidIndex(int model_index) const override;
   bool IsActiveTab(int model_index) const override;
   std::optional<int> GetActiveIndex() const override;
   bool IsTabSelected(int model_index) const override;
   bool IsTabPinned(int model_index) const override;
   void SelectTab(int model_index, const ui::Event& event) override;
+  void RecordMetricsOnTabSelectionChange(
+      std::optional<tab_groups::TabGroupId> group) override;
   void ExtendSelectionTo(int model_index) override;
   void ToggleSelected(int model_index) override;
   void AddSelectionFromAnchorTo(int model_index) override;
-  bool BeforeCloseTab(int model_index, CloseTabSource source) override;
+  void OnCloseTab(int model_index,
+                  CloseTabSource source,
+                  base::OnceCallback<void()> callback) override;
   void CloseTab(int model_index) override;
   void ToggleTabAudioMute(int model_index) override;
   void AddTabToGroup(int model_index,
@@ -81,12 +89,13 @@ class BrowserTabStripController : public TabStripController,
   void RemoveTabFromGroup(int model_index) override;
   void MoveTab(int start_index, int final_index) override;
   void MoveGroup(const tab_groups::TabGroupId& group, int final_index) override;
+  using TabStripController::ToggleTabGroupCollapsedState;
   void ToggleTabGroupCollapsedState(
-      const tab_groups::TabGroupId group,
+      tab_groups::TabGroupId group,
       ToggleTabGroupCollapsedStateOrigin origin) override;
   void ShowContextMenuForTab(Tab* tab,
                              const gfx::Point& p,
-                             ui::MenuSourceType source_type) override;
+                             ui::mojom::MenuSourceType source_type) override;
   int HasAvailableDragActions() const override;
   void OnDropIndexUpdate(std::optional<int> index, bool drop_before) override;
   void CreateNewTab() override;
@@ -100,6 +109,7 @@ class BrowserTabStripController : public TabStripController,
       const tab_groups::TabGroupId& group_id) const override;
   tab_groups::TabGroupColorId GetGroupColorId(
       const tab_groups::TabGroupId& group_id) const override;
+  TabGroup* GetTabGroup(const tab_groups::TabGroupId& group_id) const override;
   bool IsGroupCollapsed(const tab_groups::TabGroupId& group) const override;
 
   void SetVisualDataForGroup(
@@ -118,7 +128,11 @@ class BrowserTabStripController : public TabStripController,
       BrowserFrameActiveState active_state) const override;
   std::u16string GetAccessibleTabName(const Tab* tab) const override;
   Profile* GetProfile() const override;
+  BrowserWindowInterface* GetBrowserWindowInterface() override;
   const Browser* GetBrowser() const override;
+#if BUILDFLAG(IS_CHROMEOS)
+  bool IsLockedForOnTask() override;
+#endif
 
   // TabStripModelObserver implementation:
   void OnTabStripModelChanged(
@@ -137,10 +151,10 @@ class BrowserTabStripController : public TabStripController,
   void TabBlockedStateChanged(content::WebContents* contents,
                               int model_index) override;
   void TabGroupedStateChanged(std::optional<tab_groups::TabGroupId> group,
-                              content::WebContents* contents,
+                              tabs::TabInterface* tab,
                               int index) override;
   void SetTabNeedsAttentionAt(int index, bool attention) override;
-
+  bool IsFrameButtonsRightAligned() const override;
   const Browser* browser() const { return browser_view_->browser(); }
 
   // Test-specific methods.
@@ -157,6 +171,8 @@ class BrowserTabStripController : public TabStripController,
 
   // Adds a tab.
   void AddTab(content::WebContents* contents, int index);
+
+  void OnDiscardRingTreatmentEnabledChanged();
 
   raw_ptr<TabStripModel> model_;
 
@@ -175,9 +191,11 @@ class BrowserTabStripController : public TabStripController,
   // tabs.
   std::unique_ptr<ImmersiveRevealedLock> immersive_reveal_lock_;
 
-  PrefChangeRegistrar local_pref_registrar_;
+  PrefChangeRegistrar local_state_registrar_;
 
   std::unique_ptr<TabMenuModelFactory> menu_model_factory_;
+
+  bool should_show_discard_indicator_ = true;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_TABS_BROWSER_TAB_STRIP_CONTROLLER_H_

@@ -10,6 +10,7 @@
 #include <climits>
 #include <cstddef>
 #include <iterator>
+#include <ranges>
 #include <type_traits>
 
 #include "base/check.h"
@@ -17,6 +18,7 @@
 #include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/types/cxx23_to_underlying.h"
 
 namespace autofill {
 
@@ -87,10 +89,8 @@ class Bitset {
     return x;
   }
 
-  friend constexpr auto operator<=>(const Bitset& lhs,
-                                    const Bitset& rhs) = default;
-  friend constexpr bool operator==(const Bitset& lhs,
-                                   const Bitset& rhs) = default;
+  friend auto operator<=>(const Bitset& lhs, const Bitset& rhs) = default;
+  friend bool operator==(const Bitset& lhs, const Bitset& rhs) = default;
 
   constexpr base::span<const Word, kNumWords> data() const { return words_; }
 
@@ -143,30 +143,81 @@ class Bitset<Word, 1u> {
   friend constexpr bool operator==(Bitset lhs, Bitset rhs) = default;
 
   constexpr base::span<const Word, 1> data() const {
-    return base::span<const Word, 1>(&word_, 1u);
+    return base::span_from_ref(word_);
   }
 
  private:
   Word word_;
 };
 
+template <typename T, typename Traits>
+concept ValidDenseSetTraits =
+    std::integral<typename Traits::UnderlyingType> &&
+    std::same_as<decltype(Traits::from_underlying(
+                     std::declval<typename Traits::UnderlyingType>())),
+                 T> &&
+    std::same_as<decltype(Traits::to_underlying(std::declval<T>())),
+                 typename Traits::UnderlyingType> &&
+    std::same_as<decltype(Traits::kMinValue), const T> &&
+    std::same_as<decltype(Traits::kMaxValue), const T> &&
+    std::same_as<decltype(Traits::kPacked), const bool>;
+
 }  // namespace internal
 
-template <typename T>
-struct DenseSetTraits {
-  static constexpr T kMinValue = T(0);
-  static constexpr T kMaxValue = T::kMaxValue;
+// Helper for traits for integer DenseSets.
+template <typename T, T kMinValueT, T kMaxValueT>
+  requires(std::is_integral_v<T>)
+struct IntegralDenseSetTraits {
+  using UnderlyingType = T;
+
+  static constexpr T from_underlying(UnderlyingType x) { return x; }
+  static constexpr UnderlyingType to_underlying(T x) { return x; }
+
+  static constexpr T kMinValue = kMinValueT;
+  static constexpr T kMaxValue = kMaxValueT;
   static constexpr bool kPacked = false;
 };
 
-// A set container with a std::set<T>-like interface for integral or enum types
-// T that have a dense and small representation as unsigned integers.
+// Helper for traits for enum DenseSets.
+template <typename T, T kMinValueT, T kMaxValueT>
+  requires(std::is_enum_v<T>)
+struct EnumDenseSetTraits {
+  using UnderlyingType = std::underlying_type_t<T>;
+
+  static constexpr T from_underlying(UnderlyingType x) {
+    return static_cast<T>(x);
+  }
+  static constexpr UnderlyingType to_underlying(T x) {
+    return base::to_underlying(x);
+  }
+
+  static constexpr T kMinValue = kMinValueT;
+  static constexpr T kMaxValue = kMaxValueT;
+  static constexpr bool kPacked = false;
+};
+
+// The default traits.
+template <typename T, typename = void>
+struct DenseSetTraits {};
+
+template <typename T>
+  requires(std::is_enum_v<T>)
+struct DenseSetTraits<T> : public EnumDenseSetTraits<T, T(0), T::kMaxValue> {};
+
+// A set container with a std::set<T>-like interface for a type T that has a
+// dense and small integral representation. DenseSet is particularly suited for
+// enums.
 //
 // The order of the elements in the container corresponds to their integer
 // representation.
 //
+// Traits::UnderlyingType is the integral representation of the stored types.
+// Traits::to_underlying() and Traits::from_underlying() convert between T and
+// Traits::UnderlyingType.
+//
 // The lower and upper bounds of elements storable in a container are
-// [Traits::kMinValue, Traits::kMaxValue]. The default is [T(0), T::kMaxValue].
+// [Traits::kMinValue, Traits::kMaxValue].
+// For enums, the default is [T(0), T::kMaxValue].
 //
 // The `Traits::kPacked` parameter indicates whether the memory consumption of a
 // DenseSet object should be minimized. That comes at the cost of slightly
@@ -183,27 +234,22 @@ struct DenseSetTraits {
 // Iterators are invalidated when the owning container is destructed or moved,
 // or when the element the iterator points to is erased from the container.
 template <typename T, typename Traits = DenseSetTraits<T>>
+  requires(internal::ValidDenseSetTraits<T, Traits>)
 class DenseSet {
  private:
-  static_assert(std::is_integral<T>::value || std::is_enum<T>::value);
-
-  // Needed for std::conditional_t.
-  struct Wrapper {
-    using type = T;
-  };
-
   // For arithmetic on `T`.
-  using UnderlyingType = typename std::conditional_t<std::is_enum<T>::value,
-                                                     std::underlying_type<T>,
-                                                     Wrapper>::type;
+  using UnderlyingType = typename Traits::UnderlyingType;
 
   // The index of a bit in the underlying bitset. Use
   // value_to_index() and index_to_value() for conversion.
   using Index = std::make_unsigned_t<UnderlyingType>;
 
-  // We can't use `base::to_underlying()` because `T` may be not an enum.
   static constexpr UnderlyingType to_underlying(T x) {
-    return static_cast<UnderlyingType>(x);
+    return Traits::to_underlying(x);
+  }
+
+  static constexpr T from_underlying(UnderlyingType x) {
+    return Traits::from_underlying(x);
   }
 
   static_assert(to_underlying(Traits::kMinValue) <=
@@ -331,12 +377,18 @@ class DenseSet {
     }
   }
 
-  template <typename InputIt>
-  DenseSet(InputIt first, InputIt last) {
+  template <typename InputIt, typename Proj = std::identity>
+    requires(std::input_iterator<InputIt>)
+  constexpr DenseSet(InputIt first, InputIt last, Proj proj = {}) {
     for (auto it = first; it != last; ++it) {
-      insert(*it);
+      insert(std::invoke(proj, *it));
     }
   }
+
+  template <typename Range, typename Proj = std::identity>
+    requires(std::ranges::input_range<Range>)
+  constexpr explicit DenseSet(const Range& range, Proj proj = {})
+      : DenseSet(std::ranges::begin(range), std::ranges::end(range), proj) {}
 
   // Returns a set containing all values from `kMinValue` to `kMaxValue`,
   // regardless of whether the values represent an existing enum.
@@ -489,20 +541,32 @@ class DenseSet {
   using Bitset = internal::Bitset<Word, kNumWords>;
 
   static constexpr Index value_to_index(T x) {
-    DCHECK_LE(Traits::kMinValue, x);
-    DCHECK_LE(x, Traits::kMaxValue);
+    DCHECK_LE(to_underlying(Traits::kMinValue), to_underlying(x));
+    DCHECK_LE(to_underlying(x), to_underlying(Traits::kMaxValue));
     return base::checked_cast<Index>(to_underlying(x) -
                                      to_underlying(Traits::kMinValue));
   }
 
   static constexpr T index_to_value(Index i) {
     DCHECK_LE(i, kMaxBitIndex);
-    return static_cast<T>(base::checked_cast<UnderlyingType>(i) +
-                          to_underlying(Traits::kMinValue));
+    return from_underlying(base::checked_cast<UnderlyingType>(i) +
+                           to_underlying(Traits::kMinValue));
   }
 
   Bitset bitset_{};
 };
+
+template <typename T, typename... Ts>
+  requires(std::same_as<T, Ts> && ...)
+DenseSet(T, Ts...) -> DenseSet<T>;
+
+template <typename InputIt, typename Proj>
+DenseSet(InputIt, InputIt, Proj) -> DenseSet<std::remove_cvref_t<
+    std::invoke_result_t<Proj, std::iter_value_t<InputIt>>>>;
+
+template <typename Range, typename Proj>
+DenseSet(Range, Proj) -> DenseSet<std::remove_cvref_t<
+    std::invoke_result_t<Proj, std::ranges::range_value_t<Range>>>>;
 
 }  // namespace autofill
 

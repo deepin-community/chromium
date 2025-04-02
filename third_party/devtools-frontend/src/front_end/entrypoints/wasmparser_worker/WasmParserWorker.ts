@@ -35,9 +35,7 @@ export function dissambleWASM(
     params: {
       content: string,
     },
-    // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    postMessage: (arg0: any) => void): void {
+    postMessage: (arg0: unknown) => void): void {
   try {
     const dataBuffer = Common.Base64.decode(params.content);
 
@@ -56,7 +54,7 @@ export function dissambleWASM(
     const offsets = [];
     const functionBodyOffsets = [];
     let chunkSize: number = 128 * 1024;
-    let buffer: Uint8Array = new Uint8Array(chunkSize);
+    let buffer = new Uint8Array(chunkSize);
     let pendingSize = 0;
     let offsetInModule = 0;
     for (let i = 0; i < data.length;) {

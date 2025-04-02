@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #ifndef UI_GFX_X_CONNECTION_H_
 #define UI_GFX_X_CONNECTION_H_
 
@@ -76,6 +81,20 @@ struct SizeHints {
   int32_t base_width, base_height;
   // Program-specified window gravity
   uint32_t win_gravity;
+};
+
+enum WinGravityHint : int32_t {
+  WIN_GRAVITY_HINT_UNMAP_GRAVITY = 0,
+  WIN_GRAVITY_HINT_NORTHWEST_GRAVITY = 1,
+  WIN_GRAVITY_HINT_NORTH_GRAVITY = 2,
+  WIN_GRAVITY_HINT_NORTHEAST_GRAVITY = 3,
+  WIN_GRAVITY_HINT_WEST_GRAVITY = 4,
+  WIN_GRAVITY_HINT_CENTER_GRAVITY = 5,
+  WIN_GRAVITY_HINT_EAST_GRAVITY = 6,
+  WIN_GRAVITY_HINT_SOUTHWEST_GRAVITY = 7,
+  WIN_GRAVITY_HINT_SOUTH_GRAVITY = 8,
+  WIN_GRAVITY_HINT_SOUTHEAST_GRAVITY = 9,
+  WIN_GRAVITY_HINT_STATIC_GRAVITY = 10,
 };
 
 enum WmHintsFlags : uint32_t {
@@ -323,13 +342,13 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
     static_assert(T::type_id > 0, "T must be an *Event type");
     auto write_buffer = Write(event);
     CHECK_EQ(write_buffer.GetBuffers().size(), 1ul);
-    auto& first_buffer = write_buffer.GetBuffers()[0];
-    CHECK_LE(first_buffer->size(), 32ul);
-    std::vector<uint8_t> event_bytes(32);
-    memcpy(event_bytes.data(), first_buffer->data(), first_buffer->size());
+    base::span<uint8_t> first_buffer = write_buffer.GetBuffers()[0];
+    char event_bytes[kMinimumEventSize] = {};
+    base::span(event_bytes).copy_prefix_from(base::as_chars(first_buffer));
 
     SendEventRequest send_event{false, target, mask};
-    base::ranges::copy(event_bytes, send_event.event.begin());
+    base::span(send_event.event).copy_from(event_bytes);
+    std::ranges::copy(event_bytes, send_event.event.begin());
     return XProto::SendEvent(send_event);
   }
 
@@ -355,15 +374,14 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
                 .long_length = static_cast<uint32_t>(
                     amount ? length : std::numeric_limits<lentype>::max())})
             .Sync();
-    if (!response || response->format != CHAR_BIT * sizeof(T)) {
+    if (!response || response->format / 8u != sizeof(T)) {
       return false;
     }
 
-    CHECK_EQ(response->format / CHAR_BIT * response->value_len,
-             response->value->size());
+    size_t byte_len = response->value_len * response->format / 8u;
     value->resize(response->value_len);
-    if (response->value_len > 0) {
-      memcpy(value->data(), response->value->data(), response->value->size());
+    if (byte_len > 0u) {
+      memcpy(value->data(), response->value->bytes(), byte_len);
     }
     if (out_type) {
       *out_type = response->type;
@@ -388,17 +406,8 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
                                 Atom type,
                                 const std::vector<T>& values) {
     static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4, "");
-    std::vector<uint8_t> data(sizeof(T) * values.size());
-    if (values.size() > 0) {
-      memcpy(data.data(), values.data(), sizeof(T) * values.size());
-    }
-    return ChangeProperty(ChangePropertyRequest{
-        .window = static_cast<Window>(window),
-        .property = name,
-        .type = type,
-        .format = CHAR_BIT * sizeof(T),
-        .data_len = static_cast<uint32_t>(values.size()),
-        .data = base::RefCountedBytes::TakeVector(&data)});
+    return SetArrayPropertyImpl(window, name, type, 8u * sizeof(T),
+                                base::as_byte_span(values));
   }
 
   template <typename T>
@@ -463,6 +472,8 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
     ~Request();
 
     // Takes ownership of |reply| and |error|.
+    // Note that raw_error is an xcb_generic_error_t, but that type is not used
+    // here to avoid having this header file pull in xcb.h.
     void SetResponse(Connection* connection, void* raw_reply, void* raw_error);
 
     // If |callback| is nullptr, then this request has already been processed
@@ -491,6 +502,12 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
   bool HasNextResponse();
 
   bool HasNextEvent();
+
+  Future<void> SetArrayPropertyImpl(Window window,
+                                    Atom name,
+                                    Atom type,
+                                    uint8_t format,
+                                    base::span<const uint8_t> values);
 
   // Creates a new Request and adds it to the end of the queue.
   // |request_name_for_tracing| must be valid until the response is
@@ -555,7 +572,8 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
 
   base::circular_deque<Event> events_;
 
-  base::ObserverList<EventObserver>::Unchecked event_observers_;
+  base::ObserverList<EventObserver>::UncheckedAndDanglingUntriaged
+      event_observers_;
 
   // The Event currently being dispatched, or nullptr if there is none.
   raw_ptr<const Event> dispatching_event_ = nullptr;
@@ -588,6 +606,21 @@ class COMPONENT_EXPORT(X11) Connection final : public XProto,
 
   std::unique_ptr<PropertyCache> root_props_;
   std::unique_ptr<PropertyCache> wm_props_;
+};
+
+// Grab/release the X server connection within a scope. This can help avoid race
+// conditions that would otherwise lead to X errors.
+class COMPONENT_EXPORT(X11) ScopedXGrabServer {
+ public:
+  explicit ScopedXGrabServer(x11::Connection* connection);
+
+  ScopedXGrabServer(const ScopedXGrabServer&) = delete;
+  ScopedXGrabServer& operator=(const ScopedXGrabServer&) = delete;
+
+  ~ScopedXGrabServer();
+
+ private:
+  raw_ptr<x11::Connection> connection_;
 };
 
 }  // namespace x11

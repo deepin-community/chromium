@@ -10,6 +10,9 @@
 
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
+#include "components/services/app_service/public/cpp/app_launch_util.h"
+#include "components/services/app_service/public/cpp/app_types.h"
+#include "components/services/app_service/public/cpp/package_id.h"
 #include "third_party/abseil-cpp/absl/types/variant.h"
 
 namespace {
@@ -166,6 +169,13 @@ StructTraits<crosapi::mojom::AppDataView, apps::AppPtr>::allow_close(
   return ConvertOptionalBoolToMojomOptionalBool(r->allow_close);
 }
 
+// static
+crosapi::mojom::OptionalBool
+StructTraits<crosapi::mojom::AppDataView,
+             apps::AppPtr>::allow_window_mode_selection(const apps::AppPtr& r) {
+  return ConvertOptionalBoolToMojomOptionalBool(r->allow_window_mode_selection);
+}
+
 bool StructTraits<crosapi::mojom::AppDataView, apps::AppPtr>::Read(
     crosapi::mojom::AppDataView data,
     apps::AppPtr* out) {
@@ -294,6 +304,23 @@ bool StructTraits<crosapi::mojom::AppDataView, apps::AppPtr>::Read(
     return false;
   }
 
+  crosapi::mojom::OptionalBool allow_window_mode_selection;
+  if (!data.ReadAllowWindowModeSelection(&allow_window_mode_selection)) {
+    return false;
+  }
+
+  std::optional<apps::PackageId> installer_package_id;
+  if (!data.ReadInstallerPackageId(&installer_package_id)) {
+    return false;
+  }
+  // If a PackageID is set but has an unknown type, it most likely means that
+  // version skew caused the type to be dropped. Reset the value to nullopt, as
+  // if it was not set in the first place.
+  if (installer_package_id.has_value() &&
+      installer_package_id->package_type() == apps::PackageType::kUnknown) {
+    installer_package_id = std::nullopt;
+  }
+
   auto app = std::make_unique<apps::App>(app_type, app_id);
   app->readiness = readiness;
   app->name = name;
@@ -336,6 +363,9 @@ bool StructTraits<crosapi::mojom::AppDataView, apps::AppPtr>::Read(
   app->app_size_in_bytes = app_size_in_bytes;
   app->data_size_in_bytes = data_size_in_bytes;
   app->allow_close = ConvertMojomOptionalBoolToOptionalBool(allow_close);
+  app->allow_window_mode_selection =
+      ConvertMojomOptionalBoolToOptionalBool(allow_window_mode_selection);
+  app->installer_package_id = installer_package_id;
   *out = std::move(app);
   return true;
 }
@@ -352,21 +382,14 @@ EnumTraits<crosapi::mojom::AppType, apps::AppType>::ToMojom(
       return crosapi::mojom::AppType::kWeb;
     case apps::AppType::kSystemWeb:
       return crosapi::mojom::AppType::kSystemWeb;
-    case apps::AppType::kStandaloneBrowserChromeApp:
-      return crosapi::mojom::AppType::kStandaloneBrowserChromeApp;
-    case apps::AppType::kStandaloneBrowserExtension:
-      return crosapi::mojom::AppType::kStandaloneBrowserExtension;
-    case apps::AppType::kBuiltIn:
     case apps::AppType::kCrostini:
     case apps::AppType::kChromeApp:
     case apps::AppType::kExtension:
     case apps::AppType::kPluginVm:
-    case apps::AppType::kStandaloneBrowser:
     case apps::AppType::kRemote:
     case apps::AppType::kBorealis:
     case apps::AppType::kBruschetta:
       NOTREACHED();
-      return crosapi::mojom::AppType::kUnknown;
   }
 }
 
@@ -386,16 +409,9 @@ bool EnumTraits<crosapi::mojom::AppType, apps::AppType>::FromMojom(
     case crosapi::mojom::AppType::kSystemWeb:
       *output = apps::AppType::kSystemWeb;
       return true;
-    case crosapi::mojom::AppType::kStandaloneBrowserChromeApp:
-      *output = apps::AppType::kStandaloneBrowserChromeApp;
-      return true;
-    case crosapi::mojom::AppType::kStandaloneBrowserExtension:
-      *output = apps::AppType::kStandaloneBrowserExtension;
-      return true;
   }
 
   NOTREACHED();
-  return false;
 }
 
 crosapi::mojom::Readiness
@@ -420,6 +436,8 @@ EnumTraits<crosapi::mojom::Readiness, apps::Readiness>::ToMojom(
       return crosapi::mojom::Readiness::kRemoved;
     case apps::Readiness::kUninstalledByNonUser:
       return crosapi::mojom::Readiness::kUninstalledByNonUser;
+    case apps::Readiness::kDisabledByLocalSettings:
+      return crosapi::mojom::Readiness::kDisabledByLocalSettings;
   }
 
   NOTREACHED();
@@ -456,10 +474,12 @@ bool EnumTraits<crosapi::mojom::Readiness, apps::Readiness>::FromMojom(
     case crosapi::mojom::Readiness::kUninstalledByNonUser:
       *output = apps::Readiness::kUninstalledByNonUser;
       return true;
+    case crosapi::mojom::Readiness::kDisabledByLocalSettings:
+      *output = apps::Readiness::kDisabledByLocalSettings;
+      return true;
   }
 
   NOTREACHED();
-  return false;
 }
 
 crosapi::mojom::IconUpdateVersionDataView::Tag UnionTraits<
@@ -473,7 +493,6 @@ crosapi::mojom::IconUpdateVersionDataView::Tag UnionTraits<
     return crosapi::mojom::IconUpdateVersionDataView::Tag::kTimeline;
   }
   NOTREACHED();
-  return crosapi::mojom::IconUpdateVersionDataView::Tag::kRawIconUpdated;
 }
 
 bool UnionTraits<crosapi::mojom::IconUpdateVersionDataView,
@@ -491,7 +510,6 @@ bool UnionTraits<crosapi::mojom::IconUpdateVersionDataView,
     }
   }
   NOTREACHED();
-  return false;
 }
 
 bool StructTraits<crosapi::mojom::IconKeyDataView, apps::IconKeyPtr>::Read(
@@ -575,7 +593,6 @@ bool EnumTraits<crosapi::mojom::InstallReason, apps::InstallReason>::FromMojom(
   }
 
   NOTREACHED();
-  return false;
 }
 
 bool StructTraits<crosapi::mojom::IntentFilterDataView, apps::IntentFilterPtr>::
@@ -677,7 +694,6 @@ bool EnumTraits<crosapi::mojom::ConditionType, apps::ConditionType>::FromMojom(
   }
 
   NOTREACHED();
-  return false;
 }
 
 crosapi::mojom::PatternMatchType
@@ -732,7 +748,6 @@ bool EnumTraits<crosapi::mojom::PatternMatchType, apps::PatternMatchType>::
   }
 
   NOTREACHED();
-  return false;
 }
 
 crosapi::mojom::UninstallSource
@@ -776,7 +791,6 @@ bool EnumTraits<crosapi::mojom::UninstallSource, apps::UninstallSource>::
   }
 
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -853,7 +867,6 @@ bool EnumTraits<crosapi::mojom::IconType, apps::IconType>::FromMojom(
   }
 
   NOTREACHED();
-  return false;
 }
 
 bool StructTraits<crosapi::mojom::IconValueDataView, apps::IconValuePtr>::Read(
@@ -917,7 +930,6 @@ bool EnumTraits<crosapi::mojom::WindowMode, apps::WindowMode>::FromMojom(
   }
 
   NOTREACHED();
-  return false;
 }
 
 crosapi::mojom::LaunchSource
@@ -990,15 +1002,23 @@ EnumTraits<crosapi::mojom::LaunchSource, apps::LaunchSource>::ToMojom(
       return crosapi::mojom::LaunchSource::kFromInstaller;
     case apps::LaunchSource::kFromFirstRun:
       return crosapi::mojom::LaunchSource::kFromFirstRun;
-    // TODO(crbug.com/1343692): Make lock screen apps use lacros browser.
+    case apps::LaunchSource::kFromWelcomeTour:
+      return crosapi::mojom::LaunchSource::kFromWelcomeTour;
+    case apps::LaunchSource::kFromFocusMode:
+      return crosapi::mojom::LaunchSource::kFromFocusMode;
+    case apps::LaunchSource::kFromSparky:
+      return crosapi::mojom::LaunchSource::kFromSparky;
+    case apps::LaunchSource::kFromNavigationCapturing:
+      return crosapi::mojom::LaunchSource::kFromNavigationCapturing;
+    // TODO(crbug.com/40852514): Make lock screen apps use Lacros browser.
     case apps::LaunchSource::kFromLockScreen:
     case apps::LaunchSource::kFromCommandLine:
     case apps::LaunchSource::kFromBackgroundMode:
     case apps::LaunchSource::kFromAppHomePage:
     case apps::LaunchSource::kFromReparenting:
     case apps::LaunchSource::kFromProfileMenu:
+    case apps::LaunchSource::kFromWebInstallApi:
       NOTREACHED();
-      return crosapi::mojom::LaunchSource::kUnknown;
   }
   NOTREACHED();
 }
@@ -1106,10 +1126,21 @@ bool EnumTraits<crosapi::mojom::LaunchSource, apps::LaunchSource>::FromMojom(
     case crosapi::mojom::LaunchSource::kFromFirstRun:
       *output = apps::LaunchSource::kFromFirstRun;
       return true;
+    case crosapi::mojom::LaunchSource::kFromWelcomeTour:
+      *output = apps::LaunchSource::kFromWelcomeTour;
+      return true;
+    case crosapi::mojom::LaunchSource::kFromFocusMode:
+      *output = apps::LaunchSource::kFromFocusMode;
+      return true;
+    case crosapi::mojom::LaunchSource::kFromSparky:
+      *output = apps::LaunchSource::kFromSparky;
+      return true;
+    case crosapi::mojom::LaunchSource::kFromNavigationCapturing:
+      *output = apps::LaunchSource::kFromNavigationCapturing;
+      return true;
   }
 
   NOTREACHED();
-  return false;
 }
 
 bool StructTraits<crosapi::mojom::PermissionDataView, apps::PermissionPtr>::
@@ -1149,7 +1180,6 @@ EnumTraits<crosapi::mojom::PermissionType, apps::PermissionType>::ToMojom(
       return crosapi::mojom::PermissionType::kFileHandling;
     case apps::PermissionType::kPrinting:
       NOTREACHED();
-      return crosapi::mojom::PermissionType::kUnknown;
   }
 }
 
@@ -1185,7 +1215,6 @@ bool EnumTraits<crosapi::mojom::PermissionType,
   }
 
   NOTREACHED();
-  return false;
 }
 
 crosapi::mojom::TriState
@@ -1219,7 +1248,6 @@ bool EnumTraits<crosapi::mojom::TriState, apps::TriState>::FromMojom(
   }
 
   NOTREACHED();
-  return false;
 }
 
 crosapi::mojom::PermissionValueDataView::Tag
@@ -1233,7 +1261,6 @@ UnionTraits<crosapi::mojom::PermissionValueDataView,
     return crosapi::mojom::PermissionValueDataView::Tag::kTristateValue;
   }
   NOTREACHED();
-  return crosapi::mojom::PermissionValueDataView::Tag::kBoolValue;
 }
 
 bool UnionTraits<crosapi::mojom::PermissionValueDataView,
@@ -1254,7 +1281,6 @@ bool UnionTraits<crosapi::mojom::PermissionValueDataView,
     }
   }
   NOTREACHED();
-  return false;
 }
 
 bool StructTraits<crosapi::mojom::PreferredAppDataView, apps::PreferredAppPtr>::
@@ -1331,6 +1357,51 @@ bool StructTraits<crosapi::mojom::AppShortcutDataView, apps::ShortcutPtr>::Read(
   shortcut->allow_removal = data.allow_removal();
 
   *out = std::move(shortcut);
+  return true;
+}
+
+// static
+crosapi::mojom::PackageIdType
+StructTraits<crosapi::mojom::PackageIdDataView, apps::PackageId>::package_type(
+    const apps::PackageId& r) {
+  switch (r.package_type()) {
+    case apps::PackageType::kArc:
+      return crosapi::mojom::PackageIdType::kArc;
+    case apps::PackageType::kWeb:
+      return crosapi::mojom::PackageIdType::kWeb;
+    case apps::PackageType::kUnknown:
+    case apps::PackageType::kBorealis:
+    case apps::PackageType::kChromeApp:
+    case apps::PackageType::kGeForceNow:
+    case apps::PackageType::kSystem:
+    case apps::PackageType::kWebsite:
+      return crosapi::mojom::PackageIdType::kUnknown;
+  }
+}
+
+bool StructTraits<crosapi::mojom::PackageIdDataView, apps::PackageId>::Read(
+    crosapi::mojom::PackageIdDataView data,
+    apps::PackageId* out) {
+  crosapi::mojom::PackageIdType mojom_package_type = data.package_type();
+
+  std::string identifier;
+  if (!data.ReadIdentifier(&identifier) || identifier.empty()) {
+    return false;
+  }
+
+  apps::PackageType package_type = ([&mojom_package_type]() {
+    switch (mojom_package_type) {
+      case crosapi::mojom::PackageIdType::kUnknown:
+        return apps::PackageType::kUnknown;
+      case crosapi::mojom::PackageIdType::kArc:
+        return apps::PackageType::kArc;
+      case crosapi::mojom::PackageIdType::kWeb:
+        return apps::PackageType::kWeb;
+    }
+  })();
+
+  *out = apps::PackageId(package_type, identifier);
+
   return true;
 }
 

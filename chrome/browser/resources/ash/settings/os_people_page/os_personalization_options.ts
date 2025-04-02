@@ -7,15 +7,13 @@
  * 'personalization-options' contains several toggles related to
  * personalizations.
  */
-import 'chrome://resources/cr_components/settings_prefs/prefs.js';
 import '../controls/settings_toggle_button.js';
 import '../settings_shared.css.js';
 
 import {PolymerElement} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
-import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 
-import {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
+import type {SettingsToggleButtonElement} from '../controls/settings_toggle_button.js';
 
 import {getTemplate} from './os_personalization_options.html.js';
 
@@ -31,19 +29,6 @@ export class OsSettingsPersonalizationOptionsElement extends
     return getTemplate();
   }
 
-  static get properties() {
-    return {
-      showMetricsToggle_: {
-        type: Boolean,
-        value() {
-          return !loadTimeData.getBoolean('osDeprecateSyncMetricsToggle');
-        },
-      },
-    };
-  }
-
-  private showMetricsToggle_: boolean;
-
   /**
    * the autocomplete search suggestions CrToggleElement.
    */
@@ -58,14 +43,6 @@ export class OsSettingsPersonalizationOptionsElement extends
   getUrlCollectionToggle(): SettingsToggleButtonElement|null {
     return this.shadowRoot!.querySelector<SettingsToggleButtonElement>(
         '#urlCollectionToggle');
-  }
-
-  /**
-   * the Drive suggestions CrToggleElement.
-   */
-  getDriveSuggestToggle(): SettingsToggleButtonElement|null {
-    return this.shadowRoot!.querySelector<SettingsToggleButtonElement>(
-        '#driveSuggestControl');
   }
 
   // <if expr="_google_chrome">

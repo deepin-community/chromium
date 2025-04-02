@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "cc/trees/throttle_decider.h"
 
 #include <vector>
@@ -45,9 +50,7 @@ void ThrottleDecider::ProcessRenderPass(
       }
       const auto& child_rp = *found->second;
       if (child_rp.backdrop_filters.HasFilterOfType(FilterOperation::BLUR) &&
-          render_pass_quad->resources
-                  .ids[viz::RenderPassDrawQuadInternal::kMaskResourceIdIndex] ==
-              viz::kInvalidResourceId) {
+          render_pass_quad->resource_id == viz::kInvalidResourceId) {
         gfx::RectF blur_bounds(child_rp.output_rect);
         if (child_rp.backdrop_filter_bounds)
           blur_bounds.Intersect(child_rp.backdrop_filter_bounds->rect());

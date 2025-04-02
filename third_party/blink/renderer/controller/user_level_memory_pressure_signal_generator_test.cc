@@ -83,6 +83,7 @@ class DummyMainThreadScheduler : public MainThreadScheduler {
                            Thread::IdleTask) override {}
   void PostNonNestableIdleTask(const base::Location&,
                                Thread::IdleTask) override {}
+  void RemoveCancelledIdleTasks() override {}
   scoped_refptr<base::SingleThreadTaskRunner> V8TaskRunner() override {
     return nullptr;
   }
@@ -95,7 +96,11 @@ class DummyMainThreadScheduler : public MainThreadScheduler {
   void AddTaskObserver(base::TaskObserver*) override {}
   void RemoveTaskObserver(base::TaskObserver*) override {}
   void SetV8Isolate(v8::Isolate*) override {}
+  void ExecuteAfterCurrentTaskForTesting(
+      base::OnceClosure on_completion_task,
+      ExecuteAfterCurrentTaskRestricted) override {}
   void StartIdlePeriodForTesting() override {}
+  void SetRendererBackgroundedForTesting(bool) override {}
 };
 
 class UserLevelMemoryPressureSignalGeneratorTest : public testing::Test {
@@ -170,7 +175,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
   EXPECT_EQ(1u, memory_pressure_count_);
 
   AdvanceClock(kMinimumInterval - base::Minutes(1));
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   // |minimum_interval_| has passed. Another memory pressure signal is
   // generated.
@@ -185,14 +190,14 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
       CreateUserLevelMemoryPressureSignalGenerator(kInertInterval));
 
   //            <-1s->
-  // Animation --------o
+  // Default ----------o
   //                  ^ \
   //                 /   v
   //            Request  Signal
   // (*) inert interval = 5m
 
   EXPECT_CALL(*generator, Generate(_)).Times(0);
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   AdvanceClock(base::Seconds(1));
 
@@ -208,7 +213,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   //                    | inert |
   //     <-1s->         <--5m--->
-  // Load ---- Animation --------o
+  // Load ----- Default ---------o
   //                            ^ \
   //                           /   v
   //                      Request  Signal
@@ -219,7 +224,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   AdvanceClock(base::Seconds(1));
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   AdvanceClock(kInertInterval);
 
@@ -235,7 +240,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   //                             | inert  |
   //     <-1m-> <--5m-->         <---5m--->
-  // Load ------------- Animation ---------o
+  // Load -------------- Default ----------o
   //           ^                           |
   //           |                           v
   //         Request                    Signal
@@ -252,7 +257,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   AdvanceClock(kInertInterval);
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   AdvanceClock(kInertInterval - base::Seconds(1));
 
@@ -271,7 +276,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   //                      |        inert       |
   //     <--1m-->         <-1m-> <-1m-> <--3m-->
-  // Load ------ Animation ---------------------o
+  // Load ------- Default ----------------------o
   //                            ^      ^        |
   //                            |      |        v
   //                        Request   Request  Signal(once)
@@ -282,7 +287,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   AdvanceClock(base::Minutes(1));
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   AdvanceClock(base::Minutes(1));
 
@@ -311,7 +316,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   //                      | inert |                    |inert |
   //     <--1m-->         <--2m-->    <--3m-->         <--5m-->
-  // Load ------ Animation ------ Load ------ Animation -------o
+  // Load ------- Default ------- Load ------- Default --------o
   //                         ^                                 |
   //                         |                                 v
   //                       Request                          Generate
@@ -324,7 +329,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   AdvanceClock(base::Minutes(1));
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   AdvanceClock(base::Minutes(1));
 
@@ -339,7 +344,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   AdvanceClock(base::Minutes(3));
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   AdvanceClock(kInertInterval - base::Seconds(1));
 
@@ -359,7 +364,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   //                      | inert |                    |inert |
   //     <--1m-->         <--2m-->    <--5m-->         <--5m-->
-  // Load ------ Animation ------ Load ------ Animation -------x
+  // Load ------- Default ------- Load ------- Default --------x
   //                         ^                                 |
   //                         |                              Expired
   //                       Request
@@ -372,7 +377,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   AdvanceClock(base::Minutes(1));
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   AdvanceClock(base::Minutes(1));
 
@@ -387,7 +392,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   AdvanceClock(base::Minutes(5));
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   AdvanceClock(kInertInterval);
 
@@ -401,7 +406,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest, TwoRequestsAndOneIsExpired) {
 
   //                      |inert |                     |inert |
   //     <--1m-->         <--2m-->    <--5m-->         <--5m-->
-  // Load ------ Animation ------ Load ------ Animation -------o
+  // Load ------- Default ------- Load ------- Default --------o
   //                         ^    ^                            |
   //                         |    |                            v
   //                       Request Request                   Signal
@@ -414,7 +419,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest, TwoRequestsAndOneIsExpired) {
 
   AdvanceClock(base::Minutes(1));
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   AdvanceClock(base::Minutes(1));
 
@@ -432,7 +437,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest, TwoRequestsAndOneIsExpired) {
 
   AdvanceClock(base::Minutes(5));
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   // The first request is expired after more than |kMinimumInterval| passes.
   base::TimeDelta time_to_expire =
@@ -457,7 +462,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
   //              |   minimum interval          |
   //                           |     inert      |
   //     <--1m-->
-  // Load ----------- Animation -----------------o
+  // Load ------------ Default ------------------o
   //             ^                              ^ \
   //             |                             /   v
   //             Request                   Request  Signal
@@ -473,7 +478,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   AdvanceClock(kMinimumInterval - kInertInterval);
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   test_task_runner_->PostDelayedTask(
       FROM_HERE,
@@ -499,7 +504,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
   //                                      PostTask
   //                   PostTask             |--inert interval->
   //                     |-- inert interval-->
-  // Load ----- Animation - Load - Animation -x--------------- o
+  // Load ------ Default -- Load -- Default --x--------------- o
   //        ^                                 |                |
   //        |                                 |                v
   //     Request                          No Signal          Signal
@@ -515,7 +520,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   AdvanceClock(base::Seconds(1));
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   AdvanceClock(base::Seconds(1));
 
@@ -523,7 +528,7 @@ TEST_F(UserLevelMemoryPressureSignalGeneratorTest,
 
   AdvanceClock(base::Seconds(1));
 
-  generator->OnRAILModeChanged(RAILMode::kAnimation);
+  generator->OnRAILModeChanged(RAILMode::kDefault);
 
   AdvanceClock(kInertInterval - base::Seconds(2));
 

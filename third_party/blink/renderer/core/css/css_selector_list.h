@@ -23,12 +23,18 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSS_SELECTOR_LIST_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSS_SELECTOR_LIST_H_
 
 #include "base/types/pass_key.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_selector.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
@@ -85,18 +91,26 @@ class CORE_EXPORT CSSSelectorList : public GarbageCollected<CSSSelectorList> {
                                   CSSSelector* selector_array);
 
   CSSSelectorList* Copy() const;
+  static HeapVector<CSSSelector> Copy(const CSSSelector* selector_list);
 
-  bool IsValid() const {
-    return first_selector_[0].Match() != CSSSelector::kInvalidList;
+  static bool IsValid(const CSSSelector& first) {
+    return first.Match() != CSSSelector::kInvalidList;
   }
+  bool IsValid() const { return IsValid(*first_selector_); }
   const CSSSelector* First() const {
     return IsValid() ? first_selector_ : nullptr;
   }
   static const CSSSelector* Next(const CSSSelector&);
   static CSSSelector* Next(CSSSelector&);
 
-  // The CSS selector represents a single sequence of simple selectors.
-  bool HasOneSelector() const { return IsValid() && !Next(*first_selector_); }
+  // Returns true when there is exactly one complex selector in the list,
+  // and false otherwise.
+  static bool IsSingleComplexSelector(const CSSSelector& first) {
+    return IsValid(first) && !Next(first);
+  }
+  bool IsSingleComplexSelector() const {
+    return IsSingleComplexSelector(*first_selector_);
+  }
   const CSSSelector& SelectorAt(wtf_size_t index) const {
     DCHECK(IsValid());
     return first_selector_[index];
@@ -126,14 +140,23 @@ class CORE_EXPORT CSSSelectorList : public GarbageCollected<CSSSelectorList> {
   // Return the specificity of the selector with the highest specificity.
   unsigned MaximumSpecificity() const;
 
-  // See CSSSelector::Reparent.
-  static void Reparent(CSSSelector* selector_list,
-                       StyleRule* old_parent,
-                       StyleRule* new_parent);
+  // Re-nest each simple selector in `selector_list` into `result`,
+  // falling back to the original simple selector when CSSSelector::Renest
+  // returns no value, and returning 'true' if at least one simple selector
+  // needed re-nesting.
+  //
+  // See also CSSSelector::Renest.
+  static bool Renest(const CSSSelector* selector_list,
+                     StyleRule* new_parent,
+                     HeapVector<CSSSelector>& result);
 
-  void Reparent(StyleRule* old_parent, StyleRule* new_parent) {
-    CSSSelectorList::Reparent(first_selector_, old_parent, new_parent);
-  }
+  // Returns a re-nested selector list (see CSSSelector::Renest),
+  // or `this` if no re-nested was required.
+  CSSSelectorList* Renest(StyleRule* new_parent);
+
+  // True if at least one (complex) selector in the list
+  // is allowed inside '&' (see CSSSelector::IsAllowedInParentPseudo).
+  static bool IsAnyAllowedInParentPseudo(const CSSSelector* selector_list);
 
   CSSSelectorList(const CSSSelectorList&) = delete;
   CSSSelectorList& operator=(const CSSSelectorList&) = delete;

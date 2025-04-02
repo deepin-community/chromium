@@ -35,7 +35,7 @@ namespace net {
 
 namespace {
 
-// TODO(crbug.com/1206799): Delete once endpoint usage is converted to using
+// TODO(crbug.com/40181080): Delete once endpoint usage is converted to using
 // url::SchemeHostPort when available.
 HostPortPair ToLegacyDestinationEndpoint(
     const TransportSocketParams::Endpoint& endpoint) {
@@ -233,8 +233,6 @@ int TransportConnectJob::DoLoop(int result) {
         break;
       default:
         NOTREACHED();
-        rv = ERR_FAILED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && next_state_ != STATE_NONE);
 

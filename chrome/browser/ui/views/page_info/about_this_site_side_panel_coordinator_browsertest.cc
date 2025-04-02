@@ -4,11 +4,14 @@
 
 #include "base/feature_list.h"
 #include "base/strings/escape.h"
+#include "base/test/run_until.h"
 #include "base/test/scoped_feature_list.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/page_info/about_this_site_side_panel.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/side_panel/side_panel.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
 #include "chrome/browser/ui/views/side_panel/side_panel_entry.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -69,7 +72,7 @@ class AboutThisSiteSidePanelCoordinatorBrowserTest
   }
 
   SidePanelCoordinator* side_panel_coordinator() {
-    return SidePanelUtil::GetSidePanelCoordinatorForBrowser(browser());
+    return browser()->GetFeatures().side_panel_coordinator();
   }
 
   base::test::ScopedFeatureList feature_list_;
@@ -296,6 +299,10 @@ IN_PROC_BROWSER_TEST_F(AboutThisSiteSidePanelCoordinatorBrowserTest,
 
   // Close side panel.
   side_panel_coordinator()->Close();
+  ASSERT_TRUE(base::test::RunUntil([&]() {
+    return browser()->GetBrowserView().unified_side_panel()->state() ==
+           SidePanel::State::kClosed;
+  }));
   EXPECT_FALSE(side_panel_coordinator()->IsSidePanelShowing());
   ASSERT_EQ(side_panel_coordinator()->GetCurrentEntryId(), std::nullopt);
 
@@ -331,4 +338,4 @@ IN_PROC_BROWSER_TEST_F(AboutThisSiteSidePanelCoordinatorBrowserTest,
                        1);
 }
 
-// TODO(crbug.com/1318000): Cover additional AboutThisSite side panel behavior.
+// TODO(crbug.com/40222735): Cover additional AboutThisSite side panel behavior.

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "remoting/host/mojom/remoting_mojom_traits.h"
 
 namespace mojo {
@@ -91,17 +96,7 @@ bool mojo::StructTraits<remoting::mojom::DesktopEnvironmentOptionsDataView,
   out_options->set_enable_user_interface(data_view.enable_user_interface());
   out_options->set_enable_notifications(data_view.enable_notifications());
   out_options->set_terminate_upon_input(data_view.terminate_upon_input());
-  out_options->set_enable_file_transfer(data_view.enable_file_transfer());
-  out_options->set_enable_remote_open_url(data_view.enable_remote_open_url());
   out_options->set_enable_remote_webauthn(data_view.enable_remote_webauthn());
-
-  std::optional<uint32_t> clipboard_size;
-  if (!data_view.ReadClipboardSize(&clipboard_size)) {
-    return false;
-  }
-  if (clipboard_size.has_value()) {
-    out_options->set_clipboard_size(std::move(clipboard_size));
-  }
 
   if (!data_view.ReadDesktopCaptureOptions(
           out_options->desktop_capture_options())) {
@@ -564,6 +559,12 @@ bool mojo::StructTraits<remoting::mojom::VideoTrackLayoutDataView,
   }
   out_track->set_x_dpi(dpi.x());
   out_track->set_y_dpi(dpi.y());
+
+  std::string display_name;
+  if (!data_view.ReadDisplayName(&display_name)) {
+    return false;
+  }
+  out_track->set_display_name(std::move(display_name));
 
   return true;
 }

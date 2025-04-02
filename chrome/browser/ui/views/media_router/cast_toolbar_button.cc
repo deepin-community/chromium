@@ -29,6 +29,7 @@
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/paint_vector_icon.h"
 #include "ui/gfx/vector_icon_types.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/controls/button/button_controller.h"
 
@@ -38,6 +39,8 @@ namespace {
 constexpr char kLoggerComponent[] = "CastToolbarButton";
 }
 
+using Severity = media_router::IssueInfo::Severity;
+
 // static
 std::unique_ptr<CastToolbarButton> CastToolbarButton::Create(Browser* browser) {
   // These objects may be null in tests.
@@ -46,10 +49,9 @@ std::unique_ptr<CastToolbarButton> CastToolbarButton::Create(Browser* browser) {
     return nullptr;
   }
 
-  std::unique_ptr<MediaRouterContextualMenu> context_menu =
-      MediaRouterContextualMenu::Create(
-          browser,
-          MediaRouterUIService::Get(browser->profile())->action_controller());
+  std::unique_ptr<CastContextualMenu> context_menu = CastContextualMenu::Create(
+      browser,
+      MediaRouterUIService::Get(browser->profile())->action_controller());
   return std::make_unique<CastToolbarButton>(
       browser, MediaRouterFactory::GetApiForBrowserContext(browser->profile()),
       std::move(context_menu));
@@ -58,7 +60,7 @@ std::unique_ptr<CastToolbarButton> CastToolbarButton::Create(Browser* browser) {
 CastToolbarButton::CastToolbarButton(
     Browser* browser,
     MediaRouter* media_router,
-    std::unique_ptr<MediaRouterContextualMenu> context_menu)
+    std::unique_ptr<CastContextualMenu> context_menu)
     : ToolbarButton(base::BindRepeating(&CastToolbarButton::ButtonPressed,
                                         base::Unretained(this)),
                     context_menu->CreateMenuModel(),
@@ -81,12 +83,17 @@ CastToolbarButton::CastToolbarButton(
   DCHECK(GetActionController());
   GetActionController()->AddObserver(this);
   SetVisible(GetActionController()->ShouldEnableAction());
+
+  if (menu_model()) {
+    GetViewAccessibility().SetHasPopup(ax::mojom::HasPopup::kMenu);
+  }
 }
 
 CastToolbarButton::~CastToolbarButton() {
   StopObservingMirroringMediaControllerHosts();
-  if (GetActionController())
+  if (GetActionController()) {
     GetActionController()->RemoveObserver(this);
+  }
 }
 
 void CastToolbarButton::ShowIcon() {
@@ -110,13 +117,12 @@ void CastToolbarButton::DeactivateIcon() {
 }
 
 void CastToolbarButton::OnIssue(const media_router::Issue& issue) {
-  current_issue_ = std::make_unique<media_router::IssueInfo>(issue.info());
+  issue_severity_ = issue.info().severity;
   UpdateIcon();
 }
 
 void CastToolbarButton::OnIssuesCleared() {
-  if (current_issue_)
-    current_issue_.reset();
+  issue_severity_.reset();
   UpdateIcon();
 }
 
@@ -143,24 +149,26 @@ void CastToolbarButton::OnFreezeInfoChanged() {
 }
 
 bool CastToolbarButton::OnMousePressed(const ui::MouseEvent& event) {
-  if (event.IsRightMouseButton() && GetActionController())
+  if (event.IsRightMouseButton() && GetActionController()) {
     GetActionController()->KeepIconShownOnPressed();
+  }
   return ToolbarButton::OnMousePressed(event);
 }
 
 void CastToolbarButton::OnMouseReleased(const ui::MouseEvent& event) {
   ToolbarButton::OnMouseReleased(event);
-  if (event.IsRightMouseButton() && GetActionController())
+  if (event.IsRightMouseButton() && GetActionController()) {
     GetActionController()->MaybeHideIconOnReleased();
+  }
 }
 
 void CastToolbarButton::OnGestureEvent(ui::GestureEvent* event) {
   switch (event->type()) {
-    case ui::ET_GESTURE_TAP_DOWN:
+    case ui::EventType::kGestureTapDown:
       GetActionController()->KeepIconShownOnPressed();
       break;
-    case ui::ET_GESTURE_END:
-    case ui::ET_GESTURE_TAP_CANCEL:
+    case ui::EventType::kGestureEnd:
+    case ui::EventType::kGestureTapCancel:
       GetActionController()->MaybeHideIconOnReleased();
       break;
     default:
@@ -175,11 +183,9 @@ void CastToolbarButton::OnThemeChanged() {
 }
 
 void CastToolbarButton::UpdateIcon() {
-  if (!GetWidget())
+  if (!GetWidget()) {
     return;
-  using Severity = media_router::IssueInfo::Severity;
-  const auto severity =
-      current_issue_ ? current_issue_->severity : Severity::NOTIFICATION;
+  }
   bool is_frozen = false;
   for (const auto& route_id : tracked_mirroring_routes_) {
     MirroringMediaControllerHost* mirroring_controller_host =
@@ -193,25 +199,18 @@ void CastToolbarButton::UpdateIcon() {
   SkColor icon_color;
 
   const auto* const color_provider = GetColorProvider();
-  if (severity == Severity::NOTIFICATION && !has_local_route_) {
-    new_icon = ShouldShowNewIcons()
-                   ? &vector_icons::kMediaRouterIdleChromeRefreshIcon
-                   : &vector_icons::kMediaRouterIdleIcon;
+  if ((!issue_severity_ || issue_severity_ == Severity::NOTIFICATION) &&
+      !has_local_route_) {
+    new_icon = &vector_icons::kMediaRouterIdleChromeRefreshIcon;
     icon_color = gfx::kPlaceholderColor;
-  } else if (severity == Severity::WARNING) {
-    new_icon = ShouldShowNewIcons()
-                   ? &vector_icons::kMediaRouterWarningChromeRefreshIcon
-                   : &vector_icons::kMediaRouterWarningIcon;
-    icon_color = ShouldShowNewIcons()
-                     ? gfx::kPlaceholderColor
-                     : color_provider->GetColor(kColorMediaRouterIconWarning);
-  } else if (is_frozen && ShouldShowNewIcons()) {
+  } else if (issue_severity_ == Severity::WARNING) {
+    new_icon = &vector_icons::kMediaRouterWarningChromeRefreshIcon;
+    icon_color = gfx::kPlaceholderColor;
+  } else if (is_frozen) {
     new_icon = &vector_icons::kMediaRouterPausedIcon;
     icon_color = gfx::kPlaceholderColor;
   } else {
-    new_icon = ShouldShowNewIcons()
-                   ? &vector_icons::kMediaRouterActiveChromeRefreshIcon
-                   : &vector_icons::kMediaRouterActiveIcon;
+    new_icon = &vector_icons::kMediaRouterActiveChromeRefreshIcon;
     icon_color = color_provider->GetColor(kColorMediaRouterIconActive);
   }
 
@@ -223,27 +222,21 @@ void CastToolbarButton::UpdateIcon() {
                                *new_icon, GetForegroundColor(state)));
     }
   }
-  if (icon_ == new_icon)
+  if (icon_ == new_icon) {
     return;
+  }
 
   icon_ = new_icon;
   LogIconChange(icon_);
   if (icon_color != gfx::kPlaceholderColor) {
-    for (auto state : kButtonStates)
+    for (auto state : kButtonStates) {
       SetImageModel(state, ui::ImageModel::FromVectorIcon(*icon_, icon_color));
+    }
   }
-  UpdateLayoutInsetDelta();
 }
 
-MediaRouterActionController* CastToolbarButton::GetActionController() const {
+CastToolbarButtonController* CastToolbarButton::GetActionController() const {
   return MediaRouterUIService::Get(profile_)->action_controller();
-}
-
-void CastToolbarButton::UpdateLayoutInsetDelta() {
-  // This icon is smaller than the touchable-UI expected 24dp, so we need to pad
-  // the insets to match.
-  SetLayoutInsetDelta(
-      gfx::Insets(ui::TouchUiController::Get()->touch_ui() ? 4 : 0));
 }
 
 void CastToolbarButton::ButtonPressed() {
@@ -259,9 +252,7 @@ void CastToolbarButton::ButtonPressed() {
 }
 
 void CastToolbarButton::LogIconChange(const gfx::VectorIcon* icon) {
-  if (icon_ == (ShouldShowNewIcons()
-                    ? &vector_icons::kMediaRouterIdleChromeRefreshIcon
-                    : &vector_icons::kMediaRouterIdleIcon)) {
+  if (icon_ == &vector_icons::kMediaRouterIdleChromeRefreshIcon) {
     logger_->LogInfo(
         mojom::LogCategory::kUi, kLoggerComponent,
         "Cast toolbar icon indicates no active session nor issues.", "", "",
@@ -269,9 +260,7 @@ void CastToolbarButton::LogIconChange(const gfx::VectorIcon* icon) {
   } else if (icon_ == &vector_icons::kMediaRouterErrorIcon) {
     logger_->LogInfo(mojom::LogCategory::kUi, kLoggerComponent,
                      "Cast toolbar icon shows a fatal issue.", "", "", "");
-  } else if (icon_ == (ShouldShowNewIcons()
-                           ? &vector_icons::kMediaRouterWarningChromeRefreshIcon
-                           : &vector_icons::kMediaRouterWarningIcon)) {
+  } else if (icon_ == &vector_icons::kMediaRouterWarningChromeRefreshIcon) {
     logger_->LogInfo(mojom::LogCategory::kUi, kLoggerComponent,
                      "Cast toolbar icon shows a warning issue.", "", "", "");
   } else if (icon_ == &vector_icons::kMediaRouterPausedIcon) {
@@ -280,9 +269,7 @@ void CastToolbarButton::LogIconChange(const gfx::VectorIcon* icon) {
         "Cast toolbar icon indicated there is a paused mirroring session.", "",
         "", "");
   } else {
-    CHECK_EQ(icon_, ShouldShowNewIcons()
-                        ? &vector_icons::kMediaRouterActiveChromeRefreshIcon
-                        : &vector_icons::kMediaRouterActiveIcon);
+    CHECK_EQ(icon_, &vector_icons::kMediaRouterActiveChromeRefreshIcon);
     logger_->LogInfo(mojom::LogCategory::kUi, kLoggerComponent,
                      "Cast toolbar icon is blue, indicating an active session.",
                      "", "", "");
@@ -299,11 +286,6 @@ void CastToolbarButton::StopObservingMirroringMediaControllerHosts() {
     }
   }
   tracked_mirroring_routes_.clear();
-}
-
-bool CastToolbarButton::ShouldShowNewIcons() {
-  return features::IsChromeRefresh2023() ||
-         IsAccessCodeCastFreezeUiEnabled(profile_);
 }
 
 BEGIN_METADATA(CastToolbarButton)

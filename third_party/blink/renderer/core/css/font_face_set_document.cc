@@ -72,12 +72,6 @@ FontSelector* FontFaceSetDocument::GetFontSelector() const {
   return GetDocument()->GetStyleEngine().GetFontSelector();
 }
 
-AtomicString FontFaceSetDocument::status() const {
-  DEFINE_STATIC_LOCAL(AtomicString, loading, ("loading"));
-  DEFINE_STATIC_LOCAL(AtomicString, loaded, ("loaded"));
-  return is_loading_ ? loading : loaded;
-}
-
 void FontFaceSetDocument::DidLayout() {
   if (!GetExecutionContext()) {
     return;
@@ -92,11 +86,8 @@ void FontFaceSetDocument::DidLayout() {
 }
 
 void FontFaceSetDocument::StartLCPLimitTimerIfNeeded() {
-  // Make sure the timer is started at most once for each document, and only
-  // when the feature is enabled
-  if (!base::FeatureList::IsEnabled(
-          features::kAlignFontDisplayAutoTimeoutWithLCPGoal) ||
-      has_reached_lcp_limit_ || lcp_limit_timer_.IsActive() ||
+  // Make sure the timer is started at most once for each document.
+  if (has_reached_lcp_limit_ || lcp_limit_timer_.IsActive() ||
       !GetDocument()->Loader()) {
     return;
   }
@@ -130,7 +121,7 @@ size_t FontFaceSetDocument::ApproximateBlankCharacterCount() const {
   return count;
 }
 
-ScriptPromiseTyped<FontFaceSet> FontFaceSetDocument::ready(
+ScriptPromise<FontFaceSet> FontFaceSetDocument::ready(
     ScriptState* script_state) {
   if (ready_->GetState() != ReadyProperty::kPending && InActiveContext()) {
     // |ready_| is already resolved, but there may be pending stylesheet
@@ -195,13 +186,10 @@ bool FontFaceSetDocument::ResolveFontStyle(const String& font_string,
   ComputedStyleBuilder builder =
       GetDocument()->GetStyleResolver().CreateComputedStyleBuilder();
 
-  FontFamily font_family;
-  font_family.SetFamily(
-      FontFaceSet::DefaultFontFamily(),
-      FontFamily::InferredTypeFor(FontFaceSet::DefaultFontFamily()));
-
   FontDescription default_font_description;
-  default_font_description.SetFamily(font_family);
+  default_font_description.SetFamily(FontFamily(
+      FontFaceSet::DefaultFontFamily(),
+      FontFamily::InferredTypeFor(FontFaceSet::DefaultFontFamily())));
   default_font_description.SetSpecifiedSize(FontFaceSet::kDefaultFontSize);
   default_font_description.SetComputedSize(FontFaceSet::kDefaultFontSize);
 
@@ -262,8 +250,6 @@ void FontFaceSetDocument::AlignTimeoutWithLCPGoal(FontFace* font_face) {
 }
 
 void FontFaceSetDocument::LCPLimitReached(TimerBase*) {
-  DCHECK(base::FeatureList::IsEnabled(
-      features::kAlignFontDisplayAutoTimeoutWithLCPGoal));
   if (!GetDocument() || !GetDocument()->IsActive()) {
     return;
   }

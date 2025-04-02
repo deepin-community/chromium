@@ -15,11 +15,12 @@ import {assert} from '//resources/ash/common/assert.js';
 import {WebUIListenerBehavior} from '//resources/ash/common/web_ui_listener_behavior.js';
 import {Polymer} from '//resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-import {HostDevice} from 'chrome://resources/mojo/chromeos/ash/services/multidevice_setup/public/mojom/multidevice_setup.mojom-webui.js';
 
 import {MojoInterfaceProvider, MojoInterfaceProviderImpl} from './mojo_api.js';
 import {getTemplate} from './multidevice_setup.html.js';
 import {MultiDeviceSetupDelegate} from './multidevice_setup_delegate.js';
+
+/** @typedef {*} HostDevice */
 
 /** @enum {string} */
 export const PageName = {
@@ -118,7 +119,7 @@ export const MultiDeviceSetup = Polymer({
      * Unique identifier for the currently selected host device. This uses the
      * device's Instance ID if it is available; otherwise, the device's legacy
      * device ID is used.
-     * TODO(https://crbug.com/1019206): When v1 DeviceSync is turned off, only
+     * TODO(crbug.com/40105247): When v1 DeviceSync is turned off, only
      * use Instance ID since all devices are guaranteed to have one.
      *
      * Undefined if the no list of potential hosts has been received from mojo
@@ -191,6 +192,7 @@ export const MultiDeviceSetup = Polymer({
   updateLocalizedContent() {
     this.$.ironPages.querySelectorAll('.ui-page')
         .forEach(page => page.i18nUpdateLocale());
+    this.$.buttonBar.i18nUpdateLocale();
   },
 
   initializeSetupFlow() {

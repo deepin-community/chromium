@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <optional>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -103,7 +104,7 @@ bool MakeQueryRequestURL(std::optional<AutofillPageQueryRequest> query,
 }
 
 // Make HTTP request header given |url|.
-inline std::string MakeRequestHeader(base::StringPiece url) {
+inline std::string MakeRequestHeader(std::string_view url) {
   return base::StrCat({"GET ", url, " ", "HTTP/1.1"});
 }
 
@@ -163,7 +164,7 @@ std::string MakeSerializedResponse(
 // Write json node to file in text format.
 bool WriteJSONNode(const base::FilePath& file_path, const base::Value& node) {
   std::string json_text;
-  JSONWriter::WriteWithOptions(node, JSONWriter::Options::OPTIONS_PRETTY_PRINT,
+  JSONWriter::WriteWithOptions(node, JSONWriter::OPTIONS_PRETTY_PRINT,
                                &json_text);
 
   std::string compressed_json_text;
@@ -218,7 +219,7 @@ bool WriteJSON(const base::FilePath& file_path,
   return WriteJSONNode(file_path, Value(std::move(root_dict)));
 }
 
-// TODO(https://crbug.com/1212151): The test flakily times out.
+// TODO(crbug.com/40768066): The test flakily times out.
 TEST(AutofillCacheReplayerDeathTest,
      DISABLED_ServerCacheReplayerConstructor_CrashesWhenNoDomainNode) {
   // Make death test threadsafe.

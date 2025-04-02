@@ -56,8 +56,6 @@ std::string ServiceEnumToName(devtools::proto::BackgroundService service_enum) {
     default:
       NOTREACHED();
   }
-
-  return "invalid";
 }
 
 std::unique_ptr<protocol::Array<protocol::BackgroundService::EventMetadata>>

@@ -140,12 +140,12 @@ void ColorPrintf(std::ostream& out, LogColor color, const char* fmt,
   // We need to flush the stream buffers into the console before each
   // SetConsoleTextAttribute call lest it affect the text that is already
   // printed but has not yet reached the console.
-  fflush(stdout);
+  out.flush();
   SetConsoleTextAttribute(stdout_handle,
                           GetPlatformColorCode(color) | FOREGROUND_INTENSITY);
-  vprintf(fmt, args);
+  out << FormatString(fmt, args);
 
-  fflush(stdout);
+  out.flush();
   // Restores the text color.
   SetConsoleTextAttribute(stdout_handle, old_color_attrs);
 #else
@@ -163,12 +163,24 @@ bool IsColorTerminal() {
 #else
   // On non-Windows platforms, we rely on the TERM variable. This list of
   // supported TERM values is copied from Google Test:
-  // <https://github.com/google/googletest/blob/main/googletest/src/gtest.cc#L2925>.
+  // <https://github.com/google/googletest/blob/v1.13.0/googletest/src/gtest.cc#L3225-L3259>.
   const char* const SUPPORTED_TERM_VALUES[] = {
-      "xterm",         "xterm-color",     "xterm-256color",
-      "screen",        "screen-256color", "tmux",
-      "tmux-256color", "rxvt-unicode",    "rxvt-unicode-256color",
-      "linux",         "cygwin",
+      "xterm",
+      "xterm-color",
+      "xterm-256color",
+      "screen",
+      "screen-256color",
+      "tmux",
+      "tmux-256color",
+      "rxvt-unicode",
+      "rxvt-unicode-256color",
+      "linux",
+      "cygwin",
+      "xterm-kitty",
+      "alacritty",
+      "foot",
+      "foot-extra",
+      "wezterm",
   };
 
   const char* const term = getenv("TERM");

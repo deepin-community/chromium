@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/ash/login/existing_user_controller.h"
+
 #include <string>
 #include <vector>
 
-#include "ash/components/arc/test/arc_util_test_support.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_screen_test_api.h"
@@ -25,7 +26,6 @@
 #include "chrome/browser/ash/app_list/arc/arc_app_list_prefs_factory.h"
 #include "chrome/browser/ash/arc/arc_util.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
-#include "chrome/browser/ash/login/existing_user_controller.h"
 #include "chrome/browser/ash/login/help_app_launcher.h"
 #include "chrome/browser/ash/login/helper.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
@@ -40,19 +40,18 @@
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
 #include "chrome/browser/ash/login/test/oobe_screens_utils.h"
 #include "chrome/browser/ash/login/test/user_policy_mixin.h"
-#include "chrome/browser/ash/login/ui/mock_login_display_host.h"
-#include "chrome/browser/ash/login/ui/mock_signin_ui.h"
-#include "chrome/browser/ash/login/ui/signin_ui.h"
+#include "chrome/browser/ash/login/wizard_context.h"
 #include "chrome/browser/ash/login/wizard_controller.h"
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
-#include "chrome/browser/ash/policy/core/device_local_account.h"
 #include "chrome/browser/ash/policy/core/device_local_account_policy_service.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_browser_test.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/ash/login/mock_login_display_host.h"
+#include "chrome/browser/ui/ash/login/mock_signin_ui.h"
+#include "chrome/browser/ui/ash/login/signin_ui.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/locale_switch_screen_handler.h"
@@ -68,8 +67,10 @@
 #include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "chromeos/ash/components/login/auth/stub_authenticator_builder.h"
 #include "chromeos/ash/components/network/network_state_test_helper.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "chromeos/ash/components/settings/cros_settings_provider.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
 #include "chromeos/dbus/power/fake_power_manager_client.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "components/account_id/account_id.h"
@@ -79,6 +80,7 @@
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_store.h"
 #include "components/policy/core/common/cloud/test/policy_builder.h"
+#include "components/policy/core/common/device_local_account_type.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/policy_constants.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
@@ -94,6 +96,7 @@
 #include "components/user_manager/user_type.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -113,11 +116,11 @@ using ::testing::Return;
 const char kObjectGuid[] = "12345";
 const char kAdUsername[] = "test_user@ad-domain.com";
 const char kNewUser[] = "new_test_user@gmail.com";
-const char kNewGaiaID[] = "11111";
+const GaiaId::Literal kNewGaiaID("11111");
 const char kExistingUser[] = "existing_test_user@gmail.com";
-const char kExistingGaiaID[] = "22222";
+const GaiaId::Literal kExistingGaiaID("22222");
 const char kManagedUser[] = "user@example.com";
-const char kManagedGaiaID[] = "33333";
+const GaiaId::Literal kManagedGaiaID("33333");
 const char kManager[] = "admin@example.com";
 const char kManagedDomain[] = "example.com";
 
@@ -205,9 +208,11 @@ class ExistingUserControllerTest : public policy::DevicePolicyCrosBrowserTest {
   }
 
   virtual void SetUpLoginDisplay() {
-    EXPECT_CALL(*mock_login_display_host_, GetSigninUI())
-        .Times(AnyNumber())
-        .WillRepeatedly(Return(mock_signin_ui_.get()));
+    ON_CALL(*mock_login_display_host_, GetSigninUI())
+        .WillByDefault(Return(mock_signin_ui_.get()));
+
+    ON_CALL(*mock_login_display_host_, GetWizardContext())
+        .WillByDefault(Return(&dummy_wizard_context_));
   }
 
   void SetUpOnMainThread() override {
@@ -298,6 +303,8 @@ class ExistingUserControllerTest : public policy::DevicePolicyCrosBrowserTest {
                                    {existing_user_},
                                    nullptr,
                                    &cryptohome_mixin_};
+
+  WizardContext dummy_wizard_context_;
 };
 
 IN_PROC_BROWSER_TEST_F(ExistingUserControllerTest, ExistingUserLogin) {
@@ -421,12 +428,6 @@ class ExistingUserControllerPublicSessionTest
         kPublicSessionUserEmail, device_local_account_policy.GetBlob());
   }
 
-  void SetUpLoginDisplay() override {
-    EXPECT_CALL(*mock_login_display_host_, GetSigninUI())
-        .Times(AnyNumber())
-        .WillRepeatedly(Return(mock_signin_ui_.get()));
-  }
-
   void TearDownOnMainThread() override {
     ExistingUserControllerTest::TearDownOnMainThread();
 
@@ -508,7 +509,7 @@ class ExistingUserControllerPublicSessionTest
   const AccountId public_session_account_id_ =
       AccountId::FromUserEmail(policy::GenerateDeviceLocalAccountUserId(
           kPublicSessionUserEmail,
-          policy::DeviceLocalAccount::TYPE_PUBLIC_SESSION));
+          policy::DeviceLocalAccountType::kPublicSession));
 
  private:
   std::unique_ptr<base::RunLoop> local_state_changed_run_loop_;
@@ -845,7 +846,7 @@ class ExistingUserControllerAuthFailureTest : public OobeBaseTest {
  protected:
   FakeGaiaMixin fake_gaia_{&mixin_host_};
   const LoginManagerMixin::TestUserInfo test_user_{
-      AccountId::FromUserEmailGaiaId("user@gmail.com", "user")};
+      AccountId::FromUserEmailGaiaId("user@gmail.com", GaiaId("user"))};
   LoginManagerMixin login_manager_{&mixin_host_, {test_user_}};
 };
 
@@ -908,7 +909,7 @@ IN_PROC_BROWSER_TEST_F(ExistingUserControllerAuthFailureTest, WrongPassword) {
 IN_PROC_BROWSER_TEST_F(ExistingUserControllerAuthFailureTest,
                        WrongPasswordWhileOffline) {
   NetworkStateTestHelper network_state_test_helper(
-      false /*use_default_devices_and_services*/);
+      /*use_default_devices_and_services=*/false);
   network_state_test_helper.ClearServices();
 
   SetUpStubAuthenticatorAndAttemptLoginWithWrongPassword();
@@ -958,7 +959,8 @@ class ExistingUserControllerProfileTest : public LoginManagerTest {
     login_manager_mixin_.SkipPostLoginScreens();
 
     auto context = LoginManagerMixin::CreateDefaultUserContext(test_user);
-    login_manager_mixin_.LoginAndWaitForActiveSession(context);
+    login_manager_mixin_.LoginAsNewRegularUser(context);
+    login_manager_mixin_.WaitForActiveSession();
   }
 
   std::u16string ConstructManagedSessionUserWarning(std::string manager) {

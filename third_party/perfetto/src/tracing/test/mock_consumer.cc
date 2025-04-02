@@ -79,14 +79,18 @@ void MockConsumer::FreeBuffers() {
 }
 
 void MockConsumer::CloneSession(TracingSessionID tsid) {
-  service_endpoint_->CloneSession(tsid, {});
+  ConsumerEndpoint::CloneSessionArgs args;
+  args.tsid = tsid;
+  service_endpoint_->CloneSession(args);
 }
 
-void MockConsumer::WaitForTracingDisabled(uint32_t timeout_ms) {
+void MockConsumer::WaitForTracingDisabledWithError(
+    const testing::Matcher<const std::string&>& error_matcher,
+    uint32_t timeout_ms) {
   static int i = 0;
   auto checkpoint_name = "on_tracing_disabled_consumer_" + std::to_string(i++);
   auto on_tracing_disabled = task_runner_->CreateCheckpoint(checkpoint_name);
-  EXPECT_CALL(*this, OnTracingDisabled(_))
+  EXPECT_CALL(*this, OnTracingDisabled(error_matcher))
       .WillOnce(testing::InvokeWithoutArgs(on_tracing_disabled));
   task_runner_->RunUntilCheckpoint(checkpoint_name, timeout_ms);
 }
@@ -196,6 +200,14 @@ TracingServiceState MockConsumer::QueryServiceState() {
   service_endpoint_->QueryServiceState({}, callback);
   task_runner_->RunUntilCheckpoint(checkpoint_name);
   return res;
+}
+
+void MockConsumer::Detach(std::string key) {
+  service_endpoint_->Detach(key);
+}
+
+void MockConsumer::Attach(std::string key) {
+  service_endpoint_->Attach(key);
 }
 
 }  // namespace perfetto

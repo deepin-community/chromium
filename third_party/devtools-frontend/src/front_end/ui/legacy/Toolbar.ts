@@ -29,10 +29,10 @@
  */
 
 import * as Common from '../../core/common/common.js';
-import * as Host from '../../core/host/host.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as Platform from '../../core/platform/platform.js';
 import * as Root from '../../core/root/root.js';
+import * as Buttons from '../../ui/components/buttons/buttons.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 import * as Adorners from '../components/adorners/adorners.js';
 import * as IconButton from '../components/icon_button/icon_button.js';
@@ -43,12 +43,11 @@ import * as ARIAUtils from './ARIAUtils.js';
 import {ContextMenu} from './ContextMenu.js';
 import {GlassPane, PointerEventsBehavior} from './GlassPane.js';
 import {bindCheckbox} from './SettingsUI.js';
-import {type Suggestion} from './SuggestBox.js';
+import type {Suggestion} from './SuggestBox.js';
 import {Events as TextPromptEvents, TextPrompt} from './TextPrompt.js';
-import toolbarStyles from './toolbar.css.legacy.js';
+import toolbarStyles from './toolbar.css.js';
 import {Tooltip} from './Tooltip.js';
 import {CheckboxLabel, LongClickController} from './UIUtils.js';
-import * as Utils from './utils/utils.js';
 
 const UIStrings = {
   /**
@@ -62,36 +61,86 @@ const UIStrings = {
   /**
    *@description Tooltip shown when the user hovers over the clear icon to empty the text input.
    */
-  clearInput: 'Clear input',
+  clearInput: 'Clear',
+  /**
+   *@description Placeholder for filter bars that shows before the user types in a filter keyword.
+   */
+  filter: 'Filter',
 };
 const str_ = i18n.i18n.registerUIStrings('ui/legacy/Toolbar.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
 
-export class Toolbar {
-  private items: ToolbarItem[];
-  element: HTMLElement;
-  enabled: boolean;
-  private readonly shadowRoot: ShadowRoot;
-  private contentElement: Element;
+/**
+ * Custom element for toolbars.
+ *
+ * @attr floating - If present the toolbar is rendered in columns, with a border
+ *                  around it, and a non-transparent background. This is used to
+ *                  build vertical toolbars that open with long-click. Defaults
+ *                  to `false`.
+ * @attr wrappable - If present the toolbar items will wrap to a new row and the
+ *                   toolbar height increases.
+ * @prop {boolean} floating - The `"floating"` attribute is reflected as property.
+ * @prop {boolean} wrappable - The `"wrappable"` attribute is reflected as property.
+ */
+export class Toolbar extends HTMLElement {
+  #shadowRoot = this.attachShadow({mode: 'open'});
+  private items: ToolbarItem[] = [];
+  enabled: boolean = true;
   private compactLayout = false;
 
-  constructor(className: string, parentElement?: Element) {
-    this.items = [];
-    this.element = (parentElement ? parentElement.createChild('div') : document.createElement('div')) as HTMLElement;
-    this.element.className = className;
-    this.element.classList.add('toolbar');
-    this.enabled = true;
-    this.shadowRoot =
-        Utils.createShadowRootWithCoreStyles(this.element, {cssFile: toolbarStyles, delegatesFocus: undefined});
-    this.contentElement = this.shadowRoot.createChild('div', 'toolbar-shadow');
+  constructor() {
+    super();
+    this.#shadowRoot.createChild('style').textContent = toolbarStyles.cssContent;
+    this.#shadowRoot.createChild('slot');
+  }
+
+  connectedCallback(): void {
+    if (!this.hasAttribute('role')) {
+      this.setAttribute('role', 'toolbar');
+    }
+  }
+
+  /**
+   * Returns whether this toolbar is floating.
+   *
+   * @return `true` if the `"floating"` attribute is present on this toolbar,
+   *         otherwise `false`.
+   */
+  get floating(): boolean {
+    return this.hasAttribute('floating');
+  }
+
+  /**
+   * Changes the value of the `"floating"` attribute on this toolbar.
+   *
+   * @param floating `true` to make the toolbar floating.
+   */
+  set floating(floating: boolean) {
+    this.toggleAttribute('floating', floating);
+  }
+
+  /**
+   * Returns whether this toolbar is wrappable.
+   *
+   * @return `true` if the `"wrappable"` attribute is present on this toolbar,
+   *         otherwise `false`.
+   */
+  get wrappable(): boolean {
+    return this.hasAttribute('wrappable');
+  }
+
+  /**
+   * Changes the value of the `"wrappable"` attribute on this toolbar.
+   *
+   * @param wrappable `true` to make the toolbar items wrap to a new row and
+   *                  have the toolbar height adjust.
+   */
+  set wrappable(wrappable: boolean) {
+    this.toggleAttribute('wrappable', wrappable);
   }
 
   hasCompactLayout(): boolean {
     return this.compactLayout;
-  }
-
-  registerCSSFiles(cssFiles: CSSStyleSheet[]): void {
-    this.shadowRoot.adoptedStyleSheets = this.shadowRoot.adoptedStyleSheets.concat(cssFiles);
   }
 
   setCompactLayout(enable: boolean): void {
@@ -111,9 +160,8 @@ export class Toolbar {
 
     let longClickController: LongClickController|null = null;
     let longClickButtons: ToolbarButton[]|null = null;
-    let longClickGlyph: IconButton.Icon.Icon|null = null;
 
-    action.addEventListener(ActionEvents.Toggled, updateOptions);
+    action.addEventListener(ActionEvents.TOGGLED, updateOptions);
     updateOptions();
     return button;
 
@@ -123,18 +171,14 @@ export class Toolbar {
       if (buttons && buttons.length) {
         if (!longClickController) {
           longClickController = new LongClickController(button.element, showOptions);
-          longClickGlyph = IconButton.Icon.create('triangle-bottom-right', 'long-click-glyph');
-          button.element.appendChild(longClickGlyph);
+          button.setLongClickable(true);
           longClickButtons = buttons;
         }
       } else {
         if (longClickController) {
           longClickController.dispose();
           longClickController = null;
-          if (longClickGlyph) {
-            longClickGlyph.remove();
-          }
-          longClickGlyph = null;
+          button.setLongClickable(false);
           longClickButtons = null;
         }
       }
@@ -148,10 +192,10 @@ export class Toolbar {
       document.documentElement.addEventListener('mouseup', mouseUp, false);
 
       const optionsGlassPane = new GlassPane();
-      optionsGlassPane.setPointerEventsBehavior(PointerEventsBehavior.BlockedByGlassPane);
+      optionsGlassPane.setPointerEventsBehavior(PointerEventsBehavior.BLOCKED_BY_GLASS_PANE);
       optionsGlassPane.show(document);
-      const optionsBar = new Toolbar('fill', optionsGlassPane.contentElement);
-      optionsBar.contentElement.classList.add('floating');
+      const optionsBar = optionsGlassPane.contentElement.createChild('devtools-toolbar');
+      optionsBar.floating = true;
       const buttonHeight = 26;
 
       const hostButtonPosition = button.element.boxInWindow().relativeToElement(GlassPane.container(document));
@@ -162,13 +206,13 @@ export class Toolbar {
         buttons = buttons.reverse();
       }
 
-      optionsBar.element.style.height = (buttonHeight * buttons.length) + 'px';
+      optionsBar.style.height = (buttonHeight * buttons.length) + 'px';
       if (topNotBottom) {
-        optionsBar.element.style.top = (hostButtonPosition.y - 5) + 'px';
+        optionsBar.style.top = (hostButtonPosition.y - 5) + 'px';
       } else {
-        optionsBar.element.style.top = (hostButtonPosition.y - (buttonHeight * (buttons.length - 1)) - 6) + 'px';
+        optionsBar.style.top = (hostButtonPosition.y - (buttonHeight * (buttons.length - 1)) - 6) + 'px';
       }
-      optionsBar.element.style.left = (hostButtonPosition.x - 5) + 'px';
+      optionsBar.style.left = (hostButtonPosition.x - 5) + 'px';
 
       for (let i = 0; i < buttons.length; ++i) {
         buttons[i].element.addEventListener('mousemove', mouseOver, false);
@@ -183,7 +227,7 @@ export class Toolbar {
           return;
         }
         if (e.target instanceof HTMLElement) {
-          const buttonElement = e.target.enclosingNodeOrSelfWithClass('toolbar-item');
+          const buttonElement = e.target.enclosingNodeOrSelfWithClass('toolbar-button');
           buttonElement.classList.add('emulate-active');
         }
       }
@@ -193,7 +237,7 @@ export class Toolbar {
           return;
         }
         if (e.target instanceof HTMLElement) {
-          const buttonElement = e.target.enclosingNodeOrSelfWithClass('toolbar-item');
+          const buttonElement = e.target.enclosingNodeOrSelfWithClass('toolbar-button');
           buttonElement.classList.remove('emulate-active');
         }
       }
@@ -216,30 +260,23 @@ export class Toolbar {
     }
   }
 
-  static createActionButton(action: Action, options: ToolbarButtonOptions|undefined = TOOLBAR_BUTTON_DEFAULT_OPTIONS):
-      ToolbarButton {
+  static createActionButton(action: Action, options?: ToolbarButtonOptions): ToolbarButton;
+  static createActionButton(actionId: string, options?: ToolbarButtonOptions): ToolbarButton;
+  static createActionButton(actionOrActionId: Action|string, options: ToolbarButtonOptions = {}): ToolbarButton {
+    const action =
+        typeof actionOrActionId === 'string' ? ActionRegistry.instance().getAction(actionOrActionId) : actionOrActionId;
+
     const button = action.toggleable() ? makeToggle() : makeButton();
 
-    if (options.showLabel) {
-      button.setText(options.label?.() || action.title());
+    if (options.label) {
+      button.setText(options.label() || action.title());
     }
 
-    let handler = (_event: {
-      // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      data: any,
-    }): void => {
+    const handler = (): void => {
       void action.execute();
     };
-    if (options.userActionCode) {
-      const actionCode = options.userActionCode;
-      handler = () => {
-        Host.userMetrics.actionTaken(actionCode);
-        void action.execute();
-      };
-    }
-    button.addEventListener(ToolbarButton.Events.Click, handler, action);
-    action.addEventListener(ActionEvents.Enabled, enabledChanged);
+    button.addEventListener(ToolbarButton.Events.CLICK, handler, action);
+    action.addEventListener(ActionEvents.ENABLED, enabledChanged);
     button.setEnabled(action.enabled());
     return button;
 
@@ -253,8 +290,10 @@ export class Toolbar {
 
     function makeToggle(): ToolbarToggle {
       const toggleButton = new ToolbarToggle(action.title(), action.icon(), action.toggledIcon(), action.id());
-      toggleButton.setToggleWithRedColor(action.toggleWithRedColor());
-      action.addEventListener(ActionEvents.Toggled, toggled);
+      if (action.toggleWithRedColor()) {
+        toggleButton.enableToggleWithRedColor();
+      }
+      action.addEventListener(ActionEvents.TOGGLED, toggled);
       toggled();
       return toggleButton;
 
@@ -270,38 +309,6 @@ export class Toolbar {
     function enabledChanged(event: Common.EventTarget.EventTargetEvent<boolean>): void {
       button.setEnabled(event.data);
     }
-  }
-
-  static createActionButtonForId(actionId: string, options?: ToolbarButtonOptions): ToolbarButton {
-    const action = ActionRegistry.instance().getAction(actionId);
-    return Toolbar.createActionButton(action, options);
-  }
-
-  gripElementForResize(): Element {
-    return this.contentElement;
-  }
-
-  makeWrappable(growVertically?: boolean): void {
-    this.contentElement.classList.add('wrappable');
-    if (growVertically) {
-      this.contentElement.classList.add('toolbar-grow-vertical');
-    }
-  }
-
-  makeVertical(): void {
-    this.contentElement.classList.add('vertical');
-  }
-
-  makeBlueOnHover(): void {
-    this.contentElement.classList.add('toolbar-blue-on-hover');
-  }
-
-  makeToggledGray(): void {
-    this.contentElement.classList.add('toolbar-toggled-gray');
-  }
-
-  renderAsLinks(): void {
-    this.contentElement.classList.add('toolbar-render-as-links');
   }
 
   empty(): boolean {
@@ -322,7 +329,22 @@ export class Toolbar {
     if (!this.enabled) {
       item.applyEnabledState(false);
     }
-    this.contentElement.appendChild(item.element);
+    this.appendChild(item.element);
+    this.hideSeparatorDupes();
+  }
+
+  hasItem(item: ToolbarItem): boolean {
+    return this.items.includes(item);
+  }
+
+  prependToolbarItem(item: ToolbarItem): void {
+    this.items.unshift(item);
+    item.toolbar = this;
+    item.setCompactLayout(this.hasCompactLayout());
+    if (!this.enabled) {
+      item.applyEnabledState(false);
+    }
+    this.prepend(item.element);
     this.hideSeparatorDupes();
   }
 
@@ -355,20 +377,7 @@ export class Toolbar {
       item.toolbar = null;
     }
     this.items = [];
-    this.contentElement.removeChildren();
-  }
-
-  setColor(color: string): void {
-    const style = document.createElement('style');
-    style.textContent = '.toolbar-glyph { background-color: ' + color + ' !important }';
-    this.shadowRoot.appendChild(style);
-  }
-
-  setToggledColor(color: string): void {
-    const style = document.createElement('style');
-    style.textContent =
-        '.toolbar-button.toolbar-state-on .toolbar-glyph { background-color: ' + color + ' !important }';
-    this.shadowRoot.appendChild(style);
+    this.removeChildren();
   }
 
   hideSeparatorDupes(): void {
@@ -396,7 +405,7 @@ export class Toolbar {
       lastSeparator.setVisible(false);
     }
 
-    this.element.classList.toggle(
+    this.classList.toggle(
         'hidden',
         lastSeparator !== null && lastSeparator !== undefined && lastSeparator.visible() && !nonSeparatorVisible);
   }
@@ -412,13 +421,12 @@ export class Toolbar {
 
     const filtered = extensions.filter(e => e.location === location);
     const items = await Promise.all(filtered.map(extension => {
-      const {separator, actionId, showLabel, label, loadItem} = extension;
+      const {separator, actionId, label, loadItem} = extension;
       if (separator) {
         return new ToolbarSeparator();
       }
       if (actionId) {
-        return Toolbar.createActionButtonForId(
-            actionId, {label, showLabel: Boolean(showLabel), userActionCode: undefined});
+        return Toolbar.createActionButton(actionId, {label});
       }
       // TODO(crbug.com/1134103) constratint the case checked with this if using TS type definitions once UI is TS-authored.
       if (!loadItem) {
@@ -434,30 +442,25 @@ export class Toolbar {
     }
   }
 }
+
+customElements.define('devtools-toolbar', Toolbar);
+
 export interface ToolbarButtonOptions {
   label?: () => Platform.UIString.LocalizedString;
-  showLabel: boolean;
-  userActionCode?: Host.UserMetrics.Action;
 }
-
-const TOOLBAR_BUTTON_DEFAULT_OPTIONS: ToolbarButtonOptions = {
-  showLabel: false,
-  userActionCode: undefined,
-};
 
 // We need any here because Common.ObjectWrapper.ObjectWrapper is invariant in T.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export class ToolbarItem<T = any> extends Common.ObjectWrapper.ObjectWrapper<T> {
-  element: HTMLElement;
+export class ToolbarItem<T = any, E extends HTMLElement = HTMLElement> extends Common.ObjectWrapper.ObjectWrapper<T> {
+  element: E;
   private visibleInternal: boolean;
   enabled: boolean;
   toolbar: Toolbar|null;
   protected title?: string;
 
-  constructor(element: Element) {
+  constructor(element: E) {
     super();
-    this.element = (element as HTMLElement);
-    this.element.classList.add('toolbar-item');
+    this.element = element;
     this.visibleInternal = true;
     this.enabled = true;
 
@@ -509,43 +512,34 @@ export class ToolbarItem<T = any> extends Common.ObjectWrapper.ObjectWrapper<T> 
     }
   }
 
-  setRightAligned(alignRight: boolean): void {
-    this.element.classList.toggle('toolbar-item-right-aligned', alignRight);
-  }
-
   setCompactLayout(_enable: boolean): void {
   }
 }
 
 export const enum ToolbarItemWithCompactLayoutEvents {
-  CompactLayoutUpdated = 'CompactLayoutUpdated',
+  COMPACT_LAYOUT_UPDATED = 'CompactLayoutUpdated',
 }
 
-type ToolbarItemWithCompactLayoutEventTypes = {
-  [ToolbarItemWithCompactLayoutEvents.CompactLayoutUpdated]: boolean,
-};
+interface ToolbarItemWithCompactLayoutEventTypes {
+  [ToolbarItemWithCompactLayoutEvents.COMPACT_LAYOUT_UPDATED]: boolean;
+}
 
 export class ToolbarItemWithCompactLayout extends ToolbarItem<ToolbarItemWithCompactLayoutEventTypes> {
-  constructor(element: Element) {
-    super(element);
-  }
-
   override setCompactLayout(enable: boolean): void {
-    this.dispatchEventToListeners(ToolbarItemWithCompactLayoutEvents.CompactLayoutUpdated, enable);
+    this.dispatchEventToListeners(ToolbarItemWithCompactLayoutEvents.COMPACT_LAYOUT_UPDATED, enable);
   }
 }
 
-export class ToolbarText extends ToolbarItem<void> {
-  constructor(text?: string) {
+export class ToolbarText extends ToolbarItem<void, HTMLElement> {
+  constructor(text: string = '') {
     const element = document.createElement('div');
     element.classList.add('toolbar-text');
     super(element);
-    this.element.classList.add('toolbar-text');
-    this.setText(text || '');
+    this.setText(text);
   }
 
   text(): string {
-    return this.element.textContent || '';
+    return this.element.textContent ?? '';
   }
 
   setText(text: string): void {
@@ -553,70 +547,99 @@ export class ToolbarText extends ToolbarItem<void> {
   }
 }
 
-export class ToolbarButton extends ToolbarItem<ToolbarButton.EventTypes> {
-  private readonly glyphElement: IconButton.Icon.Icon;
-  private textElement: HTMLElement;
+export class ToolbarButton extends ToolbarItem<ToolbarButton.EventTypes, Buttons.Button.Button> {
+  private button: Buttons.Button.Button;
   private text?: string;
-  private glyph?: string;
   private adorner?: HTMLElement;
 
   constructor(title: string, glyphOrAdorner?: string|Adorners.Adorner.Adorner, text?: string, jslogContext?: string) {
-    const element = document.createElement('button');
-    element.classList.add('toolbar-button');
-    super(element);
+    const button = new Buttons.Button.Button();
+    super(button);
+    this.button = button;
+    if (glyphOrAdorner instanceof Adorners.Adorner.Adorner) {
+      this.button.variant = Buttons.Button.Variant.ADORNER_ICON;
+      this.setAdorner(glyphOrAdorner);
+      this.button.prepend(glyphOrAdorner);
+    } else if (typeof glyphOrAdorner === 'string' && !text) {
+      this.button.data = {variant: Buttons.Button.Variant.ICON, iconName: glyphOrAdorner};
+    } else {
+      this.button.variant = Buttons.Button.Variant.TEXT;
+      this.button.reducedFocusRing = true;
+      if (glyphOrAdorner) {
+        this.button.iconName = glyphOrAdorner;
+      }
+    }
+    button.classList.add('toolbar-button');
     this.element.addEventListener('click', this.clicked.bind(this), false);
-    this.element.addEventListener('mousedown', this.mouseDown.bind(this), false);
-
-    this.glyphElement = new IconButton.Icon.Icon();
-    this.glyphElement.className = 'toolbar-glyph hidden';
-    this.element.appendChild(this.glyphElement);
-    this.textElement = this.element.createChild('div', 'toolbar-text hidden');
-
+    button.textContent = text || '';
     this.setTitle(title);
-    if (glyphOrAdorner) {
-      this.setGlyphOrAdorner(glyphOrAdorner);
-    }
-    this.setText(text || '');
     if (jslogContext) {
-      this.element.setAttribute('jslog', `${VisualLogging.action().track({click: true}).context(jslogContext)}`);
+      button.jslogContext = jslogContext;
     }
-    this.title = '';
   }
 
   focus(): void {
     this.element.focus();
   }
 
+  checked(checked: boolean): void {
+    this.button.checked = checked;
+  }
+
+  toggleOnClick(toggleOnClick: boolean): void {
+    this.button.toggleOnClick = toggleOnClick;
+  }
+
+  isToggled(): boolean {
+    return this.button.toggled;
+  }
+
+  toggled(toggled: boolean): void {
+    this.button.toggled = toggled;
+  }
+
+  setToggleType(type: Buttons.Button.ToggleType): void {
+    this.button.toggleType = type;
+  }
+
+  setLongClickable(longClickable: boolean): void {
+    this.button.longClickable = longClickable;
+  }
+
+  setSize(size: Buttons.Button.Size): void {
+    this.button.size = size;
+  }
+
+  setReducedFocusRing(): void {
+    this.button.reducedFocusRing = true;
+  }
+
   setText(text: string): void {
     if (this.text === text) {
       return;
     }
-    this.textElement.textContent = text;
-    this.textElement.classList.toggle('hidden', !text);
+    this.button.textContent = text;
+    this.button.variant = Buttons.Button.Variant.TEXT;
+    this.button.reducedFocusRing = true;
     this.text = text;
   }
 
-  setGlyphOrAdorner(glyphOrAdorner: string|Adorners.Adorner.Adorner): void {
-    if (glyphOrAdorner instanceof Adorners.Adorner.Adorner) {
-      if (this.adorner) {
-        this.adorner.replaceWith(glyphOrAdorner);
-      } else {
-        this.element.prepend(glyphOrAdorner);
-      }
-      this.adorner = glyphOrAdorner;
+  setAdorner(adorner: Adorners.Adorner.Adorner): void {
+    if (this.adorner) {
+      this.adorner.replaceWith(adorner);
     } else {
-      this.setGlyph(glyphOrAdorner);
+      this.element.prepend(adorner);
     }
+    this.adorner = adorner;
   }
 
-  setGlyph(glyph: string): void {
-    if (this.glyph === glyph) {
-      return;
-    }
-    this.glyphElement.name = !glyph ? null : glyph;
-    this.glyphElement.classList.toggle('hidden', !glyph);
-    this.element.classList.toggle('toolbar-has-glyph', Boolean(glyph));
-    this.glyph = glyph;
+  setGlyph(iconName: string): void {
+    this.button.iconName = iconName;
+  }
+
+  setToggledIcon(toggledIconName: string): void {
+    this.button.variant = Buttons.Button.Variant.ICON_TOGGLE;
+    this.button.toggledIconName = toggledIconName;
   }
 
   setBackgroundImage(iconURL: string): void {
@@ -644,28 +667,98 @@ export class ToolbarButton extends ToolbarItem<ToolbarButton.EventTypes> {
     if (!this.enabled) {
       return;
     }
-    this.dispatchEventToListeners(ToolbarButton.Events.Click, event);
+    this.dispatchEventToListeners(ToolbarButton.Events.CLICK, event);
     event.consume();
   }
+}
 
-  protected mouseDown(event: MouseEvent): void {
+export class ToolbarCombobox extends ToolbarItem<ToolbarButton.EventTypes> {
+  private textElement?: HTMLElement;
+  private text?: string;
+  private iconName?: string;
+  private adorner?: Adorners.Adorner.Adorner;
+
+  constructor(title: string, isIconDropdown?: boolean, jslogContext?: string, iconName?: string) {
+    let element;
+    if (iconName) {
+      element = new Buttons.Button.Button();
+      element.data = {variant: Buttons.Button.Variant.ICON, iconName};
+    } else {
+      element = document.createElement('button');
+    }
+    element.classList.add('toolbar-button');
+    super(element);
+    this.element.addEventListener('click', this.clicked.bind(this), false);
+
+    this.iconName = iconName;
+
+    this.setTitle(title);
+    if (jslogContext) {
+      this.element.setAttribute('jslog', `${VisualLogging.action().track({click: true}).context(jslogContext)}`);
+    }
+    this.title = '';
+    if (!isIconDropdown) {
+      this.element.classList.add('toolbar-has-dropdown');
+      const dropdownArrowIcon = IconButton.Icon.create('triangle-down', 'toolbar-dropdown-arrow');
+      this.element.appendChild(dropdownArrowIcon);
+    }
+  }
+
+  setText(text: string): void {
+    if (this.text === text || this.iconName) {
+      return;
+    }
+    if (!this.textElement) {
+      this.textElement = document.createElement('div');
+      this.textElement.classList.add('toolbar-text', 'hidden');
+      const dropDownArrow = this.element.querySelector('.toolbar-dropdown-arrow');
+      this.element.insertBefore(this.textElement, dropDownArrow);
+    }
+    this.textElement.textContent = text;
+    this.textElement.classList.toggle('hidden', !text);
+    this.text = text;
+  }
+
+  setAdorner(adorner: Adorners.Adorner.Adorner): void {
+    if (this.iconName) {
+      return;
+    }
+    if (!this.adorner) {
+      this.adorner = adorner;
+    } else {
+      adorner.replaceWith(adorner);
+      if (this.element.firstChild) {
+        this.element.removeChild(this.element.firstChild);
+      }
+    }
+    this.element.prepend(adorner);
+  }
+
+  setDarkText(): void {
+    this.element.classList.add('dark-text');
+  }
+
+  turnShrinkable(): void {
+    this.element.classList.add('toolbar-has-dropdown-shrinkable');
+  }
+
+  clicked(event: Event): void {
     if (!this.enabled) {
       return;
     }
-    this.dispatchEventToListeners(ToolbarButton.Events.MouseDown, event);
+    this.dispatchEventToListeners(ToolbarButton.Events.CLICK, event);
+    event.consume();
   }
 }
 
 export namespace ToolbarButton {
   export const enum Events {
-    Click = 'Click',
-    MouseDown = 'MouseDown',
+    CLICK = 'Click',
   }
 
-  export type EventTypes = {
-    [Events.Click]: Event,
-    [Events.MouseDown]: MouseEvent,
-  };
+  export interface EventTypes {
+    [Events.CLICK]: Event;
+  }
 }
 
 export class ToolbarInput extends ToolbarItem<ToolbarInput.EventTypes> {
@@ -699,7 +792,7 @@ export class ToolbarInput extends ToolbarItem<ToolbarInput.EventTypes> {
       this.prompt.setTitle(tooltip);
     }
     this.prompt.setPlaceholder(placeholder, accessiblePlaceholder);
-    this.prompt.addEventListener(TextPromptEvents.TextChanged, this.onChangeCallback.bind(this));
+    this.prompt.addEventListener(TextPromptEvents.TEXT_CHANGED, this.onChangeCallback.bind(this));
 
     if (growFactor) {
       this.element.style.flexGrow = String(growFactor);
@@ -708,21 +801,40 @@ export class ToolbarInput extends ToolbarItem<ToolbarInput.EventTypes> {
       this.element.style.flexShrink = String(shrinkFactor);
     }
 
-    const clearButton = this.element.createChild('div', 'toolbar-input-clear-button');
-    clearButton.title = UIStrings.clearInput;
-    const clearIcon = new IconButton.Icon.Icon();
-    clearIcon.data = {color: 'var(--icon-default)', width: '16px', height: '16px', iconName: 'cross-circle-filled'};
-    clearIcon.classList.add('search-cancel-button');
-    clearButton.appendChild(clearIcon);
+    const clearButtonText = i18nString(UIStrings.clearInput);
+    const clearButton = new Buttons.Button.Button();
+    clearButton.data = {
+      variant: Buttons.Button.Variant.ICON,
+      iconName: 'cross-circle-filled',
+      size: Buttons.Button.Size.SMALL,
+      title: clearButtonText,
+    };
+    clearButton.className = 'toolbar-input-clear-button';
+    clearButton.setAttribute('jslog', `${VisualLogging.action('clear').track({click: true}).parent('mapped')}`);
+    VisualLogging.setMappedParent(clearButton, internalPromptElement);
+    clearButton.variant = Buttons.Button.Variant.ICON;
+    clearButton.size = Buttons.Button.Size.SMALL;
+    clearButton.iconName = 'cross-circle-filled';
+    clearButton.title = clearButtonText;
+    clearButton.ariaLabel = clearButtonText;
+    clearButton.tabIndex = -1;
+
     clearButton.addEventListener('click', () => {
       this.setValue('', true);
       this.prompt.focus();
     });
 
+    this.element.appendChild(clearButton);
     this.updateEmptyStyles();
   }
 
   override applyEnabledState(enabled: boolean): void {
+    if (enabled) {
+      this.element.classList.remove('disabled');
+    } else {
+      this.element.classList.add('disabled');
+    }
+
     this.prompt.setEnabled(enabled);
   }
 
@@ -741,9 +853,18 @@ export class ToolbarInput extends ToolbarItem<ToolbarInput.EventTypes> {
   valueWithoutSuggestion(): string {
     return this.prompt.text();
   }
+
+  clearAutocomplete(): void {
+    this.prompt.clearAutocomplete();
+  }
+
+  focus(): void {
+    this.prompt.focus();
+  }
+
   private onKeydownCallback(event: KeyboardEvent): void {
     if (event.key === 'Enter' && this.prompt.text()) {
-      this.dispatchEventToListeners(ToolbarInput.Event.EnterPressed, this.prompt.text());
+      this.dispatchEventToListeners(ToolbarInput.Event.ENTER_PRESSED, this.prompt.text());
     }
     if (!Platform.KeyboardUtilities.isEscKey(event) || !this.prompt.text()) {
       return;
@@ -754,7 +875,7 @@ export class ToolbarInput extends ToolbarItem<ToolbarInput.EventTypes> {
 
   private onChangeCallback(): void {
     this.updateEmptyStyles();
-    this.dispatchEventToListeners(ToolbarInput.Event.TextChanged, this.prompt.text());
+    this.dispatchEventToListeners(ToolbarInput.Event.TEXT_CHANGED, this.prompt.text());
   }
 
   private updateEmptyStyles(): void {
@@ -762,105 +883,135 @@ export class ToolbarInput extends ToolbarItem<ToolbarInput.EventTypes> {
   }
 }
 
+export class ToolbarFilter extends ToolbarInput {
+  constructor(
+      filterBy?: Common.UIString.LocalizedString, growFactor?: number, shrinkFactor?: number, tooltip?: string,
+      completions?: ((arg0: string, arg1: string, arg2?: boolean|undefined) => Promise<Suggestion[]>),
+      dynamicCompletions?: boolean, jslogContext?: string) {
+    const filterPlaceholder = filterBy ? filterBy : i18nString(UIStrings.filter);
+    super(
+        filterPlaceholder, filterPlaceholder, growFactor, shrinkFactor, tooltip, completions, dynamicCompletions,
+        jslogContext || 'filter');
+
+    const filterIcon = IconButton.Icon.create('filter');
+    this.element.prepend(filterIcon);
+    this.element.classList.add('toolbar-filter');
+  }
+}
+
 export namespace ToolbarInput {
   export const enum Event {
-    TextChanged = 'TextChanged',
-    EnterPressed = 'EnterPressed',
+    TEXT_CHANGED = 'TextChanged',
+    ENTER_PRESSED = 'EnterPressed',
   }
 
   export interface EventTypes {
-    [Event.TextChanged]: string;
-    [Event.EnterPressed]: string;
+    [Event.TEXT_CHANGED]: string;
+    [Event.ENTER_PRESSED]: string;
   }
 }
 
 export class ToolbarToggle extends ToolbarButton {
-  private toggledInternal: boolean;
   private readonly untoggledGlyph: string|undefined;
   private readonly toggledGlyph: string|undefined;
 
-  constructor(title: string, glyph?: string, toggledGlyph?: string, jslogContext?: string) {
+  constructor(title: string, glyph?: string, toggledGlyph?: string, jslogContext?: string, toggleOnClick?: boolean) {
     super(title, glyph, '');
-    this.toggledInternal = false;
     this.untoggledGlyph = glyph;
-    this.toggledGlyph = toggledGlyph;
-    this.element.classList.add('toolbar-state-off');
-    ARIAUtils.setPressed(this.element, false);
+    this.toggledGlyph = toggledGlyph ? toggledGlyph : glyph;
+    this.setToggledIcon(this.toggledGlyph || '');
+    this.setToggleType(Buttons.Button.ToggleType.PRIMARY);
+    this.toggled(false);
+
     if (jslogContext) {
       this.element.setAttribute('jslog', `${VisualLogging.toggle().track({click: true}).context(jslogContext)}`);
     }
+    if (toggleOnClick !== undefined) {
+      this.setToggleOnClick(toggleOnClick);
+    }
   }
 
-  toggled(): boolean {
-    return this.toggledInternal;
+  setToggleOnClick(toggleOnClick: boolean): void {
+    this.toggleOnClick(toggleOnClick);
   }
 
   setToggled(toggled: boolean): void {
-    if (this.toggledInternal === toggled) {
-      return;
-    }
-    this.toggledInternal = toggled;
-    this.element.classList.toggle('toolbar-state-on', toggled);
-    this.element.classList.toggle('toolbar-state-off', !toggled);
-    ARIAUtils.setPressed(this.element, toggled);
-    if (this.toggledGlyph && this.untoggledGlyph) {
-      this.setGlyph(toggled ? this.toggledGlyph : this.untoggledGlyph);
-    }
+    this.toggled(toggled);
+  }
+
+  setChecked(checked: boolean): void {
+    this.checked(checked);
   }
 
   setDefaultWithRedColor(withRedColor: boolean): void {
-    this.element.classList.toggle('toolbar-default-with-red-color', withRedColor);
+    if (withRedColor) {
+      this.setToggleType(Buttons.Button.ToggleType.RED);
+      this.setGlyph(this.toggledGlyph || '');
+      this.setToggledIcon(this.untoggledGlyph || '');
+      this.toggled(true);
+    }
   }
 
-  setToggleWithRedColor(toggleWithRedColor: boolean): void {
-    this.element.classList.toggle('toolbar-toggle-with-red-color', toggleWithRedColor);
-  }
-
-  setToggleWithDot(toggleWithDot: boolean): void {
-    this.element.classList.toggle('toolbar-toggle-with-dot', toggleWithDot);
+  enableToggleWithRedColor(): void {
+    this.setToggleType(Buttons.Button.ToggleType.RED);
   }
 }
 
-export class ToolbarMenuButton extends ToolbarButton {
+export class ToolbarMenuButton extends ToolbarCombobox {
   private readonly contextMenuHandler: (arg0: ContextMenu) => void;
   private readonly useSoftMenu: boolean;
-  private triggerTimeout?: number;
-  constructor(contextMenuHandler: (arg0: ContextMenu) => void, useSoftMenu?: boolean, jslogContext?: string) {
-    super('', 'dots-vertical', undefined, jslogContext);
+  private triggerTimeoutId?: number;
+  #triggerDelay: number = 200;
+
+  constructor(
+      contextMenuHandler: (arg0: ContextMenu) => void, isIconDropdown?: boolean, useSoftMenu?: boolean,
+      jslogContext?: string, iconName?: string) {
+    super('', isIconDropdown, jslogContext, iconName);
     if (jslogContext) {
       this.element.setAttribute('jslog', `${VisualLogging.dropDown().track({click: true}).context(jslogContext)}`);
     }
+    this.element.addEventListener('mousedown', this.mouseDown.bind(this), false);
     this.contextMenuHandler = contextMenuHandler;
     this.useSoftMenu = Boolean(useSoftMenu);
     ARIAUtils.markAsMenuButton(this.element);
   }
 
-  override mouseDown(event: MouseEvent): void {
+  setTriggerDelay(x: number): void {
+    this.#triggerDelay = x;
+  }
+
+  mouseDown(event: MouseEvent): void {
+    if (!this.enabled) {
+      return;
+    }
     if (event.buttons !== 1) {
-      super.mouseDown(event);
       return;
     }
 
-    if (!this.triggerTimeout) {
-      this.triggerTimeout = window.setTimeout(this.trigger.bind(this, event), 200);
+    if (!this.triggerTimeoutId) {
+      this.triggerTimeoutId = window.setTimeout(this.trigger.bind(this, event), this.#triggerDelay);
     }
   }
 
   private trigger(event: Event): void {
-    delete this.triggerTimeout;
+    delete this.triggerTimeoutId;
 
     const contextMenu = new ContextMenu(event, {
       useSoftMenu: this.useSoftMenu,
       x: this.element.getBoundingClientRect().left,
       y: this.element.getBoundingClientRect().top + this.element.offsetHeight,
+      // Without adding a delay, pointer events will be un-ignored too early, and a single click causes
+      // the context menu to be closed and immediately re-opened on Windows (https://crbug.com/339560549).
+      onSoftMenuClosed: () => setTimeout(() => this.element.removeAttribute('aria-expanded'), 50),
     });
     this.contextMenuHandler(contextMenu);
+    this.element.setAttribute('aria-expanded', 'true');
     void contextMenu.show();
   }
 
   override clicked(event: Event): void {
-    if (this.triggerTimeout) {
-      clearTimeout(this.triggerTimeout);
+    if (this.triggerTimeoutId) {
+      clearTimeout(this.triggerTimeoutId);
     }
     this.trigger(event);
   }
@@ -897,7 +1048,7 @@ export class ToolbarSettingToggle extends ToolbarToggle {
 
   override clicked(event: Event): void {
     this.willAnnounceState = true;
-    this.setting.set(!this.toggled());
+    this.setting.set(this.isToggled());
     super.clicked(event);
   }
 }
@@ -918,96 +1069,83 @@ export interface ItemsProvider {
   toolbarItems(): ToolbarItem[];
 }
 
-export class ToolbarComboBox extends ToolbarItem<void> {
-  protected selectElementInternal: HTMLSelectElement;
-
+export class ToolbarComboBox extends ToolbarItem<void, HTMLSelectElement> {
   constructor(changeHandler: ((arg0: Event) => void)|null, title: string, className?: string, jslogContext?: string) {
-    const element = document.createElement('span');
-    element.classList.add('toolbar-select-container');
-    super(element);
-    this.selectElementInternal = (this.element.createChild('select', 'toolbar-item') as HTMLSelectElement);
-    const dropdownArrowIcon = IconButton.Icon.create('triangle-down', 'toolbar-dropdown-arrow');
-    this.element.appendChild(dropdownArrowIcon);
+    super(document.createElement('select'));
     if (changeHandler) {
-      this.selectElementInternal.addEventListener('change', changeHandler, false);
+      this.element.addEventListener('change', changeHandler, false);
     }
-    ARIAUtils.setLabel(this.selectElementInternal, title);
+    ARIAUtils.setLabel(this.element, title);
     super.setTitle(title);
     if (className) {
-      this.selectElementInternal.classList.add(className);
+      this.element.classList.add(className);
     }
     if (jslogContext) {
-      this.selectElementInternal.setAttribute(
-          'jslog', `${VisualLogging.dropDown().track({change: true}).context(jslogContext)}`);
+      this.element.setAttribute('jslog', `${VisualLogging.dropDown().track({change: true}).context(jslogContext)}`);
     }
-  }
-
-  selectElement(): HTMLSelectElement {
-    return this.selectElementInternal;
   }
 
   size(): number {
-    return this.selectElementInternal.childElementCount;
+    return this.element.childElementCount;
   }
 
   options(): HTMLOptionElement[] {
-    return Array.prototype.slice.call(this.selectElementInternal.children, 0);
+    return Array.prototype.slice.call(this.element.children, 0);
   }
 
   addOption(option: Element): void {
-    this.selectElementInternal.appendChild(option);
+    this.element.appendChild(option);
   }
 
-  createOption(label: string, value?: string): Element {
-    const option = (this.selectElementInternal.createChild('option') as HTMLOptionElement);
+  createOption(label: string, value?: string): HTMLOptionElement {
+    const option = this.element.createChild('option');
     option.text = label;
     if (typeof value !== 'undefined') {
       option.value = value;
     }
+    const jslogContext = value ? Platform.StringUtilities.toKebabCase(value) : undefined;
+    option.setAttribute('jslog', `${VisualLogging.item(jslogContext).track({click: true})}`);
     return option;
   }
 
   override applyEnabledState(enabled: boolean): void {
     super.applyEnabledState(enabled);
-    this.selectElementInternal.disabled = !enabled;
+    this.element.disabled = !enabled;
   }
 
   removeOption(option: Element): void {
-    this.selectElementInternal.removeChild(option);
+    this.element.removeChild(option);
   }
 
   removeOptions(): void {
-    this.selectElementInternal.removeChildren();
+    this.element.removeChildren();
   }
 
   selectedOption(): HTMLOptionElement|null {
-    if (this.selectElementInternal.selectedIndex >= 0) {
-      return this.selectElementInternal[this.selectElementInternal.selectedIndex] as HTMLOptionElement;
+    if (this.element.selectedIndex >= 0) {
+      return this.element[this.element.selectedIndex] as HTMLOptionElement;
     }
     return null;
   }
 
   select(option: Element): void {
-    this.selectElementInternal.selectedIndex =
-        // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        Array.prototype.indexOf.call((this.selectElementInternal as any), option);
+    this.element.selectedIndex = Array.prototype.indexOf.call(this.element, option);
   }
 
   setSelectedIndex(index: number): void {
-    this.selectElementInternal.selectedIndex = index;
+    this.element.selectedIndex = index;
   }
 
   selectedIndex(): number {
-    return this.selectElementInternal.selectedIndex;
+    return this.element.selectedIndex;
   }
 
   setMaxWidth(width: number): void {
-    this.selectElementInternal.style.maxWidth = width + 'px';
+    this.element.style.maxWidth = width + 'px';
   }
 
   setMinWidth(width: number): void {
-    this.selectElementInternal.style.minWidth = width + 'px';
+    this.element.style.minWidth = width + 'px';
   }
 }
 
@@ -1021,21 +1159,21 @@ export class ToolbarSettingComboBox extends ToolbarComboBox {
   private readonly setting: Common.Settings.Setting<string>;
   private muteSettingListener?: boolean;
   constructor(options: Option[], setting: Common.Settings.Setting<string>, accessibleName: string) {
-    super(null, accessibleName);
+    super(null, accessibleName, undefined, setting.name);
     this.optionsInternal = options;
     this.setting = setting;
-    this.selectElementInternal.addEventListener('change', this.valueChanged.bind(this), false);
+    this.element.addEventListener('change', this.valueChanged.bind(this), false);
     this.setOptions(options);
     setting.addChangeListener(this.settingChanged, this);
   }
 
   setOptions(options: Option[]): void {
     this.optionsInternal = options;
-    this.selectElementInternal.removeChildren();
+    this.element.removeChildren();
     for (let i = 0; i < options.length; ++i) {
       const dataOption = options[i];
       const option = this.createOption(dataOption.label, dataOption.value);
-      this.selectElementInternal.appendChild(option);
+      this.element.appendChild(option);
       if (this.setting.get() === dataOption.value) {
         this.setSelectedIndex(i);
       }
@@ -1071,9 +1209,10 @@ export class ToolbarSettingComboBox extends ToolbarComboBox {
 export class ToolbarCheckbox extends ToolbarItem<void> {
   inputElement: HTMLInputElement;
 
-  constructor(text: string, tooltip?: string, listener?: ((arg0: MouseEvent) => void), jslogContext?: string) {
+  constructor(
+      text: Common.UIString.LocalizedString, tooltip?: Common.UIString.LocalizedString,
+      listener?: ((arg0: MouseEvent) => void), jslogContext?: string) {
     super(CheckboxLabel.create(text));
-    this.element.classList.add('checkbox');
     this.inputElement = (this.element as CheckboxLabel).checkboxElement;
     if (tooltip) {
       // install on the checkbox
@@ -1107,8 +1246,10 @@ export class ToolbarCheckbox extends ToolbarItem<void> {
 }
 
 export class ToolbarSettingCheckbox extends ToolbarCheckbox {
-  constructor(setting: Common.Settings.Setting<boolean>, tooltip?: string, alternateTitle?: string) {
-    super(alternateTitle || setting.title() || '', tooltip, undefined, setting.name);
+  constructor(
+      setting: Common.Settings.Setting<boolean>, tooltip?: Common.UIString.LocalizedString,
+      alternateTitle?: Common.UIString.LocalizedString) {
+    super(alternateTitle || setting.title(), tooltip, undefined, setting.name);
     bindCheckbox(this.inputElement, setting);
   }
 }
@@ -1129,7 +1270,6 @@ export interface ToolbarItemRegistration {
   location: ToolbarItemLocation;
   separator?: boolean;
   label?: () => Platform.UIString.LocalizedString;
-  showLabel?: boolean;
   actionId?: string;
   condition?: Root.Runtime.Condition;
   loadItem?: (() => Promise<Provider>);
@@ -1142,4 +1282,10 @@ export const enum ToolbarItemLocation {
   MAIN_TOOLBAR_RIGHT = 'main-toolbar-right',
   MAIN_TOOLBAR_LEFT = 'main-toolbar-left',
   STYLES_SIDEBARPANE_TOOLBAR = 'styles-sidebarpane-toolbar',
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'devtools-toolbar': Toolbar;
+  }
 }

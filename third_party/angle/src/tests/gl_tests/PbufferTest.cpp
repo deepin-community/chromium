@@ -647,7 +647,7 @@ TEST_P(PbufferTest, ClearAndBindTexImageSrgb)
     ANGLE_SKIP_TEST_IF(!mSupportsPbuffers || !mSupportsBindTexImage);
     ANGLE_SKIP_TEST_IF(
         !IsEGLDisplayExtensionEnabled(window->getDisplay(), "EGL_KHR_gl_colorspace"));
-    // Possible GLES driver bug on Pixel2 devices: http://anglebug.com/5321
+    // Possible GLES driver bug on Pixel2 devices: http://anglebug.com/42263865
     ANGLE_SKIP_TEST_IF(IsPixel2() && IsOpenGLES());
 
     GLubyte kLinearColor[] = {132, 55, 219, 255};
@@ -720,7 +720,7 @@ TEST_P(PbufferTest, ClearAndBindTexImageSrgbSkipDecode)
     ANGLE_SKIP_TEST_IF(
         !IsEGLDisplayExtensionEnabled(window->getDisplay(), "EGL_KHR_gl_colorspace"));
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_sRGB_decode"));
-    // Possible GLES driver bug on Pixel devices: http://anglebug.com/5321
+    // Possible GLES driver bug on Pixel devices: http://anglebug.com/42263865
     ANGLE_SKIP_TEST_IF((IsPixel2() || IsPixel4()) && IsOpenGLES());
 
     GLubyte kLinearColor[] = {132, 55, 219, 255};
@@ -1003,6 +1003,26 @@ TEST_P(PbufferTest, UseAsFramebufferColorThenDeferredDestroy)
     // Finish work
     glFinish();
     ASSERT_GL_NO_ERROR();
+}
+
+// Test the validation errors for bad parameters for eglCreatePbufferSurface
+TEST_P(PbufferTest, NegativeValidationBadAttributes)
+{
+    EGLWindow *window = getEGLWindow();
+    EGLSurface pbufferSurface;
+
+    const EGLint invalidPBufferAttributeList[][3] = {
+        {EGL_MIPMAP_TEXTURE, EGL_MIPMAP_TEXTURE, EGL_NONE},
+        {EGL_LARGEST_PBUFFER, EGL_LARGEST_PBUFFER, EGL_NONE},
+    };
+
+    for (size_t i = 0; i < 2; i++)
+    {
+        pbufferSurface = eglCreatePbufferSurface(window->getDisplay(), window->getConfig(),
+                                                 &invalidPBufferAttributeList[i][0]);
+        ASSERT_EQ(pbufferSurface, EGL_NO_SURFACE);
+        ASSERT_EGL_ERROR(EGL_BAD_ATTRIBUTE);
+    }
 }
 
 // Test that passing colorspace attributes do not generate EGL validation errors

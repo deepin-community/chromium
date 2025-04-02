@@ -4,6 +4,8 @@
 
 #include "ash/system/input_device_settings/input_device_notifier.h"
 
+#include <algorithm>
+#include <functional>
 #include <memory>
 
 #include "ash/public/cpp/input_device_settings_controller.h"
@@ -12,12 +14,9 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
-#include "base/ranges/functional.h"
 #include "base/test/scoped_feature_list.h"
 #include "device/bluetooth/bluetooth_adapter_factory.h"
 #include "device/bluetooth/bluetooth_common.h"
-#include "device/bluetooth/floss/floss_features.h"
 #include "device/bluetooth/test/mock_bluetooth_adapter.h"
 #include "ui/events/devices/device_data_manager_test_api.h"
 #include "ui/events/devices/input_device.h"
@@ -58,12 +57,10 @@ const ui::InputDevice kSampleMouseBluetooth = {25, ui::INPUT_DEVICE_BLUETOOTH,
                                                "kSampleMouseBluetooth"};
 const ui::InputDevice kSampleMouseInternal = {30, ui::INPUT_DEVICE_INTERNAL,
                                               "kSampleMouseInternal"};
-const ui::InputDevice kSampleFlossExtraMouse = {35, ui::INPUT_DEVICE_UNKNOWN,
-                                                "VIRTUAL_SUSPEND_UHID"};
 
-template <typename Comp = base::ranges::less>
+template <typename Comp = std::ranges::less>
 void SortDevices(std::vector<ui::KeyboardDevice>& devices, Comp comp = {}) {
-  base::ranges::sort(devices, comp, [](const ui::KeyboardDevice& keyboard) {
+  std::ranges::sort(devices, comp, [](const ui::KeyboardDevice& keyboard) {
     return keyboard.id;
   });
 }
@@ -295,6 +292,10 @@ TEST_F(InputDeviceStateNotifierTest, BluetoothKeyboardTest) {
   ui::DeviceDataManagerTestApi()
       .NotifyObserversKeyboardDeviceConfigurationChanged();
   ASSERT_EQ(2u, devices_to_add_.size());
+
+  // Clear `bluetooth_adapter_` mock so that it would not return dangling
+  // pointers after return.
+  ASSERT_TRUE(testing::Mock::VerifyAndClear(bluetooth_adapter_.get()));
 }
 
 class InputDeviceStateLoginScreenNotifierTest : public NoSessionAshTestBase {
@@ -635,22 +636,6 @@ TEST_F(InputDeviceMouseNotifierTest, InternalMiceFilteredOut) {
   EXPECT_EQ(kSampleMouseBluetooth.id, devices_to_add_[1].id);
 }
 
-// When an internal mouse in the list received from DeviceDataManager, filter it
-// out as this is likely not a real device.
-TEST_F(InputDeviceMouseNotifierTest, FlossMouseFilteredOut) {
-  base::test::ScopedFeatureList feature_list;
-  feature_list.InitAndEnableFeature(floss::features::kFlossEnabled);
-
-  ui::DeviceDataManagerTestApi().SetMouseDevices(
-      {kSampleMouseUsb, kSampleMouseBluetooth, kSampleFlossExtraMouse});
-  EXPECT_TRUE(device_ids_to_remove_.empty());
-  ASSERT_EQ(2u, devices_to_add_.size());
-  EXPECT_EQ(kSampleMouseUsb.name, devices_to_add_[0].name);
-  EXPECT_EQ(kSampleMouseUsb.id, devices_to_add_[0].id);
-  EXPECT_EQ(kSampleMouseBluetooth.name, devices_to_add_[1].name);
-  EXPECT_EQ(kSampleMouseBluetooth.id, devices_to_add_[1].id);
-}
-
 TEST_F(InputDeviceMouseNotifierTest, BluetoothMouseTest) {
   uint32_t test_vendor_id = 0x1111;
   uint32_t test_product_id = 0x1112;
@@ -716,11 +701,67 @@ TEST_F(InputDeviceMouseNotifierTest, BluetoothMouseTest) {
       .NotifyObserversMouseDeviceConfigurationChanged();
   ASSERT_EQ(2u, devices_to_add_.size());
 
-  // Needed to reset the `bluetooth_adapter_`.
-  ON_CALL(*bluetooth_adapter_, GetDevices)
-      .WillByDefault(testing::Return(
-          std::vector<
-              raw_ptr<const device::BluetoothDevice, VectorExperimental>>()));
+  // Clear `bluetooth_adapter_` mock so that it would not return dangling
+  // pointers after return.
+  ASSERT_TRUE(testing::Mock::VerifyAndClear(bluetooth_adapter_.get()));
+}
+
+TEST_F(InputDeviceMouseNotifierTest, ImpostersRemoved) {
+  ui::InputDevice imposter_mouse = kSampleMouseUsb;
+  imposter_mouse.vendor_id = 0x1234;
+  imposter_mouse.product_id = 0x5678;
+  imposter_mouse.suspected_mouse_imposter = true;
+
+  ui::DeviceDataManagerTestApi().SetMouseDevices(
+      {imposter_mouse, kSampleMouseBluetooth});
+  ASSERT_EQ(1u, devices_to_add_.size());
+  EXPECT_EQ(kSampleMouseBluetooth.name, devices_to_add_[0].name);
+  EXPECT_EQ(kSampleMouseBluetooth.id, devices_to_add_[0].id);
+
+  imposter_mouse.suspected_mouse_imposter = false;
+  ui::DeviceDataManagerTestApi().SetMouseDevices(
+      {imposter_mouse, kSampleMouseBluetooth});
+  ASSERT_EQ(2u, devices_to_add_.size());
+  EXPECT_EQ(imposter_mouse.name, devices_to_add_[0].name);
+  EXPECT_EQ(imposter_mouse.id, devices_to_add_[0].id);
+  EXPECT_EQ(kSampleMouseBluetooth.name, devices_to_add_[1].name);
+  EXPECT_EQ(kSampleMouseBluetooth.id, devices_to_add_[1].id);
+}
+
+TEST_F(InputDeviceMouseNotifierTest, ImpostersRemembered) {
+  ui::InputDevice imposter_mouse = kSampleMouseUsb;
+  imposter_mouse.vendor_id = 0x1234;
+  imposter_mouse.product_id = 0x5678;
+  imposter_mouse.suspected_mouse_imposter = true;
+
+  ui::DeviceDataManagerTestApi().SetMouseDevices(
+      {imposter_mouse, kSampleMouseBluetooth});
+  ASSERT_EQ(1u, devices_to_add_.size());
+  EXPECT_EQ(kSampleMouseBluetooth.name, devices_to_add_[0].name);
+  EXPECT_EQ(kSampleMouseBluetooth.id, devices_to_add_[0].id);
+
+  // Remove imposter flag and make sure the notifier includes the old
+  // "imposter".
+  imposter_mouse.suspected_mouse_imposter = false;
+  ui::DeviceDataManagerTestApi().SetMouseDevices(
+      {imposter_mouse, kSampleMouseBluetooth});
+  ASSERT_EQ(2u, devices_to_add_.size());
+  EXPECT_EQ(imposter_mouse.name, devices_to_add_[0].name);
+  EXPECT_EQ(imposter_mouse.id, devices_to_add_[0].id);
+  EXPECT_EQ(kSampleMouseBluetooth.name, devices_to_add_[1].name);
+  EXPECT_EQ(kSampleMouseBluetooth.id, devices_to_add_[1].id);
+
+  // Remove the imposter and then add it back and ensure it was remembered as
+  // being a previously valid device.
+  ui::DeviceDataManagerTestApi().SetMouseDevices({kSampleMouseBluetooth});
+  imposter_mouse.suspected_mouse_imposter = true;
+  ui::DeviceDataManagerTestApi().SetMouseDevices(
+      {imposter_mouse, kSampleMouseBluetooth});
+  ASSERT_EQ(2u, devices_to_add_.size());
+  EXPECT_EQ(imposter_mouse.name, devices_to_add_[0].name);
+  EXPECT_EQ(imposter_mouse.id, devices_to_add_[0].id);
+  EXPECT_EQ(kSampleMouseBluetooth.name, devices_to_add_[1].name);
+  EXPECT_EQ(kSampleMouseBluetooth.id, devices_to_add_[1].id);
 }
 
 }  // namespace ash

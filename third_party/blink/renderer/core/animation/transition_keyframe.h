@@ -75,7 +75,6 @@ class CORE_EXPORT TransitionKeyframe : public Keyframe {
         double offset,
         scoped_refptr<TimingFunction> easing) const final {
       NOTREACHED();
-      return nullptr;
     }
     Interpolation* CreateInterpolation(
         const PropertyHandle&,

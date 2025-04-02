@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include <algorithm>
+#include <iterator>
 
 #include "extensions/common/error_utils.h"
 #include "extensions/common/manifest_constants.h"
@@ -193,28 +194,31 @@ TEST_F(ExternallyConnectableTest, AllIDs) {
 
 TEST_F(ExternallyConnectableTest, IdCanConnect) {
   // Not in order to test that ExternallyConnectableInfo sorts it.
-  ExtensionId matches_ids_array[] = {"g", "h", "c", "i", "a", "z", "b"};
-  std::vector<ExtensionId> matches_ids(
-      matches_ids_array, matches_ids_array + std::size(matches_ids_array));
+  const std::vector<ExtensionId> matches_ids = {"g", "h", "c", "i",
+                                                "a", "z", "b"};
 
-  ExtensionId nomatches_ids_array[] = {"2", "3", "1"};
+  const std::vector<ExtensionId> nomatches_ids = {"2", "3", "1"};
 
   // all_ids = false.
   {
     ExternallyConnectableInfo info(URLPatternSet(), matches_ids, false, false);
-    for (size_t i = 0; i < matches_ids.size(); ++i)
-      EXPECT_TRUE(info.IdCanConnect(matches_ids[i]));
-    for (size_t i = 0; i < std::size(nomatches_ids_array); ++i)
-      EXPECT_FALSE(info.IdCanConnect(nomatches_ids_array[i]));
+    for (const auto& entry : matches_ids) {
+      EXPECT_TRUE(info.IdCanConnect(entry));
+    }
+    for (const auto& entry : nomatches_ids) {
+      EXPECT_FALSE(info.IdCanConnect(entry));
+    }
   }
 
   // all_ids = true.
   {
     ExternallyConnectableInfo info(URLPatternSet(), matches_ids, true, false);
-    for (size_t i = 0; i < matches_ids.size(); ++i)
-      EXPECT_TRUE(info.IdCanConnect(matches_ids[i]));
-    for (size_t i = 0; i < std::size(nomatches_ids_array); ++i)
-      EXPECT_TRUE(info.IdCanConnect(nomatches_ids_array[i]));
+    for (const auto& entry : matches_ids) {
+      EXPECT_TRUE(info.IdCanConnect(entry));
+    }
+    for (const auto& entry : nomatches_ids) {
+      EXPECT_TRUE(info.IdCanConnect(entry));
+    }
   }
 }
 
@@ -288,7 +292,7 @@ TEST_F(ExternallyConnectableTest, WarningUnusedAcceptsTlsChannelId) {
 
 // Tests that the deprecated externally_connectable.all_urls permission doesn't
 // trigger a warning for an extension that requests it.
-// TODO(https://crbug.com/1363485): Remove this test when we remove the
+// TODO(crbug.com/40864987): Remove this test when we remove the
 // externally_connectable.all_urls permission.
 TEST_F(ExternallyConnectableTest, DeprecatedAllUrlsPermission) {
   scoped_refptr<const Extension> extension =

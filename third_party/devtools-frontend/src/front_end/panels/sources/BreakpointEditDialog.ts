@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import '../../ui/legacy/legacy.js';
+
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as SDK from '../../core/sdk/sdk.js';
@@ -84,11 +86,12 @@ export class BreakpointEditDialog extends UI.Widget.Widget {
       editorLineNumber: number, oldCondition: string, isLogpoint: boolean,
       onFinish: (result: BreakpointEditDialogResult) => void) {
     super(true);
+    this.registerRequiredCSS(breakpointEditDialogStyles);
 
     const editorConfig = [
       CodeMirror.javascript.javascriptLanguage,
       TextEditor.Config.baseConfiguration(oldCondition || ''),
-      TextEditor.Config.closeBrackets,
+      TextEditor.Config.closeBrackets.instance(),
       TextEditor.Config.autocompletion.instance(),
       CodeMirror.EditorView.lineWrapping,
       TextEditor.Config.showCompletionHint,
@@ -105,9 +108,9 @@ export class BreakpointEditDialog extends UI.Widget.Widget {
     this.element.tabIndex = -1;
 
     this.element.classList.add('sources-edit-breakpoint-dialog');
-    this.element.setAttribute('jslog', `${VisualLogging.pane('edit-breakpoint')}`);
+    this.element.setAttribute('jslog', `${VisualLogging.dialog('edit-breakpoint')}`);
     const header = this.contentElement.createChild('div', 'dialog-header');
-    const toolbar = new UI.Toolbar.Toolbar('source-frame-breakpoint-toolbar', header);
+    const toolbar = header.createChild('devtools-toolbar', 'source-frame-breakpoint-toolbar');
     toolbar.appendText(`Line ${editorLineNumber + 1}:`);
 
     this.typeSelector = new UI.Toolbar.ToolbarComboBox(
@@ -162,7 +165,7 @@ export class BreakpointEditDialog extends UI.Widget.Widget {
 
     const editorWrapper = this.contentElement.appendChild(document.createElement('div'));
     editorWrapper.classList.add('condition-editor');
-    editorWrapper.setAttribute('jslog', `${VisualLogging.textField()}`);
+    editorWrapper.setAttribute('jslog', `${VisualLogging.textField().track({change: true})}`);
 
     this.editor = new TextEditor.TextEditor.TextEditor(CodeMirror.EditorState.create({
       doc: content,
@@ -175,8 +178,7 @@ export class BreakpointEditDialog extends UI.Widget.Widget {
     }));
     editorWrapper.appendChild(this.editor);
 
-    const closeIcon = new IconButton.Icon.Icon();
-    closeIcon.name = 'cross';
+    const closeIcon = IconButton.Icon.create('cross');
     closeIcon.title = i18nString(UIStrings.closeDialog);
     closeIcon.setAttribute('jslog', `${VisualLogging.close().track({click: true})}`);
     closeIcon.onclick = () => this.finishEditing(true, this.editor.state.doc.toString());
@@ -191,9 +193,7 @@ export class BreakpointEditDialog extends UI.Widget.Widget {
     const link = UI.Fragment.html`<x-link class="link devtools-link" tabindex="0" href="https://goo.gle/devtools-loc"
                                           jslog="${VisualLogging.link('learn-more')}">${
                      i18nString(UIStrings.learnMoreOnBreakpointTypes)}</x-link>` as UI.XLink.XLink;
-    const linkIcon = new IconButton.Icon.Icon();
-    linkIcon.name = 'open-externally';
-    linkIcon.classList.add('link-icon');
+    const linkIcon = IconButton.Icon.create('open-externally', 'link-icon');
     link.prepend(linkIcon);
     linkWrapper.appendChild(link);
 
@@ -252,11 +252,6 @@ export class BreakpointEditDialog extends UI.Widget.Widget {
     this.#history.pushHistoryItem(condition);
     const isLogpoint = this.breakpointType === SDK.DebuggerModel.BreakpointType.LOGPOINT;
     this.onFinish({committed, condition: condition as BreakpointManager.BreakpointManager.UserCondition, isLogpoint});
-  }
-
-  override wasShown(): void {
-    super.wasShown();
-    this.registerCSSFiles([breakpointEditDialogStyles]);
   }
 
   get editorForTest(): TextEditor.TextEditor.TextEditor {

@@ -2,11 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/http/transport_security_state.h"
 
 #include <stdint.h>
 
 #include <algorithm>
+#include <array>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -21,7 +27,6 @@
 #include "base/metrics/field_trial_param_associator.h"
 #include "base/rand_util.h"
 #include "base/stl_util.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_entropy_provider.h"
@@ -29,7 +34,6 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "crypto/openssl_util.h"
 #include "crypto/sha2.h"
 #include "net/base/features.h"
 #include "net/base/hash_value.h"
@@ -76,27 +80,26 @@ namespace test3 {
 }
 
 const char kHost[] = "example.test";
-const uint16_t kPort = 443;
 
-const char* const kGoodPath[] = {
+const auto kGoodPath = std::to_array<const char*>({
     "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "sha256/fzP+pVAbH0hRoUphJKenIP8+2tD/d2QH9J+kQNieM6Q=",
     "sha256/9vRUVdjloCa4wXUKfDWotV5eUXYD7vu0v0z9SRzQdzg=",
     "sha256/Nn8jk5By4Vkq6BeOVZ7R7AC6XUUBZsWmUbJR1f1Y5FY=",
     nullptr,
-};
+});
 
-const char* const kBadPath[] = {
+const auto kBadPath = std::to_array<const char*>({
     "sha256/1111111111111111111111111111111111111111111=",
     "sha256/2222222222222222222222222222222222222222222=",
     "sha256/3333333333333333333333333333333333333333333=",
     nullptr,
-};
+});
 
 class MockRequireCTDelegate : public TransportSecurityState::RequireCTDelegate {
  public:
   MOCK_METHOD3(IsCTRequiredForHost,
-               CTRequirementLevel(const std::string& hostname,
+               CTRequirementLevel(std::string_view hostname,
                                   const X509Certificate* chain,
                                   const HashValueVector& hashes));
 };
@@ -136,8 +139,6 @@ class TransportSecurityStateTest : public ::testing::Test,
     SetTransportSecurityStateSourceForTesting(nullptr);
   }
 
-  void SetUp() override { crypto::EnsureOpenSSLInit(); }
-
   static void DisableStaticPins(TransportSecurityState* state) {
     state->enable_static_pins_ = false;
   }
@@ -176,6 +177,8 @@ class TransportSecurityStateTest : public ::testing::Test,
   base::test::ScopedFeatureList scoped_feature_list_;
 };
 
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, DomainNameOddities) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
@@ -187,114 +190,157 @@ TEST_F(TransportSecurityStateTest, DomainNameOddities) {
   // layer (that is, whether they are treated as equivalent or distinct),
   // ensure that for policy matching, something lacking a terminal "."
   // is equivalent to something with a terminal "."
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("example.com"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("example.com", /*is_top_level_nav=*/true));
 
   state.AddHSTS("example.com", expiry, true /* include_subdomains */);
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example.com"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example.com", /*is_top_level_nav=*/true));
   // Trailing '.' should be equivalent; it's just a resolver hint
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example.com."));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example.com.", /*is_top_level_nav=*/true));
   // Leading '.' should be invalid
-  EXPECT_FALSE(state.ShouldUpgradeToSSL(".example.com"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL(".example.com", /*is_top_level_nav=*/true));
   // Subdomains should work regardless
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("sub.example.com"));
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("sub.example.com."));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("sub.example.com", /*is_top_level_nav=*/true));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("sub.example.com.", /*is_top_level_nav=*/true));
   // But invalid subdomains should be rejected
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("sub..example.com"));
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("sub..example.com."));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("sub..example.com", /*is_top_level_nav=*/true));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("sub..example.com.", /*is_top_level_nav=*/true));
 
   // Now try the inverse form
   TransportSecurityState state2;
   state2.AddHSTS("example.net.", expiry, true /* include_subdomains */);
-  EXPECT_TRUE(state2.ShouldUpgradeToSSL("example.net."));
-  EXPECT_TRUE(state2.ShouldUpgradeToSSL("example.net"));
-  EXPECT_TRUE(state2.ShouldUpgradeToSSL("sub.example.net."));
-  EXPECT_TRUE(state2.ShouldUpgradeToSSL("sub.example.net"));
+  EXPECT_TRUE(
+      state2.ShouldUpgradeToSSL("example.net.", /*is_top_level_nav=*/true));
+  EXPECT_TRUE(
+      state2.ShouldUpgradeToSSL("example.net", /*is_top_level_nav=*/true));
+  EXPECT_TRUE(
+      state2.ShouldUpgradeToSSL("sub.example.net.", /*is_top_level_nav=*/true));
+  EXPECT_TRUE(
+      state2.ShouldUpgradeToSSL("sub.example.net", /*is_top_level_nav=*/true));
 
   // Finally, test weird things
   TransportSecurityState state3;
   state3.AddHSTS("", expiry, true /* include_subdomains */);
-  EXPECT_FALSE(state3.ShouldUpgradeToSSL(""));
-  EXPECT_FALSE(state3.ShouldUpgradeToSSL("."));
-  EXPECT_FALSE(state3.ShouldUpgradeToSSL("..."));
+  EXPECT_FALSE(state3.ShouldUpgradeToSSL("", /*is_top_level_nav=*/true));
+  EXPECT_FALSE(state3.ShouldUpgradeToSSL(".", /*is_top_level_nav=*/true));
+  EXPECT_FALSE(state3.ShouldUpgradeToSSL("...", /*is_top_level_nav=*/true));
   // Make sure it didn't somehow apply HSTS to the world
-  EXPECT_FALSE(state3.ShouldUpgradeToSSL("example.org"));
+  EXPECT_FALSE(
+      state3.ShouldUpgradeToSSL("example.org", /*is_top_level_nav=*/true));
 
   TransportSecurityState state4;
   state4.AddHSTS(".", expiry, true /* include_subdomains */);
-  EXPECT_FALSE(state4.ShouldUpgradeToSSL(""));
-  EXPECT_FALSE(state4.ShouldUpgradeToSSL("."));
-  EXPECT_FALSE(state4.ShouldUpgradeToSSL("..."));
-  EXPECT_FALSE(state4.ShouldUpgradeToSSL("example.org"));
+  EXPECT_FALSE(state4.ShouldUpgradeToSSL("", /*is_top_level_nav=*/true));
+  EXPECT_FALSE(state4.ShouldUpgradeToSSL(".", /*is_top_level_nav=*/true));
+  EXPECT_FALSE(state4.ShouldUpgradeToSSL("...", /*is_top_level_nav=*/true));
+  EXPECT_FALSE(
+      state4.ShouldUpgradeToSSL("example.org", /*is_top_level_nav=*/true));
 
   // Now do the same for preloaded entries
   TransportSecurityState state5;
-  EXPECT_TRUE(state5.ShouldUpgradeToSSL("hsts-preloaded.test"));
-  EXPECT_TRUE(state5.ShouldUpgradeToSSL("hsts-preloaded.test."));
-  EXPECT_FALSE(state5.ShouldUpgradeToSSL("hsts-preloaded..test"));
-  EXPECT_FALSE(state5.ShouldUpgradeToSSL("hsts-preloaded..test."));
+  EXPECT_TRUE(state5.ShouldUpgradeToSSL("hsts-preloaded.test",
+                                        /*is_top_level_nav=*/true));
+  EXPECT_TRUE(state5.ShouldUpgradeToSSL("hsts-preloaded.test.",
+                                        /*is_top_level_nav=*/true));
+  EXPECT_FALSE(state5.ShouldUpgradeToSSL("hsts-preloaded..test",
+                                         /*is_top_level_nav=*/true));
+  EXPECT_FALSE(state5.ShouldUpgradeToSSL("hsts-preloaded..test.",
+                                         /*is_top_level_nav=*/true));
 }
 
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, SimpleMatches) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
   const base::Time expiry = current_time + base::Seconds(1000);
 
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("example.com"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("example.com", /*is_top_level_nav=*/true));
   bool include_subdomains = false;
   state.AddHSTS("example.com", expiry, include_subdomains);
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example.com"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example.com", /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.ShouldSSLErrorsBeFatal("example.com"));
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("foo.example.com"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("foo.example.com", /*is_top_level_nav=*/true));
   EXPECT_FALSE(state.ShouldSSLErrorsBeFatal("foo.example.com"));
 }
 
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, MatchesCase1) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
   const base::Time expiry = current_time + base::Seconds(1000);
 
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("example.com"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("example.com", /*is_top_level_nav=*/true));
   bool include_subdomains = false;
   state.AddHSTS("EXample.coM", expiry, include_subdomains);
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example.com"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example.com", /*is_top_level_nav=*/true));
 }
 
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, MatchesCase2) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
   const base::Time expiry = current_time + base::Seconds(1000);
 
   // Check dynamic entries
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("EXample.coM"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("EXample.coM", /*is_top_level_nav=*/true));
   bool include_subdomains = false;
   state.AddHSTS("example.com", expiry, include_subdomains);
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("EXample.coM"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("EXample.coM", /*is_top_level_nav=*/true));
 
   // Check static entries
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("hStS-prelOAded.tEsT"));
-  EXPECT_TRUE(
-      state.ShouldUpgradeToSSL("inClude-subDOmaIns-hsts-prEloaDed.TesT"));
+  EXPECT_TRUE(state.ShouldUpgradeToSSL("hStS-prelOAded.tEsT",
+                                       /*is_top_level_nav=*/true));
+  EXPECT_TRUE(state.ShouldUpgradeToSSL("inClude-subDOmaIns-hsts-prEloaDed.TesT",
+                                       /*is_top_level_nav=*/true));
 }
 
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, SubdomainMatches) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
   const base::Time expiry = current_time + base::Seconds(1000);
 
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("example.test"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("example.test", /*is_top_level_nav=*/true));
   bool include_subdomains = true;
   state.AddHSTS("example.test", expiry, include_subdomains);
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example.test"));
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("foo.example.test"));
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("foo.bar.example.test"));
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("foo.bar.baz.example.test"));
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("test"));
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("notexample.test"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example.test", /*is_top_level_nav=*/true));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("foo.example.test", /*is_top_level_nav=*/true));
+  EXPECT_TRUE(state.ShouldUpgradeToSSL("foo.bar.example.test",
+                                       /*is_top_level_nav=*/true));
+  EXPECT_TRUE(state.ShouldUpgradeToSSL("foo.bar.baz.example.test",
+                                       /*is_top_level_nav=*/true));
+  EXPECT_FALSE(state.ShouldUpgradeToSSL("test", /*is_top_level_nav=*/true));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("notexample.test", /*is_top_level_nav=*/true));
 }
 
 // Tests that a more-specific HSTS rule without the includeSubDomains bit does
 // not override a less-specific rule with includeSubDomains. Applicability is
 // checked before specificity. See https://crbug.com/821811.
+//
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, STSSubdomainNoOverride) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
@@ -306,18 +352,24 @@ TEST_F(TransportSecurityStateTest, STSSubdomainNoOverride) {
 
   // The example.test rule applies to the entire domain, including subdomains of
   // foo.example.test.
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example.test"));
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("foo.example.test"));
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("bar.foo.example.test"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example.test", /*is_top_level_nav=*/true));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("foo.example.test", /*is_top_level_nav=*/true));
+  EXPECT_TRUE(state.ShouldUpgradeToSSL("bar.foo.example.test",
+                                       /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.ShouldSSLErrorsBeFatal("bar.foo.example.test"));
 
   // Expire the foo.example.test rule.
   state.AddHSTS("foo.example.test", older, false);
 
   // The example.test rule still applies.
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example.test"));
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("foo.example.test"));
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("bar.foo.example.test"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example.test", /*is_top_level_nav=*/true));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("foo.example.test", /*is_top_level_nav=*/true));
+  EXPECT_TRUE(state.ShouldUpgradeToSSL("bar.foo.example.test",
+                                       /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.ShouldSSLErrorsBeFatal("bar.foo.example.test"));
 }
 
@@ -363,6 +415,9 @@ TEST_F(TransportSecurityStateTest, FatalSSLErrors) {
 
 // Tests that HPKP and HSTS state both expire. Also tests that expired entries
 // are pruned.
+//
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, Expiration) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
@@ -373,7 +428,8 @@ TEST_F(TransportSecurityStateTest, Expiration) {
   // the past works and is pruned on query.
   state.AddHSTS("example1.test", older, false);
   EXPECT_TRUE(TransportSecurityState::STSStateIterator(state).HasNext());
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("example1.test"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("example1.test", /*is_top_level_nav=*/true));
   // Querying |state| for a domain should flush out expired entries.
   EXPECT_FALSE(TransportSecurityState::STSStateIterator(state).HasNext());
 
@@ -395,18 +451,23 @@ TEST_F(TransportSecurityStateTest, Expiration) {
   // Test that HSTS can outlive HPKP.
   state.AddHSTS("example1.test", expiry, false);
   state.AddHPKP("example1.test", older, false, GetSampleSPKIHashes());
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example1.test"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example1.test", /*is_top_level_nav=*/true));
   EXPECT_FALSE(state.HasPublicKeyPins("example1.test"));
 
   // Test that HPKP can outlive HSTS.
   state.AddHSTS("example2.test", older, false);
   state.AddHPKP("example2.test", expiry, false, GetSampleSPKIHashes());
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("example2.test"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("example2.test", /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.HasPublicKeyPins("example2.test"));
 }
 
 // Tests that HPKP and HSTS state are queried independently for subdomain
 // matches.
+//
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, IndependentSubdomain) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
@@ -418,13 +479,18 @@ TEST_F(TransportSecurityStateTest, IndependentSubdomain) {
   state.AddHSTS("example2.test", expiry, false);
   state.AddHPKP("example2.test", expiry, true, GetSampleSPKIHashes());
 
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("foo.example1.test"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("foo.example1.test", /*is_top_level_nav=*/true));
   EXPECT_FALSE(state.HasPublicKeyPins("foo.example1.test"));
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("foo.example2.test"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("foo.example2.test", /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.HasPublicKeyPins("foo.example2.test"));
 }
 
 // Tests that HPKP and HSTS state are inserted and overridden independently.
+//
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, IndependentInsertion) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
@@ -434,33 +500,41 @@ TEST_F(TransportSecurityStateTest, IndependentInsertion) {
   state.AddHSTS("example1.test", expiry, true);
   state.AddHPKP("foo.example1.test", expiry, false, GetSampleSPKIHashes());
 
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("foo.example1.test"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("foo.example1.test", /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.HasPublicKeyPins("foo.example1.test"));
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example1.test"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example1.test", /*is_top_level_nav=*/true));
   EXPECT_FALSE(state.HasPublicKeyPins("example1.test"));
 
   // Drop the includeSubdomains from the HSTS entry.
   state.AddHSTS("example1.test", expiry, false);
 
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("foo.example1.test"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("foo.example1.test", /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.HasPublicKeyPins("foo.example1.test"));
 
   // Place an includeSubdomains HPKP entry below a normal HSTS entry.
   state.AddHSTS("foo.example2.test", expiry, false);
   state.AddHPKP("example2.test", expiry, true, GetSampleSPKIHashes());
 
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("foo.example2.test"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("foo.example2.test", /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.HasPublicKeyPins("foo.example2.test"));
 
   // Drop the includeSubdomains from the HSTS entry.
   state.AddHPKP("example2.test", expiry, false, GetSampleSPKIHashes());
 
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("foo.example2.test"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("foo.example2.test", /*is_top_level_nav=*/true));
   EXPECT_FALSE(state.HasPublicKeyPins("foo.example2.test"));
 }
 
 // Tests that GetDynamic[PKP|STS]State returns the correct data and that the
 // states are not mixed together.
+//
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, DynamicDomainState) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
@@ -482,6 +556,55 @@ TEST_F(TransportSecurityStateTest, DynamicDomainState) {
   EXPECT_EQ(expiry2, pkp_state.expiry);
   EXPECT_EQ("example.com", sts_state.domain);
   EXPECT_EQ("foo.example.com", pkp_state.domain);
+}
+
+// Tests that GetSSLUpgradeDecision() matches the result of ShouldUpgradeToSSL()
+// and correctly identifies the source of the decision.
+//
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
+TEST_F(TransportSecurityStateTest, StaticOrDynamicSource) {
+  TransportSecurityState state;
+  SetTransportSecurityStateSourceForTesting(&test1::kHSTSSource);
+
+  // Check preconditions of preloaded states.
+  TransportSecurityState::STSState sts_state;
+  ASSERT_TRUE(state.GetStaticSTSState("hsts.example.com", &sts_state));
+  ASSERT_EQ(sts_state.upgrade_mode,
+            TransportSecurityState::STSState::MODE_FORCE_HTTPS);
+  ASSERT_TRUE(sts_state.include_subdomains);
+  ASSERT_FALSE(state.GetStaticSTSState("dynamic.example.com", &sts_state));
+
+  const base::Time current_time(base::Time::Now());
+  const base::Time expiry = current_time + base::Seconds(1000);
+
+  EXPECT_EQ(state.GetSSLUpgradeDecision("dynamic.example.com",
+                                        /*is_top_level_nav=*/true),
+            SSLUpgradeDecision::kNoUpgrade);
+  EXPECT_FALSE(state.ShouldUpgradeToSSL("dynamic.example.com",
+                                        /*is_top_level_nav=*/true));
+
+  EXPECT_EQ(state.GetSSLUpgradeDecision("hsts.example.com",
+                                        /*is_top_level_nav=*/true),
+            SSLUpgradeDecision::kStaticUpgrade);
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("hsts.example.com", /*is_top_level_nav=*/true));
+
+  state.AddHSTS("dynamic.example.com", expiry, false);
+  EXPECT_EQ(state.GetSSLUpgradeDecision("dynamic.example.com",
+                                        /*is_top_level_nav=*/true),
+            SSLUpgradeDecision::kDynamicUpgrade);
+  EXPECT_TRUE(state.ShouldUpgradeToSSL("dynamic.example.com",
+                                       /*is_top_level_nav=*/true));
+
+  // Dynamic state for a host that already has static state doesn't change the
+  // decision.
+  state.AddHSTS("subdomain.hsts.example.com", expiry, false);
+  EXPECT_EQ(state.GetSSLUpgradeDecision("subdomain.hsts.example.com",
+                                        /*is_top_level_nav=*/true),
+            SSLUpgradeDecision::kStaticUpgrade);
+  EXPECT_TRUE(state.ShouldUpgradeToSSL("subdomain.hsts.example.com",
+                                       /*is_top_level_nav=*/true));
 }
 
 // Tests that new pins always override previous pins. This should be true for
@@ -517,13 +640,16 @@ TEST_F(TransportSecurityStateTest, NewPinsOverride) {
   EXPECT_EQ(pkp_state.spki_hashes[0], hash3);
 }
 
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, DeleteAllDynamicDataBetween) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
   const base::Time expiry = current_time + base::Seconds(1000);
   const base::Time older = current_time - base::Seconds(1000);
 
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("example.com"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("example.com", /*is_top_level_nav=*/true));
   EXPECT_FALSE(state.HasPublicKeyPins("example.com"));
   bool include_subdomains = false;
   state.AddHSTS("example.com", expiry, include_subdomains);
@@ -532,21 +658,25 @@ TEST_F(TransportSecurityStateTest, DeleteAllDynamicDataBetween) {
 
   state.DeleteAllDynamicDataBetween(expiry, base::Time::Max(),
                                     base::DoNothing());
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example.com"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example.com", /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.HasPublicKeyPins("example.com"));
 
   state.DeleteAllDynamicDataBetween(older, current_time, base::DoNothing());
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example.com"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example.com", /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.HasPublicKeyPins("example.com"));
 
   state.DeleteAllDynamicDataBetween(base::Time(), current_time,
                                     base::DoNothing());
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example.com"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example.com", /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.HasPublicKeyPins("example.com"));
 
   state.DeleteAllDynamicDataBetween(older, base::Time::Max(),
                                     base::DoNothing());
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("example.com"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("example.com", /*is_top_level_nav=*/true));
   EXPECT_FALSE(state.HasPublicKeyPins("example.com"));
 
   // Dynamic data in |state| should be empty now.
@@ -554,6 +684,8 @@ TEST_F(TransportSecurityStateTest, DeleteAllDynamicDataBetween) {
   EXPECT_FALSE(state.has_dynamic_pkp_state());
 }
 
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, DeleteDynamicDataForHost) {
   TransportSecurityState state;
   const base::Time current_time(base::Time::Now());
@@ -564,13 +696,16 @@ TEST_F(TransportSecurityStateTest, DeleteDynamicDataForHost) {
   state.AddHPKP("example1.test", expiry, include_subdomains,
                 GetSampleSPKIHashes());
 
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("example1.test"));
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("example2.test"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("example1.test", /*is_top_level_nav=*/true));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("example2.test", /*is_top_level_nav=*/true));
   EXPECT_TRUE(state.HasPublicKeyPins("example1.test"));
   EXPECT_FALSE(state.HasPublicKeyPins("example2.test"));
 
   EXPECT_TRUE(state.DeleteDynamicDataForHost("example1.test"));
-  EXPECT_FALSE(state.ShouldUpgradeToSSL("example1.test"));
+  EXPECT_FALSE(
+      state.ShouldUpgradeToSSL("example1.test", /*is_top_level_nav=*/true));
   EXPECT_FALSE(state.HasPublicKeyPins("example1.test"));
 }
 
@@ -601,7 +736,7 @@ static bool AddHash(const std::string& type_and_base64, HashValueVector* out) {
 TEST_F(TransportSecurityStateTest, PinValidationWithoutRejectedCerts) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
+      features::kStaticKeyPinningEnforcement);
   HashValueVector good_hashes, bad_hashes;
 
   for (size_t i = 0; kGoodPath[i]; i++) {
@@ -631,7 +766,7 @@ TEST_F(TransportSecurityStateTest, PinValidationWithoutRejectedCerts) {
 TEST_F(TransportSecurityStateTest, DecodePreloadedSingle) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
+      features::kStaticKeyPinningEnforcement);
   SetTransportSecurityStateSourceForTesting(&test1::kHSTSSource);
 
   TransportSecurityState state;
@@ -659,7 +794,7 @@ TEST_F(TransportSecurityStateTest, DecodePreloadedSingle) {
 TEST_F(TransportSecurityStateTest, DecodePreloadedMultiplePrefix) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
+      features::kStaticKeyPinningEnforcement);
   SetTransportSecurityStateSourceForTesting(&test2::kHSTSSource);
 
   TransportSecurityState state;
@@ -709,7 +844,7 @@ TEST_F(TransportSecurityStateTest, DecodePreloadedMultiplePrefix) {
 TEST_F(TransportSecurityStateTest, DecodePreloadedMultipleMix) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
+      features::kStaticKeyPinningEnforcement);
   SetTransportSecurityStateSourceForTesting(&test3::kHSTSSource);
 
   TransportSecurityState state;
@@ -780,6 +915,8 @@ TEST_F(TransportSecurityStateTest, DecodePreloadedMultipleMix) {
   EXPECT_TRUE(pkp_state == TransportSecurityState::PKPState());
 }
 
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateTest, HstsHostBypassList) {
   SetTransportSecurityStateSourceForTesting(&test_default::kHSTSSource);
 
@@ -792,16 +929,18 @@ TEST_F(TransportSecurityStateTest, HstsHostBypassList) {
   {
     TransportSecurityState state;
     // Check that "example" is preloaded with subdomains.
-    EXPECT_TRUE(state.ShouldUpgradeToSSL(preloaded_tld));
-    EXPECT_TRUE(state.ShouldUpgradeToSSL(subdomain));
+    EXPECT_TRUE(
+        state.ShouldUpgradeToSSL(preloaded_tld, /*is_top_level_nav=*/true));
+    EXPECT_TRUE(state.ShouldUpgradeToSSL(subdomain, /*is_top_level_nav=*/true));
   }
 
   {
     // Add "example" to the bypass list.
     TransportSecurityState state({preloaded_tld});
-    EXPECT_FALSE(state.ShouldUpgradeToSSL(preloaded_tld));
+    EXPECT_FALSE(
+        state.ShouldUpgradeToSSL(preloaded_tld, /*is_top_level_nav=*/true));
     // The preloaded entry should still apply to the subdomain.
-    EXPECT_TRUE(state.ShouldUpgradeToSSL(subdomain));
+    EXPECT_TRUE(state.ShouldUpgradeToSSL(subdomain, /*is_top_level_nav=*/true));
   }
 }
 
@@ -829,40 +968,35 @@ TEST_F(TransportSecurityStateTest, RequireCTConsultsDelegate) {
     TransportSecurityState state;
     const TransportSecurityState::CTRequirementsStatus original_status =
         state.CheckCTRequirements(
-            HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+            "www.example.com", true, hashes, cert.get(),
             ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS);
 
     MockRequireCTDelegate always_require_delegate;
     EXPECT_CALL(always_require_delegate, IsCTRequiredForHost(_, _, _))
         .WillRepeatedly(Return(CTRequirementLevel::REQUIRED));
     state.SetRequireCTDelegate(&always_require_delegate);
-    EXPECT_EQ(
-        TransportSecurityState::CT_REQUIREMENTS_NOT_MET,
-        state.CheckCTRequirements(
-            HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-            ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
-    EXPECT_EQ(
-        TransportSecurityState::CT_REQUIREMENTS_NOT_MET,
-        state.CheckCTRequirements(
-            HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-            ct::CTPolicyCompliance::CT_POLICY_NOT_DIVERSE_SCTS));
-    EXPECT_EQ(
-        TransportSecurityState::CT_REQUIREMENTS_MET,
-        state.CheckCTRequirements(
-            HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-            ct::CTPolicyCompliance::CT_POLICY_COMPLIES_VIA_SCTS));
-    EXPECT_EQ(
-        TransportSecurityState::CT_REQUIREMENTS_MET,
-        state.CheckCTRequirements(
-            HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-            ct::CTPolicyCompliance::CT_POLICY_BUILD_NOT_TIMELY));
+    EXPECT_EQ(TransportSecurityState::CT_REQUIREMENTS_NOT_MET,
+              state.CheckCTRequirements(
+                  "www.example.com", true, hashes, cert.get(),
+                  ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
+    EXPECT_EQ(TransportSecurityState::CT_REQUIREMENTS_NOT_MET,
+              state.CheckCTRequirements(
+                  "www.example.com", true, hashes, cert.get(),
+                  ct::CTPolicyCompliance::CT_POLICY_NOT_DIVERSE_SCTS));
+    EXPECT_EQ(TransportSecurityState::CT_REQUIREMENTS_MET,
+              state.CheckCTRequirements(
+                  "www.example.com", true, hashes, cert.get(),
+                  ct::CTPolicyCompliance::CT_POLICY_COMPLIES_VIA_SCTS));
+    EXPECT_EQ(TransportSecurityState::CT_REQUIREMENTS_MET,
+              state.CheckCTRequirements(
+                  "www.example.com", true, hashes, cert.get(),
+                  ct::CTPolicyCompliance::CT_POLICY_BUILD_NOT_TIMELY));
 
     state.SetRequireCTDelegate(nullptr);
-    EXPECT_EQ(
-        original_status,
-        state.CheckCTRequirements(
-            HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-            ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
+    EXPECT_EQ(original_status,
+              state.CheckCTRequirements(
+                  "www.example.com", true, hashes, cert.get(),
+                  ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
   }
 
   // If CT is not required, then regardless of the CT state for the host,
@@ -871,68 +1005,33 @@ TEST_F(TransportSecurityStateTest, RequireCTConsultsDelegate) {
     TransportSecurityState state;
     const TransportSecurityState::CTRequirementsStatus original_status =
         state.CheckCTRequirements(
-            HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+            "www.example.com", true, hashes, cert.get(),
             ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS);
 
     MockRequireCTDelegate never_require_delegate;
     EXPECT_CALL(never_require_delegate, IsCTRequiredForHost(_, _, _))
         .WillRepeatedly(Return(CTRequirementLevel::NOT_REQUIRED));
     state.SetRequireCTDelegate(&never_require_delegate);
-    EXPECT_EQ(
-        TransportSecurityState::CT_NOT_REQUIRED,
-        state.CheckCTRequirements(
-            HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-            ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
-    EXPECT_EQ(
-        TransportSecurityState::CT_NOT_REQUIRED,
-        state.CheckCTRequirements(
-            HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-            ct::CTPolicyCompliance::CT_POLICY_NOT_DIVERSE_SCTS));
+    EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
+              state.CheckCTRequirements(
+                  "www.example.com", true, hashes, cert.get(),
+                  ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
+    EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
+              state.CheckCTRequirements(
+                  "www.example.com", true, hashes, cert.get(),
+                  ct::CTPolicyCompliance::CT_POLICY_NOT_DIVERSE_SCTS));
 
     state.SetRequireCTDelegate(nullptr);
-    EXPECT_EQ(
-        original_status,
-        state.CheckCTRequirements(
-            HostPortPair("www.example.com", 443), true, hashes, cert.get(),
-            ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
+    EXPECT_EQ(original_status,
+              state.CheckCTRequirements(
+                  "www.example.com", true, hashes, cert.get(),
+                  ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
   }
 }
 
-enum class CTEmergencyDisableSwitchKind {
-  kFinchDrivenFeature,
-  kComponentUpdaterDrivenSwitch,
-};
-
-class CTEmergencyDisableTest
-    : public TransportSecurityStateTest,
-      public testing::WithParamInterface<CTEmergencyDisableSwitchKind> {
- public:
-  CTEmergencyDisableTest() {
-    if (GetParam() ==
-        CTEmergencyDisableSwitchKind::kComponentUpdaterDrivenSwitch) {
-      scoped_feature_list_.Init();
-    } else {
-      scoped_feature_list_.InitAndDisableFeature(
-          kCertificateTransparencyEnforcement);
-    }
-  }
-  void SetUp() override {
-    if (GetParam() ==
-        CTEmergencyDisableSwitchKind::kComponentUpdaterDrivenSwitch) {
-      state_.SetCTEmergencyDisabled(true);
-    } else {
-      ASSERT_EQ(GetParam(), CTEmergencyDisableSwitchKind::kFinchDrivenFeature);
-    }
-  }
-
- protected:
-  base::test::ScopedFeatureList scoped_feature_list_;
-  TransportSecurityState state_;
-};
-
 // Tests that the emergency disable flags cause CT to stop being required
 // regardless of host or delegate status.
-TEST_P(CTEmergencyDisableTest, CTEmergencyDisable) {
+TEST(CTEmergencyDisableTest, CTEmergencyDisable) {
   using ::testing::_;
   using ::testing::Return;
   using CTRequirementLevel =
@@ -947,39 +1046,36 @@ TEST_P(CTEmergencyDisableTest, CTEmergencyDisable) {
   hashes.push_back(
       HashValue(X509Certificate::CalculateFingerprint256(cert->cert_buffer())));
 
+  TransportSecurityState state;
+  state.SetCTEmergencyDisabled(true);
+
   MockRequireCTDelegate always_require_delegate;
   EXPECT_CALL(always_require_delegate, IsCTRequiredForHost(_, _, _))
       .WillRepeatedly(Return(CTRequirementLevel::REQUIRED));
-  state_.SetRequireCTDelegate(&always_require_delegate);
+  state.SetRequireCTDelegate(&always_require_delegate);
   EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
-            state_.CheckCTRequirements(
-                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+            state.CheckCTRequirements(
+                "www.example.com", true, hashes, cert.get(),
                 ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
   EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
-            state_.CheckCTRequirements(
-                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+            state.CheckCTRequirements(
+                "www.example.com", true, hashes, cert.get(),
                 ct::CTPolicyCompliance::CT_POLICY_NOT_DIVERSE_SCTS));
   EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
-            state_.CheckCTRequirements(
-                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+            state.CheckCTRequirements(
+                "www.example.com", true, hashes, cert.get(),
                 ct::CTPolicyCompliance::CT_POLICY_COMPLIES_VIA_SCTS));
   EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
-            state_.CheckCTRequirements(
-                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+            state.CheckCTRequirements(
+                "www.example.com", true, hashes, cert.get(),
                 ct::CTPolicyCompliance::CT_POLICY_BUILD_NOT_TIMELY));
 
-  state_.SetRequireCTDelegate(nullptr);
+  state.SetRequireCTDelegate(nullptr);
   EXPECT_EQ(TransportSecurityState::CT_NOT_REQUIRED,
-            state_.CheckCTRequirements(
-                HostPortPair("www.example.com", 443), true, hashes, cert.get(),
+            state.CheckCTRequirements(
+                "www.example.com", true, hashes, cert.get(),
                 ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
 }
-
-INSTANTIATE_TEST_SUITE_P(
-    CTEmergencyDisable,
-    CTEmergencyDisableTest,
-    testing::Values(CTEmergencyDisableSwitchKind::kComponentUpdaterDrivenSwitch,
-                    CTEmergencyDisableSwitchKind::kFinchDrivenFeature));
 
 #if BUILDFLAG(INCLUDE_TRANSPORT_SECURITY_STATE_PRELOAD_LIST)
 
@@ -1028,7 +1124,7 @@ static bool OnlyPinningInStaticState(const char* hostname) {
 TEST_F(TransportSecurityStateStaticTest, EnableStaticPins) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
+      features::kStaticKeyPinningEnforcement);
   TransportSecurityState state;
   state.SetPinningListAlwaysTimelyForTesting(true);
   TransportSecurityState::PKPState pkp_state;
@@ -1088,7 +1184,7 @@ TEST_F(TransportSecurityStateStaticTest, IsPreloaded) {
 TEST_F(TransportSecurityStateStaticTest, PreloadedDomainSet) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
+      features::kStaticKeyPinningEnforcement);
   TransportSecurityState state;
   EnableStaticPins(&state);
   TransportSecurityState::STSState sts_state;
@@ -1109,7 +1205,7 @@ TEST_F(TransportSecurityStateStaticTest, PreloadedDomainSet) {
 TEST_F(TransportSecurityStateStaticTest, Preloaded) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
+      features::kStaticKeyPinningEnforcement);
   TransportSecurityState state;
   EnableStaticPins(&state);
   TransportSecurityState::STSState sts_state;
@@ -1274,8 +1370,6 @@ TEST_F(TransportSecurityStateStaticTest, Preloaded) {
   EXPECT_TRUE(StaticShouldRedirect("epoxate.com"));
   EXPECT_FALSE(HasStaticState("foo.epoxate.com"));
 
-  EXPECT_FALSE(HasStaticState("foo.torproject.org"));
-
   EXPECT_TRUE(StaticShouldRedirect("www.moneybookers.com"));
   EXPECT_FALSE(HasStaticState("moneybookers.com"));
 
@@ -1328,7 +1422,7 @@ TEST_F(TransportSecurityStateStaticTest, Preloaded) {
 TEST_F(TransportSecurityStateStaticTest, PreloadedPins) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
+      features::kStaticKeyPinningEnforcement);
   TransportSecurityState state;
   EnableStaticPins(&state);
   TransportSecurityState::STSState sts_state;
@@ -1357,21 +1451,6 @@ TEST_F(TransportSecurityStateStaticTest, PreloadedPins) {
   EXPECT_TRUE(OnlyPinningInStaticState("doubleclick.net"));
   EXPECT_TRUE(OnlyPinningInStaticState("googlegroups.com"));
 
-  EXPECT_TRUE(HasStaticPublicKeyPins("torproject.org"));
-  EXPECT_TRUE(HasStaticPublicKeyPins("www.torproject.org"));
-  EXPECT_TRUE(HasStaticPublicKeyPins("check.torproject.org"));
-  EXPECT_TRUE(HasStaticPublicKeyPins("blog.torproject.org"));
-  EXPECT_FALSE(HasStaticState("foo.torproject.org"));
-
-  EXPECT_TRUE(state.GetStaticPKPState("torproject.org", &pkp_state));
-  EXPECT_FALSE(pkp_state.spki_hashes.empty());
-  EXPECT_TRUE(state.GetStaticPKPState("www.torproject.org", &pkp_state));
-  EXPECT_FALSE(pkp_state.spki_hashes.empty());
-  EXPECT_TRUE(state.GetStaticPKPState("check.torproject.org", &pkp_state));
-  EXPECT_FALSE(pkp_state.spki_hashes.empty());
-  EXPECT_TRUE(state.GetStaticPKPState("blog.torproject.org", &pkp_state));
-  EXPECT_FALSE(pkp_state.spki_hashes.empty());
-
   // Facebook has pinning and hsts on facebook.com, but only pinning on
   // subdomains.
   EXPECT_TRUE(state.GetStaticPKPState("facebook.com", &pkp_state));
@@ -1395,7 +1474,7 @@ TEST_F(TransportSecurityStateStaticTest, PreloadedPins) {
 TEST_F(TransportSecurityStateStaticTest, BuiltinCertPins) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
+      features::kStaticKeyPinningEnforcement);
   TransportSecurityState state;
   EnableStaticPins(&state);
   TransportSecurityState::PKPState pkp_state;
@@ -1442,7 +1521,7 @@ TEST_F(TransportSecurityStateStaticTest, BuiltinCertPins) {
 TEST_F(TransportSecurityStateStaticTest, OptionalHSTSCertPins) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
+      features::kStaticKeyPinningEnforcement);
   TransportSecurityState state;
   EnableStaticPins(&state);
 
@@ -1465,10 +1544,12 @@ TEST_F(TransportSecurityStateStaticTest, OptionalHSTSCertPins) {
   EXPECT_TRUE(HasStaticPublicKeyPins("a.googlegroups.com"));
 }
 
+// Setting `is_top_level_nav` true prevents the upgrade from being blocked by
+// kHstsTopLevelNavigationsOnly.
 TEST_F(TransportSecurityStateStaticTest, OverrideBuiltins) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
+      features::kStaticKeyPinningEnforcement);
   EXPECT_TRUE(HasStaticPublicKeyPins("google.com"));
   EXPECT_FALSE(StaticShouldRedirect("google.com"));
   EXPECT_FALSE(StaticShouldRedirect("www.google.com"));
@@ -1480,7 +1561,8 @@ TEST_F(TransportSecurityStateStaticTest, OverrideBuiltins) {
   const base::Time expiry = current_time + base::Seconds(1000);
   state.AddHSTS("www.google.com", expiry, true);
 
-  EXPECT_TRUE(state.ShouldUpgradeToSSL("www.google.com"));
+  EXPECT_TRUE(
+      state.ShouldUpgradeToSSL("www.google.com", /*is_top_level_nav=*/true));
 }
 
 TEST_F(TransportSecurityStateTest, WriteSizeDecodeSize) {
@@ -1526,9 +1608,7 @@ TEST_F(TransportSecurityStateTest, DecodeSizeFour) {
 TEST_F(TransportSecurityStateTest, UpdateKeyPinsListValidPin) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
-  HostPortPair host_port_pair(kHost, kPort);
-
+      features::kStaticKeyPinningEnforcement);
   HashValueVector bad_hashes;
   for (size_t i = 0; kBadPath[i]; i++)
     EXPECT_TRUE(AddHash(kBadPath[i], &bad_hashes));
@@ -1538,7 +1618,7 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsListValidPin) {
 
   // Prior to updating the list, bad_hashes should be rejected.
   EXPECT_EQ(TransportSecurityState::PKPStatus::VIOLATED,
-            state.CheckPublicKeyPins(host_port_pair, true, bad_hashes));
+            state.CheckPublicKeyPins(kHost, true, bad_hashes));
 
   // Update the pins list, adding bad_hashes to the accepted hashes for this
   // host.
@@ -1559,15 +1639,13 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsListValidPin) {
 
   // Hashes should now be accepted.
   EXPECT_EQ(TransportSecurityState::PKPStatus::OK,
-            state.CheckPublicKeyPins(host_port_pair, true, bad_hashes));
+            state.CheckPublicKeyPins(kHost, true, bad_hashes));
 }
 
 TEST_F(TransportSecurityStateTest, UpdateKeyPinsListNotValidPin) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
-  HostPortPair host_port_pair(kHost, kPort);
-
+      features::kStaticKeyPinningEnforcement);
   HashValueVector good_hashes;
   for (size_t i = 0; kGoodPath[i]; i++)
     EXPECT_TRUE(AddHash(kGoodPath[i], &good_hashes));
@@ -1577,7 +1655,7 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsListNotValidPin) {
 
   // Prior to updating the list, good_hashes should be accepted
   EXPECT_EQ(TransportSecurityState::PKPStatus::OK,
-            state.CheckPublicKeyPins(host_port_pair, true, good_hashes));
+            state.CheckPublicKeyPins(kHost, true, good_hashes));
 
   // Update the pins list, adding good_hashes to the rejected hashes for this
   // host.
@@ -1598,26 +1676,22 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsListNotValidPin) {
 
   // Hashes should now be rejected.
   EXPECT_EQ(TransportSecurityState::PKPStatus::VIOLATED,
-            state.CheckPublicKeyPins(host_port_pair, true, good_hashes));
+            state.CheckPublicKeyPins(kHost, true, good_hashes));
 
   // Hashes should also be rejected if the hostname has a trailing dot.
-  host_port_pair = HostPortPair("example.test.", kPort);
   EXPECT_EQ(TransportSecurityState::PKPStatus::VIOLATED,
-            state.CheckPublicKeyPins(host_port_pair, true, good_hashes));
+            state.CheckPublicKeyPins("example.test", true, good_hashes));
 
   // Hashes should also be rejected if the hostname has different
   // capitalization.
-  host_port_pair = HostPortPair("ExAmpLe.tEsT", kPort);
   EXPECT_EQ(TransportSecurityState::PKPStatus::VIOLATED,
-            state.CheckPublicKeyPins(host_port_pair, true, good_hashes));
+            state.CheckPublicKeyPins("ExAmpLe.tEsT", true, good_hashes));
 }
 
 TEST_F(TransportSecurityStateTest, UpdateKeyPinsEmptyList) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
-  HostPortPair host_port_pair(kHost, kPort);
-
+      features::kStaticKeyPinningEnforcement);
   HashValueVector bad_hashes;
   for (size_t i = 0; kBadPath[i]; i++)
     EXPECT_TRUE(AddHash(kBadPath[i], &bad_hashes));
@@ -1627,22 +1701,20 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsEmptyList) {
 
   // Prior to updating the list, bad_hashes should be rejected.
   EXPECT_EQ(TransportSecurityState::PKPStatus::VIOLATED,
-            state.CheckPublicKeyPins(host_port_pair, true, bad_hashes));
+            state.CheckPublicKeyPins(kHost, true, bad_hashes));
 
   // Update the pins list with an empty list.
   state.UpdatePinList({}, {}, base::Time::Now());
 
   // Hashes should now be accepted.
   EXPECT_EQ(TransportSecurityState::PKPStatus::OK,
-            state.CheckPublicKeyPins(host_port_pair, true, bad_hashes));
+            state.CheckPublicKeyPins(kHost, true, bad_hashes));
 }
 
 TEST_F(TransportSecurityStateTest, UpdateKeyPinsIncludeSubdomains) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
-  HostPortPair host_port_pair("example.sub.test", kPort);
-
+      features::kStaticKeyPinningEnforcement);
   // unpinned_hashes is a set of hashes that (after the update) won't match the
   // expected hashes for the tld of this domain. kGoodPath is used here because
   // it's a path that is accepted prior to any updates, and this test will
@@ -1656,8 +1728,9 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsIncludeSubdomains) {
   EnableStaticPins(&state);
 
   // Prior to updating the list, unpinned_hashes should be accepted
-  EXPECT_EQ(TransportSecurityState::PKPStatus::OK,
-            state.CheckPublicKeyPins(host_port_pair, true, unpinned_hashes));
+  EXPECT_EQ(
+      TransportSecurityState::PKPStatus::OK,
+      state.CheckPublicKeyPins("example.sub.test", true, unpinned_hashes));
 
   // Update the pins list, adding kBadPath to the accepted hashes for this
   // host, relying on include_subdomains for enforcement. The contents of the
@@ -1681,16 +1754,15 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsIncludeSubdomains) {
   state.UpdatePinList({test_pinset}, {test_pinsetinfo}, base::Time::Now());
 
   // The path that was accepted before updating the pins should now be rejected.
-  EXPECT_EQ(TransportSecurityState::PKPStatus::VIOLATED,
-            state.CheckPublicKeyPins(host_port_pair, true, unpinned_hashes));
+  EXPECT_EQ(
+      TransportSecurityState::PKPStatus::VIOLATED,
+      state.CheckPublicKeyPins("example.sub.test", true, unpinned_hashes));
 }
 
 TEST_F(TransportSecurityStateTest, UpdateKeyPinsIncludeSubdomainsTLD) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
-  HostPortPair host_port_pair(kHost, kPort);
-
+      features::kStaticKeyPinningEnforcement);
   // unpinned_hashes is a set of hashes that (after the update) won't match the
   // expected hashes for the tld of this domain. kGoodPath is used here because
   // it's a path that is accepted prior to any updates, and this test will
@@ -1705,7 +1777,7 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsIncludeSubdomainsTLD) {
 
   // Prior to updating the list, unpinned_hashes should be accepted
   EXPECT_EQ(TransportSecurityState::PKPStatus::OK,
-            state.CheckPublicKeyPins(host_port_pair, true, unpinned_hashes));
+            state.CheckPublicKeyPins(kHost, true, unpinned_hashes));
 
   // Update the pins list, adding kBadPath to the accepted hashes for this
   // host, relying on include_subdomains for enforcement. The contents of the
@@ -1730,15 +1802,13 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsIncludeSubdomainsTLD) {
 
   // The path that was accepted before updating the pins should now be rejected.
   EXPECT_EQ(TransportSecurityState::PKPStatus::VIOLATED,
-            state.CheckPublicKeyPins(host_port_pair, true, unpinned_hashes));
+            state.CheckPublicKeyPins(kHost, true, unpinned_hashes));
 }
 
 TEST_F(TransportSecurityStateTest, UpdateKeyPinsDontIncludeSubdomains) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
-  HostPortPair host_port_pair(kHost, kPort);
-
+      features::kStaticKeyPinningEnforcement);
   // unpinned_hashes is a set of hashes that (after the update) won't match the
   // expected hashes for the tld of this domain. kGoodPath is used here because
   // it's a path that is accepted prior to any updates, and this test will
@@ -1754,7 +1824,7 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsDontIncludeSubdomains) {
 
   // Prior to updating the list, unpinned_hashes should be accepted
   EXPECT_EQ(TransportSecurityState::PKPStatus::OK,
-            state.CheckPublicKeyPins(host_port_pair, true, unpinned_hashes));
+            state.CheckPublicKeyPins(kHost, true, unpinned_hashes));
 
   // Update the pins list, adding kBadPath to the accepted hashes for the
   // tld of this host, but without include_subdomains set. The contents of the
@@ -1781,20 +1851,17 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsDontIncludeSubdomains) {
   // include subdomains is not set for the pinset, and this is not an exact
   // match.
   EXPECT_EQ(TransportSecurityState::PKPStatus::OK,
-            state.CheckPublicKeyPins(host_port_pair, true, unpinned_hashes));
+            state.CheckPublicKeyPins(kHost, true, unpinned_hashes));
 
   // Hashes should be rejected for an exact match of the hostname.
-  HostPortPair exact_match_host("test", kPort);
   EXPECT_EQ(TransportSecurityState::PKPStatus::VIOLATED,
-            state.CheckPublicKeyPins(exact_match_host, true, unpinned_hashes));
+            state.CheckPublicKeyPins("test", true, unpinned_hashes));
 }
 
 TEST_F(TransportSecurityStateTest, UpdateKeyPinsListTimestamp) {
   base::test::ScopedFeatureList scoped_feature_list_;
   scoped_feature_list_.InitAndEnableFeature(
-      net::features::kStaticKeyPinningEnforcement);
-  HostPortPair host_port_pair(kHost, kPort);
-
+      features::kStaticKeyPinningEnforcement);
   HashValueVector bad_hashes;
   for (size_t i = 0; kBadPath[i]; i++)
     EXPECT_TRUE(AddHash(kBadPath[i], &bad_hashes));
@@ -1804,7 +1871,7 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsListTimestamp) {
 
   // Prior to updating the list, bad_hashes should be rejected.
   EXPECT_EQ(TransportSecurityState::PKPStatus::VIOLATED,
-            state.CheckPublicKeyPins(host_port_pair, true, bad_hashes));
+            state.CheckPublicKeyPins(kHost, true, bad_hashes));
 
   // TransportSecurityStateTest sets a flag when EnableStaticPins is called that
   // results in TransportSecurityState considering the pins list as always
@@ -1832,7 +1899,7 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsListTimestamp) {
 
   // Hashes should now be accepted.
   EXPECT_EQ(TransportSecurityState::PKPStatus::OK,
-            state.CheckPublicKeyPins(host_port_pair, true, bad_hashes));
+            state.CheckPublicKeyPins(kHost, true, bad_hashes));
 
   // Update the pins list again, with a timestamp <70 days old.
   state.UpdatePinList({test_pinset}, {test_pinsetinfo},
@@ -1840,7 +1907,7 @@ TEST_F(TransportSecurityStateTest, UpdateKeyPinsListTimestamp) {
 
   // Hashes should now be rejected.
   EXPECT_EQ(TransportSecurityState::PKPStatus::VIOLATED,
-            state.CheckPublicKeyPins(host_port_pair, true, bad_hashes));
+            state.CheckPublicKeyPins(kHost, true, bad_hashes));
 }
 
 class TransportSecurityStatePinningKillswitchTest
@@ -1856,8 +1923,6 @@ class TransportSecurityStatePinningKillswitchTest
 };
 
 TEST_F(TransportSecurityStatePinningKillswitchTest, PinningKillswitchSet) {
-  HostPortPair host_port_pair(kHost, kPort);
-
   HashValueVector bad_hashes;
   for (size_t i = 0; kBadPath[i]; i++)
     EXPECT_TRUE(AddHash(kBadPath[i], &bad_hashes));
@@ -1867,7 +1932,7 @@ TEST_F(TransportSecurityStatePinningKillswitchTest, PinningKillswitchSet) {
 
   // Hashes should be accepted since pinning enforcement is disabled.
   EXPECT_EQ(TransportSecurityState::PKPStatus::OK,
-            state.CheckPublicKeyPins(host_port_pair, true, bad_hashes));
+            state.CheckPublicKeyPins(kHost, true, bad_hashes));
 }
 
 }  // namespace net

@@ -32,6 +32,8 @@
 #include "src/tint/utils/containers/vector.h"
 #include "src/tint/utils/ice/ice.h"
 
+TINT_BEGIN_DISABLE_WARNING(UNSAFE_BUFFER_USAGE);
+
 namespace tint::wgsl::reader {
 
 namespace {
@@ -84,8 +86,7 @@ void ClassifyTemplateArguments(std::vector<Token>& tokens) {
     for (size_t i = 0; i < count - 1; i++) {
         switch (tokens[i].type()) {
             case Token::Type::kIdentifier:
-            case Token::Type::kVar:
-            case Token::Type::kBitcast: {
+            case Token::Type::kVar: {
                 auto& next = tokens[i + 1];
                 if (next.type() == Token::Type::kLessThan) {
                     // ident '<'
@@ -153,3 +154,5 @@ void ClassifyTemplateArguments(std::vector<Token>& tokens) {
 }
 
 }  // namespace tint::wgsl::reader
+
+TINT_END_DISABLE_WARNING(UNSAFE_BUFFER_USAGE);

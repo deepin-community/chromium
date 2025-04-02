@@ -35,13 +35,14 @@ SpeechRecognitionPrivateRecognizer::SpeechRecognitionPrivateRecognizer(
   DCHECK(delegate);
 }
 
-SpeechRecognitionPrivateRecognizer::~SpeechRecognitionPrivateRecognizer() {}
+SpeechRecognitionPrivateRecognizer::~SpeechRecognitionPrivateRecognizer() =
+    default;
 
 void SpeechRecognitionPrivateRecognizer::OnSpeechResult(
     const std::u16string& text,
     bool is_final,
     const std::optional<media::SpeechRecognitionResult>& full_result) {
-  // TODO(crbug.com/1220107): NetworkSpeechRecognizer adds spaces between
+  // TODO(crbug.com/40186322): NetworkSpeechRecognizer adds spaces between
   // results, but SpeechRecognitionRecognizerClientImpl doesn't. Add behavior in
   // SpeechRecognitionRecognizerClientImpl so it's consistent with
   // NetworkSpeechRecognizer.
@@ -128,7 +129,6 @@ void SpeechRecognitionPrivateRecognizer::HandleStart(
         GetWeakPtr(),
         profile->GetDefaultStoragePartition()
             ->GetURLLoaderFactoryForBrowserProcessIOThread(),
-        profile->GetPrefs()->GetString(language::prefs::kAcceptLanguages),
         locale_);
   }
 }

@@ -80,6 +80,9 @@ class VulkanImageWrappingTestBase : public DawnTestWithParams<ImageWrappingParam
         DAWN_SUPPRESS_TEST_IF(IsLinux() && IsNvidia() && GetParam().mUseDedicatedAllocation &&
                               GetParam().mDetectDedicatedAllocation);
 
+        // TODO(crbug.com/342213634): Crashes on ChromeOS volteer devices.
+        DAWN_SUPPRESS_TEST_IF(IsChromeOS() && IsIntel() && IsBackendValidationEnabled());
+
         switch (GetParam().mExternalImageType) {
             case ExternalImageType::OpaqueFD:
                 mBackend = CreateOpaqueFDBackend(device);
@@ -119,8 +122,8 @@ class VulkanImageWrappingTestBase : public DawnTestWithParams<ImageWrappingParam
             return;
         }
 
-        testTextures = {};
         defaultTexture = nullptr;
+        testTextures = {};
         mBackend = nullptr;
         DawnTestWithParams::TearDown();
     }
@@ -187,8 +190,7 @@ class VulkanImageWrappingTestBase : public DawnTestWithParams<ImageWrappingParam
 
     wgpu::TextureDescriptor defaultDescriptor;
     std::array<std::unique_ptr<ExternalTexture>, kTestTexturesCount> testTextures;
-    // TODO(https://crbug.com/dawn/2346): Investigate `DanglingUntriaged` pointers in dawn/test.
-    raw_ptr<ExternalTexture, DanglingUntriaged> defaultTexture;
+    raw_ptr<ExternalTexture> defaultTexture;
 };
 
 using VulkanImageWrappingValidationTests = VulkanImageWrappingTestBase;
@@ -267,17 +269,6 @@ TEST_P(VulkanImageWrappingValidationTests, DoubleSignalSemaphoreExport) {
         WrapVulkanImage(device, &defaultDescriptor, defaultTexture, {}, true, true);
     ASSERT_NE(texture.Get(), nullptr);
     IgnoreSignalSemaphore(texture);
-
-    ExternalImageExportInfoVkForTesting exportInfo = GetExternalImageExportInfo();
-    ASSERT_DEVICE_ERROR(bool success = mBackend->ExportImage(texture, &exportInfo));
-    ASSERT_FALSE(success);
-    ASSERT_EQ(exportInfo.semaphores.size(), 0u);
-}
-
-// Test an error occurs if we try to export the signal semaphore from a normal texture
-TEST_P(VulkanImageWrappingValidationTests, NormalTextureSignalSemaphoreExport) {
-    wgpu::Texture texture = device.CreateTexture(&defaultDescriptor);
-    ASSERT_NE(texture.Get(), nullptr);
 
     ExternalImageExportInfoVkForTesting exportInfo = GetExternalImageExportInfo();
     ASSERT_DEVICE_ERROR(bool success = mBackend->ExportImage(texture, &exportInfo));
@@ -420,6 +411,12 @@ TEST_P(VulkanImageWrappingUsageTests, ClearImageAcrossDevices) {
 // This is intended to verify that waiting on the signalFd for one external texture does not affect
 // those of other external textures.
 TEST_P(VulkanImageWrappingUsageTests, ClearTwoImagesAcrossDevices) {
+    // TODO(crbug.com/341124484): Fails on Linux/Intel UHD 770.
+    DAWN_SUPPRESS_TEST_IF(IsLinux() && IsBackendValidationEnabled() && IsIntelGen12());
+
+    // crbug.com/358408563
+    DAWN_SUPPRESS_TEST_IF(IsLinux() && IsNvidia() && IsVulkan() && IsBackendValidationEnabled());
+
     static_assert(kTestTexturesCount >= 2);
 
     std::vector<wgpu::Texture> wrappedTextures;
@@ -998,6 +995,12 @@ class VulkanImageWrappingMultithreadTests : public VulkanImageWrappingUsageTests
 
 // Test that wrapping multiple VulkanImage and clear them on multiple threads work.
 TEST_P(VulkanImageWrappingMultithreadTests, WrapAndClear_OnMultipleThreads) {
+    // TODO(crbug.com/341124484): Crashes on Linux/Intel UHD 770.
+    DAWN_SUPPRESS_TEST_IF(IsLinux() && IsBackendValidationEnabled() && IsIntelGen12());
+
+    // crbug.com/358408563
+    DAWN_SUPPRESS_TEST_IF(IsLinux() && IsNvidia() && IsVulkan() && IsBackendValidationEnabled());
+
     std::vector<std::unique_ptr<ExternalTexture>> testTextures(10);
     for (auto& testTexture : testTextures) {
         testTexture =

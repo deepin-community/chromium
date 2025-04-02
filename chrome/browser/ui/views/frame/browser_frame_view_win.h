@@ -17,7 +17,6 @@
 #include "ui/views/window/non_client_view.h"
 
 class BrowserView;
-class TabSearchBubbleHost;
 class BrowserCaptionButtonContainer;
 
 class BrowserFrameViewWin : public BrowserNonClientFrameView,
@@ -46,7 +45,6 @@ class BrowserFrameViewWin : public BrowserNonClientFrameView,
   void UpdateThrobber(bool running) override;
   gfx::Size GetMinimumSize() const override;
   void WindowControlsOverlayEnabledChanged() override;
-  TabSearchBubbleHost* GetTabSearchBubbleHost() override;
 
   // views::NonClientFrameView:
   gfx::Rect GetBoundsForClientView() const override;
@@ -172,10 +170,10 @@ class BrowserFrameViewWin : public BrowserNonClientFrameView,
   gfx::Rect client_view_bounds_;
 
   // The small icon created from the bitmap image of the window icon.
-  base::win::ScopedHICON small_window_icon_;
+  base::win::ScopedGDIObject<HICON> small_window_icon_;
 
   // The big icon created from the bitmap image of the window icon.
-  base::win::ScopedHICON big_window_icon_;
+  base::win::ScopedGDIObject<HICON> big_window_icon_;
 
   // Icon and title. Only used when custom-drawing the titlebar for popups.
   raw_ptr<TabIconView> window_icon_ = nullptr;

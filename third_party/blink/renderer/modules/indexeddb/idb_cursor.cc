@@ -61,7 +61,7 @@ namespace {
 
 using CursorSet = HeapHashSet<WeakMember<IDBCursor>>;
 
-CursorSet& GetInstanceForCurrentThread() {
+CursorSet& GetGlobalCursorSet() {
   DEFINE_THREAD_SAFE_STATIC_LOCAL(ThreadSpecific<Persistent<CursorSet>>,
                                   thread_specific_instance, ());
   if (!*thread_specific_instance) {
@@ -71,7 +71,7 @@ CursorSet& GetInstanceForCurrentThread() {
 }
 
 void RegisterCursor(IDBCursor* cursor) {
-  CursorSet& cursor_set = GetInstanceForCurrentThread();
+  CursorSet& cursor_set = GetGlobalCursorSet();
   CHECK(!cursor_set.Contains(cursor));
   cursor_set.insert(cursor);
 }
@@ -124,8 +124,7 @@ v8::Local<v8::Object> IDBCursor::AssociateWithWrapper(
   if (!wrapper.IsEmpty()) {
     static const V8PrivateProperty::SymbolKey kPrivatePropertyRequest;
     V8PrivateProperty::GetSymbol(isolate, kPrivatePropertyRequest)
-        .Set(wrapper,
-             ToV8Traits<IDBRequest>::ToV8(isolate, request_.Get(), wrapper));
+        .Set(wrapper, request_->ToV8(isolate, wrapper));
   }
   return wrapper;
 }
@@ -182,8 +181,8 @@ void IDBCursor::Continue(ScriptState* script_state,
   std::unique_ptr<IDBKey> key =
       key_value.IsUndefined() || key_value.IsNull()
           ? nullptr
-          : ScriptValue::To<std::unique_ptr<IDBKey>>(
-                script_state->GetIsolate(), key_value, exception_state);
+          : CreateIDBKeyFromValue(script_state->GetIsolate(),
+                                  key_value.V8Value(), exception_state);
   if (exception_state.HadException())
     return;
   if (key && !key->IsValid()) {
@@ -236,8 +235,8 @@ void IDBCursor::continuePrimaryKey(ScriptState* script_state,
     return;
   }
 
-  std::unique_ptr<IDBKey> key = ScriptValue::To<std::unique_ptr<IDBKey>>(
-      script_state->GetIsolate(), key_value, exception_state);
+  std::unique_ptr<IDBKey> key = CreateIDBKeyFromValue(
+      script_state->GetIsolate(), key_value.V8Value(), exception_state);
   if (exception_state.HadException()) {
     return;
   }
@@ -247,9 +246,8 @@ void IDBCursor::continuePrimaryKey(ScriptState* script_state,
     return;
   }
 
-  std::unique_ptr<IDBKey> primary_key =
-      ScriptValue::To<std::unique_ptr<IDBKey>>(
-          script_state->GetIsolate(), primary_key_value, exception_state);
+  std::unique_ptr<IDBKey> primary_key = CreateIDBKeyFromValue(
+      script_state->GetIsolate(), primary_key_value.V8Value(), exception_state);
   if (exception_state.HadException())
     return;
   if (!primary_key->IsValid()) {
@@ -340,6 +338,7 @@ void IDBCursor::Close() {
   request_.Clear();
   remote_.reset();
   ResetPrefetchCache();
+  GetGlobalCursorSet().erase(this);
 }
 
 ScriptValue IDBCursor::key(ScriptState* script_state) {
@@ -446,7 +445,6 @@ IDBObjectStore* IDBCursor::EffectiveObjectStore() const {
       return source_->GetAsIDBObjectStore();
   }
   NOTREACHED();
-  return nullptr;
 }
 
 bool IDBCursor::IsDeleted() const {
@@ -457,29 +455,27 @@ bool IDBCursor::IsDeleted() const {
       return source_->GetAsIDBObjectStore()->IsDeleted();
   }
   NOTREACHED();
-  return false;
 }
 
 // static
-mojom::IDBCursorDirection IDBCursor::StringToDirection(
-    const String& direction_string) {
-  if (direction_string == indexed_db_names::kNext)
-    return mojom::IDBCursorDirection::Next;
-  if (direction_string == indexed_db_names::kNextunique)
-    return mojom::IDBCursorDirection::NextNoDuplicate;
-  if (direction_string == indexed_db_names::kPrev)
-    return mojom::IDBCursorDirection::Prev;
-  if (direction_string == indexed_db_names::kPrevunique)
-    return mojom::IDBCursorDirection::PrevNoDuplicate;
-
-  NOTREACHED();
-  return mojom::IDBCursorDirection::Next;
+mojom::blink::IDBCursorDirection IDBCursor::V8EnumToDirection(
+    V8IDBCursorDirection::Enum mode) {
+  switch (mode) {
+    case V8IDBCursorDirection::Enum::kNext:
+      return mojom::blink::IDBCursorDirection::Next;
+    case V8IDBCursorDirection::Enum::kNextunique:
+      return mojom::blink::IDBCursorDirection::NextNoDuplicate;
+    case V8IDBCursorDirection::Enum::kPrev:
+      return mojom::blink::IDBCursorDirection::Prev;
+    case V8IDBCursorDirection::Enum::kPrevunique:
+      return mojom::blink::IDBCursorDirection::PrevNoDuplicate;
+  }
 }
 
 // static
 void IDBCursor::ResetCursorPrefetchCaches(int64_t transaction_id,
                                           IDBCursor* except_cursor) {
-  CursorSet& cursor_set = GetInstanceForCurrentThread();
+  CursorSet& cursor_set = GetGlobalCursorSet();
 
   for (IDBCursor* cursor : cursor_set) {
     if (cursor != except_cursor &&
@@ -489,24 +485,21 @@ void IDBCursor::ResetCursorPrefetchCaches(int64_t transaction_id,
   }
 }
 
-const String& IDBCursor::direction() const {
+V8IDBCursorDirection IDBCursor::direction() const {
   switch (direction_) {
     case mojom::IDBCursorDirection::Next:
-      return indexed_db_names::kNext;
+      return V8IDBCursorDirection(V8IDBCursorDirection::Enum::kNext);
 
     case mojom::IDBCursorDirection::NextNoDuplicate:
-      return indexed_db_names::kNextunique;
+      return V8IDBCursorDirection(V8IDBCursorDirection::Enum::kNextunique);
 
     case mojom::IDBCursorDirection::Prev:
-      return indexed_db_names::kPrev;
+      return V8IDBCursorDirection(V8IDBCursorDirection::Enum::kPrev);
 
     case mojom::IDBCursorDirection::PrevNoDuplicate:
-      return indexed_db_names::kPrevunique;
-
-    default:
-      NOTREACHED();
-      return indexed_db_names::kNext;
+      return V8IDBCursorDirection(V8IDBCursorDirection::Enum::kPrevunique);
   }
+  NOTREACHED();
 }
 
 void IDBCursor::AdvanceImpl(uint32_t count, IDBRequest* request) {

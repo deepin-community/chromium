@@ -25,7 +25,6 @@ sk_sp<SkTypeface> SkTypeface_Factory::FromFontConfigInterfaceIdAndTtcIndex(
   return fci->makeTypeface(font_identity, skia::DefaultFontMgr());
 #else
   NOTREACHED();
-  return nullptr;
 #endif
 }
 
@@ -38,7 +37,6 @@ sk_sp<SkTypeface> SkTypeface_Factory::FromFilenameAndTtcIndex(
   return skia::DefaultFontMgr()->makeFromFile(filename.c_str(), ttc_index);
 #else
   NOTREACHED();
-  return nullptr;
 #endif
 }
 

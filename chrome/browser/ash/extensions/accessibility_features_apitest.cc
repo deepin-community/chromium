@@ -10,8 +10,10 @@
 #include "ash/constants/ash_pref_names.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
-#include "chrome/browser/ash/accessibility/api_test_config.h"
+#include "chrome/browser/ash/accessibility/accessibility_test_utils.h"
 #include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/test/browser_test.h"
 #include "extensions/test/result_catcher.h"
@@ -71,8 +73,8 @@ class AccessibilityFeaturesApiTest
     : public ExtensionApiTest,
       public testing::WithParamInterface<TestConfig> {
  public:
-  AccessibilityFeaturesApiTest() {}
-  virtual ~AccessibilityFeaturesApiTest() {}
+  AccessibilityFeaturesApiTest() = default;
+  virtual ~AccessibilityFeaturesApiTest() = default;
 
  protected:
   // Returns pref service to be used to initialize and later verify
@@ -99,7 +101,6 @@ class AccessibilityFeaturesApiTest
     }
 
     NOTREACHED();
-    return "";
   }
 
   // Whether a parameterized test should have been able to modify accessibility
@@ -246,11 +247,8 @@ IN_PROC_BROWSER_TEST_P(AccessibilityFeaturesApiTest, Get) {
   // WARNING: Make sure that features which load Chrome extension are not among
   // enabled_features (see |Set| test for the reason).
   std::vector<std::string> enabled_features = {
-      "cursorColor",
-      "cursorHighlight",
-      "highContrast",
-      "largeCursor",
-      "stickyKeys",
+      "cursorColor", "cursorHighlight", "highContrast",
+      "largeCursor", "stickyKeys",
   };
 
   std::vector<std::string> disabled_features = {
@@ -304,15 +302,9 @@ IN_PROC_BROWSER_TEST_P(AccessibilityFeaturesApiTest, Get_ComponentApp) {
   };
 
   std::vector<std::string> disabled_features = {
-      "autoclick",
-      "caretHighlight",
-      "cursorColor",
-      "focusHighlight",
-      "screenMagnifier",
-      "selectToSpeak",
-      "spokenFeedback",
-      "switchAccess",
-      "virtualKeyboard",
+      "autoclick",      "caretHighlight",  "cursorColor",
+      "focusHighlight", "screenMagnifier", "selectToSpeak",
+      "spokenFeedback", "switchAccess",    "virtualKeyboard",
   };
 
   ASSERT_TRUE(

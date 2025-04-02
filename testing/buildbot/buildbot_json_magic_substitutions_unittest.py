@@ -5,6 +5,7 @@
 
 import unittest
 
+# //testing/buildbot imports.
 import buildbot_json_magic_substitutions as magic_substitutions
 
 
@@ -74,6 +75,21 @@ class ChromeOSGtestFilterFileTest(unittest.TestCase):
 
   def testSkylab(self):
     test_config = {'name': 'test_name', 'cros_board': 'eve'}
+    tester_config = {'browser_config': 'cros-chrome', 'use_swarming': False}
+    self.assertEqual(
+        magic_substitutions.ChromeOSGtestFilterFile(test_config, None,
+                                                    tester_config),
+        [
+            '--test-launcher-filter-file=../../testing/buildbot/filters/'
+            'chromeos.eve.test_name.filter',
+        ])
+
+  def testSkylabWithVariant(self):
+    test_config = {
+        'name': 'test_name SOME_VARIANT',
+        'cros_board': 'eve',
+        'variant_id': 'SOME_VARIANT',
+    }
     tester_config = {'browser_config': 'cros-chrome', 'use_swarming': False}
     self.assertEqual(
         magic_substitutions.ChromeOSGtestFilterFile(test_config, None,
@@ -385,7 +401,7 @@ class GPUTelemetryNoRootForUnrootedDevices(unittest.TestCase):
     self.assertEqual(retval, [])
 
   def testUnrootedDevices(self):
-    devices = ('a13', 'a23')
+    devices = ('a13', 'a13ve', 'a23', 'dm1q', 'devonn')
     for d in devices:
       test_config = CreateConfigWithDeviceType(d)
       retval = magic_substitutions.GPUTelemetryNoRootForUnrootedDevices(

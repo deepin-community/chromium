@@ -6,7 +6,7 @@
 #define COMPONENTS_AUTOFILL_CONTENT_BROWSER_TEST_CONTENT_AUTOFILL_CLIENT_H_
 
 #include "components/autofill/content/browser/content_autofill_client.h"
-#include "components/autofill/core/browser/test_autofill_client.h"
+#include "components/autofill/core/browser/foundations/test_autofill_client.h"
 #include "content/public/browser/web_contents.h"
 
 namespace autofill {
@@ -26,9 +26,6 @@ class TestContentAutofillClient
   std::unique_ptr<AutofillManager> CreateManager(
       base::PassKey<ContentAutofillDriver> pass_key,
       ContentAutofillDriver& driver) override;
-  void InitAgent(
-      base::PassKey<ContentAutofillDriverFactory> pass_key,
-      const mojo::AssociatedRemote<mojom::AutofillAgent>& agent) override;
 };
 
 }  // namespace autofill

@@ -28,6 +28,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/combobox_model.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/combobox/combobox.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
@@ -68,7 +69,7 @@ LaunchOptionsComboboxModel::LaunchOptionsComboboxModel() {
       l10n_util::GetStringUTF16(IDS_APP_CONTEXT_MENU_OPEN_WINDOW));
 }
 
-LaunchOptionsComboboxModel::~LaunchOptionsComboboxModel() {}
+LaunchOptionsComboboxModel::~LaunchOptionsComboboxModel() = default;
 
 extensions::LaunchType LaunchOptionsComboboxModel::GetLaunchTypeAtIndex(
     int index) const {
@@ -196,7 +197,7 @@ void AppInfoSummaryPanel::AddLaunchOptionControl(views::View* vertical_stack) {
       std::make_unique<LaunchOptionsComboboxModel>();
   auto launch_options_combobox =
       std::make_unique<views::Combobox>(launch_options_combobox_model_.get());
-  launch_options_combobox->SetAccessibleName(
+  launch_options_combobox->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_APPLICATION_INFO_LAUNCH_OPTIONS_ACCNAME));
   launch_options_combobox->SetCallback(base::BindRepeating(
       &AppInfoSummaryPanel::LaunchOptionsChanged, base::Unretained(this)));

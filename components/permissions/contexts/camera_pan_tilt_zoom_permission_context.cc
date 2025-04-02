@@ -14,12 +14,12 @@
 #include "content/public/browser/permission_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 #include "third_party/blink/public/common/permissions/permission_utils.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-shared.h"
 
 namespace permissions {
 
-// TODO(crbug.com/1271543): This method is a temporary solution because of
+// TODO(crbug.com/40205763): This method is a temporary solution because of
 // inconsistency between the new permissions API that is migrated to
 // `blink::mojom::PermissionStatus` and its callsites that still use
 // `ContentSetting`.
@@ -38,9 +38,10 @@ CameraPanTiltZoomPermissionContext::CameraPanTiltZoomPermissionContext(
     content::BrowserContext* browser_context,
     std::unique_ptr<Delegate> delegate,
     const webrtc::MediaStreamDeviceEnumerator* device_enumerator)
-    : PermissionContextBase(browser_context,
-                            ContentSettingsType::CAMERA_PAN_TILT_ZOOM,
-                            blink::mojom::PermissionsPolicyFeature::kNotFound),
+    : PermissionContextBase(
+          browser_context,
+          ContentSettingsType::CAMERA_PAN_TILT_ZOOM,
+          network::mojom::PermissionsPolicyFeature::kNotFound),
       delegate_(std::move(delegate)),
       device_enumerator_(device_enumerator) {
   DCHECK(device_enumerator_);
@@ -126,7 +127,7 @@ void CameraPanTiltZoomPermissionContext::OnContentSettingChanged(
     return;
   }
 
-  // TODO(crbug.com/1078272): We should not need to deduce the url from the
+  // TODO(crbug.com/40129438): We should not need to deduce the url from the
   // primary pattern here. Modify the infrastructure to facilitate this
   // particular use case better.
   const GURL url(primary_pattern.ToString());

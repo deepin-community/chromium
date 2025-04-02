@@ -4,14 +4,15 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <memory>
 #include <utility>
 
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/permissions_test_util.h"
-#include "chrome/browser/extensions/permissions_updater.h"
+#include "chrome/browser/extensions/permissions/permissions_test_util.h"
+#include "chrome/browser/extensions/permissions/permissions_updater.h"
 #include "chrome/browser/extensions/test_extension_environment.h"
 #include "chrome/common/extensions/permissions/chrome_permission_message_provider.h"
 #include "chrome/grit/generated_resources.h"
@@ -56,7 +57,7 @@ class PermissionMessagesUnittest : public testing::Test {
   PermissionMessagesUnittest& operator=(const PermissionMessagesUnittest&) =
       delete;
 
-  ~PermissionMessagesUnittest() override {}
+  ~PermissionMessagesUnittest() override = default;
 
  protected:
   void CreateAndInstallExtensionWithPermissions(
@@ -250,7 +251,7 @@ class USBDevicePermissionMessagesTest : public testing::Test {
  public:
   USBDevicePermissionMessagesTest()
       : message_provider_(new ChromePermissionMessageProvider()) {}
-  ~USBDevicePermissionMessagesTest() override {}
+  ~USBDevicePermissionMessagesTest() override = default;
 
   PermissionMessages GetMessages(const PermissionIDSet& permissions) {
     return message_provider_->GetPermissionMessages(permissions);
@@ -314,11 +315,11 @@ TEST_F(USBDevicePermissionMessagesTest, SingleDevice) {
 
 TEST_F(USBDevicePermissionMessagesTest, MultipleDevice) {
   const char16_t kMessage[] = u"Access any of these USB devices";
-  const char* kDetails[] = {
+  auto kDetails = std::to_array<const char*>({
       "PVR Mass Storage from HUMAX Co., Ltd.",
       "unknown devices from HUMAX Co., Ltd.",
-      "devices from an unknown vendor"
-  };
+      "devices from an unknown vendor",
+  });
 
   // Prepare data set
   base::Value::List permission_list;

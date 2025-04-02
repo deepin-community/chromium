@@ -59,40 +59,34 @@ void DumpDXCCompiledShader(Device* device,
                            const dawn::native::d3d::CompiledShader& compiledShader,
                            uint32_t compileFlags) {
     std::ostringstream dumpedMsg;
-    // The HLSL may be empty if compilation failed.
-    if (!compiledShader.hlslSource.empty()) {
-        dumpedMsg << "/* Dumped generated HLSL */" << std::endl
-                  << compiledShader.hlslSource << std::endl;
-    }
+    DAWN_ASSERT(!compiledShader.hlslSource.empty());
+    dumpedMsg << "/* Dumped generated HLSL */\n" << compiledShader.hlslSource << "\n";
 
-    // The blob may be empty if DXC compilation failed.
     const Blob& shaderBlob = compiledShader.shaderBlob;
-    if (!shaderBlob.Empty()) {
-        dumpedMsg << "/* DXC compile flags */ " << std::endl
-                  << dawn::native::d3d::CompileFlagsToString(compileFlags) << std::endl;
-        dumpedMsg << "/* Dumped disassembled DXIL */" << std::endl;
-        DxcBuffer dxcBuffer;
-        dxcBuffer.Encoding = DXC_CP_UTF8;
-        dxcBuffer.Ptr = shaderBlob.Data();
-        dxcBuffer.Size = shaderBlob.Size();
+    DAWN_ASSERT(!shaderBlob.Empty());
+    dumpedMsg << "/* DXC compile flags */\n"
+              << dawn::native::d3d::CompileFlagsToString(compileFlags) << "\n";
+    dumpedMsg << "/* Dumped disassembled DXIL */\n";
+    DxcBuffer dxcBuffer;
+    dxcBuffer.Encoding = DXC_CP_UTF8;
+    dxcBuffer.Ptr = shaderBlob.Data();
+    dxcBuffer.Size = shaderBlob.Size();
 
-        ComPtr<IDxcResult> dxcResult;
-        device->GetDxcCompiler()->Disassemble(&dxcBuffer, IID_PPV_ARGS(&dxcResult));
+    ComPtr<IDxcResult> dxcResult;
+    device->GetDxcCompiler()->Disassemble(&dxcBuffer, IID_PPV_ARGS(&dxcResult));
 
-        ComPtr<IDxcBlobEncoding> disassembly;
-        if (dxcResult && dxcResult->HasOutput(DXC_OUT_DISASSEMBLY) &&
-            SUCCEEDED(
-                dxcResult->GetOutput(DXC_OUT_DISASSEMBLY, IID_PPV_ARGS(&disassembly), nullptr))) {
-            dumpedMsg << std::string_view(static_cast<const char*>(disassembly->GetBufferPointer()),
-                                          disassembly->GetBufferSize());
-        } else {
-            dumpedMsg << "DXC disassemble failed" << std::endl;
-            ComPtr<IDxcBlobEncoding> errors;
-            if (dxcResult && dxcResult->HasOutput(DXC_OUT_ERRORS) &&
-                SUCCEEDED(dxcResult->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr))) {
-                dumpedMsg << std::string_view(static_cast<const char*>(errors->GetBufferPointer()),
-                                              errors->GetBufferSize());
-            }
+    ComPtr<IDxcBlobEncoding> disassembly;
+    if (dxcResult && dxcResult->HasOutput(DXC_OUT_DISASSEMBLY) &&
+        SUCCEEDED(dxcResult->GetOutput(DXC_OUT_DISASSEMBLY, IID_PPV_ARGS(&disassembly), nullptr))) {
+        dumpedMsg << std::string_view(static_cast<const char*>(disassembly->GetBufferPointer()),
+                                      disassembly->GetBufferSize());
+    } else {
+        dumpedMsg << "DXC disassemble failed\n";
+        ComPtr<IDxcBlobEncoding> errors;
+        if (dxcResult && dxcResult->HasOutput(DXC_OUT_ERRORS) &&
+            SUCCEEDED(dxcResult->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr))) {
+            dumpedMsg << std::string_view(static_cast<const char*>(errors->GetBufferPointer()),
+                                          errors->GetBufferSize());
         }
     }
 
@@ -107,15 +101,18 @@ void DumpDXCCompiledShader(Device* device,
 ResultOrError<Ref<ShaderModule>> ShaderModule::Create(
     Device* device,
     const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+    const std::vector<tint::wgsl::Extension>& internalExtensions,
     ShaderModuleParseResult* parseResult,
     OwnedCompilationMessages* compilationMessages) {
-    Ref<ShaderModule> module = AcquireRef(new ShaderModule(device, descriptor));
+    Ref<ShaderModule> module = AcquireRef(new ShaderModule(device, descriptor, internalExtensions));
     DAWN_TRY(module->Initialize(parseResult, compilationMessages));
     return module;
 }
 
-ShaderModule::ShaderModule(Device* device, const UnpackedPtr<ShaderModuleDescriptor>& descriptor)
-    : ShaderModuleBase(device, descriptor) {}
+ShaderModule::ShaderModule(Device* device,
+                           const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+                           std::vector<tint::wgsl::Extension> internalExtensions)
+    : ShaderModuleBase(device, descriptor, std::move(internalExtensions)) {}
 
 MaybeError ShaderModule::Initialize(ShaderModuleParseResult* parseResult,
                                     OwnedCompilationMessages* compilationMessages) {
@@ -128,21 +125,23 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
     SingleShaderStage stage,
     const PipelineLayout* layout,
     uint32_t compileFlags,
-    const std::optional<dawn::native::d3d::InterStageShaderVariablesMask>& usedInterstageVariables,
-    std::optional<uint32_t> maxSubgroupSizeForFullSubgroups) {
+    const std::optional<dawn::native::d3d::InterStageShaderVariablesMask>&
+        usedInterstageVariables) {
     Device* device = ToBackend(GetDevice());
     TRACE_EVENT0(device->GetPlatform(), General, "ShaderModuleD3D12::Compile");
     DAWN_ASSERT(!IsError());
 
     ScopedTintICEHandler scopedICEHandler(device);
     const EntryPointMetadata& entryPoint = GetEntryPoint(programmableStage.entryPoint);
+    const bool useTintIR = device->IsToggleEnabled(Toggle::UseTintIR);
 
     d3d::D3DCompilationRequest req = {};
     req.tracePlatform = UnsafeUnkeyedValue(device->GetPlatform());
-    req.hlsl.shaderModel = device->GetDeviceInfo().shaderModel;
+    req.hlsl.shaderModel = ToBackend(device->GetPhysicalDevice())
+                               ->GetAppliedShaderModelUnderToggles(device->GetTogglesState());
     req.hlsl.disableSymbolRenaming = device->IsToggleEnabled(Toggle::DisableSymbolRenaming);
     req.hlsl.dumpShaders = device->IsToggleEnabled(Toggle::DumpShaders);
-    req.hlsl.maxSubgroupSizeForFullSubgroups = maxSubgroupSizeForFullSubgroups;
+    req.hlsl.useTintIR = useTintIR;
 
     req.bytecode.hasShaderF16Feature = device->HasFeature(Feature::ShaderF16);
     req.bytecode.compileFlags = compileFlags;
@@ -152,14 +151,14 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
         // available.
         DAWN_ASSERT(ToBackend(device->GetPhysicalDevice())->GetBackend()->IsDXCAvailable());
         // We can get the DXC version information since IsDXCAvailable() is true.
-        d3d::DxcVersionInfo dxcVersionInfo =
+        d3d12::DxcVersionInfo dxcVersionInfo =
             ToBackend(device->GetPhysicalDevice())->GetBackend()->GetDxcVersion();
 
         req.bytecode.compiler = d3d::Compiler::DXC;
         req.bytecode.dxcLibrary = device->GetDxcLibrary().Get();
         req.bytecode.dxcCompiler = device->GetDxcCompiler().Get();
         req.bytecode.compilerVersion = dxcVersionInfo.DxcCompilerVersion;
-        req.bytecode.dxcShaderProfile = device->GetDeviceInfo().shaderProfiles[stage];
+        req.bytecode.dxcShaderProfile = device->GetDxcShaderProfiles()[stage];
     } else {
         req.bytecode.compiler = d3d::Compiler::FXC;
         req.bytecode.d3dCompile = device->GetFunctions()->d3dCompile;
@@ -179,7 +178,7 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
 
     using tint::BindingPoint;
 
-    tint::ArrayLengthFromUniformOptions arrayLengthFromUniform;
+    tint::hlsl::writer::ArrayLengthFromUniformOptions arrayLengthFromUniform;
     arrayLengthFromUniform.ubo_binding = {layout->GetDynamicStorageBufferLengthsRegisterSpace(),
                                           layout->GetDynamicStorageBufferLengthsShaderRegister()};
 
@@ -218,6 +217,7 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
                             srcBindingPoint, tint::hlsl::writer::binding::Storage{
                                                  dstBindingPoint.group, dstBindingPoint.binding});
                         break;
+                    case wgpu::BufferBindingType::BindingNotUsed:
                     case wgpu::BufferBindingType::Undefined:
                         DAWN_UNREACHABLE();
                         break;
@@ -226,8 +226,7 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
                 bindings.sampler.emplace(
                     srcBindingPoint, tint::hlsl::writer::binding::Sampler{dstBindingPoint.group,
                                                                           dstBindingPoint.binding});
-            } else if (std::holds_alternative<SampledTextureBindingInfo>(
-                           shaderBindingInfo.bindingInfo)) {
+            } else if (std::holds_alternative<TextureBindingInfo>(shaderBindingInfo.bindingInfo)) {
                 bindings.texture.emplace(
                     srcBindingPoint, tint::hlsl::writer::binding::Texture{dstBindingPoint.group,
                                                                           dstBindingPoint.binding});
@@ -259,7 +258,7 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
 
             if (bufferBindingInfo) {
                 const auto& bindingLayout =
-                    std::get<BufferBindingLayout>(bgl->GetBindingInfo(bindingIndex).bindingLayout);
+                    std::get<BufferBindingInfo>(bgl->GetBindingInfo(bindingIndex).bindingLayout);
 
                 // Declaring a read-only storage buffer in HLSL but specifying a storage
                 // buffer in the BGL produces the wrong output. Force read-only storage
@@ -330,8 +329,10 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
     req.hlsl.inputProgram = &(tintProgram->program);
     req.hlsl.entryPointName = programmableStage.entryPoint.c_str();
     req.hlsl.stage = stage;
-    req.hlsl.firstIndexOffsetShaderRegister = layout->GetFirstIndexOffsetShaderRegister();
-    req.hlsl.firstIndexOffsetRegisterSpace = layout->GetFirstIndexOffsetRegisterSpace();
+    if (!useTintIR) {
+        req.hlsl.firstIndexOffsetRegisterSpace = layout->GetFirstIndexOffsetRegisterSpace();
+        req.hlsl.firstIndexOffsetShaderRegister = layout->GetFirstIndexOffsetShaderRegister();
+    }
     req.hlsl.substituteOverrideConfig = std::move(substituteOverrideConfig);
 
     req.hlsl.tintOptions.disable_robustness = !device->IsRobustnessEnabled();
@@ -339,9 +340,19 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
         device->IsToggleEnabled(Toggle::DisableWorkgroupInit);
     req.hlsl.tintOptions.bindings = std::move(bindings);
 
+    req.hlsl.tintOptions.compiler = req.bytecode.compiler == d3d::Compiler::FXC
+                                        ? tint::hlsl::writer::Options::Compiler::kFXC
+                                        : tint::hlsl::writer::Options::Compiler::kDXC;
+
     if (entryPoint.usesNumWorkgroups) {
+        DAWN_ASSERT(stage == SingleShaderStage::Compute);
         req.hlsl.tintOptions.root_constant_binding_point = tint::BindingPoint{
             layout->GetNumWorkgroupsRegisterSpace(), layout->GetNumWorkgroupsShaderRegister()};
+    } else if (useTintIR && stage == SingleShaderStage::Vertex) {
+        // For vertex shaders, use root constant to add FirstIndexOffset, if needed
+        req.hlsl.tintOptions.root_constant_binding_point =
+            tint::BindingPoint{layout->GetFirstIndexOffsetRegisterSpace(),
+                               layout->GetFirstIndexOffsetShaderRegister()};
     }
 
     // TODO(dawn:549): HLSL generation outputs the indices into the
@@ -373,13 +384,11 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
 
     const CombinedLimits& limits = device->GetLimits();
     req.hlsl.limits = LimitsForCompilationRequest::Create(limits.v1);
+    req.hlsl.adapter = UnsafeUnkeyedValue(static_cast<const AdapterBase*>(device->GetAdapter()));
 
     CacheResult<d3d::CompiledShader> compiledShader;
-    MaybeError compileError = [&]() -> MaybeError {
-        DAWN_TRY_LOAD_OR_RUN(compiledShader, device, std::move(req), d3d::CompiledShader::FromBlob,
-                             d3d::CompileShader, "D3D12.CompileShader");
-        return {};
-    }();
+    DAWN_TRY_LOAD_OR_RUN(compiledShader, device, std::move(req), d3d::CompiledShader::FromBlob,
+                         d3d::CompileShader, "D3D12.CompileShader");
 
     if (device->IsToggleEnabled(Toggle::DumpShaders)) {
         if (device->IsToggleEnabled(Toggle::UseDXC)) {
@@ -387,10 +396,6 @@ ResultOrError<d3d::CompiledShader> ShaderModule::Compile(
         } else {
             d3d::DumpFXCCompiledShader(device, *compiledShader, compileFlags);
         }
-    }
-
-    if (compileError.IsError()) {
-        return {compileError.AcquireError()};
     }
 
     device->GetBlobCache()->EnsureStored(compiledShader);

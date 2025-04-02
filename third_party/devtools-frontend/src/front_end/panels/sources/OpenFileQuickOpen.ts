@@ -12,6 +12,10 @@ import {FilteredUISourceCodeListProvider} from './FilteredUISourceCodeListProvid
 import {SourcesView} from './SourcesView.js';
 
 export class OpenFileQuickOpen extends FilteredUISourceCodeListProvider {
+  constructor() {
+    super('source-file');
+  }
+
   override attach(): void {
     this.setDefaultScores(SourcesView.defaultUISourceCodeScores());
     super.attach();
@@ -42,8 +46,8 @@ export class OpenFileQuickOpen extends FilteredUISourceCodeListProvider {
     const iconData = PanelUtils.iconDataForResourceType(this.itemContentTypeAt(itemIndex));
     iconElement.data = {
       ...iconData,
-      width: '20px',
-      height: '20px',
+      width: '18px',
+      height: '18px',
     };
     titleElement.parentElement?.parentElement?.insertBefore(iconElement, titleElement.parentElement);
   }

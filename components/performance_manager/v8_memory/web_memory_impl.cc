@@ -4,6 +4,7 @@
 
 #include "components/performance_manager/v8_memory/web_memory_impl.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -12,7 +13,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
-#include "base/ranges/algorithm.h"
 #include "components/performance_manager/public/graph/frame_node.h"
 #include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/graph/page_node.h"
@@ -26,7 +26,6 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/content_switches.h"
-#include "third_party/blink/public/common/features.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -41,7 +40,7 @@ mojom::WebMemoryMeasurementPtr BuildMemoryUsageResult(
     const ProcessNode* process_node) {
   const auto& frame_nodes = process_node->GetFrameNodes();
   const auto it =
-      base::ranges::find(frame_nodes, frame_token, &FrameNode::GetFrameToken);
+      std::ranges::find(frame_nodes, frame_token, &FrameNode::GetFrameToken);
 
   if (it == frame_nodes.end()) {
     // The frame no longer exists.
@@ -153,19 +152,12 @@ void WebMeasureMemorySecurityCheckerImpl::CheckMeasureMemoryIsAllowed(
   DCHECK(frame);
   DCHECK_ON_GRAPH_SEQUENCE(frame->GetGraph());
 
-  // TODO(crbug/1085129): The frame may have navigated since it sent the
+  // TODO(crbug.com/40132061): The frame may have navigated since it sent the
   // measureMemory request. We could return true if the new document is allowed
   // to measure memory, but the actual document that sent the request is not.
   // If that happens the DocumentCoordinationUnit mojo interface is reset so
   // the measurement result will be thrown away, so this is not a security
   // issue, but it does mean doing extra work.
-
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kWebMeasureMemoryViaPerformanceManager)) {
-    std::move(bad_message_callback)
-        .Run("WebMeasureMemoryViaPerformanceManager feature is disabled");
-    return;
-  }
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE, base::BindOnce(&CheckIsCrossOriginIsolatedOnUISeq,
                                 frame->GetRenderFrameHostProxy(),

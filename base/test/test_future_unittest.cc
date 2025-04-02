@@ -12,6 +12,7 @@
 #include "base/task/thread_pool.h"
 #include "base/test/bind.h"
 #include "base/test/gtest_util.h"
+#include "base/test/mock_callback.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest-spi.h"
@@ -229,12 +230,12 @@ TEST_F(TestFutureTest, ShouldNotAllowOverwritingStoredValue) {
 TEST_F(TestFutureTest, ShouldAllowReuseIfPreviousValueIsFirstConsumed) {
   TestFuture<std::string> future;
 
-  RunLater([&]() { future.SetValue("first value"); });
+  RunLater([&] { future.SetValue("first value"); });
   EXPECT_EQ(future.Take(), "first value");
 
   ASSERT_FALSE(future.IsReady());
 
-  RunLater([&]() { future.SetValue("second value"); });
+  RunLater([&] { future.SetValue("second value"); });
   EXPECT_EQ(future.Take(), "second value");
 }
 
@@ -267,7 +268,7 @@ TEST_F(TestFutureTest, WaitShouldWorkAfterTake) {
   future.SetValue("first value");
   std::ignore = future.Take();
 
-  RunLater([&]() { future.SetValue("second value"); });
+  RunLater([&] { future.SetValue("second value"); });
 
   EXPECT_TRUE(future.Wait());
   EXPECT_EQ(future.Get(), "second value");
@@ -277,7 +278,7 @@ TEST_F(TestFutureTest, ShouldSignalWhenSetValueIsInvoked) {
   const int expected_value = 111;
   TestFuture<int> future;
 
-  RunLater([&future]() { future.SetValue(expected_value); });
+  RunLater([&future] { future.SetValue(expected_value); });
 
   int actual_value = future.Get();
 
@@ -529,6 +530,70 @@ TEST_F(TestFutureTest, ShouldPrintNewValueIfItOverwritesOldValue) {
       "new value <second-value, 2222, [4-byte object at 0x");
 }
 
+TEST_F(TestFutureTest, InvokeFutureSingleValue) {
+  TestFuture<int> future;
+
+  MockCallback<OnceCallback<void(int)>> cb;
+
+  EXPECT_CALL(cb, Run).WillOnce(InvokeFuture(future));
+
+  RunLater(BindOnce(cb.Get(), 7));
+
+  EXPECT_EQ(7, future.Take());
+}
+
+TEST_F(TestFutureTest, InvokeFutureMoveOnlyValue) {
+  TestFuture<MoveOnlyValue> future;
+
+  MockCallback<OnceCallback<void(MoveOnlyValue)>> cb;
+
+  EXPECT_CALL(cb, Run).WillOnce(InvokeFuture(future));
+
+  RunLater(BindOnce(cb.Get(), MoveOnlyValue(10)));
+
+  EXPECT_EQ(10, future.Take().data);
+}
+
+TEST_F(TestFutureTest, InvokeFutureMultipleValues) {
+  TestFuture<int, std::string> future;
+
+  MockCallback<OnceCallback<void(int, std::string)>> cb;
+
+  EXPECT_CALL(cb, Run).WillOnce(InvokeFuture(future));
+
+  RunLater(BindOnce(cb.Get(), 19, "Nineteen"));
+
+  EXPECT_THAT(future.Take(), std::tuple(19, "Nineteen"));
+}
+
+TEST_F(TestFutureTest, InvokeFutureMultipleTimes) {
+  TestFuture<std::string> future;
+
+  MockCallback<RepeatingCallback<void(std::string)>> cb;
+
+  EXPECT_CALL(cb, Run).WillRepeatedly(InvokeFuture(future));
+
+  cb.Get().Run("first time");
+  EXPECT_EQ("first time", future.Take());
+
+  cb.Get().Run("second time");
+  EXPECT_EQ("second time", future.Take());
+}
+
+TEST_F(TestFutureTest, InvokeFutureDestroyedFuture) {
+  std::optional<TestFuture<int>> maybe_future;
+  maybe_future.emplace();
+
+  MockCallback<OnceCallback<void(int)>> cb;
+
+  EXPECT_CALL(cb, Run).WillOnce(InvokeFuture(*maybe_future));
+
+  maybe_future = std::nullopt;
+
+  // If this doesn't crash it worked.
+  cb.Get().Run(42);
+}
+
 TEST_F(TestFutureDeathTest, CallbackShouldDcheckOnOtherSequence) {
   TestFuture<int> future;
 
@@ -564,7 +629,7 @@ TEST_F(TestFutureWithoutValuesTest, IsReadyShouldBeTrueWhenSetValueIsInvoked) {
 TEST_F(TestFutureWithoutValuesTest, WaitShouldUnblockWhenSetValueIsInvoked) {
   TestFuture<void> future;
 
-  RunLater([&future]() { future.SetValue(); });
+  RunLater([&future] { future.SetValue(); });
 
   ASSERT_FALSE(future.IsReady());
   std::ignore = future.Wait();
@@ -650,6 +715,18 @@ TEST(TestFutureWithoutTaskEnvironmentDeathTest,
 
   EXPECT_CHECK_DEATH_WITH((void)future.Wait(),
                           "requires a single-threaded context");
+}
+
+TEST_F(TestFutureWithoutValuesTest, InvokeFuture) {
+  TestFuture<void> future;
+
+  MockCallback<OnceClosure> cb;
+
+  EXPECT_CALL(cb, Run).WillOnce(InvokeFuture(future));
+
+  RunLater(cb.Get());
+
+  EXPECT_TRUE(future.Wait());
 }
 
 }  // namespace base::test

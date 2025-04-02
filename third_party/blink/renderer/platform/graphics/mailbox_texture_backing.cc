@@ -9,7 +9,7 @@
 #include "third_party/blink/renderer/platform/graphics/skia/skia_utils.h"
 #include "third_party/blink/renderer/platform/graphics/web_graphics_context_3d_provider_wrapper.h"
 #include "third_party/skia/include/core/SkImage.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
 
 namespace blink {
 
@@ -37,7 +37,7 @@ MailboxTextureBacking::~MailboxTextureBacking() {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (context_provider_wrapper_) {
     gpu::raster::RasterInterface* ri =
-        context_provider_wrapper_->ContextProvider()->RasterInterface();
+        context_provider_wrapper_->ContextProvider().RasterInterface();
     // Update the sync token for MailboxRef.
     ri->WaitSyncTokenCHROMIUM(mailbox_ref_->sync_token().GetConstData());
     gpu::SyncToken sync_token;
@@ -73,10 +73,13 @@ sk_sp<SkImage> MailboxTextureBacking::GetSkImageViaReadback() {
     uint8_t* writable_pixels =
         static_cast<uint8_t*>(image_pixels->writable_data());
     gpu::raster::RasterInterface* ri =
-        context_provider_wrapper_->ContextProvider()->RasterInterface();
-    ri->ReadbackImagePixels(mailbox_, sk_image_info_,
-                            static_cast<GLuint>(sk_image_info_.minRowBytes()),
-                            0, 0, /*plane_index=*/0, writable_pixels);
+        context_provider_wrapper_->ContextProvider().RasterInterface();
+    if (!ri->ReadbackImagePixels(
+            mailbox_, sk_image_info_,
+            static_cast<GLuint>(sk_image_info_.minRowBytes()), 0, 0,
+            /*plane_index=*/0, writable_pixels)) {
+      return nullptr;
+    }
 
     return SkImages::RasterFromData(sk_image_info_, std::move(image_pixels),
                                     sk_image_info_.minRowBytes());
@@ -97,11 +100,10 @@ bool MailboxTextureBacking::readPixels(const SkImageInfo& dst_info,
       return false;
 
     gpu::raster::RasterInterface* ri =
-        context_provider_wrapper_->ContextProvider()->RasterInterface();
-    ri->ReadbackImagePixels(mailbox_, dst_info,
-                            static_cast<GLuint>(dst_info.minRowBytes()), src_x,
-                            src_y, /*plane_index=*/0, dst_pixels);
-    return true;
+        context_provider_wrapper_->ContextProvider().RasterInterface();
+    return ri->ReadbackImagePixels(mailbox_, dst_info,
+                                   static_cast<GLuint>(dst_info.minRowBytes()),
+                                   src_x, src_y, /*plane_index=*/0, dst_pixels);
   } else if (sk_image_) {
     return sk_image_->readPixels(dst_info, dst_pixels, dst_row_bytes, src_x,
                                  src_y);
@@ -115,7 +117,7 @@ void MailboxTextureBacking::FlushPendingSkiaOps() {
     return;
   }
   GrDirectContext* ctx =
-      context_provider_wrapper_->ContextProvider()->GetGrContext();
+      context_provider_wrapper_->ContextProvider().GetGrContext();
   if (!ctx) {
     return;
   }

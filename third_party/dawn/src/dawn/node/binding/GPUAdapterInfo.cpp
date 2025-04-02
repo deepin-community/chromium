@@ -30,28 +30,26 @@
 #include <iomanip>
 #include <sstream>
 
-namespace {
-
-std::string FormatDevice(uint32_t deviceId) {
-    std::ostringstream device;
-    device << "0x" << std::setfill('0') << std::uppercase << std::internal << std::hex
-           << std::setw(4) << deviceId;
-    return device.str();
-}
-
-}  // namespace
-
 namespace wgpu::binding {
 
 ////////////////////////////////////////////////////////////////////////////////
 // wgpu::bindings::GPUAdapterInfo
 ////////////////////////////////////////////////////////////////////////////////
 
-GPUAdapterInfo::GPUAdapterInfo(WGPUAdapterProperties properties)
-    : vendor_(properties.vendorName),
-      architecture_(properties.architecture),
-      device_(FormatDevice(properties.deviceID)),
-      description_(properties.name) {}
+GPUAdapterInfo::GPUAdapterInfo(const wgpu::AdapterInfo& info)
+    : vendor_(info.vendor),
+      architecture_(info.architecture),
+      device_(info.device),
+      description_(info.description) {
+    for (wgpu::ChainedStructOut* chain = info.nextInChain; chain; chain = chain->nextInChain) {
+        if (chain->sType == wgpu::SType::AdapterPropertiesSubgroups) {
+            subgroup_properties_ = *static_cast<wgpu::AdapterPropertiesSubgroups*>(chain);
+            // Clear to prevent using invalid pointer.
+            subgroup_properties_.nextInChain = nullptr;
+            break;
+        }
+    }
+}
 
 std::string GPUAdapterInfo::getVendor(Napi::Env) {
     return vendor_;
@@ -67,6 +65,14 @@ std::string GPUAdapterInfo::getDevice(Napi::Env) {
 
 std::string GPUAdapterInfo::getDescription(Napi::Env) {
     return description_;
+}
+
+uint32_t GPUAdapterInfo::getSubgroupMinSize(Napi::Env) {
+    return subgroup_properties_.subgroupMinSize;
+}
+
+uint32_t GPUAdapterInfo::getSubgroupMaxSize(Napi::Env) {
+    return subgroup_properties_.subgroupMaxSize;
 }
 
 }  // namespace wgpu::binding

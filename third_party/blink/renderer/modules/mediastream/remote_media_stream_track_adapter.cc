@@ -147,7 +147,6 @@ void RemoteAudioTrackAdapter::OnChangedOnMainThread(
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 

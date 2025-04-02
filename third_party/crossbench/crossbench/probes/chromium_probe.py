@@ -6,17 +6,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from crossbench.browsers.chromium import chromium
-from crossbench.env import HostEnvironment
-
-from .probe import Probe
+from crossbench.browsers.attributes import BrowserAttributes
+from crossbench.probes.probe import Probe
 
 if TYPE_CHECKING:
   from crossbench.browsers.browser import Browser
+  from crossbench.env import HostEnvironment
 
 
 class ChromiumProbe(Probe):
 
   def validate_browser(self, env: HostEnvironment, browser: Browser) -> None:
     super().validate_browser(env, browser)
-    self.expect_browser(browser, chromium.Chromium)
+    self.expect_browser(browser, BrowserAttributes.CHROMIUM_BASED)
+
+  def attach(self, browser: Browser) -> None:
+    self.expect_browser(browser, BrowserAttributes.CHROMIUM_BASED)
+    super().attach(browser)

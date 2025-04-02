@@ -9,12 +9,12 @@
 #include <optional>
 
 #include "base/containers/span.h"
+#include "cc/paint/paint_flags.h"
 #include "components/viz/common/quads/draw_quad.h"
 #include "components/viz/common/resources/resource_id.h"
 #include "components/viz/common/viz_common_export.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/geometry/rect.h"
-#include "ui/gfx/hdr_metadata.h"
 #include "ui/gfx/video_types.h"
 
 namespace viz {
@@ -24,7 +24,6 @@ enum class OverlayPriority { kLow, kRegular, kRequired };
 
 class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
  public:
-  static const size_t kResourceIdIndex = 0;
   static constexpr Material kMaterial = Material::kTextureContent;
 
   TextureDrawQuad();
@@ -41,7 +40,6 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
               const gfx::PointF& top_left,
               const gfx::PointF& bottom_right,
               SkColor4f background,
-              bool flipped,
               bool nearest,
               bool secure_output,
               gfx::ProtectedVideoType video_type);
@@ -56,7 +54,6 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
               const gfx::PointF& top_left,
               const gfx::PointF& bottom_right,
               SkColor4f background,
-              bool flipped,
               bool nearest,
               bool secure_output,
               gfx::ProtectedVideoType video_type);
@@ -64,8 +61,7 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
   gfx::PointF uv_top_left;
   gfx::PointF uv_bottom_right;
   SkColor4f background_color = SkColors::kTransparent;
-  std::array<float, 4> vertex_opacity = {1, 1, 1, 1};
-  bool y_flipped : 1;
+  cc::PaintFlags::DynamicRangeLimitMixture dynamic_range_limit;
   bool nearest_neighbor : 1;
   bool premultiplied_alpha : 1;
 
@@ -83,8 +79,6 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
   // If true we will treat the alpha in the texture as 1. This works like rgbx
   // and not like blend mode 'kSrc' which would copy the alpha.
   bool force_rgbx : 1 = false;
-
-  gfx::HDRMetadata hdr_metadata;
 
   // kClear if the contents do not require any special protection. See enum of a
   // list of protected content types. Protected contents cannot be displayed via
@@ -107,6 +101,11 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
         int other_rounded_display_mask_radius,
         bool is_horizontally_positioned = true);
 
+    // Returns the bounds of rounded display masks in target space that are
+    // associated with the `quad`.
+    static std::array<gfx::RectF, kMaxRoundedDisplayMasksCount>
+    GetRoundedDisplayMasksBounds(const DrawQuad* quad);
+
     RoundedDisplayMasksInfo();
 
     bool IsEmpty() const;
@@ -114,7 +113,7 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
     bool is_horizontally_positioned = true;
 
     // Radii of display's rounded corners masks in pixels.
-    uint8_t radii[kMaxRoundedDisplayMasksCount] = {0, 0};
+    std::array<uint8_t, kMaxRoundedDisplayMasksCount> radii = {0, 0};
   };
 
   // Encodes the radii(in pixels) and position of rounded-display mask textures
@@ -139,7 +138,7 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
   };
   OverlayResources overlay_resources;
 
-  ResourceId resource_id() const { return resources.ids[kResourceIdIndex]; }
+  // TODO(crbug.com/40279814): Remove this resource size.
   const gfx::Size& resource_size_in_pixels() const {
     return overlay_resources.size_in_pixels;
   }
@@ -150,10 +149,6 @@ class VIZ_COMMON_EXPORT TextureDrawQuad : public DrawQuad {
   void set_force_rgbx(bool force_rgbx_value = true) {
     force_rgbx = force_rgbx_value;
   }
-
-  void set_vertex_opacity(float opacity);
-
-  void set_vertex_opacity(base::span<const float, 4> opacity);
 
   static const TextureDrawQuad* MaterialCast(const DrawQuad*);
 

@@ -16,43 +16,33 @@
 #include "base/metrics/histogram.h"
 #include "base/metrics/sparse_histogram.h"
 #include "base/time/time.h"
+#include "base/types/cxx23_to_underlying.h"
 
 // This is for macros and helpers internal to base/metrics. They should not be
 // used outside of this directory. For writing to UMA histograms, see
 // histogram_macros.h.
 
-namespace base {
-namespace internal {
+namespace base::internal {
 
-// Helper traits for deducing the boundary value for enums.
-template <typename Enum, typename SFINAE = void>
+// Helper trait for deducing the boundary value for enums.
+template <typename Enum>
+  requires(std::is_enum_v<Enum>)
 struct EnumSizeTraits {
   static constexpr Enum Count() {
-    static_assert(
-        sizeof(Enum) == 0,
-        "enumerator must define kMaxValue enumerator to use this macro!");
-    return Enum();
+    if constexpr (requires { Enum::kMaxValue; }) {
+      // Since the UMA histogram macros expect a value one larger than the max
+      // defined enumerator value, add one.
+      return static_cast<Enum>(base::to_underlying(Enum::kMaxValue) + 1);
+    } else {
+      static_assert(
+          sizeof(Enum) == 0,
+          "enumerator must define kMaxValue enumerator to use this macro!");
+      return Enum();
+    }
   }
 };
 
-// Since the UMA histogram macros expect a value one larger than the max defined
-// enumerator value, add one.
-template <typename Enum>
-struct EnumSizeTraits<
-    Enum,
-    std::enable_if_t<std::is_enum_v<decltype(Enum::kMaxValue)>>> {
-  static constexpr Enum Count() {
-    // If you're getting
-    //   note: integer value X is outside the valid range of values [0, X] for
-    //         this enumeration type
-    // Then you need to give your enum a fixed underlying type.
-    return static_cast<Enum>(
-        static_cast<std::underlying_type_t<Enum>>(Enum::kMaxValue) + 1);
-  }
-};
-
-}  // namespace internal
-}  // namespace base
+}  // namespace base::internal
 
 // TODO(rkaplow): Improve commenting of these methods.
 //------------------------------------------------------------------------------
@@ -118,11 +108,11 @@ struct EnumSizeTraits<
   } while (0)
 
 // This is a helper macro used by other macros and shouldn't be used directly.
-#define INTERNAL_HISTOGRAM_CUSTOM_COUNTS_WITH_FLAG(name, sample, min, max,     \
-                                                   bucket_count, flag)         \
-    STATIC_HISTOGRAM_POINTER_BLOCK(                                            \
-        name, Add(sample),                                                     \
-        base::Histogram::FactoryGet(name, min, max, bucket_count, flag))
+#define INTERNAL_HISTOGRAM_CUSTOM_COUNTS_WITH_FLAG(name, sample, min, max, \
+                                                   bucket_count, flag)     \
+  STATIC_HISTOGRAM_POINTER_BLOCK(                                          \
+      name, Add(sample),                                                   \
+      base::Histogram::FactoryGet(name, min, max, bucket_count, flag))
 
 // This is a helper macro used by other macros and shouldn't be used directly.
 // The bucketing scheme is linear with a bucket size of 1. For N items,
@@ -194,10 +184,10 @@ struct EnumSizeTraits<
 
 // Similar to the previous macro but intended for enumerations. This delegates
 // the work to the previous macro, but supports scoped enumerations as well by
-// forcing an explicit cast to the HistogramBase::Sample integral type.
+// forcing an explicit cast to the HistogramBase::Sample32 integral type.
 //
 // Note the range checks verify two separate issues:
-// - that the declared enum size isn't out of range of HistogramBase::Sample
+// - that the declared enum size isn't out of range of HistogramBase::Sample32
 // - that the declared enum size is > 0
 //
 // TODO(dcheng): This should assert that the passed in types are actually enum
@@ -216,11 +206,11 @@ struct EnumSizeTraits<
     static_assert(                                                             \
         static_cast<uintmax_t>(boundary) <                                     \
             static_cast<uintmax_t>(                                            \
-                std::numeric_limits<base::HistogramBase::Sample>::max()),      \
-        "|boundary| is out of range of HistogramBase::Sample");                \
+                std::numeric_limits<base::HistogramBase::Sample32>::max()),    \
+        "|boundary| is out of range of HistogramBase::Sample32");              \
     INTERNAL_HISTOGRAM_EXACT_LINEAR_WITH_FLAG(                                 \
-        name, static_cast<base::HistogramBase::Sample>(sample),                \
-        static_cast<base::HistogramBase::Sample>(boundary), flag);             \
+        name, static_cast<base::HistogramBase::Sample32>(sample),              \
+        static_cast<base::HistogramBase::Sample32>(boundary), flag);           \
   } while (0)
 
 #define INTERNAL_HISTOGRAM_SCALED_ENUMERATION_WITH_FLAG(name, sample, count, \
@@ -234,11 +224,11 @@ struct EnumSizeTraits<
     static_assert(                                                           \
         static_cast<uintmax_t>(boundary) <                                   \
             static_cast<uintmax_t>(                                          \
-                std::numeric_limits<base::HistogramBase::Sample>::max()),    \
-        "|boundary| is out of range of HistogramBase::Sample");              \
+                std::numeric_limits<base::HistogramBase::Sample32>::max()),  \
+        "|boundary| is out of range of HistogramBase::Sample32");            \
     INTERNAL_HISTOGRAM_SCALED_EXACT_LINEAR_WITH_FLAG(                        \
-        name, static_cast<base::HistogramBase::Sample>(sample), count,       \
-        static_cast<base::HistogramBase::Sample>(boundary), scale, flag);    \
+        name, static_cast<base::HistogramBase::Sample32>(sample), count,     \
+        static_cast<base::HistogramBase::Sample32>(boundary), scale, flag);  \
   } while (0)
 
 // This is a helper macro used by other macros and shouldn't be used directly.

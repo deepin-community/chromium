@@ -8,13 +8,13 @@
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/test_future.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
 #include "chrome/browser/web_applications/test/fake_os_integration_manager.h"
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
+#include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
@@ -25,7 +25,7 @@
 #include "content/public/test/browser_test.h"
 #include "url/gurl.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/app_list/app_list_syncable_service.h"
 #include "chrome/browser/ash/app_list/app_list_syncable_service_factory.h"
 #include "chrome/browser/web_applications/test/web_app_test_observers.h"
@@ -34,12 +34,6 @@
 namespace web_app {
 
 class WebAppUiManagerImplBrowserTest : public InProcessBrowserTest {
- public:
-  WebAppUiManagerImplBrowserTest()
-      : fake_web_app_provider_creator_(base::BindRepeating(
-            &WebAppUiManagerImplBrowserTest::CreateFakeWebAppProvider,
-            base::Unretained(this))) {}
-
  protected:
   // InProcessBrowserTest:
   void SetUpOnMainThread() override {
@@ -51,8 +45,8 @@ class WebAppUiManagerImplBrowserTest : public InProcessBrowserTest {
   Profile* profile() { return browser()->profile(); }
 
   webapps::AppId InstallWebApp(const GURL& start_url) {
-    auto web_app_info = std::make_unique<WebAppInstallInfo>();
-    web_app_info->start_url = start_url;
+    auto web_app_info =
+        WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
     web_app_info->user_display_mode = mojom::UserDisplayMode::kStandalone;
     return web_app::test::InstallWebApp(profile(), std::move(web_app_info));
   }
@@ -66,17 +60,7 @@ class WebAppUiManagerImplBrowserTest : public InProcessBrowserTest {
   }
 
  private:
-  std::unique_ptr<KeyedService> CreateFakeWebAppProvider(Profile* profile) {
-    auto provider = std::make_unique<FakeWebAppProvider>(profile);
-    auto shortcut_manager = std::make_unique<TestShortcutManager>(profile);
-    auto os_integration_manager = std::make_unique<FakeOsIntegrationManager>(
-        profile, std::move(shortcut_manager), nullptr, nullptr, nullptr);
-    provider->SetOsIntegrationManager(std::move(os_integration_manager));
-    provider->StartWithSubsystems();
-    return provider;
-  }
-
-  FakeWebAppProviderCreator fake_web_app_provider_creator_;
+  web_app::OsIntegrationTestOverrideBlockingRegistration faked_os_integration_;
 };
 
 IN_PROC_BROWSER_TEST_F(WebAppUiManagerImplBrowserTest,
@@ -184,7 +168,7 @@ IN_PROC_BROWSER_TEST_F(WebAppUiManagerImplBrowserTest,
   }
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 IN_PROC_BROWSER_TEST_F(WebAppUiManagerImplBrowserTest, MigrateAppAttribute) {
   app_list::AppListSyncableService* app_list_service =
       app_list::AppListSyncableServiceFactory::GetForProfile(
@@ -210,6 +194,6 @@ IN_PROC_BROWSER_TEST_F(WebAppUiManagerImplBrowserTest, MigrateAppAttribute) {
                 ->item_pin_ordinal.ToDebugString(),
             "positionold");
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 }  // namespace web_app

@@ -14,7 +14,7 @@ namespace ash {
 // In Ash, most of the profile has corresponding ChromeOS User.
 // This class is to support their mapping.
 // On Profile creation, AccountId for the corresponding User is annotated.
-// See also ChromeUserManagerImpl.
+// See also ProfileUserManagerController.
 class COMPONENT_EXPORT(ASH_BROWSER_CONTEXT_HELPER) AnnotatedAccountId
     : public base::SupportsUserData::Data {
  public:
@@ -31,7 +31,12 @@ class COMPONENT_EXPORT(ASH_BROWSER_CONTEXT_HELPER) AnnotatedAccountId
   // Sets the corresponding account id to `context`.
   // `context` must not be nullptr, nor a Profile instance where AccountId is
   // already annotated.
-  static void Set(base::SupportsUserData* context, const AccountId& account_id);
+  // `for_test` is a trick to reduce the migration cost of each test.
+  // In test code, `AnnotatedAccountId::Set(browser_context, account_id);`
+  // is expected to be used (i.e. no explicit specifying of `for_test`).
+  static void Set(base::SupportsUserData* context,
+                  const AccountId& account_id,
+                  bool for_test = true);
 
  private:
   explicit AnnotatedAccountId(const AccountId& account_id);

@@ -4,25 +4,27 @@
 
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 
+#include "ash/constants/web_app_id_constants.h"
 #include "base/json/json_reader.h"
 #include "base/scoped_observation.h"
 #include "base/test/metrics/histogram_tester.h"
+#include "base/test/mock_callback.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/policy/policy_test_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/tabs/organization/tab_organization_service.h"
 #include "chrome/browser/ui/tabs/organization/tab_organization_service_factory.h"
 #include "chrome/browser/ui/tabs/organization/tab_organization_session.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/web_applications/test/web_app_browsertest_util.h"
+#include "chrome/browser/web_applications/test/os_integration_test_override_impl.h"
 #include "chrome/browser/web_applications/test/prevent_close_test_base.h"
 #include "chrome/browser/web_applications/test/web_app_install_test_utils.h"
-#include "chrome/browser/web_applications/web_app_id_constants.h"
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/common/chrome_features.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
@@ -30,16 +32,14 @@
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
+#include "components/saved_tab_groups/public/features.h"
+#include "components/tab_groups/tab_group_id.h"
 #include "components/webapps/common/web_app_id.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
-
-#if BUILDFLAG(IS_CHROMEOS)
-#include "chromeos/constants/chromeos_features.h"
-#endif
 
 using testing::_;
 
@@ -93,18 +93,19 @@ class TabStripModelPreventCloseTest : public PreventCloseTestBase,
               (override));
 
  protected:
+  web_app::OsIntegrationTestOverrideBlockingRegistration faked_os_integration_;
   base::ScopedObservation<TabStripModel, TabStripModelPreventCloseTest>
       observer_{this};
 };
 
 IN_PROC_BROWSER_TEST_F(TabStripModelPreventCloseTest,
                        PreventCloseEnforedByPolicy) {
-  InstallPWA(GURL(kCalculatorAppUrl), web_app::kCalculatorAppId);
-  SetPoliciesAndWaitUntilInstalled(web_app::kCalculatorAppId,
+  InstallPWA(GURL(kCalculatorAppUrl), ash::kCalculatorAppId);
+  SetPoliciesAndWaitUntilInstalled(ash::kCalculatorAppId,
                                    kPreventCloseEnabledForCalculator,
                                    kCalculatorForceInstalled);
   Browser* const browser =
-      LaunchPWA(web_app::kCalculatorAppId, /*launch_in_window=*/true);
+      LaunchPWA(ash::kCalculatorAppId, /*launch_in_window=*/true);
   ASSERT_TRUE(browser);
 
   observer_.Observe(browser->tab_strip_model());
@@ -130,7 +131,7 @@ IN_PROC_BROWSER_TEST_F(TabStripModelPreventCloseTest,
 }
 
 // TODO(b/321593065): enable this flaky test.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_PreventCloseEnforcedByPolicyTabbedAppShallBeClosable \
   DISABLED_PreventCloseEnforcedByPolicyTabbedAppShallBeClosable
 #else
@@ -140,19 +141,12 @@ IN_PROC_BROWSER_TEST_F(TabStripModelPreventCloseTest,
 IN_PROC_BROWSER_TEST_F(
     TabStripModelPreventCloseTest,
     MAYBE_PreventCloseEnforcedByPolicyTabbedAppShallBeClosable) {
-#if BUILDFLAG(IS_CHROMEOS)
-  if (chromeos::features::IsCrosShortstandEnabled()) {
-    GTEST_SKIP()
-        << "Cannot launch web apps in a tab when Shortstand is enabled.";
-  }
-#endif
-
-  InstallPWA(GURL(kCalculatorAppUrl), web_app::kCalculatorAppId);
-  SetPoliciesAndWaitUntilInstalled(web_app::kCalculatorAppId,
+  InstallPWA(GURL(kCalculatorAppUrl), ash::kCalculatorAppId);
+  SetPoliciesAndWaitUntilInstalled(ash::kCalculatorAppId,
                                    kPreventCloseEnabledForCalculator,
                                    kCalculatorForceInstalled);
   Browser* const browser =
-      LaunchPWA(web_app::kCalculatorAppId, /*launch_in_window=*/false);
+      LaunchPWA(ash::kCalculatorAppId, /*launch_in_window=*/false);
   ASSERT_TRUE(browser);
 
   observer_.Observe(browser->tab_strip_model());
@@ -168,15 +162,52 @@ IN_PROC_BROWSER_TEST_F(
   EXPECT_EQ(0, tab_strip_model->count());
 }
 
-class TabStripModelBrowserTest : public InProcessBrowserTest {
+class TabStripModelBrowserTest : public InProcessBrowserTest,
+                                 public TabStripModelObserver {
  public:
   TabStripModelBrowserTest() {
-    feature_list_.InitWithFeatures(
-        {features::kTabOrganization, features::kChromeRefresh2023}, {});
+    feature_list_.InitWithFeatures({features::kTabOrganization}, {});
   }
 
+  void TearDownOnMainThread() override { observer_.Reset(); }
+
+  MOCK_METHOD(void,
+              OnTabGroupAdded,
+              (const tab_groups::TabGroupId& group_id),
+              (override));
+  MOCK_METHOD(void,
+              OnTabGroupWillBeRemoved,
+              (const tab_groups::TabGroupId& group_id),
+              (override));
+
   base::test::ScopedFeatureList feature_list_;
+  base::ScopedObservation<TabStripModel, TabStripModelBrowserTest> observer_{
+      this};
 };
+
+IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest, OnTabGroupAdded) {
+  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+
+  // We should already have a tab. Add it to a group and see if
+  // TabStripModelObserver::OnTabGroupAdded is called.
+  EXPECT_CALL(*this, OnTabGroupAdded(_)).Times(1);
+
+  observer_.Observe(browser()->tab_strip_model());
+  browser()->tab_strip_model()->AddToNewGroup({0});
+}
+
+IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest, OnTabGroupWillBeRemoved) {
+  EXPECT_EQ(1, browser()->tab_strip_model()->count());
+  tab_groups::TabGroupId group_id =
+      browser()->tab_strip_model()->AddToNewGroup({0});
+
+  // Close the group and see if TabStripModelObserver::OnTabGroupWillBeRemoved
+  // is called.
+  EXPECT_CALL(*this, OnTabGroupWillBeRemoved(group_id)).Times(1);
+
+  observer_.Observe(browser()->tab_strip_model());
+  browser()->tab_strip_model()->CloseAllTabsInGroup(group_id);
+}
 
 IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest, CommandOrganizeTabs) {
   base::HistogramTester histogram_tester;
@@ -203,4 +234,65 @@ IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest, CommandOrganizeTabs) {
                                       true, 1);
   histogram_tester.ExpectUniqueSample("Tab.Organization.TabContextMenu.Clicked",
                                       true, 1);
+}
+
+IN_PROC_BROWSER_TEST_F(TabStripModelBrowserTest,
+                       DetachWebContentsAtForInsertion) {
+  class WebContentsRemovedObserver : public TabStripModelObserver {
+   public:
+    WebContentsRemovedObserver() = default;
+    WebContentsRemovedObserver(const WebContentsRemovedObserver&) = delete;
+    WebContentsRemovedObserver& operator=(const WebContentsRemovedObserver&) =
+        delete;
+    ~WebContentsRemovedObserver() override = default;
+
+    // TabStripModelObserver:
+    void OnTabStripModelChanged(
+        TabStripModel* tab_strip_model,
+        const TabStripModelChange& change,
+        const TabStripSelectionChange& selection) override {
+      if (change.type() == TabStripModelChange::kRemoved) {
+        const TabStripModelChange::RemovedTab& removed_tab =
+            change.GetRemove()->contents[0];
+        remove_reason_ = removed_tab.remove_reason;
+        tab_detach_reason_ = removed_tab.tab_detach_reason;
+      }
+    }
+
+    std::optional<TabStripModelChange::RemoveReason> remove_reason() const {
+      return remove_reason_;
+    }
+    std::optional<tabs::TabInterface::DetachReason> tab_detach_reason() const {
+      return tab_detach_reason_;
+    }
+
+   private:
+    std::optional<TabStripModelChange::RemoveReason> remove_reason_;
+    std::optional<tabs::TabInterface::DetachReason> tab_detach_reason_;
+  };
+
+  // Start with a browser window with 2 tabs.
+  TabStripModel* tab_strip_model = browser()->tab_strip_model();
+  chrome::AddTabAt(browser(), GURL(url::kAboutBlankURL), 1, true);
+  tabs::TabInterface* const initial_tab = tab_strip_model->GetTabAtIndex(1);
+  EXPECT_EQ(2, tab_strip_model->count());
+
+  base::MockCallback<tabs::TabInterface::WillDetach> tab_detached_callback;
+
+  base::CallbackListSubscription tab_subscription =
+      initial_tab->RegisterWillDetach(tab_detached_callback.Get());
+  WebContentsRemovedObserver removed_observer;
+  tab_strip_model->AddObserver(&removed_observer);
+
+  // Extract the new WebContents for re-insertion.
+  EXPECT_CALL(tab_detached_callback,
+              Run(tab_strip_model->GetTabAtIndex(1),
+                  tabs::TabInterface::DetachReason::kDelete));
+  std::unique_ptr<content::WebContents> extracted_contents =
+      tab_strip_model->DetachWebContentsAtForInsertion(1);
+  EXPECT_EQ(TabStripModelChange::RemoveReason::kInsertedIntoOtherTabStrip,
+            removed_observer.remove_reason());
+  EXPECT_EQ(tabs::TabInterface::DetachReason::kDelete,
+            removed_observer.tab_detach_reason());
+  tab_strip_model->AppendWebContents(std::move(extracted_contents), true);
 }

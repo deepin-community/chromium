@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright (c) 2018 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -13,7 +12,7 @@ import urllib.parse
 # Current version of metrics recording.
 # When we add new metrics, the version number will be increased, we display the
 # user what has changed, and ask the user to agree again.
-CURRENT_VERSION = 2
+CURRENT_VERSION = 3
 
 APP_URL = 'https://cit-cli-metrics.appspot.com'
 
@@ -73,6 +72,13 @@ def get_change_notice(version):
             'authenticated as bot service accounts.',
         ]
 
+    if version == 3:
+        return [
+            'We will start collecting metrics for experiment flags.',
+            'These are boolean or enum values that show whether',
+            'you have opted in to or out of experimental features',
+        ]
+
 
 KNOWN_PROJECT_URLS = {
     'https://chrome-internal.googlesource.com/chrome/ios_internal',
@@ -83,7 +89,6 @@ KNOWN_PROJECT_URLS = {
     'https://chromium.googlesource.com/crashpad/crashpad',
     'https://chromium.googlesource.com/external/gyp',
     'https://chromium.googlesource.com/external/naclports',
-    'https://chromium.googlesource.com/infra/goma/client',
     'https://chromium.googlesource.com/infra/infra',
     'https://chromium.googlesource.com/native_client/',
     'https://chromium.googlesource.com/syzygy',

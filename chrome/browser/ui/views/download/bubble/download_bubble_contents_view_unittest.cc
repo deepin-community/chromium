@@ -52,7 +52,6 @@ class MockDownloadBubbleNavigationHandler
               OnSecurityDialogButtonPress,
               (const DownloadUIModel& model, DownloadCommands::Command command),
               (override));
-  void ResizeDialog() override {}
   void OnDialogInteracted() override {}
   std::unique_ptr<views::BubbleDialogDelegate::CloseOnDeactivatePin>
   PreventDialogCloseOnDeactivate() override {
@@ -76,7 +75,9 @@ class MockDownloadCoreService : public DownloadCoreService {
               ());
   MOCK_METHOD(bool, HasCreatedDownloadManager, ());
   MOCK_METHOD(int, BlockingShutdownCount, (), (const));
-  MOCK_METHOD(void, CancelDownloads, ());
+  MOCK_METHOD(void,
+              CancelDownloads,
+              (DownloadCoreService::CancelDownloadsTrigger));
   MOCK_METHOD(void,
               SetDownloadManagerDelegateForTesting,
               (std::unique_ptr<ChromeDownloadManagerDelegate> delegate));
@@ -113,6 +114,11 @@ class DownloadBubbleContentsViewTest
       EXPECT_CALL(*item, GetDangerType())
           .WillRepeatedly(Return(download::DownloadDangerType::
                                      DOWNLOAD_DANGER_TYPE_DANGEROUS_FILE));
+      EXPECT_CALL(*item, IsDangerous()).WillRepeatedly(Return(true));
+      EXPECT_CALL(*item, GetReferrerUrl())
+          .WillRepeatedly(ReturnRefOfCopy(GURL("https://chromium.org")));
+      EXPECT_CALL(*item, GetTargetFilePath())
+          .WillRepeatedly(ReturnRefOfCopy(base::FilePath()));
       content::DownloadItemUtils::AttachInfoForTesting(item.get(), profile_,
                                                        nullptr);
       download_items_.push_back(std::move(item));
@@ -150,7 +156,9 @@ class DownloadBubbleContentsViewTest
     params.window = window_.get();
     browser_ = std::unique_ptr<Browser>(Browser::Create(params));
 
-    anchor_widget_ = CreateTestWidget(views::Widget::InitParams::TYPE_WINDOW);
+    anchor_widget_ =
+        CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET,
+                         views::Widget::InitParams::TYPE_WINDOW);
     auto bubble_delegate = std::make_unique<views::BubbleDialogDelegate>(
         anchor_widget_->GetContentsView(), views::BubbleBorder::TOP_RIGHT);
     bubble_delegate_ = bubble_delegate.get();

@@ -1,10 +1,9 @@
 # Please consult components/viz/README.md about allowable dependencies.
 
 include_rules = [
-  "+ash/components/arc/video_accelerator",
+  "+chromeos/ash/experiences/arc/video_accelerator",
   "+components/chromeos_camera",
   "+components/crash/core/common/crash_key.h",
-  "+components/ml/webnn",
   "+components/version_info/version_info.h",
   "+components/viz/service/service_jni_headers",
   "+components/viz/common",

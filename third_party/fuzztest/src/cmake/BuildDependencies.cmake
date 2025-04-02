@@ -9,14 +9,14 @@ set(re2_URL https://github.com/google/re2.git)
 set(re2_TAG 2024-02-01)
 
 set(gtest_URL https://github.com/google/googletest.git)
-set(gtest_TAG 456574145cf71a5375777cab58453acfd92a920b)
+set(gtest_TAG v1.14.0)
 
 # From https://www.antlr.org/download.html
 set(antlr_cpp_URL https://www.antlr.org/download/antlr4-cpp-runtime-4.12.0-source.zip)
 set(antlr_cpp_MD5 acf7371bd7562188712751266d8a7b90)
 
 set(proto_URL https://github.com/protocolbuffers/protobuf.git)
-set(proto_TAG 33b78e67a92c7ba1ecc2e19a037cd2e12f4c5e27)
+set(proto_TAG v28.2)
 
 set(nlohmann_json_URL https://github.com/nlohmann/json.git)
 set(nlohmann_json_TAG v3.11.2)

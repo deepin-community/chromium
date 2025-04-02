@@ -6,9 +6,12 @@
 #define ASH_SHELL_DELEGATE_H_
 
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "ash/ash_export.h"
+#include "ash/public/cpp/tab_strip_delegate.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "chromeos/ash/services/multidevice_setup/public/mojom/multidevice_setup.mojom-forward.h"
@@ -22,6 +25,7 @@
 #include "ui/gfx/native_widget_types.h"
 #include "url/gurl.h"
 
+class AccountId;
 namespace aura {
 class Window;
 }
@@ -42,12 +46,15 @@ class BackGestureContextualNudgeController;
 class BackGestureContextualNudgeDelegate;
 class CaptureModeDelegate;
 class ClipboardHistoryControllerDelegate;
+class CoralDelegate;
 class DeskProfilesDelegate;
+class FocusModeDelegate;
 class GameDashboardDelegate;
 class MediaNotificationProvider;
 class NearbyShareController;
 class NearbyShareDelegate;
 class SavedDeskDelegate;
+class ScannerDelegate;
 class SystemSoundsDelegate;
 class UserEducationDelegate;
 class WindowState;
@@ -56,9 +63,10 @@ class WindowState;
 class ASH_EXPORT ShellDelegate {
  public:
   enum class FeedbackSource {
-    kFocusMode,
     kGameDashboard,
+    kOverview,
     kWindowLayoutMenu,
+    kSunfish,
   };
 
   // The Shell owns the delegate.
@@ -75,6 +83,9 @@ class ASH_EXPORT ShellDelegate {
   // Creates and returns the delegate of the clipboard history feature.
   virtual std::unique_ptr<ClipboardHistoryControllerDelegate>
   CreateClipboardHistoryControllerDelegate() const = 0;
+
+  // Creates and returns the delegate of the Coral feature.
+  virtual std::unique_ptr<CoralDelegate> CreateCoralDelegate() const = 0;
 
   // Creates and returns the delegate of the Game Dashboard feature.
   virtual std::unique_ptr<GameDashboardDelegate> CreateGameDashboardDelegate()
@@ -103,6 +114,12 @@ class ASH_EXPORT ShellDelegate {
 
   virtual std::unique_ptr<api::TasksDelegate> CreateTasksDelegate() const = 0;
 
+  virtual std::unique_ptr<TabStripDelegate> CreateTabStripDelegate() const = 0;
+
+  // Creates and returns the delegate for Focus Mode.
+  virtual std::unique_ptr<FocusModeDelegate> CreateFocusModeDelegate()
+      const = 0;
+
   // Creates and returns the delegate of the System Sounds feature.
   virtual std::unique_ptr<SystemSoundsDelegate> CreateSystemSoundsDelegate()
       const = 0;
@@ -111,10 +128,13 @@ class ASH_EXPORT ShellDelegate {
   virtual std::unique_ptr<UserEducationDelegate> CreateUserEducationDelegate()
       const = 0;
 
-  // Returns the geolocation loader factory used to initialize geolocation
-  // provider.
+  // Creates and returns the delegate for the scanner feature.
+  virtual std::unique_ptr<ScannerDelegate> CreateScannerDelegate() const = 0;
+
+  // Returns the `SharedURLLoaderFactory` associated with the browser process.
+  // Do not use for requests related to the user profile.
   virtual scoped_refptr<network::SharedURLLoaderFactory>
-  GetGeolocationUrlLoaderFactory() const = 0;
+  GetBrowserProcessUrlLoaderFactory() const = 0;
 
   // Check whether the current tab of the browser window can go back.
   virtual bool CanGoBack(gfx::NativeWindow window) const = 0;
@@ -184,7 +204,20 @@ class ASH_EXPORT ShellDelegate {
   // `description_template` fields. Note, this will only be used by features
   // before they are fully launched or removed.
   virtual void OpenFeedbackDialog(FeedbackSource source,
-                                  const std::string& description_template) = 0;
+                                  const std::string& description_template,
+                                  const std::string& category_tag) = 0;
+
+  // Uploads feedback about a specialized feature after redacting the given
+  // description using the given account ID.
+  // Returns false if there is no feedback uploader for the given account ID.
+  // See //chromeos/ash/components/specialized_features/feedback.h for more
+  // details.
+  virtual bool SendSpecializedFeatureFeedback(
+      const AccountId& account_id,
+      int product_id,
+      std::string description,
+      std::optional<std::string> image,
+      std::optional<std::string> image_mime_type) = 0;
 
   // Calls browser service to open the profile manager.
   virtual void OpenProfileManager() = 0;
@@ -217,6 +250,10 @@ class ASH_EXPORT ShellDelegate {
 
   // Opens the Multitasking OS Settings page.
   virtual void OpenMultitaskingSettings() = 0;
+
+  // Checks if the command line contains "no-first-run". Some UI's can interfere
+  // with browser tests, which have "no-first-run" on by default.
+  virtual bool IsNoFirstRunSwitchOn() const;
 };
 
 }  // namespace ash

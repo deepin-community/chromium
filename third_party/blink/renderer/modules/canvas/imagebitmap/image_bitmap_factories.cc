@@ -57,6 +57,7 @@
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
 #include "third_party/blink/renderer/platform/bindings/script_state.h"
 #include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
+#include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
 #include "third_party/blink/renderer/platform/instrumentation/histogram.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
@@ -97,6 +98,35 @@ gfx::Rect NormalizedCropRect(int x, int y, int width, int height) {
     height = base::ClampSub(0, height);
   }
   return gfx::Rect(x, y, width, height);
+}
+
+void ThrowExceptionForStatus(ImageBitmapSourceError error,
+                             ExceptionState& exception_state) {
+  switch (error) {
+    case ImageBitmapSourceError::kUndecodable:
+      exception_state.ThrowDOMException(
+          DOMExceptionCode::kInvalidStateError,
+          "The HTMLImageElement provided is in the 'broken' state.");
+      break;
+    case ImageBitmapSourceError::kZeroWidth:
+      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                        "The image source's width is 0.");
+      break;
+    case ImageBitmapSourceError::kZeroHeight:
+      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                        "The image source's height is 0.");
+      break;
+    case ImageBitmapSourceError::kIncomplete:
+    case ImageBitmapSourceError::kInvalid:
+      exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
+                                        "The image source is not usable.");
+      break;
+    case ImageBitmapSourceError::kLayersOpenInCanvas:
+      exception_state.ThrowDOMException(
+          DOMExceptionCode::kInvalidStateError,
+          "The source canvas cannot be used because layers are open.");
+      break;
+  }
 }
 
 }  // namespace
@@ -147,16 +177,15 @@ inline ImageBitmapSource* ToImageBitmapSourceInternal(
   }
 
   NOTREACHED();
-  return nullptr;
 }
 
-ScriptPromise ImageBitmapFactories::CreateImageBitmapFromBlob(
+ScriptPromise<ImageBitmap> ImageBitmapFactories::CreateImageBitmapFromBlob(
     ScriptState* script_state,
     ImageBitmapSource* bitmap_source,
     std::optional<gfx::Rect> crop_rect,
     const ImageBitmapOptions* options) {
   if (!script_state->ContextIsValid()) {
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   // imageOrientation: 'from-image' will be used to replace imageOrientation:
@@ -178,7 +207,7 @@ ScriptPromise ImageBitmapFactories::CreateImageBitmapFromBlob(
   return loader->Promise();
 }
 
-ScriptPromise ImageBitmapFactories::CreateImageBitmap(
+ScriptPromise<ImageBitmap> ImageBitmapFactories::CreateImageBitmap(
     ScriptState* script_state,
     const V8ImageBitmapSource* bitmap_source,
     const ImageBitmapOptions* options,
@@ -188,12 +217,12 @@ ScriptPromise ImageBitmapFactories::CreateImageBitmap(
   ImageBitmapSource* bitmap_source_internal =
       ToImageBitmapSourceInternal(bitmap_source, options, false);
   if (!bitmap_source_internal)
-    return ScriptPromise();
+    return EmptyPromise();
   return CreateImageBitmap(script_state, bitmap_source_internal, std::nullopt,
                            options, exception_state);
 }
 
-ScriptPromise ImageBitmapFactories::CreateImageBitmap(
+ScriptPromise<ImageBitmap> ImageBitmapFactories::CreateImageBitmap(
     ScriptState* script_state,
     const V8ImageBitmapSource* bitmap_source,
     int sx,
@@ -207,13 +236,13 @@ ScriptPromise ImageBitmapFactories::CreateImageBitmap(
   ImageBitmapSource* bitmap_source_internal =
       ToImageBitmapSourceInternal(bitmap_source, options, true);
   if (!bitmap_source_internal)
-    return ScriptPromise();
+    return EmptyPromise();
   gfx::Rect crop_rect = NormalizedCropRect(sx, sy, sw, sh);
   return CreateImageBitmap(script_state, bitmap_source_internal, crop_rect,
                            options, exception_state);
 }
 
-ScriptPromise ImageBitmapFactories::CreateImageBitmap(
+ScriptPromise<ImageBitmap> ImageBitmapFactories::CreateImageBitmap(
     ScriptState* script_state,
     ImageBitmapSource* bitmap_source,
     std::optional<gfx::Rect> crop_rect,
@@ -222,22 +251,18 @@ ScriptPromise ImageBitmapFactories::CreateImageBitmap(
   if (crop_rect && (crop_rect->width() == 0 || crop_rect->height() == 0)) {
     exception_state.ThrowRangeError(String::Format(
         "The crop rect %s is 0.", crop_rect->width() ? "height" : "width"));
-    return ScriptPromise();
+    return EmptyPromise();
+  }
+
+  const ImageBitmapSourceStatus status = bitmap_source->CheckUsability();
+  if (!status.has_value()) {
+    ThrowExceptionForStatus(status.error(), exception_state);
+    return EmptyPromise();
   }
 
   if (bitmap_source->IsBlob()) {
     return CreateImageBitmapFromBlob(script_state, bitmap_source, crop_rect,
                                      options);
-  }
-
-  if (bitmap_source->BitmapSourceSize().width() == 0 ||
-      bitmap_source->BitmapSourceSize().height() == 0) {
-    exception_state.ThrowDOMException(
-        DOMExceptionCode::kInvalidStateError,
-        String::Format(
-            "The source image %s is 0.",
-            bitmap_source->BitmapSourceSize().width() ? "height" : "width"));
-    return ScriptPromise();
   }
 
   return bitmap_source->CreateImageBitmap(script_state, crop_rect, options,
@@ -283,7 +308,8 @@ ImageBitmapFactories::ImageBitmapLoader::ImageBitmapLoader(
           this,
           GetExecutionContext()->GetTaskRunner(TaskType::kFileReading))),
       factory_(&factory),
-      resolver_(MakeGarbageCollected<ScriptPromiseResolver>(script_state)),
+      resolver_(MakeGarbageCollected<ScriptPromiseResolver<ImageBitmap>>(
+          script_state)),
       crop_rect_(crop_rect),
       options_(options) {}
 
@@ -370,7 +396,8 @@ void DecodeImageOnDecoderThread(
       SegmentReader::CreateFromSkData(
           SkData::MakeWithoutCopy(contents.Data(), contents.DataLength())),
       data_complete, alpha_option, ImageDecoder::kDefaultBitDepth,
-      color_behavior, Platform::GetMaxDecodedImageBytes());
+      color_behavior, cc::AuxImage::kDefault,
+      Platform::GetMaxDecodedImageBytes());
   sk_sp<SkImage> frame;
   ImageOrientationEnum orientation = ImageOrientationEnum::kDefault;
   if (decoder) {
@@ -402,7 +429,7 @@ void ImageBitmapFactories::ImageBitmapLoader::ScheduleAsyncImageBitmapDecoding(
           std::move(contents), alpha_option, color_behavior,
           CrossThreadBindOnce(&ImageBitmapFactories::ImageBitmapLoader::
                                   ResolvePromiseOnOriginalThread,
-                              WrapCrossThreadWeakPersistent(this))));
+                              MakeUnwrappingCrossThreadWeakHandle(this))));
 }
 
 void ImageBitmapFactories::ImageBitmapLoader::ResolvePromiseOnOriginalThread(

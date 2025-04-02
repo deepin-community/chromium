@@ -18,7 +18,9 @@ import '../icons.html.js';
 
 import {CrLitElement} from '//resources/lit/v3_0/lit.rollup.js';
 import type {PropertyValues} from '//resources/lit/v3_0/lit.rollup.js';
-import {IronA11yAnnouncer} from '//resources/polymer/v3_0/iron-a11y-announcer/iron-a11y-announcer.js';
+
+import type {CrA11yAnnouncerElement} from '../cr_a11y_announcer/cr_a11y_announcer.js';
+import {getInstance as getAnnouncerInstance} from '../cr_a11y_announcer/cr_a11y_announcer.js';
 
 import {getCss} from './cr_toolbar_selection_overlay.css.js';
 import {getHtml} from './cr_toolbar_selection_overlay.html.js';
@@ -49,8 +51,8 @@ export class CrToolbarSelectionOverlayElement extends CrLitElement {
   }
 
   show: boolean = false;
-  cancelLabel: string;
-  selectionLabel: string;
+  cancelLabel: string = '';
+  selectionLabel: string = '';
 
   override firstUpdated() {
     this.setAttribute('role', 'toolbar');
@@ -62,9 +64,13 @@ export class CrToolbarSelectionOverlayElement extends CrLitElement {
     // Parent element is responsible for updating `selectionLabel` when `show`
     // changes.
     if (changedProperties.has('selectionLabel')) {
+      if (changedProperties.get('selectionLabel') === undefined &&
+          this.selectionLabel === '') {
+        return;
+      }
       this.setAttribute('aria-label', this.selectionLabel);
-      IronA11yAnnouncer.requestAvailability();
-      this.fire('iron-announce', {text: this.selectionLabel});
+      const announcer = getAnnouncerInstance() as CrA11yAnnouncerElement;
+      announcer.announce(this.selectionLabel);
     }
   }
 

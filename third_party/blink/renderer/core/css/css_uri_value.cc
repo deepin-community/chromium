@@ -19,7 +19,8 @@ CSSURIValue::~CSSURIValue() = default;
 
 SVGResource* CSSURIValue::EnsureResourceReference() const {
   if (!resource_) {
-    resource_ = MakeGarbageCollected<ExternalSVGResource>(AbsoluteUrl());
+    resource_ =
+        MakeGarbageCollected<ExternalSVGResourceDocumentContent>(AbsoluteUrl());
   }
   return resource_.Get();
 }
@@ -37,7 +38,7 @@ String CSSURIValue::CustomCSSText() const {
 AtomicString CSSURIValue::FragmentIdentifier() const {
   // Always use KURL's FragmentIdentifier to ensure that we're handling the
   // fragment in a consistent manner.
-  return AtomicString(AbsoluteUrl().FragmentIdentifier());
+  return AbsoluteUrl().FragmentIdentifier().ToAtomicString();
 }
 
 const AtomicString& CSSURIValue::NormalizedFragmentIdentifier() const {

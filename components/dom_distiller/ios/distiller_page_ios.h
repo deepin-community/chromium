@@ -10,6 +10,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "components/dom_distiller/core/distiller_page.h"
 #include "ios/web/public/web_state_observer.h"
 #include "url/gurl.h"
@@ -73,11 +74,14 @@ class DistillerPageIOS : public DistillerPage, public web::WebStateObserver {
   bool distilling_navigation_ = false;
 
   // Used to store whether the owned WebState is currently loading or not.
-  // TODO(crbug.com/782159): this is a work-around as WebState::IsLoading()
+  // TODO(crbug.com/40548473): this is a work-around as WebState::IsLoading()
   // is/was not returning the expected value when an SLL interstitial is
   // blocked. Remove this and use WebState::IsLoading() when WebState has
   // been fixed.
   bool loading_ = false;
+
+  base::ScopedObservation<web::WebState, web::WebStateObserver>
+      web_state_observation_{this};
 
   base::WeakPtrFactory<DistillerPageIOS> weak_ptr_factory_;
 };

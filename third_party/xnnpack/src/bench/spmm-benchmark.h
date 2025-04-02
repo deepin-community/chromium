@@ -5,16 +5,16 @@
 
 #pragma once
 
-#include "bench/spmm.h"
-#include "bench/utils.h"
+#include "spmm.h"
+#include "utils.h"
 
-#include <xnnpack.h>
-#include <xnnpack/aligned-allocator.h>
-#include <xnnpack/common.h>
-#include <xnnpack/isa-checks.h>
-#include <xnnpack/microfnptr.h>
-#include <xnnpack/microparams-init.h>
-#include <xnnpack/spmm.h>
+#include "xnnpack.h"
+#include "xnnpack/aligned-allocator.h"
+#include "xnnpack/common.h"
+#include "xnnpack/isa-checks.h"
+#include "xnnpack/microfnptr.h"
+#include "xnnpack/microparams-init.h"
+#include "xnnpack/spmm.h"
 
 #include <functional>
 #include <random>
@@ -123,7 +123,6 @@ static void f32_spmm(benchmark::State& state,
   std::vector<float, AlignedAllocator<float, 64>> c(num_buffers * c_elements);
 
   std::generate(a.begin(), a.end(), std::ref(f32rng));
-  std::fill(c.begin(), c.end(), nanf(""));
 
   xnn_f32_minmax_params params;
   init_params(&params, -std::numeric_limits<float>::infinity(), +std::numeric_limits<float>::infinity());

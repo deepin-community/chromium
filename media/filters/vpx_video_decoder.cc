@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/filters/vpx_video_decoder.h"
 
 #include <stddef.h>
@@ -11,13 +16,14 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/span.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/sys_byteorder.h"
+#include "base/numerics/byte_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/trace_event/trace_event.h"
 #include "media/base/decoder_buffer.h"
@@ -81,8 +87,9 @@ static int32_t GetVP9FrameBuffer(void* user_priv,
   DCHECK(user_priv);
   DCHECK(fb);
   FrameBufferPool* pool = static_cast<FrameBufferPool*>(user_priv);
-  fb->data = pool->GetFrameBuffer(min_size, &fb->priv);
-  fb->size = min_size;
+  auto buffer = pool->GetFrameBuffer(min_size, &fb->priv);
+  fb->data = buffer.data();
+  fb->size = buffer.size();
   return fb->data ? 0 : VPX_CODEC_MEM_ERROR;
 }
 
@@ -229,17 +236,6 @@ bool VpxVideoDecoder::ConfigureDecoder(const VideoDecoderConfig& config) {
   if (config.codec() != VideoCodec::kVP8 && config.codec() != VideoCodec::kVP9)
     return false;
 
-#if BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
-  // When enabled, ffmpeg handles VP8 that doesn't have alpha, and
-  // VpxVideoDecoder will handle VP8 with alpha. FFvp8 is being deprecated.
-  // See http://crbug.com/992235.
-  if (config.codec() == VideoCodec::kVP8 &&
-      FFmpegVideoDecoder::IsCodecSupported(config.codec()) &&
-      config.alpha_mode() == VideoDecoderConfig::AlphaMode::kIsOpaque) {
-    return false;
-  }
-#endif
-
   DCHECK(!vpx_codec_);
   vpx_codec_ = InitializeVpxContext(config);
   if (!vpx_codec_)
@@ -319,7 +315,7 @@ bool VpxVideoDecoder::VpxDecode(const DecoderBuffer* buffer,
     TRACE_EVENT1("media", "vpx_codec_decode", "buffer",
                  buffer->AsHumanReadableString());
     vpx_codec_err_t status =
-        vpx_codec_decode(vpx_codec_.get(), buffer->data(), buffer->data_size(),
+        vpx_codec_decode(vpx_codec_.get(), buffer->data(), buffer->size(),
                          nullptr /* user_priv */, 0 /* deadline */);
     if (status != VPX_CODEC_OK) {
       DLOG(ERROR) << "vpx_codec_decode() error: "
@@ -353,8 +349,8 @@ bool VpxVideoDecoder::VpxDecode(const DecoderBuffer* buffer,
     libyuv::CopyPlane(
         vpx_image_alpha->planes[VPX_PLANE_Y],
         vpx_image_alpha->stride[VPX_PLANE_Y],
-        (*video_frame)->GetWritableVisibleData(VideoFrame::kAPlane),
-        (*video_frame)->stride(VideoFrame::kAPlane),
+        (*video_frame)->GetWritableVisibleData(VideoFrame::Plane::kA),
+        (*video_frame)->stride(VideoFrame::Plane::kA),
         (*video_frame)->visible_rect().width(),
         (*video_frame)->visible_rect().height());
   }
@@ -424,15 +420,15 @@ VpxVideoDecoder::AlphaDecodeStatus VpxVideoDecoder::DecodeAlphaPlane(
     const struct vpx_image** vpx_image_alpha,
     const DecoderBuffer* buffer) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!vpx_codec_alpha_ || !buffer->has_side_data() ||
+  if (!vpx_codec_alpha_ || !buffer->side_data() ||
       buffer->side_data()->alpha_data.size() < 8) {
     return kAlphaPlaneProcessed;
   }
 
   // First 8 bytes of side data is |side_data_id| in big endian.
-  const uint64_t side_data_id =
-      base::NetToHost64(*(reinterpret_cast<const uint64_t*>(
-          buffer->side_data()->alpha_data.data())));
+  auto [alpha_data_id, alpha_data] =
+      buffer->side_data()->alpha_data.as_span().split_at<8u>();
+  const uint64_t side_data_id = base::U64FromBigEndian(alpha_data_id);
   if (side_data_id != 1) {
     return kAlphaPlaneProcessed;
   }
@@ -443,9 +439,8 @@ VpxVideoDecoder::AlphaDecodeStatus VpxVideoDecoder::DecodeAlphaPlane(
     TRACE_EVENT1("media", "vpx_codec_decode_alpha", "buffer",
                  buffer->AsHumanReadableString());
     vpx_codec_err_t status = vpx_codec_decode(
-        vpx_codec_alpha_.get(), buffer->side_data()->alpha_data.data() + 8,
-        buffer->side_data()->alpha_data.size() - 8, nullptr /* user_priv */,
-        0 /* deadline */);
+        vpx_codec_alpha_.get(), alpha_data.data(), alpha_data.size(),
+        /*user_priv=*/nullptr, /*deadline=*/0);
     if (status != VPX_CODEC_OK) {
       DLOG(ERROR) << "vpx_codec_decode() failed for the alpha: "
                   << vpx_codec_error(vpx_codec_.get());
@@ -556,12 +551,15 @@ bool VpxVideoDecoder::CopyVpxImageToVideoFrame(
     if (vpx_image_alpha) {
       size_t alpha_plane_size =
           vpx_image_alpha->stride[VPX_PLANE_Y] * vpx_image_alpha->d_h;
-      uint8_t* alpha_plane = memory_pool_->AllocateAlphaPlaneForFrameBuffer(
+      auto alpha_plane = memory_pool_->AllocateAlphaPlaneForFrameBuffer(
           alpha_plane_size, vpx_image->fb_priv);
-      if (!alpha_plane)  // In case of OOM, abort copy.
+      if (alpha_plane.empty()) {
+        // In case of OOM, abort copy.
         return false;
+      }
       libyuv::CopyPlane(vpx_image_alpha->planes[VPX_PLANE_Y],
-                        vpx_image_alpha->stride[VPX_PLANE_Y], alpha_plane,
+                        vpx_image_alpha->stride[VPX_PLANE_Y],
+                        alpha_plane.data(),
                         vpx_image_alpha->stride[VPX_PLANE_Y],
                         vpx_image_alpha->d_w, vpx_image_alpha->d_h);
       *video_frame = VideoFrame::WrapExternalYuvaData(
@@ -569,7 +567,7 @@ bool VpxVideoDecoder::CopyVpxImageToVideoFrame(
           vpx_image->stride[VPX_PLANE_Y], vpx_image->stride[VPX_PLANE_U],
           vpx_image->stride[VPX_PLANE_V], vpx_image_alpha->stride[VPX_PLANE_Y],
           vpx_image->planes[VPX_PLANE_Y], vpx_image->planes[VPX_PLANE_U],
-          vpx_image->planes[VPX_PLANE_V], alpha_plane, kNoTimestamp);
+          vpx_image->planes[VPX_PLANE_V], alpha_plane.data(), kNoTimestamp);
     } else {
       *video_frame = VideoFrame::WrapExternalYuvData(
           codec_format, coded_size, gfx::Rect(visible_size), natural_size,

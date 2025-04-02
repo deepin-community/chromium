@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/threading/thread_local_storage.h"
 
 #include <algorithm>
@@ -11,11 +16,14 @@
 #include "base/compiler_specific.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/notreached.h"
+#include "base/sampling_heap_profiler/poisson_allocation_sampler.h"
 #include "base/synchronization/lock.h"
 #include "build/build_config.h"
+#include "partition_alloc/buildflags.h"
 
 #if BUILDFLAG(IS_MAC) && defined(ARCH_CPU_X86_64)
 #include <pthread.h>
+
 #include <type_traits>
 #endif
 
@@ -368,13 +376,16 @@ void OnThreadExitInternal(TlsVectorEntry* tls_data) {
       size_t slot = ordered_slot.slot;
       void* tls_value = stack_allocated_tls_data[slot].data;
       if (!tls_value || tls_metadata[slot].status == TlsStatus::FREE ||
-          stack_allocated_tls_data[slot].version != tls_metadata[slot].version)
+          stack_allocated_tls_data[slot].version !=
+              tls_metadata[slot].version) {
         continue;
+      }
 
       base::ThreadLocalStorage::TLSDestructorFunc destructor =
           tls_metadata[slot].destructor;
-      if (!destructor)
+      if (!destructor) {
         continue;
+      }
       stack_allocated_tls_data[slot].data = nullptr;  // pre-clear the slot.
       destructor(tls_value);
       // Any destructor might have called a different service, which then set a
@@ -385,7 +396,6 @@ void OnThreadExitInternal(TlsVectorEntry* tls_data) {
 
     if (--remaining_attempts == 0) {
       NOTREACHED();  // Destructors might not have been called.
-      break;
     }
   }
 
@@ -403,8 +413,9 @@ namespace internal {
 void PlatformThreadLocalStorage::OnThreadExit() {
   PlatformThreadLocalStorage::TLSKey key =
       g_native_tls_key.load(std::memory_order_relaxed);
-  if (key == PlatformThreadLocalStorage::TLS_KEY_OUT_OF_INDEXES)
+  if (key == PlatformThreadLocalStorage::TLS_KEY_OUT_OF_INDEXES) {
     return;
+  }
   TlsVectorEntry* tls_vector = nullptr;
   const TlsVectorState state = GetTlsVectorStateAndValue(key, &tls_vector);
 
@@ -413,8 +424,9 @@ void PlatformThreadLocalStorage::OnThreadExit() {
   DCHECK_NE(state, TlsVectorState::kDestroyed);
 
   // Maybe we have never initialized TLS for this thread.
-  if (state == TlsVectorState::kUninitialized)
+  if (state == TlsVectorState::kUninitialized) {
     return;
+  }
   OnThreadExitInternal(tls_vector);
 }
 #elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
@@ -441,14 +453,25 @@ void PlatformThreadLocalStorage::OnThreadExit(void* value) {
 bool ThreadLocalStorage::HasBeenDestroyed() {
   PlatformThreadLocalStorage::TLSKey key =
       g_native_tls_key.load(std::memory_order_relaxed);
-  if (key == PlatformThreadLocalStorage::TLS_KEY_OUT_OF_INDEXES)
+  if (key == PlatformThreadLocalStorage::TLS_KEY_OUT_OF_INDEXES) {
     return false;
+  }
   const TlsVectorState state = GetTlsVectorStateAndValue(key);
   return state == TlsVectorState::kDestroying ||
          state == TlsVectorState::kDestroyed;
 }
 
 void ThreadLocalStorage::Slot::Initialize(TLSDestructorFunc destructor) {
+  // The heap sampler uses TLS internally. Disable allocation sampling before
+  // allocating TLS-internal structures, to safeguard against reentrancy.
+#if BUILDFLAG(IS_NACL)
+  // Heap sampler isn't built under NACL.
+#elif BUILDFLAG(IS_IOS) && !PA_BUILDFLAG(USE_ALLOCATOR_SHIM)
+  // Heap sampler is only built on IOS when the allocator shim is enabled.
+#else
+  base::PoissonAllocationSampler::ScopedMuteThreadSamples mute_heap_sampler;
+#endif
+
   PlatformThreadLocalStorage::TLSKey key =
       g_native_tls_key.load(std::memory_order_relaxed);
   if (key == PlatformThreadLocalStorage::TLS_KEY_OUT_OF_INDEXES ||
@@ -498,12 +521,14 @@ void* ThreadLocalStorage::Slot::Get() const {
   const TlsVectorState state = GetTlsVectorStateAndValue(
       g_native_tls_key.load(std::memory_order_relaxed), &tls_data);
   DCHECK_NE(state, TlsVectorState::kDestroyed);
-  if (!tls_data)
+  if (!tls_data) {
     return nullptr;
+  }
   DCHECK_LT(slot_, kThreadLocalStorageSize);
   // Version mismatches means this slot was previously freed.
-  if (tls_data[slot_].version != version_)
+  if (tls_data[slot_].version != version_) {
     return nullptr;
+  }
   return tls_data[slot_].data;
 }
 
@@ -512,9 +537,10 @@ void ThreadLocalStorage::Slot::Set(void* value) {
   const TlsVectorState state = GetTlsVectorStateAndValue(
       g_native_tls_key.load(std::memory_order_relaxed), &tls_data);
   DCHECK_NE(state, TlsVectorState::kDestroyed);
-  if (UNLIKELY(!tls_data)) {
-    if (!value)
+  if (!tls_data) [[unlikely]] {
+    if (!value) {
       return;
+    }
     tls_data = ConstructTlsVector();
   }
   DCHECK_LT(slot_, kThreadLocalStorageSize);

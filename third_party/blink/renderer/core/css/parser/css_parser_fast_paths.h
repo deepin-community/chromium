@@ -44,9 +44,7 @@ class CORE_EXPORT CSSParserFastPaths {
     return handled_by_keyword_fast_paths_properties_.Has(property_id);
   }
 
-  static bool IsNonStandardAppearanceValuesHighUsage(CSSValueID);
-
-  static bool IsNonStandardAppearanceValuesLowUsage(CSSValueID);
+  static bool IsBorderStyleValue(CSSValueID);
 
   static bool IsValidKeywordPropertyAndValue(CSSPropertyID,
                                              CSSValueID,
@@ -59,6 +57,18 @@ class CORE_EXPORT CSSParserFastPaths {
   static ParseColorResult ParseColor(const String&,
                                      CSSParserMode,
                                      Color& color);
+
+  // Checks for a value that looks like env(safe-area-inset-bottom) or
+  // calc(env(safe-area-inset-bottom) + ...).
+  //
+  // Note that this function does not verify the validity of
+  // the fallback (if any). In other words, it assumes that
+  // the 'safe-area-inset-bottom' environment variable is supported
+  // and therefore the fallback will not be taken.
+  //
+  // See go/cc-dynamic-sai and comments on IsBottomRelativeToSafeAreaInset in
+  // computed_style_extra_fields.json5.
+  static bool IsSafeAreaInsetBottom(StringView);
 
  private:
   static CSSBitset handled_by_keyword_fast_paths_properties_;

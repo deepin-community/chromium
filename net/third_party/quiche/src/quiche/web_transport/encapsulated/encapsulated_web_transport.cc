@@ -36,6 +36,7 @@
 #include "quiche/common/quiche_circular_deque.h"
 #include "quiche/common/quiche_status_utils.h"
 #include "quiche/common/quiche_stream.h"
+#include "quiche/common/vectorized_io_utils.h"
 #include "quiche/web_transport/web_transport.h"
 
 namespace webtransport {
@@ -783,4 +784,14 @@ void EncapsulatedSession::GarbageCollectStreams() {
   streams_to_garbage_collect_.clear();
 }
 
+void EncapsulatedSession::InnerStream::SetPriority(
+    const StreamPriority& priority) {
+  absl::Status status;
+  status = session_->scheduler_.UpdateSendGroup(id_, priority.send_group_id);
+  QUICHE_BUG_IF(EncapsulatedWebTransport_SetPriority_group, !status.ok())
+      << status;
+  status = session_->scheduler_.UpdateSendOrder(id_, priority.send_order);
+  QUICHE_BUG_IF(EncapsulatedWebTransport_SetPriority_order, !status.ok())
+      << status;
+}
 }  // namespace webtransport

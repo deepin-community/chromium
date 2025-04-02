@@ -166,7 +166,6 @@ int SyntheticTouchDriver::GetIndexFromMap(int value) const {
     }
   }
   NOTREACHED() << "Failed to find the value.";
-  return -1;
 }
 
 }  // namespace content

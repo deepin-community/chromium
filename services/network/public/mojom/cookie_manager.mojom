@@ -18,15 +18,6 @@ struct CookieManagerParams {
   // Whether or not third party cookies should be blocked.
   bool block_third_party_cookies = false;
 
-  // Whether or not truncated cookies should be ignored. Defaults to true but
-  // can be overridden in cases such as when the feature has been disabled via
-  // Enterprise Policy. Regardless of whether this value is true, the blocking
-  // of truncated cookies will not occur if the kBlockTruncatedCookies feature
-  // is disabled (thus, this default value is acceptable for WebView and other
-  // non-Chrome platforms where the feature flag is the primary means to control
-  // the value).
-  bool block_truncated_cookies = true;
-
   // Whether tracking protection for 3PCD (prefs + UX) is enabled.
   bool tracking_protection_enabled_for_3pcd = false;
 
@@ -106,11 +97,13 @@ enum CookieExemptionReason {
     kUserSetting = 1,
     k3PCDMetadata = 2,
     k3PCDDeprecationTrial = 3,
-    k3PCDHeuristics = 4,
-    kEnterprisePolicy = 5,
-    kStorageAccess = 6,
-    kTopLevelStorageAccess = 7,
-    kCorsOptIn = 8,
+    kTopLevel3PCDDeprecationTrial = 4,
+    k3PCDHeuristics = 5,
+    kEnterprisePolicy = 6,
+    kStorageAccess = 7,
+    kTopLevelStorageAccess = 8,
+    kScheme = 9,
+    kSameSiteNoneCookiesInSandbox = 10,
 };
 
 enum ContextType {
@@ -125,6 +118,13 @@ enum CookieSameSiteContextMetadataDowngradeType {
   kStrictToLax,
   kStrictToCross,
   kLaxToCross,
+};
+
+enum CookieSourceType {
+  kUnknown,
+  kHTTP,
+  kScript,
+  kOther,
 };
 
 enum ContextRedirectTypeBug1221316 {
@@ -153,7 +153,6 @@ enum HttpMethod {
 struct CookieSameSiteContextMetadata {
   CookieSameSiteContextMetadataDowngradeType cross_site_redirect_downgrade = kNoDowngrade;
   ContextRedirectTypeBug1221316 redirect_type_bug_1221316 = kUnset;
-  HttpMethod http_method_bug_1221316 = kUnset;
 };
 
 // Keep defaults here in sync with net/cookies/cookie_options.h.
@@ -172,6 +171,15 @@ enum CookieAccessSemantics {
   NONLEGACY = 0,
   LEGACY,
 };
+
+// Keep in sync with net/cookies/cookie_constants.h.
+// LINT.IfChange(CookieScopeSemanticsMojom)
+enum CookieScopeSemantics {
+  UNKNOWN = -1,
+  NONLEGACY = 0,
+  LEGACY = 1,
+};
+// LINT.ThenChange(/net/cookies/cookie_constants.h:CookieScopeSemantics)
 
 // Keep defaults here in sync with net/cookies/cookie_options.cc.
 struct CookieOptions {
@@ -201,18 +209,27 @@ struct CanonicalCookie {
   // -1 because of url::PORT_UNSPECIFIED
   // url/third_party/mozilla/url_parse.h
   int32 source_port = -1;
+  CookieSourceType source_type = kUnknown;
+};
+
+struct ExclusionReasons {
+  // Bitfield. Is defined in
+  // net::CookieInclusionStatus::ExclusionReason.
+  uint64 exclusions_bitmask;
+};
+
+struct WarningReasons {
+  // Bitfield. Is defined in
+  // net::CookieInclusionStatus::WarningReason.
+  uint64 warnings_bitmask;
 };
 
 // Indicates reasons why a cookie may be excluded in a get or set
 // operation and if it should be warned about.
-// TODO(crbug.com/1310444): Improve serialization validation comments.
+// TODO(crbug.com/40219875): Improve serialization validation comments.
 struct CookieInclusionStatus {
-  // Bitfield. Is defined in
-  // net::CookieInclusionStatus::ExclusionReason.
-  uint32 exclusion_reasons;
-  // Bitfield. Is defined in
-  // net::CookieInclusionStatus::WarningReason.
-  uint32 warning_reasons;
+  ExclusionReasons exclusion_reasons;
+  WarningReasons warning_reasons;
 
   CookieExemptionReason exemption_reason;
 };
@@ -237,6 +254,7 @@ struct CookieOrLineWithAccessResult {
 struct CookieAccessResult {
   CookieEffectiveSameSite effective_same_site;
   CookieAccessSemantics access_semantics;
+  CookieScopeSemantics scope_semantics;
   CookieInclusionStatus status;
   bool is_allowed_to_access_secure_cookies;
 };
@@ -352,6 +370,9 @@ struct CookieDeletionFilter {
   bool partitioned_state_only;
 };
 
+// Interface used to register event listeners in processes like the Browser and
+// privileged Renderer processes to receive synchronous cookie change
+// notifications from the Network Service's CookieStore.
 interface CookieChangeListener {
   // TODO(rdsmith): Should this be made a batch interface?
   OnCookieChange(CookieChangeInfo change);
@@ -416,6 +437,17 @@ interface CookieManager {
   // Delete a cookie. Returns true if a cookie was deleted.
   DeleteCanonicalCookie(CanonicalCookie cookie) => (bool success);
 
+  // Returns true if a site has cookies in a separate partition than the
+  // current site's partition.
+  // If a nullopt is returned, it means either the partition key wasn't set
+  // or the cookie store isn't fully initialized yet.
+  // Note: Calls here do not follow normal sequencing rules. The results
+  // are processed and returned to the caller as soon as requests
+  // are received.
+  SiteHasCookieInOtherPartition(SchemefulSite schemeful_site,
+                                CookiePartitionKey? partition_key)
+                                  => (bool? site_has_cookie_in_other_partition);
+
   // Delete a set of cookies matching the passed filter.
   // Returns the number of cookies deleted.
   DeleteCookies(CookieDeletionFilter filter) => (uint32 num_deleted);
@@ -423,6 +455,16 @@ interface CookieManager {
   // Delete cookies marked as session-only in cookie settings.
   // Returns the number of cookies deleted.
   DeleteSessionOnlyCookies() => (uint32 num_deleted);
+
+  // Delete cookies marked as session-only in cookie settings that are stale
+  // (haven't been accessed or updated in 7 days).
+  // Returns the number of cookies deleted.
+  // See crbug.com/40285083 for more info.
+  //
+  // If there is a more general use case for filtering cookie deletion on
+  // the last access time, consider replacing this with a call to DeleteCookies
+  // by adding a last_accessed time range to CookieDeletionFilter.
+  DeleteStaleSessionOnlyCookies() => (uint32 num_deleted);
 
   // Subscribes the given listener to changes to a cookie.
   //
@@ -481,11 +523,6 @@ interface CookieManager {
 
   // Enables/Disables blocking of third-party cookies.
   BlockThirdPartyCookies(bool block);
-
-  // Enables/Disables blocking of truncated cookies. This provides a way to
-  // change the setting at runtime, which allows the corresponding enterprise
-  // policy to not require a restart to take affect.
-  BlockTruncatedCookies(bool block);
 
   // Enables/Disables mitigations for third-party cookies deprecation.
   SetMitigationsEnabledFor3pcd(bool enable);

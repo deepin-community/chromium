@@ -11,12 +11,12 @@
 #include "base/functional/callback.h"
 #include "base/memory/ref_counted_delete_on_sequence.h"
 #include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/strcat.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/policy/messaging_layer/storage_selector/storage_selector.h"
 #include "chrome/browser/policy/messaging_layer/upload/event_upload_size_controller.h"
 #include "chrome/browser/policy/messaging_layer/upload/file_upload_impl.h"
@@ -34,34 +34,40 @@
 #include "dbus/message.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/dbus/missive/history_tracker.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
 namespace ash {
 
 namespace {
 
 static constexpr uint64_t kDefaultMemoryAllocation =
-    16u * 1024uLL * 1024uLL;  // 16 MiB by default
+    64u * 1024uLL * 1024uLL;  // 64 MiB by default
+
+// UMA name for memory usage by uploads.
+// The memory is logged as a `used` percent of `total`. Recorded every time we
+// receive a new upload request. Expected to be well below 100%.
+constexpr char kUploadMemoryUsage[] = "Browser.ERP.UploadMemoryUsagePercent";
 
 void SendStatusAsResponse(
     std::unique_ptr<dbus::Response> response,
     dbus::ExportedObject::ResponseSender response_sender,
     ::reporting::UploadEncryptedRecordResponse response_message,
-    ::reporting::Status status) {
-  // Build `StatusProto` in `response_message`
-  status.SaveTo(response_message.mutable_status());
+    ::reporting::StatusOr<std::list<int64_t>> result) {
+  if (result.has_value()) {
+    // Log cache state in `response_message`
+    for (const auto& seq_id : result.value()) {
+      response_message.add_cached_events_seq_ids(seq_id);
+    }
+  } else {
+    // Build `StatusProto` in `response_message`
+    result.error().SaveTo(response_message.mutable_status());
+  }
+
+  // Turn on/off the debug state flag.
+  response_message.set_health_data_logging_enabled(
+      ::reporting::HistoryTracker::Get()->debug_state());
 
   // Encode whole `response_message`
   dbus::MessageWriter writer(response.get());
   writer.AppendProtoAsArrayOfBytes(response_message);
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Turn on/off the debug state flag (for Ash only).
-  response_message.set_health_data_logging_enabled(
-      ::reporting::HistoryTracker::Get()->debug_state());
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   // Send `response`
   std::move(response_sender).Run(std::move(response));
@@ -116,7 +122,7 @@ void EncryptedReportingServiceProvider::OnExported(
 }
 
 // static
-::reporting::UploadClient::ReportSuccessfulUploadCallback
+::reporting::ReportSuccessfulUploadCallback
 EncryptedReportingServiceProvider::GetReportSuccessUploadCallback() {
   chromeos::MissiveClient* const missive_client =
       chromeos::MissiveClient::Get();
@@ -135,7 +141,7 @@ EncryptedReportingServiceProvider::GetReportSuccessUploadCallback() {
 }
 
 // static
-::reporting::UploadClient::EncryptionKeyAttachedCallback
+::reporting::EncryptionKeyAttachedCallback
 EncryptedReportingServiceProvider::GetEncryptionKeyAttachedCallback() {
   chromeos::MissiveClient* const missive_client =
       chromeos::MissiveClient::Get();
@@ -153,7 +159,7 @@ EncryptedReportingServiceProvider::GetEncryptionKeyAttachedCallback() {
 }
 
 // static
-::reporting::UploadClient::UpdateConfigInMissiveCallback
+::reporting::UpdateConfigInMissiveCallback
 EncryptedReportingServiceProvider::GetUpdateConfigInMissiveCallback() {
   chromeos::MissiveClient* const missive_client =
       chromeos::MissiveClient::Get();
@@ -185,7 +191,7 @@ void EncryptedReportingServiceProvider::RequestUploadEncryptedRecords(
         "Uploads are not expected in this configuration"};
     LOG(ERROR) << status;
     SendStatusAsResponse(std::move(response), std::move(response_sender),
-                         std::move(response_message), status);
+                         std::move(response_message), base::unexpected(status));
     return;
   }
 
@@ -196,7 +202,7 @@ void EncryptedReportingServiceProvider::RequestUploadEncryptedRecords(
                                "No Missive client available"};
     LOG(ERROR) << status;
     SendStatusAsResponse(std::move(response), std::move(response_sender),
-                         std::move(response_message), status);
+                         std::move(response_message), base::unexpected(status));
     return;
   }
 
@@ -207,7 +213,7 @@ void EncryptedReportingServiceProvider::RequestUploadEncryptedRecords(
         "Cannot communicate with server, unsupported API Key"};
     LOG(ERROR) << status;
     SendStatusAsResponse(std::move(response), std::move(response_sender),
-                         std::move(response_message), status);
+                         std::move(response_message), base::unexpected(status));
     return;
   }
 
@@ -223,12 +229,19 @@ void EncryptedReportingServiceProvider::RequestUploadEncryptedRecords(
     LOG(ERROR) << "Unable to process UploadEncryptedRecordRequest. status: "
                << status;
     SendStatusAsResponse(std::move(response), std::move(response_sender),
-                         std::move(response_message), status);
+                         std::move(response_message), base::unexpected(status));
     return;
   }
 
   ::reporting::ScopedReservation scoped_reservation(serialized_request_buf_size,
                                                     memory_resource_);
+
+  // Update UMA on actual memory usage.
+  base::UmaHistogramPercentage(
+      kUploadMemoryUsage,
+      static_cast<int>(memory_resource_->GetUsed() * 100uL /
+                       memory_resource_->GetTotal()));  // Never zero.
+
   if (!scoped_reservation.reserved()) {
     ::reporting::Status status{::reporting::error::RESOURCE_EXHAUSTED,
                                "UploadEncryptedRecordRequest has exhausted "
@@ -236,7 +249,7 @@ void EncryptedReportingServiceProvider::RequestUploadEncryptedRecords(
     LOG(ERROR) << "Unable to process UploadEncryptedRecordRequest. status: "
                << status;
     SendStatusAsResponse(std::move(response), std::move(response_sender),
-                         std::move(response_message), status);
+                         std::move(response_message), base::unexpected(status));
     return;
   }
 
@@ -250,7 +263,7 @@ void EncryptedReportingServiceProvider::RequestUploadEncryptedRecords(
     LOG(ERROR) << "Unable to process UploadEncryptedRecordRequest. status: "
                << status;
     SendStatusAsResponse(std::move(response), std::move(response_sender),
-                         std::move(response_message), status);
+                         std::move(response_message), base::unexpected(status));
     return;
   }
 
@@ -273,13 +286,11 @@ void EncryptedReportingServiceProvider::RequestUploadEncryptedRecords(
           remaining_storage_capacity,
           ::reporting::FileUploadDelegate::kMaxUploadBufferSize))};
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  // Accept health data if present (ChromeOS only)
+  // Accept health data if present.
   if (request.has_health_data()) {
     ::reporting::HistoryTracker::Get()->set_data(
         std::move(request.health_data()), base::DoNothing());
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   upload_provider_->RequestUploadEncryptedRecords(
       request.need_encryption_keys(), std::move(records),
@@ -299,6 +310,7 @@ bool EncryptedReportingServiceProvider::OnOriginThread() const {
 std::unique_ptr<::reporting::EncryptedReportingUploadProvider>
 EncryptedReportingServiceProvider::GetDefaultUploadProvider() {
   return std::make_unique<::reporting::EncryptedReportingUploadProvider>(
-      GetReportSuccessUploadCallback(), GetEncryptionKeyAttachedCallback());
+      GetReportSuccessUploadCallback(), GetEncryptionKeyAttachedCallback(),
+      GetUpdateConfigInMissiveCallback());
 }
 }  // namespace ash

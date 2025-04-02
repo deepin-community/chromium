@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chromeos/ash/components/language_packs/language_pack_manager.h"
 
 #include <optional>
@@ -159,7 +164,7 @@ void OnInstallDlcComplete(OnInstallCompleteCallback callback,
 void OnUninstallDlcComplete(OnUninstallCompleteCallback callback,
                             std::string_view feature_id,
                             const std::string& locale,
-                            const std::string& err) {
+                            std::string_view err) {
   PackResult result;
   result.feature_id = feature_id;
   result.language_code = locale;
@@ -181,7 +186,7 @@ void OnUninstallDlcComplete(OnUninstallCompleteCallback callback,
 void OnGetDlcState(GetPackStateCallback callback,
                    std::string feature_id,
                    const std::string& locale,
-                   const std::string& err,
+                   std::string_view err,
                    const dlcservice::DlcState& dlc_state) {
   PackResult result;
   if (dlc_state.is_verified() &&
@@ -249,7 +254,7 @@ void UpdateFromInputMethodPrefs(
 // Callback for dlcservice::GetExistingDlcs().
 // TODO: b/294162606 - Write unit tests for this function if possible.
 void OnGetExistingDlcs(PrefService* prefs,
-                       const std::string& err,
+                       std::string_view err,
                        const dlcservice::DlcsWithContent& dlcs_with_content) {
   if (!err.empty() && err != dlcservice::kErrorNone) {
     DLOG(ERROR) << "DlcserviceClient::GetExisingDlcs() returned error";
@@ -271,12 +276,9 @@ const base::flat_map<PackSpecPair, std::string>& GetAllLanguagePackDlcIds() {
   // It's a map from PackSpecPair to DLC ID. The pair is <feature id, locale>.
   // Whenever a new DLC is created, it needs to be added here.
   // Clients of Language Packs don't need to know the IDs.
-  // Note: if you add new languages here, make sure to add them to the metrics
-  //       test `LanguagePackMetricsTest.CheckLanguageCodes`.
   static const base::NoDestructor<base::flat_map<PackSpecPair, std::string>>
       all_dlc_ids({
           // Handwriting Recognition.
-          // Note: English is not included because it's still using LongForm.
           {{kHandwritingFeatureId, "am"}, "handwriting-am"},
           {{kHandwritingFeatureId, "ar"}, "handwriting-ar"},
           {{kHandwritingFeatureId, "be"}, "handwriting-be"},
@@ -287,6 +289,7 @@ const base::flat_map<PackSpecPair, std::string>& GetAllLanguagePackDlcIds() {
           {{kHandwritingFeatureId, "da"}, "handwriting-da"},
           {{kHandwritingFeatureId, "de"}, "handwriting-de"},
           {{kHandwritingFeatureId, "el"}, "handwriting-el"},
+          {{kHandwritingFeatureId, "en"}, "handwriting-en"},
           {{kHandwritingFeatureId, "es"}, "handwriting-es"},
           {{kHandwritingFeatureId, "et"}, "handwriting-et"},
           {{kHandwritingFeatureId, "fa"}, "handwriting-fa"},
@@ -351,7 +354,7 @@ const base::flat_map<PackSpecPair, std::string>& GetAllLanguagePackDlcIds() {
           {{kTtsFeatureId, "el"}, "tts-el-gr-c"},
           {{kTtsFeatureId, "en-au"}, "tts-en-au-c"},
           {{kTtsFeatureId, "en-gb"}, "tts-en-gb-c"},
-          {{kTtsFeatureId, "en-us"}, "tts-en-us-c"},
+          {{kTtsFeatureId, "en-us"}, "tts-en-us-d"},
           {{kTtsFeatureId, "es-es"}, "tts-es-es-c"},
           {{kTtsFeatureId, "es-us"}, "tts-es-us-c"},
           {{kTtsFeatureId, "fi"}, "tts-fi-fi-c"},
@@ -408,6 +411,22 @@ std::optional<std::string> GetDlcIdForLanguagePack(
   return it->second;
 }
 
+std::optional<std::string> DlcToTtsLocale(std::string_view dlc_id) {
+  const base::flat_map<PackSpecPair, std::string>& all_ids =
+      GetAllLanguagePackDlcIds();
+  // Relies on the fact that TTS `PackSpecPair`s are "grouped together" in the
+  // sorted `flat_map`.
+  auto it = all_ids.upper_bound({kTtsFeatureId, ""});
+  while (it != all_ids.end() && it->first.feature_id == kTtsFeatureId) {
+    if (it->second == dlc_id) {
+      return it->first.locale;
+    }
+    ++it;
+  }
+
+  return std::nullopt;
+}
+
 ///////////////////////////////////////////////////////////
 // PackResult constructors and destructors.
 PackResult::PackResult() {
@@ -460,6 +479,8 @@ void LanguagePackManager::GetPackState(const std::string& feature_id,
     return;
   }
 
+  // TODO: b/351723265 - Split this language code metric into a metric for each
+  // feature.
   base::UmaHistogramSparse("ChromeOS.LanguagePacks.GetPackState.LanguageCode",
                            static_cast<int32_t>(base::PersistentHash(locale)));
   base::UmaHistogramEnumeration("ChromeOS.LanguagePacks.GetPackState.FeatureId",
@@ -579,15 +600,18 @@ void LanguagePackManager::NotifyPackStateChanged(
 void LanguagePackManager::OnDlcStateChanged(
     const dlcservice::DlcState& dlc_state) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // As of now, we only have Handwriting as a client.
-  // We will check the full list once we have more than one DLC.
+
   const std::optional<std::string> handwriting_locale =
       DlcToHandwritingLocale(dlc_state.id());
-  if (!handwriting_locale.has_value()) {
-    return;
+  if (handwriting_locale.has_value()) {
+    NotifyPackStateChanged(kHandwritingFeatureId, *handwriting_locale,
+                           dlc_state);
   }
 
-  NotifyPackStateChanged(kHandwritingFeatureId, *handwriting_locale, dlc_state);
+  const std::optional<std::string> tts_locale = DlcToTtsLocale(dlc_state.id());
+  if (tts_locale.has_value()) {
+    NotifyPackStateChanged(kTtsFeatureId, *tts_locale, dlc_state);
+  }
 }
 
 LanguagePackManager::LanguagePackManager() {

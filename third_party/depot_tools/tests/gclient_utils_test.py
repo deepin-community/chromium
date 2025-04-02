@@ -71,11 +71,15 @@ class CheckCallAndFilterTestCase(unittest.TestCase):
         ])
         self.assertEqual(self.stdout.getvalue(), b'')
 
-        mockPopen.assert_called_with(args,
-                                     cwd=cwd,
-                                     stdout=mock.ANY,
-                                     stderr=subprocess2.STDOUT,
-                                     bufsize=0)
+        kall = mockPopen.call_args
+        self.assertEqual(kall.args, (args, ))
+        self.assertEqual(kall.kwargs['cwd'], cwd)
+        self.assertEqual(kall.kwargs['stdout'], mock.ANY)
+        self.assertEqual(kall.kwargs['stderr'], subprocess2.STDOUT)
+        self.assertEqual(kall.kwargs['bufsize'], 0)
+        self.assertIn('env', kall.kwargs)
+        self.assertIn('COLUMNS', kall.kwargs['env'])
+        self.assertIn('LINES', kall.kwargs['env'])
 
     @mock.patch('time.sleep')
     @mock.patch('subprocess2.Popen')
@@ -117,18 +121,16 @@ class CheckCallAndFilterTestCase(unittest.TestCase):
 
         mockTime.assert_called_with(gclient_utils.RETRY_INITIAL_SLEEP)
 
-        self.assertEqual(mockPopen.mock_calls, [
-            mock.call(args,
-                      cwd=cwd,
-                      stdout=mock.ANY,
-                      stderr=subprocess2.STDOUT,
-                      bufsize=0),
-            mock.call(args,
-                      cwd=cwd,
-                      stdout=mock.ANY,
-                      stderr=subprocess2.STDOUT,
-                      bufsize=0),
-        ])
+        for i in range(2):
+            kall = mockPopen.mock_calls[i]
+            self.assertEqual(kall.args, (args, ))
+            self.assertEqual(kall.kwargs['cwd'], cwd)
+            self.assertEqual(kall.kwargs['stdout'], mock.ANY)
+            self.assertEqual(kall.kwargs['stderr'], subprocess2.STDOUT)
+            self.assertEqual(kall.kwargs['bufsize'], 0)
+            self.assertIn('env', kall.kwargs)
+            self.assertIn('COLUMNS', kall.kwargs['env'])
+            self.assertIn('LINES', kall.kwargs['env'])
 
         self.assertEqual(self.stdout.getvalue(), b'')
         self.assertEqual(
@@ -401,6 +403,18 @@ class GClientUtilsTest(trial_dir.TestCase):
             self.assertEqual('test', gclient_utils.FileRead(tmp))
         self.assertFalse(os.path.exists(tmp))
 
+    def testMergeConditions(self):
+        self.assertEqual(None, gclient_utils.merge_conditions(None, None))
+
+        self.assertEqual('foo', gclient_utils.merge_conditions('foo', None))
+
+        self.assertEqual('foo', gclient_utils.merge_conditions(None, 'foo'))
+
+        self.assertEqual('(foo) and (bar)',
+                         gclient_utils.merge_conditions('foo', 'bar'))
+
+        self.assertEqual('(foo or bar) and (baz)',
+                         gclient_utils.merge_conditions('foo or bar', 'baz'))
 
 if __name__ == '__main__':
     unittest.main()

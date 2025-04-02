@@ -67,7 +67,7 @@ class ExpectFloatWithTolerance : public detail::Expectation {
                 testing::AssertionResult result = testing::AssertionFailure()
                                                   << "Expected data[" << i << "] to be close to "
                                                   << expectedValue << ", actual " << actualValue
-                                                  << std::endl;
+                                                  << "\n";
                 return result;
             }
         }
@@ -114,7 +114,7 @@ class ExpectFloat16 : public detail::Expectation {
                 testing::AssertionResult result = testing::AssertionFailure()
                                                   << "Expected data[" << i << "] to be "
                                                   << expectedValue << ", actual " << actualValue
-                                                  << std::endl;
+                                                  << "\n";
                 return result;
             }
         }
@@ -151,7 +151,7 @@ class ExpectRG11B10Ufloat : public detail::Expectation {
                 testing::AssertionResult result = testing::AssertionFailure()
                                                   << "Expected data[" << i << "] to be "
                                                   << expectedValue << ", actual " << actualValue
-                                                  << std::endl;
+                                                  << "\n";
                 return result;
             }
         }
@@ -453,8 +453,8 @@ class TextureFormatTest : public DawnTest {
         DAWN_ASSERT(sizeof(T) * formatInfo.componentCount == formatInfo.texelByteSize);
         DAWN_ASSERT(formatInfo.type == TextureComponentType::Float);
 
-        DAWN_TEST_UNSUPPORTED_IF((utils::IsNorm16TextureFormat(formatInfo.format)) &&
-                                 !IsNorm16TextureFormatsSupported());
+        DAWN_TEST_UNSUPPORTED_IF((utils::IsUnorm16TextureFormat(formatInfo.format)) &&
+                                 !IsUnorm16TextureFormatsSupported());
 
         T maxValue = std::numeric_limits<T>::max();
         std::vector<T> textureData = {0, 1, maxValue, maxValue};
@@ -470,8 +470,8 @@ class TextureFormatTest : public DawnTest {
         DAWN_ASSERT(sizeof(T) * formatInfo.componentCount == formatInfo.texelByteSize);
         DAWN_ASSERT(formatInfo.type == TextureComponentType::Float);
 
-        DAWN_TEST_UNSUPPORTED_IF((utils::IsNorm16TextureFormat(formatInfo.format)) &&
-                                 !IsNorm16TextureFormatsSupported());
+        DAWN_TEST_UNSUPPORTED_IF((utils::IsSnorm16TextureFormat(formatInfo.format)) &&
+                                 !IsSnorm16TextureFormatsSupported());
 
         T maxValue = std::numeric_limits<T>::max();
         T minValue = std::numeric_limits<T>::min();
@@ -548,28 +548,40 @@ class TextureFormatTest : public DawnTest {
             mIsRG11B10UfloatRenderableSupported = true;
             requiredFeatures.push_back(wgpu::FeatureName::RG11B10UfloatRenderable);
         }
-        if (SupportsFeatures({wgpu::FeatureName::Norm16TextureFormats})) {
-            mIsNorm16TextureFormatsSupported = true;
-            requiredFeatures.push_back(wgpu::FeatureName::Norm16TextureFormats);
+        if (SupportsFeatures({wgpu::FeatureName::Unorm16TextureFormats})) {
+            mIsUnorm16TextureFormatsSupported = true;
+            requiredFeatures.push_back(wgpu::FeatureName::Unorm16TextureFormats);
+        }
+        if (SupportsFeatures({wgpu::FeatureName::Snorm16TextureFormats})) {
+            mIsSnorm16TextureFormatsSupported = true;
+            requiredFeatures.push_back(wgpu::FeatureName::Snorm16TextureFormats);
         }
         return requiredFeatures;
     }
 
     bool IsRG11B10UfloatRenderableSupported() { return mIsRG11B10UfloatRenderableSupported; }
-    bool IsNorm16TextureFormatsSupported() { return mIsNorm16TextureFormatsSupported; }
+    bool IsUnorm16TextureFormatsSupported() { return mIsUnorm16TextureFormatsSupported; }
+    bool IsSnorm16TextureFormatsSupported() { return mIsSnorm16TextureFormatsSupported; }
 
   private:
     bool mIsRG11B10UfloatRenderableSupported = false;
-    bool mIsNorm16TextureFormatsSupported = false;
+    bool mIsUnorm16TextureFormatsSupported = false;
+    bool mIsSnorm16TextureFormatsSupported = false;
 };
 
 // Test the R8Unorm format
 TEST_P(TextureFormatTest, R8Unorm) {
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
     DoUnormTest<uint8_t>({wgpu::TextureFormat::R8Unorm, 1, TextureComponentType::Float, 1});
 }
 
 // Test the RG8Unorm format
 TEST_P(TextureFormatTest, RG8Unorm) {
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
     DoUnormTest<uint8_t>({wgpu::TextureFormat::RG8Unorm, 2, TextureComponentType::Float, 2});
 }
 
@@ -590,11 +602,19 @@ TEST_P(TextureFormatTest, RGBA16Unorm) {
 
 // Test the RGBA8Unorm format
 TEST_P(TextureFormatTest, RGBA8Unorm) {
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
     DoUnormTest<uint8_t>({wgpu::TextureFormat::RGBA8Unorm, 4, TextureComponentType::Float, 4});
 }
 
 // Test the BGRA8Unorm format
 TEST_P(TextureFormatTest, BGRA8Unorm) {
+    // TODO(crbug.com/388318201): GL_EXT_texture_format_BGRA8888 or GL_APPLE_texture_format_BGRA8888
+    // is required for compat mode.
+    DAWN_TEST_UNSUPPORTED_IF(IsCompatibilityMode() &&
+                             HasToggleEnabled("gl_force_es_31_and_no_extensions"));
+
     // Intel's implementation of BGRA on ES is broken: it claims to support
     // GL_EXT_texture_format_BGRA8888, but won't accept GL_BGRA or GL_BGRA8_EXT as internalFormat.
     DAWN_SUPPRESS_TEST_IF(IsIntel() && IsOpenGLES() && IsLinux());
@@ -613,16 +633,25 @@ TEST_P(TextureFormatTest, BGRA8Unorm) {
 
 // Test the R8Snorm format
 TEST_P(TextureFormatTest, R8Snorm) {
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
     DoSnormTest<int8_t>({wgpu::TextureFormat::R8Snorm, 1, TextureComponentType::Float, 1});
 }
 
 // Test the RG8Snorm format
 TEST_P(TextureFormatTest, RG8Snorm) {
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
     DoSnormTest<int8_t>({wgpu::TextureFormat::RG8Snorm, 2, TextureComponentType::Float, 2});
 }
 
 // Test the RGBA8Snorm format
 TEST_P(TextureFormatTest, RGBA8Snorm) {
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
     DoSnormTest<int8_t>({wgpu::TextureFormat::RGBA8Snorm, 4, TextureComponentType::Float, 4});
 }
 
@@ -751,16 +780,25 @@ TEST_P(TextureFormatTest, RGBA32Sint) {
 
 // Test the R32Float format
 TEST_P(TextureFormatTest, R32Float) {
+    // TODO(crbug.com/381214487): float32-renderable
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
     DoFloat32Test({wgpu::TextureFormat::R32Float, 4, TextureComponentType::Float, 1});
 }
 
 // Test the RG32Float format
 TEST_P(TextureFormatTest, RG32Float) {
+    // TODO(crbug.com/381214487): float32-renderable
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
     DoFloat32Test({wgpu::TextureFormat::RG32Float, 8, TextureComponentType::Float, 2});
 }
 
 // Test the RGBA32Float format
 TEST_P(TextureFormatTest, RGBA32Float) {
+    // TODO(crbug.com/381214487): float32-renderable
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
     DoFloat32Test({wgpu::TextureFormat::RGBA32Float, 16, TextureComponentType::Float, 4});
 }
 
@@ -793,6 +831,10 @@ TEST_P(TextureFormatTest, RGBA16Float) {
 
 // Test the RGBA8Unorm format
 TEST_P(TextureFormatTest, RGBA8UnormSrgb) {
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
+
     uint8_t maxValue = std::numeric_limits<uint8_t>::max();
     std::vector<uint8_t> textureData = {0, 1, maxValue, 64, 35, 68, 152, 168};
 
@@ -814,9 +856,8 @@ TEST_P(TextureFormatTest, RGBA8UnormSrgb) {
 
 // Test the BGRA8UnormSrgb format
 TEST_P(TextureFormatTest, BGRA8UnormSrgb) {
-    // TODO(cwallez@chromium.org): This format doesn't exist in OpenGL, emulate it using
-    // RGBA8UnormSrgb and swizzling / shader twiddling
-    DAWN_SUPPRESS_TEST_IF(IsOpenGL() || IsOpenGLES());
+    // BGRA8UnormSrgb is unsupported in Compatibility mode
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode());
 
     uint8_t maxValue = std::numeric_limits<uint8_t>::max();
     std::vector<uint8_t> textureData = {0, 1, maxValue, 64, 35, 68, 152, 168};
@@ -867,6 +908,10 @@ TEST_P(TextureFormatTest, RGB10A2Uint) {
 
 // Test the RGB10A2Unorm format
 TEST_P(TextureFormatTest, RGB10A2Unorm) {
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
+
     auto MakeRGB10A2 = [](uint32_t r, uint32_t g, uint32_t b, uint32_t a) -> uint32_t {
         DAWN_ASSERT((r & 0x3FF) == r);
         DAWN_ASSERT((g & 0x3FF) == g);
@@ -895,6 +940,11 @@ TEST_P(TextureFormatTest, RGB10A2Unorm) {
 
 // Test the RG11B10Ufloat format
 TEST_P(TextureFormatTest, RG11B10Ufloat) {
+    // TODO(crbug.com/388318201): sampling test also requires format to be color-renderable
+    DAWN_SUPPRESS_TEST_IF(!IsRG11B10UfloatRenderableSupported());
+    // TODO(crbug.com/388318201): expected: 0xf87e0000, actual: 0xfffff800
+    DAWN_SUPPRESS_TEST_IF(IsD3D11());
+
     constexpr uint32_t kFloat11Zero = 0;
     constexpr uint32_t kFloat11Infinity = 0x7C0;
     constexpr uint32_t kFloat11Nan = 0x7C1;
@@ -936,18 +986,15 @@ TEST_P(TextureFormatTest, RG11B10Ufloat) {
         {wgpu::TextureFormat::RG11B10Ufloat, 4, TextureComponentType::Float, 4}, textureData,
         uncompressedData);
 
-    // This format is renderable if "rg11b10ufloat-renderable" feature is enabled
-    if (IsRG11B10UfloatRenderableSupported()) {
-        // TODO(https://crbug.com/swiftshader/147) Rendering INFINITY and NaN isn't handled
-        // correctly by swiftshader
-        if ((IsVulkan() && IsSwiftshader()) || IsANGLE()) {
-            WarningLog() << "Skip Rendering test because Swiftshader doesn't render INFINITY "
-                            "and NaN correctly for RG11B10Ufloat texture format.";
-        } else {
-            DoFormatRenderingTest(
-                {wgpu::TextureFormat::RG11B10Ufloat, 4, TextureComponentType::Float, 4},
-                uncompressedData, textureData, new ExpectRG11B10Ufloat(textureData));
-        }
+    // TODO(https://crbug.com/swiftshader/147) Rendering INFINITY and NaN isn't handled
+    // correctly by swiftshader
+    if ((IsVulkan() && IsSwiftshader()) || IsANGLE()) {
+        WarningLog() << "Skip Rendering test because Swiftshader doesn't render INFINITY "
+                        "and NaN correctly for RG11B10Ufloat texture format.";
+    } else {
+        DoFormatRenderingTest(
+            {wgpu::TextureFormat::RG11B10Ufloat, 4, TextureComponentType::Float, 4},
+            uncompressedData, textureData, new ExpectRG11B10Ufloat(textureData));
     }
 }
 
@@ -963,6 +1010,10 @@ TEST_P(TextureFormatTest, RGB9E5Ufloat) {
     // Where reduint and expuint are the integer values when considering the E5 as a 5bit uint, and
     // the r9 as a 9bit uint. B the number of bits of the mantissa (9), and N the offset for the
     // exponent (15).
+
+    // TODO(crbug.com/388318201): investigate
+    DAWN_SUPPRESS_TEST_IF(IsCompatibilityMode() &&
+                          HasToggleEnabled("gl_force_es_31_and_no_extensions"));
 
     float smallestExponent = std::pow(2.0f, -24.0f);
     float largestExponent = std::pow(2.0f, float{31 - 24});

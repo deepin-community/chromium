@@ -47,8 +47,28 @@ namespace tint::core::ir {
 /// An instruction in the IR.
 class Instruction : public Castable<Instruction> {
   public:
+    using Id = uint32_t;
+
+    /// Kinds of memory access the call will do.
+    enum class Access {
+        kLoad,
+        kStore,
+    };
+    /// Accesses is a set of of Access
+    using Accesses = EnumSet<Access>;
+
     /// Destructor
     ~Instruction() override;
+
+    /// An equality helper for Instructions.
+    /// @param other the instruction to compare against
+    /// @returns true if the two instructions have matching IDs
+    bool operator==(const Instruction& other) const { return id_ == other.id_; }
+
+    /// A comparison helper for Instruction.
+    /// @param other the instruction to compare against
+    /// @returns true if `this` is less then `other`.
+    bool operator<(const Instruction& other) const { return id_ < other.id_; }
 
     /// Set an operand at a given index.
     /// @param index the operand index
@@ -86,6 +106,9 @@ class Instruction : public Castable<Instruction> {
     /// @returns a clone of this instruction
     virtual Instruction* Clone(CloneContext& ctx) = 0;
 
+    /// @returns the side effects for this instruction
+    virtual Accesses GetSideEffects() const { return Accesses{}; }
+
     /// @returns true if the Instruction has not been destroyed with Destroy()
     bool Alive() const { return !flags_.Contains(Flag::kDead); }
 
@@ -114,6 +137,10 @@ class Instruction : public Castable<Instruction> {
     void ReplaceWith(Instruction* replacement);
     /// Removes this instruction from the owning block
     void Remove();
+
+    /// Detach an instruction result from this instruction.
+    /// @returns the instruction result that was detached
+    InstructionResult* DetachResult();
 
     /// @param idx the index of the operand
     /// @returns the operand with index @p idx, or `nullptr` if there are no operands or the index
@@ -162,7 +189,10 @@ class Instruction : public Castable<Instruction> {
     };
 
     /// Constructor
-    Instruction();
+    explicit Instruction(Id id);
+
+    /// The instruction id
+    Id id_;
 
     /// The block that owns this instruction
     ConstPropagatingPtr<ir::Block> block_;

@@ -36,7 +36,6 @@ const char* GetServerConnectionCodeString(
     ENUM_CASE(SERVER_CONNECTION_OK);
   }
   NOTREACHED();
-  return "";
 }
 
 #undef ENUM_CASE

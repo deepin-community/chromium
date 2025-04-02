@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "gpu/command_buffer/client/gl_helper.h"
 
 #include <GLES2/gl2.h>
@@ -9,6 +14,7 @@
 #include <GLES2/gl2extchromium.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -38,17 +44,17 @@ namespace gpu {
 
 namespace {
 
-GLHelper::ScalerQuality kQualities[] = {
+auto kQualities = std::to_array<GLHelper::ScalerQuality>({
     GLHelper::SCALER_QUALITY_BEST,
     GLHelper::SCALER_QUALITY_GOOD,
     GLHelper::SCALER_QUALITY_FAST,
-};
+});
 
-const char* kQualityNames[] = {
+auto kQualityNames = std::to_array<const char*>({
     "best",
     "good",
     "fast",
-};
+});
 
 }  // namespace
 
@@ -821,7 +827,7 @@ class GLHelperTest : public testing::Test {
         gfx::Vector2dF offset;
         scaler->ComputeRegionOfInfluence(framebuffer_size, gfx::Vector2dF(),
                                          patch_rect, &sampling_rect, &offset);
-        // TODO(crbug.com/775740): Only test offsets having whole-numbered
+        // TODO(crbug.com/41350322): Only test offsets having whole-numbered
         // coordinates until the scalers can account for the other case.
         if (offset.x() == std::floor(offset.x()) &&
             offset.y() == std::floor(offset.y())) {
@@ -1268,7 +1274,7 @@ class GLHelperPixelTest : public GLHelperTest {
   gl::DisableNullDrawGLBindings enable_pixel_output_;
 };
 
-// TODO(crbug.com/1384328): Re-enable this test
+// TODO(crbug.com/40246425): Re-enable this test
 TEST_F(GLHelperTest, DISABLED_RGBAASyncReadbackTest) {
   const int kTestSize = 64;
   bool result = TestTextureFormatReadback(gfx::Size(kTestSize, kTestSize),
@@ -1295,7 +1301,7 @@ class GLHelperPixelReadbackTest
 
 // Per pixel tests, all sizes are small so that we can print
 // out the generated bitmaps.
-// TODO(crbug.com/1367486): Very flaky on Linux ASAN.
+// TODO(crbug.com/40867694): Very flaky on Linux ASAN.
 #if BUILDFLAG(IS_LINUX) && defined(ADDRESS_SANITIZER)
 #define MAYBE_ScaleTest DISABLED_ScaleTest
 #else
@@ -1355,7 +1361,20 @@ INSTANTIATE_TEST_SUITE_P(
 
 // Validate that all scaling generates valid pipelines.
 TEST_F(GLHelperTest, ValidateScalerPipelines) {
-  int sizes[] = {7, 99, 128, 256, 512, 719, 720, 721, 1920, 2011, 3217, 4096};
+  auto sizes = std::to_array<int>({
+      7,
+      99,
+      128,
+      256,
+      512,
+      719,
+      720,
+      721,
+      1920,
+      2011,
+      3217,
+      4096,
+  });
   for (size_t q = 0; q < std::size(kQualities); q++) {
     for (size_t x = 0; x < std::size(sizes); x++) {
       for (size_t y = 0; y < std::size(sizes); y++) {

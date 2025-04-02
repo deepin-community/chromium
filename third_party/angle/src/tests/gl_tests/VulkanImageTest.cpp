@@ -550,6 +550,9 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageWhenDeviceOOM)
 {
     ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseVmaForImageSuballocation));
 
+    GLPerfMonitor monitor;
+    glBeginPerfMonitorAMD(monitor);
+
     VulkanHelper helper;
     helper.initializeFromANGLE();
     uint64_t expectedAllocationFallbacks =
@@ -579,7 +582,7 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageWhenDeviceOOM)
         EXPECT_GL_NO_ERROR();
 
         // This process only needs to continue until the allocation is no longer on the device.
-        if (getPerfCounters().deviceMemoryImageAllocationFallbacks == expectedAllocationFallbacks)
+        if (getPerfCounters().deviceMemoryImageAllocationFallbacks >= expectedAllocationFallbacks)
         {
             break;
         }
@@ -596,6 +599,8 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageWhenDeviceOOM)
     EXPECT_EQ(getPerfCounters().deviceMemoryImageAllocationFallbacks,
               expectedAllocationFallbacksAfterLastTexture);
 
+    glEndPerfMonitorAMD(monitor);
+
     GLFramebuffer fbo;
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
@@ -608,6 +613,9 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageWhenDeviceOOM)
 TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeing2DArrayGarbageWhenDeviceOOM)
 {
     ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseVmaForImageSuballocation));
+
+    GLPerfMonitor monitor;
+    glBeginPerfMonitorAMD(monitor);
 
     VulkanHelper helper;
     helper.initializeFromANGLE();
@@ -663,7 +671,7 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeing2DArrayGarbageWhenDeviceOOM
         EXPECT_GL_NO_ERROR();
 
         // This process only needs to continue until the allocation is no longer on the device.
-        if (getPerfCounters().deviceMemoryImageAllocationFallbacks == expectedAllocationFallbacks)
+        if (getPerfCounters().deviceMemoryImageAllocationFallbacks >= expectedAllocationFallbacks)
         {
             break;
         }
@@ -689,6 +697,8 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeing2DArrayGarbageWhenDeviceOOM
                     GL_UNSIGNED_BYTE, lastTextureColor.data());
     EXPECT_EQ(getPerfCounters().deviceMemoryImageAllocationFallbacks, expectedAllocationFallbacks);
 
+    glEndPerfMonitorAMD(monitor);
+
     GLFramebuffer fbo;
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, lastTexture, 0);
@@ -701,6 +711,9 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeing2DArrayGarbageWhenDeviceOOM
 TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeingFinished2DGarbageWhenDeviceOOM)
 {
     ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseVmaForImageSuballocation));
+
+    GLPerfMonitor monitor;
+    glBeginPerfMonitorAMD(monitor);
 
     VulkanHelper helper;
     helper.initializeFromANGLE();
@@ -748,7 +761,7 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeingFinished2DGarbageWhenDevice
         EXPECT_GL_NO_ERROR();
 
         // This process only needs to continue until the allocation is no longer on the device.
-        if (getPerfCounters().deviceMemoryImageAllocationFallbacks == expectedAllocationFallbacks)
+        if (getPerfCounters().deviceMemoryImageAllocationFallbacks >= expectedAllocationFallbacks)
         {
             break;
         }
@@ -797,6 +810,8 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeingFinished2DGarbageWhenDevice
     EXPECT_EQ(getPerfCounters().deviceMemoryImageAllocationFallbacks, expectedAllocationFallbacks);
     EXPECT_EQ(getPerfCounters().commandQueueSubmitCallsTotal, expectedSubmitCalls);
 
+    glEndPerfMonitorAMD(monitor);
+
     GLFramebuffer fbo;
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, lastTexture, 0);
@@ -809,6 +824,9 @@ TEST_P(VulkanMemoryTest, AllocateVMAImageAfterFreeingFinished2DGarbageWhenDevice
 TEST_P(VulkanMemoryTest, AllocateBufferAfterFreeing2DGarbageWhenDeviceOOM)
 {
     ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseVmaForImageSuballocation));
+
+    GLPerfMonitor monitor;
+    glBeginPerfMonitorAMD(monitor);
 
     VulkanHelper helper;
     helper.initializeFromANGLE();
@@ -860,12 +878,14 @@ TEST_P(VulkanMemoryTest, AllocateBufferAfterFreeing2DGarbageWhenDeviceOOM)
         EXPECT_GL_NO_ERROR();
 
         // This process only needs to continue until the allocation is no longer on the device.
-        if (getPerfCounters().deviceMemoryImageAllocationFallbacks == expectedAllocationFallbacks)
+        if (getPerfCounters().deviceMemoryImageAllocationFallbacks >= expectedAllocationFallbacks)
         {
             break;
         }
     }
     EXPECT_EQ(getPerfCounters().deviceMemoryImageAllocationFallbacks, expectedAllocationFallbacks);
+
+    glEndPerfMonitorAMD(monitor);
 
     // Wait until GPU finishes execution.
     GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);

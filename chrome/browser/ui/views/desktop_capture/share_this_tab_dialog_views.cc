@@ -29,12 +29,14 @@
 #include "content/public/browser/desktop_media_id.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents_delegate.h"
-#include "media/base/media_switches.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/color_palette.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
 #include "ui/views/layout/box_layout.h"
@@ -62,11 +64,6 @@ void RecordUmaSelection(base::TimeTicks dialog_open_time) {
   RecordUma(GDMPreferCurrentTabResult::kUserSelectedThisTab, dialog_open_time);
 }
 
-// The length of the initial delay during which the "Allow"-button is disabled
-// in the share-this-tab dialog.
-const base::FeatureParam<int> kShareThisTabDialogActivationDelayMs{
-    &kShareThisTabDialog, "activation_delay_ms", 500};
-
 bool ShouldAutoAcceptThisTabCapture() {
 #if BUILDFLAG(PLATFORM_CFM)
   return true;
@@ -80,7 +77,7 @@ bool ShouldAutoAcceptThisTabCapture() {
 
 ShareThisTabDialogView::ShareThisTabDialogView(
     const DesktopMediaPicker::Params& params,
-    ShareThisTabDialogViews* parent)
+    ShareThisTabMediaPicker* parent)
     : web_contents_(params.web_contents->GetWeakPtr()),
       app_name_(params.app_name),
       parent_(parent),
@@ -124,7 +121,7 @@ ShareThisTabDialogView::ShareThisTabDialogView(
   title_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   title_label->SetText(
       l10n_util::GetStringFUTF16(IDS_SHARE_THIS_TAB_DIALOG_TITLE, app_name_));
-  // TODO(crbug.com/1448008): Prevent non-initial focus of the title label.
+  // TODO(crbug.com/40269137): Prevent non-initial focus of the title label.
   title_label->SetFocusBehavior(View::FocusBehavior::ALWAYS);
   SetInitiallyFocusedView(title_label);
 
@@ -141,11 +138,11 @@ ShareThisTabDialogView::ShareThisTabDialogView(
     SetupAudioToggle();
   }
 
-  // Use no delay in tests that auto-accepts/rejects the dialog.
+  // Delay the "Allow" button as a click-jacking mitigation. Skip the delay if
+  // the result is preprogrammed anyway (e.g. in tests).
   const base::TimeDelta activation_delay =
-      (ShouldAutoAccept() || ShouldAutoReject())
-          ? base::Milliseconds(0)
-          : base::Milliseconds(kShareThisTabDialogActivationDelayMs.Get());
+      (ShouldAutoAccept() || ShouldAutoReject()) ? base::Milliseconds(0)
+                                                 : base::Milliseconds(500);
   activation_timer_.Start(FROM_HERE, activation_delay,
                           base::BindOnce(&ShareThisTabDialogView::Activate,
                                          weak_factory_.GetWeakPtr()));
@@ -165,30 +162,25 @@ ShareThisTabDialogView::ShareThisTabDialogView(
     constrained_window::ShowWebModalDialogViews(this, params.web_contents);
   } else {
 #if BUILDFLAG(IS_MAC)
-    // On Mac, MODAL_TYPE_CHILD with a null parent isn't allowed - fall back to
-    // MODAL_TYPE_WINDOW.
-    SetModalType(ui::MODAL_TYPE_WINDOW);
+    // On Mac, ModalType::kChild with a null parent isn't allowed - fall back to
+    // ModalType::kWindow.
+    SetModalType(ui::mojom::ModalType::kWindow);
 #endif
     CreateDialogWidget(this, params.context, nullptr)->Show();
   }
 
-  source_view_->SetBorder(features::IsChromeRefresh2023()
-                              ? views::CreateThemedRoundedRectBorder(
-                                    1, 4, ui::kColorSysPrimaryContainer)
-                              : views::CreateThemedRoundedRectBorder(
-                                    1, 2, kColorShareThisTabSourceViewBorder));
+  source_view_->SetBorder(views::CreateThemedRoundedRectBorder(
+      1, 4, ui::kColorSysPrimaryContainer));
 
-  SetButtonLabel(ui::DIALOG_BUTTON_OK,
+  SetButtonLabel(ui::mojom::DialogButton::kOk,
                  l10n_util::GetStringUTF16(IDS_SHARE_THIS_TAB_DIALOG_ALLOW));
-  SetButtonEnabled(ui::DIALOG_BUTTON_OK, false);
-  if (features::IsChromeRefresh2023()) {
-    SetButtonStyle(ui::DIALOG_BUTTON_OK, ui::ButtonStyle::kTonal);
-    SetButtonStyle(ui::DIALOG_BUTTON_CANCEL, ui::ButtonStyle::kTonal);
-  }
+  SetButtonEnabled(ui::mojom::DialogButton::kOk, false);
+  SetButtonStyle(ui::mojom::DialogButton::kOk, ui::ButtonStyle::kTonal);
+  SetButtonStyle(ui::mojom::DialogButton::kCancel, ui::ButtonStyle::kTonal);
 
   // Simply pressing ENTER without tab-key navigating to the button
   // must not accept the dialog, or else that'd be a security issue.
-  SetDefaultButton(ui::DialogButton::DIALOG_BUTTON_NONE);
+  SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kNone));
 }
 
 ShareThisTabDialogView::~ShareThisTabDialogView() = default;
@@ -202,10 +194,13 @@ void ShareThisTabDialogView::DetachParent() {
   parent_ = nullptr;
 }
 
-gfx::Size ShareThisTabDialogView::CalculatePreferredSize() const {
+gfx::Size ShareThisTabDialogView::CalculatePreferredSize(
+    const views::SizeBounds& /*available_size*/) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   static constexpr size_t kDialogViewWidth = 600;
-  return gfx::Size(kDialogViewWidth, GetHeightForWidth(kDialogViewWidth));
+  return gfx::Size(
+      kDialogViewWidth,
+      GetLayoutManager()->GetPreferredHeightForWidth(this, kDialogViewWidth));
 }
 
 bool ShareThisTabDialogView::ShouldShowWindowTitle() const {
@@ -215,7 +210,7 @@ bool ShareThisTabDialogView::ShouldShowWindowTitle() const {
 bool ShareThisTabDialogView::Accept() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   CHECK(!activation_timer_.IsRunning());
-  CHECK(IsDialogButtonEnabled(ui::DIALOG_BUTTON_OK));
+  CHECK(IsDialogButtonEnabled(ui::mojom::DialogButton::kOk));
 
   source_view_->StopRefreshing();
   if (parent_ && web_contents_) {
@@ -223,7 +218,9 @@ bool ShareThisTabDialogView::Accept() {
         content::DesktopMediaID::TYPE_WEB_CONTENTS,
         content::DesktopMediaID::kNullId,
         content::WebContentsMediaCaptureId(
-            web_contents_->GetPrimaryMainFrame()->GetProcess()->GetID(),
+            web_contents_->GetPrimaryMainFrame()
+                ->GetProcess()
+                ->GetDeprecatedID(),
             web_contents_->GetPrimaryMainFrame()->GetRoutingID()));
     desktop_media_id.audio_share =
         audio_toggle_button_ && audio_toggle_button_->GetIsOn();
@@ -269,10 +266,7 @@ void ShareThisTabDialogView::SetupAudioToggle() {
   audio_toggle_container->SetProperty(views::kMarginsKey,
                                       gfx::Insets::TLBR(8, 0, 0, 0));
   audio_toggle_container->SetBackground(
-      features::IsChromeRefresh2023()
-          ? views::CreateThemedRoundedRectBackground(ui::kColorSysSurface4, 8)
-          : views::CreateThemedRoundedRectBackground(
-                kColorShareThisTabAudioToggleBackground, 4));
+      views::CreateThemedRoundedRectBackground(ui::kColorSysSurface4, 8));
 
   views::ImageView* audio_icon_view = audio_toggle_container->AddChildView(
       std::make_unique<views::ImageView>());
@@ -289,7 +283,7 @@ void ShareThisTabDialogView::SetupAudioToggle() {
 
   audio_toggle_button_ = audio_toggle_container->AddChildView(
       std::make_unique<views::ToggleButton>());
-  audio_toggle_button_->SetAccessibleName(
+  audio_toggle_button_->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(IDS_SHARE_THIS_TAB_AUDIO_SHARE));
   audio_toggle_button_->SetIsOn(
       !base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -309,7 +303,7 @@ void ShareThisTabDialogView::Activate() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
   source_view_->Activate();
-  SetButtonEnabled(ui::DIALOG_BUTTON_OK, true);
+  SetButtonEnabled(ui::mojom::DialogButton::kOk, true);
 
   // In tests.
   if (ShouldAutoAccept()) {
@@ -350,11 +344,11 @@ bool ShareThisTabDialogView::ShouldAutoReject() const {
 BEGIN_METADATA(ShareThisTabDialogView)
 END_METADATA
 
-ShareThisTabDialogViews::ShareThisTabDialogViews() : dialog_(nullptr) {
+ShareThisTabMediaPicker::ShareThisTabMediaPicker() : dialog_(nullptr) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 }
 
-ShareThisTabDialogViews::~ShareThisTabDialogViews() {
+ShareThisTabMediaPicker::~ShareThisTabMediaPicker() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (dialog_) {
     dialog_->RecordUmaDismissal();
@@ -363,7 +357,7 @@ ShareThisTabDialogViews::~ShareThisTabDialogViews() {
   }
 }
 
-void ShareThisTabDialogViews::Show(
+void ShareThisTabMediaPicker::Show(
     const DesktopMediaPicker::Params& params,
     std::vector<std::unique_ptr<DesktopMediaList>> source_lists,
     DoneCallback done_callback) {
@@ -371,12 +365,12 @@ void ShareThisTabDialogViews::Show(
   CHECK(!callback_);
   CHECK(!dialog_);
 
-  DesktopMediaPickerManager::Get()->OnShowDialog();
+  DesktopMediaPickerManager::Get()->OnShowDialog(params);
   callback_ = std::move(done_callback);
   dialog_ = new ShareThisTabDialogView(params, this);
 }
 
-void ShareThisTabDialogViews::NotifyDialogResult(
+void ShareThisTabMediaPicker::NotifyDialogResult(
     const content::DesktopMediaID& source) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 

@@ -27,6 +27,7 @@ DEFAULT_HEARTBEAT_TIMEOUT = 15
 SLOW_HEARTBEAT_MULTIPLIER = 8
 DEFAULT_CONTROLLER_MESSAGE_TIMEOUT = 5
 SLOW_CONTROLLER_MESSAGE_MULTIPLIER = 5
+ASAN_MESSAGE_LOOP_MULTIPLIER = 1.5
 
 DEFAULT_GLOBAL_TIMEOUT = 300
 
@@ -214,7 +215,8 @@ class SkiaGoldHeartbeatIntegrationTestBase(sgitb.SkiaGoldIntegrationTestBase):
       tab.action_runner.EvaluateJavaScript('connectWebsocket("%d")' %
                                            websocket_server.server_port,
                                            timeout=5)
-      websocket_server.WaitForConnection()
+      websocket_server.WaitForConnection(
+          websocket_utils.GetScaledConnectionTimeout(self.child.jobs))
       response = websocket_server.Receive(5)
       response = json.loads(response)
       assert response['type'] == 'CONNECTION_ACK'
@@ -238,6 +240,7 @@ class SkiaGoldHeartbeatIntegrationTestBase(sgitb.SkiaGoldIntegrationTestBase):
           instead of the ones associated with the primary tab.
       loop_state: The LoopState to use. Will be modified in place.
     """
+    test_timeout = test_timeout * self._GetMessageLoopTimeoutMultiplier()
     tab = tab_data.tab
     websocket_server = tab_data.websocket_server
     start_time = time.time()
@@ -295,6 +298,12 @@ class SkiaGoldHeartbeatIntegrationTestBase(sgitb.SkiaGoldIntegrationTestBase):
         logging.warning('Could not retrieve messages from test page.')
 
   # pylint: enable=too-many-branches
+
+  def _GetMessageLoopTimeoutMultiplier(self) -> float:
+    multiplier = 1
+    if self._is_asan:
+      multiplier = ASAN_MESSAGE_LOOP_MULTIPLIER
+    return multiplier
 
   def _GetHeartbeatTimeout(self) -> int:
     multiplier = 1

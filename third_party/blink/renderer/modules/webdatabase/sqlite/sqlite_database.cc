@@ -365,13 +365,11 @@ int SQLiteDatabase::AuthorizerFunction(void* user_data,
       return kSQLAuthDeny;
   }
   NOTREACHED();
-  return kSQLAuthDeny;
 }
 
 void SQLiteDatabase::SetAuthorizer(DatabaseAuthorizer* authorizer) {
   if (!db_) {
     NOTREACHED() << "Attempt to set an authorizer on a non-open SQL database";
-    return;
   }
 
   base::AutoLock locker(authorizer_lock_);

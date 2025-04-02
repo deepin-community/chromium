@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "extensions/browser/user_script_loader.h"
 
 #include <stddef.h>
@@ -10,8 +15,8 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/memory/writable_shared_memory_region.h"
 #include "base/observer_list.h"
@@ -19,16 +24,20 @@
 #include "base/types/pass_key.h"
 #include "base/version.h"
 #include "build/build_config.h"
+#include "components/guest_view/buildflags/buildflags.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extensions_browser_client.h"
-#include "extensions/browser/guest_view/web_view/web_view_renderer_state.h"
 #include "extensions/browser/renderer_startup_helper.h"
 #include "extensions/browser/script_injection_tracker.h"
 #include "extensions/common/mojom/run_location.mojom-shared.h"
 #include "extensions/common/permissions/permissions_data.h"
+
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
+#include "extensions/browser/guest_view/web_view/web_view_renderer_state.h"
+#endif
 
 using content::BrowserThread;
 using content::BrowserContext;
@@ -68,16 +77,18 @@ bool GetDeclarationValue(std::string_view line,
     return false;
   }
 
-  std::string temp(line.data() + index + prefix.length(),
-                   line.length() - index - prefix.length());
+  std::string_view temp = line.substr(index + prefix.length(),
+                                      line.length() - index - prefix.length());
 
-  if (temp.empty() || !base::IsAsciiWhitespace(temp[0]))
+  if (temp.empty() || !base::IsAsciiWhitespace(temp[0])) {
     return false;
+  }
 
   base::TrimWhitespaceASCII(temp, base::TRIM_ALL, value);
   return true;
 }
 
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
 bool CanExecuteScriptEverywhere(BrowserContext* browser_context,
                                 const mojom::HostID& host_id) {
   if (host_id.type == mojom::HostID::HostType::kWebUi)
@@ -90,6 +101,7 @@ bool CanExecuteScriptEverywhere(BrowserContext* browser_context,
   return extension && PermissionsData::CanExecuteScriptEverywhere(
                           extension->id(), extension->location());
 }
+#endif
 
 }  // namespace
 
@@ -102,20 +114,21 @@ bool UserScriptLoader::ParseMetadataHeader(std::string_view script_text,
   size_t line_end = line_start;
   bool in_metadata = false;
 
-  static const std::string_view kUserScriptBegin("// ==UserScript==");
-  static const std::string_view kUserScriptEng("// ==/UserScript==");
-  static const std::string_view kNamespaceDeclaration("// @namespace");
-  static const std::string_view kNameDeclaration("// @name");
-  static const std::string_view kVersionDeclaration("// @version");
-  static const std::string_view kDescriptionDeclaration("// @description");
-  static const std::string_view kIncludeDeclaration("// @include");
-  static const std::string_view kExcludeDeclaration("// @exclude");
-  static const std::string_view kMatchDeclaration("// @match");
-  static const std::string_view kExcludeMatchDeclaration("// @exclude_match");
-  static const std::string_view kRunAtDeclaration("// @run-at");
-  static const std::string_view kRunAtDocumentStartValue("document-start");
-  static const std::string_view kRunAtDocumentEndValue("document-end");
-  static const std::string_view kRunAtDocumentIdleValue("document-idle");
+  static constexpr std::string_view kUserScriptBegin("// ==UserScript==");
+  static constexpr std::string_view kUserScriptEng("// ==/UserScript==");
+  static constexpr std::string_view kNamespaceDeclaration("// @namespace");
+  static constexpr std::string_view kNameDeclaration("// @name");
+  static constexpr std::string_view kVersionDeclaration("// @version");
+  static constexpr std::string_view kDescriptionDeclaration("// @description");
+  static constexpr std::string_view kIncludeDeclaration("// @include");
+  static constexpr std::string_view kExcludeDeclaration("// @exclude");
+  static constexpr std::string_view kMatchDeclaration("// @match");
+  static constexpr std::string_view kExcludeMatchDeclaration(
+      "// @exclude_match");
+  static constexpr std::string_view kRunAtDeclaration("// @run-at");
+  static constexpr std::string_view kRunAtDocumentStartValue("document-start");
+  static constexpr std::string_view kRunAtDocumentEndValue("document-end");
+  static constexpr std::string_view kRunAtDocumentIdleValue("document-idle");
 
   while (line_start < script_text.length()) {
     line_end = script_text.find('\n', line_start);
@@ -124,8 +137,7 @@ bool UserScriptLoader::ParseMetadataHeader(std::string_view script_text,
     if (line_end == std::string::npos)
       line_end = script_text.length() - 1;
 
-    line = std::string_view(script_text.data() + line_start,
-                            line_end - line_start);
+    line = script_text.substr(line_start, line_end - line_start);
 
     if (!in_metadata) {
       if (base::StartsWith(line, kUserScriptBegin))
@@ -305,7 +317,7 @@ void UserScriptLoader::StartLoad() {
   loaded_scripts_.reset();
 
   // Filter out any scripts that are queued for removal.
-  base::EraseIf(scripts_to_load,
+  std::erase_if(scripts_to_load,
                 [this](const std::unique_ptr<UserScript>& script) {
                   return removed_script_ids_.count(script->id()) > 0u;
                 });
@@ -313,7 +325,7 @@ void UserScriptLoader::StartLoad() {
   // Since all scripts managed by an instance of this class should have unique
   // IDs, remove any already loaded scripts from `scripts_to_load` that will be
   // updated from `added_scripts_map_`.
-  base::EraseIf(scripts_to_load,
+  std::erase_if(scripts_to_load,
                 [this](const std::unique_ptr<UserScript>& script) {
                   return added_scripts_map_.count(script->id()) > 0u;
                 });
@@ -442,7 +454,7 @@ void UserScriptLoader::OnScriptsLoaded(
     content::RenderProcessHost* process = i.GetCurrentValue();
     SendUpdateResult update_result = SendUpdate(process, shared_memory_);
     if (update_result == SendUpdateResult::kRendererHasBeenNotified) {
-      ids_of_newly_notified_processes.push_back(process->GetID());
+      ids_of_newly_notified_processes.push_back(process->GetDeprecatedID());
     }
   }
 
@@ -494,6 +506,7 @@ UserScriptLoader::SendUpdateResult UserScriptLoader::SendUpdate(
     return SendUpdateResult::kNoActionTaken;
   }
 
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
   // If the process only hosts guest frames, then those guest frames share the
   // same embedder/owner. In this case, only scripts from allowlisted hosts or
   // from the guest frames' owner should be injected.
@@ -501,11 +514,12 @@ UserScriptLoader::SendUpdateResult UserScriptLoader::SendUpdate(
   // other extensions are injected into webviews.
   if (process->IsForGuestsOnly() &&
       !CanExecuteScriptEverywhere(browser_context_, host_id())) {
-    DCHECK(WebViewRendererState::GetInstance()->IsGuest(process->GetID()));
+    DCHECK(WebViewRendererState::GetInstance()->IsGuest(
+        process->GetDeprecatedID()));
 
     std::string owner_host;
     bool found_owner = WebViewRendererState::GetInstance()->GetOwnerInfo(
-        process->GetID(), /*owner_process_id=*/nullptr, &owner_host);
+        process->GetDeprecatedID(), /*owner_process_id=*/nullptr, &owner_host);
     DCHECK(found_owner);
 
     // Keep this check in sync with the approach and formatting in:
@@ -522,7 +536,7 @@ UserScriptLoader::SendUpdateResult UserScriptLoader::SendUpdate(
         // For Controlled Frame embedders, |owner_host| will be a serialized
         // form of the embedder's origin, using scheme, host, port [if
         // applicable] tuple in origin form. No trailing slash.
-        // TODO(crbug.com/1517391): Use an actual Origin object in the
+        // TODO(crbug.com/41490369): Use an actual Origin object in the
         // Controlled Frame comparison rather than a serialized Origin.
         if (owner_host != host_id().id) {
           return SendUpdateResult::kNoActionTaken;
@@ -530,6 +544,7 @@ UserScriptLoader::SendUpdateResult UserScriptLoader::SendUpdate(
         break;
     }
   }
+#endif
 
   mojom::Renderer* renderer =
       RendererStartupHelperFactory::GetForBrowserContext(browser_context())

@@ -9,7 +9,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/command_updater_delegate.h"
-#include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/feedback/show_feedback_page.h"
 #include "chrome/browser/ui/user_education/start_tutorial_in_page.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -31,12 +31,12 @@ struct FeedbackCommandSettings {
   FeedbackCommandSettings() = default;
 
   FeedbackCommandSettings(const GURL& url,
-                          chrome::FeedbackSource source,
+                          feedback::FeedbackSource source,
                           std::string category)
       : url(url), source(source), category(category) {}
 
   GURL url;
-  chrome::FeedbackSource source = chrome::kFeedbackSourceCount;
+  feedback::FeedbackSource source = feedback::kFeedbackSourceCount;
   std::string category;
 };
 
@@ -73,9 +73,9 @@ class BrowserCommandHandler : public CommandUpdaterDelegate,
   virtual CommandUpdater* GetCommandUpdater();
 
   virtual bool BrowserSupportsTabGroups();
-  virtual bool BrowserSupportsCustomizeChromeSidePanel();
   virtual bool DefaultSearchProviderIsGoogle();
   virtual bool BrowserSupportsSavedTabGroups();
+  virtual bool ActiveTabSupportsCustomizeChrome();
 
  private:
   FRIEND_TEST_ALL_PREFIXES(BrowserCommandHandlerTest,
@@ -94,6 +94,7 @@ class BrowserCommandHandler : public CommandUpdaterDelegate,
   virtual void NavigateToEnhancedProtectionSetting();
   virtual void OpenPasswordManager();
   virtual void OpenAISettings();
+  virtual void ShowCustomizeChromeToolbar();
   void StartTabGroupTutorial();
   void OpenNTPAndStartCustomizeChromeTutorial();
   void StartPasswordManagerTutorial();

@@ -9,7 +9,7 @@
  * chrome/common/extensions/api/tabs.json -g ts_definitions` to regenerate.
  */
 
-import {ChromeEvent} from '../../../../../../tools/typescript/definitions/chrome_event.js';
+import type {ChromeEvent} from '../../../../../../tools/typescript/definitions/chrome_event.js';
 
 declare global {
   export namespace chrome {
@@ -202,8 +202,8 @@ declare global {
           callback: (arg: string) => void): void;
 
       export function executeScript(
-          tabId: number|undefined,
-          details: extensionTypes.InjectDetails): Promise<any[]>;
+          tabId: number|undefined, details: extensionTypes.InjectDetails,
+          callback?: (result?: any[]) => void): Promise<any[]>;
 
       export function insertCSS(
           tabId: number|undefined, details: extensionTypes.InjectDetails,

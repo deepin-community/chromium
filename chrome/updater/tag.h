@@ -10,6 +10,7 @@
 #include <ostream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
@@ -75,6 +76,7 @@ std::ostream& operator<<(std::ostream&, const NeedsAdmin&);
 
 // This struct contains the "runtime mode" parsed from the metainstaller tag.
 struct RuntimeModeArgs {
+  auto operator<=>(const RuntimeModeArgs&) const = default;
   std::optional<NeedsAdmin> needs_admin;
 };
 
@@ -112,6 +114,7 @@ struct TagArgs {
   std::optional<BrowserType> browser_type;
   std::optional<bool> flighting = false;
   std::optional<bool> usage_stats_enable;
+  std::string enrollment_token;
 
   // List of apps to install.
   std::vector<AppArgs> apps;
@@ -192,6 +195,9 @@ enum class ErrorCode {
 
   // The needsadmin value must be "yes", "no", or "prefers".
   kRuntimeMode_NeedsAdminValueIsInvalid,
+
+  // The enrollment token must be a GUID.
+  kGlobal_EnrollmentTokenValueIsInvalid,
 };
 
 std::ostream& operator<<(std::ostream&, const ErrorCode&);
@@ -220,6 +226,8 @@ std::ostream& operator<<(std::ostream&, const ErrorCode&);
 // - lang              Can be any string.
 // - flighting         Must be "true" or "false".
 // - usagestats        Must be "0", "1", or "2".
+// - runtime           Must be "true", "false".
+// - etoken            Must be a GUID.
 //
 // The following keys specify app-specific attributes. "appid" must be specified
 // before any other app attribute to specify the "current" app. Other app

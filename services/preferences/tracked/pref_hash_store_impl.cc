@@ -192,7 +192,6 @@ ValueState PrefHashStoreImpl::PrefHashStoreTransactionImpl::CheckValue(
   }
   NOTREACHED() << "Unexpected PrefHashCalculator::ValidationResult: "
                << validation_result;
-  return ValueState::UNTRUSTED_UNKNOWN_VALUE;
 }
 
 void PrefHashStoreImpl::PrefHashStoreTransactionImpl::StoreHash(

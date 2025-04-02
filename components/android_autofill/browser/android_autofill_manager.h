@@ -13,20 +13,20 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/notreached.h"
-#include "components/autofill/core/browser/autofill_manager.h"
 #include "components/autofill/core/browser/crowdsourcing/autofill_crowdsourcing_manager.h"
+#include "components/autofill/core/browser/foundations/autofill_manager.h"
 #include "components/autofill/core/common/dense_set.h"
 
 namespace autofill {
 
 class AutofillProvider;
-class FormEventLoggerWeblayerAndroid;
+class AndroidFormEventLogger;
 
 // This class forwards AutofillManager calls to AutofillProvider.
 class AndroidAutofillManager : public AutofillManager,
                                public AutofillManager::Observer {
  public:
-  AndroidAutofillManager(AutofillDriver* driver, AutofillClient* client);
+  explicit AndroidAutofillManager(AutofillDriver* driver);
 
   AndroidAutofillManager(const AndroidAutofillManager&) = delete;
   AndroidAutofillManager& operator=(const AndroidAutofillManager&) = delete;
@@ -41,19 +41,14 @@ class AndroidAutofillManager : public AutofillManager,
 
   bool ShouldClearPreviewedForm() override;
 
-  void OnFocusNoLongerOnFormImpl(bool had_interacted_form) override;
+  void OnFocusOnNonFormFieldImpl() override;
 
   void OnDidFillAutofillFormDataImpl(const FormData& form,
                                      const base::TimeTicks timestamp) override;
 
   void OnDidEndTextFieldEditingImpl() override {}
   void OnHidePopupImpl() override;
-  void OnSelectOrSelectListFieldOptionsDidChangeImpl(
-      const FormData& form) override {}
-
-  void Reset() override;
-  void OnContextMenuShownInField(const FormGlobalId& form_global_id,
-                                 const FieldGlobalId& field_global_id) override;
+  void OnSelectFieldOptionsDidChangeImpl(const FormData& form) override {}
 
   void ReportAutofillWebOTPMetrics(bool used_web_otp) override {}
 
@@ -61,8 +56,8 @@ class AndroidAutofillManager : public AutofillManager,
     return forms_with_server_predictions_.contains(form);
   }
 
-  FieldTypeGroup ComputeFieldTypeGroupForField(const FormData& form,
-                                               const FormFieldData& field);
+  FieldTypeGroup ComputeFieldTypeGroupForField(const FormGlobalId& form_id,
+                                               const FieldGlobalId& field_id);
 
   // Send the |form| to the renderer for the specified |action|.
   //
@@ -70,42 +65,44 @@ class AndroidAutofillManager : public AutofillManager,
   // triggered; this affects the security policy for cross-frame fills. See
   // AutofillDriver::FillOrPreviewForm() for further details.
   void FillOrPreviewForm(mojom::ActionPersistence action_persistence,
-                         const FormData& form,
+                         FormData form,
                          const FieldTypeGroup field_type_group,
                          const url::Origin& triggered_origin);
 
  protected:
+  void Reset() override;
+
   void OnFormSubmittedImpl(const FormData& form,
-                           bool known_success,
                            mojom::SubmissionSource source) override;
 
-  void OnTextFieldDidChangeImpl(const FormData& form,
-                                const FormFieldData& field,
-                                const gfx::RectF& bounding_box,
-                                const base::TimeTicks timestamp) override;
+  void OnCaretMovedInFormFieldImpl(const FormData& form,
+                                   const FieldGlobalId& field_id,
+                                   const gfx::Rect& caret_bounds) override {}
+
+  void OnTextFieldValueChangedImpl(const FormData& form,
+                                   const FieldGlobalId& field_id,
+                                   const base::TimeTicks timestamp) override;
 
   void OnTextFieldDidScrollImpl(const FormData& form,
-                                const FormFieldData& field,
-                                const gfx::RectF& bounding_box) override;
+                                const FieldGlobalId& field_id) override;
 
   void OnAskForValuesToFillImpl(
       const FormData& form,
-      const FormFieldData& field,
-      const gfx::RectF& bounding_box,
+      const FieldGlobalId& field_id,
+      const gfx::Rect& caret_bounds,
       AutofillSuggestionTriggerSource trigger_source) override;
 
   void OnFocusOnFormFieldImpl(const FormData& form,
-                              const FormFieldData& field,
-                              const gfx::RectF& bounding_box) override;
+                              const FieldGlobalId& field_id) override;
 
-  void OnSelectControlDidChangeImpl(const FormData& form,
-                                    const FormFieldData& field,
-                                    const gfx::RectF& bounding_box) override;
-
-  void OnJavaScriptChangedAutofilledValueImpl(
+  void OnSelectControlSelectionChangedImpl(
       const FormData& form,
-      const FormFieldData& field,
-      const std::u16string& old_value) override {}
+      const FieldGlobalId& field_id) override;
+
+  void OnJavaScriptChangedAutofilledValueImpl(const FormData& form,
+                                              const FieldGlobalId& field_id,
+                                              const std::u16string& old_value,
+                                              bool formatting_only) override {}
 
   bool ShouldParseForms() override;
 
@@ -113,9 +110,6 @@ class AndroidAutofillManager : public AutofillManager,
 
   void OnFormProcessed(const FormData& form,
                        const FormStructure& form_structure) override;
-
-  void OnAfterProcessParsedForms(
-      const DenseSet<FormType>& form_types) override {}
 
  private:
   // AutofillManager::Observer:
@@ -128,23 +122,21 @@ class AndroidAutofillManager : public AutofillManager,
   // Records metrics for loggers and creates new logging session.
   void StartNewLoggingSession();
 
-  // Returns logger associated with the passed-in `form` and `field`.
-  FormEventLoggerWeblayerAndroid* GetEventFormLogger(
-      const FormData& form,
-      const FormFieldData& field);
+  // Returns logger associated with the passed-in `form_id` and `field_id`.
+  AndroidFormEventLogger* GetEventFormLogger(const FormGlobalId& form_id,
+                                             const FieldGlobalId& field_id);
 
   // Returns logger associated with the passed-in `field_type_group`.
-  FormEventLoggerWeblayerAndroid* GetEventFormLogger(
-      FieldTypeGroup field_type_group);
+  AndroidFormEventLogger* GetEventFormLogger(FieldTypeGroup field_type_group);
 
   // Returns logger associated with the passed-in `form_type`.
-  FormEventLoggerWeblayerAndroid* GetEventFormLogger(FormType form_type);
+  AndroidFormEventLogger* GetEventFormLogger(FormType form_type);
 
   // The forms that have received server predictions.
   base::flat_set<FormGlobalId> forms_with_server_predictions_;
-  std::unique_ptr<FormEventLoggerWeblayerAndroid> address_logger_;
-  std::unique_ptr<FormEventLoggerWeblayerAndroid> payments_logger_;
-  std::unique_ptr<FormEventLoggerWeblayerAndroid> password_logger_;
+  std::unique_ptr<AndroidFormEventLogger> address_logger_;
+  std::unique_ptr<AndroidFormEventLogger> payments_logger_;
+  std::unique_ptr<AndroidFormEventLogger> password_logger_;
 
   base::ScopedObservation<AutofillManager, AutofillManager::Observer>
       autofill_manager_observation{this};

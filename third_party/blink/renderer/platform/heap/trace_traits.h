@@ -311,7 +311,6 @@ struct TraceTrait<std::pair<T, U>> {
     // should always happen eagerly by directly invoking `Trace()` below. This
     // happens e.g. when being used in HeapVector<std::pair<...>>.
     NOTREACHED();
-    return {nullptr, Trace};
   }
 
   static void Trace(Visitor* visitor, const std::pair<T, U>* pair) {

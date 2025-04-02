@@ -91,10 +91,34 @@ bool UncompressData(const std::vector<uint8_t> &compressedData,
     {
         std::cerr << "Failure to decompressed binary data: " << zResult
                   << " msg=" << (stream.msg ? stream.msg : "nil") << "\n";
+        fprintf(stderr,
+                "next_in %p (input %p) avail_in %d total_in %lu next_out %p (output %p) avail_out "
+                "%d total_out %ld adler %lX crc %lX crc_simd %lX\n",
+                stream.next_in, compressedData.data(), stream.avail_in, stream.total_in,
+                stream.next_out, uncompressedData->data(), stream.avail_out, stream.total_out,
+                stream.adler, crc32(0, uncompressedData->data(), uncompressedSize),
+                crc32(0, uncompressedData->data(), 16 * (uncompressedSize / 16)));
         return false;
     }
 
     return true;
+}
+
+void SaveDebugFile(const std::string &outputDir,
+                   const char *baseFileName,
+                   const char *suffix,
+                   const std::vector<uint8_t> data)
+{
+    if (outputDir.empty())
+    {
+        return;
+    }
+
+    std::ostringstream path;
+    path << outputDir << "/" << baseFileName << suffix;
+    FILE *fp = fopen(path.str().c_str(), "wb");
+    fwrite(data.data(), 1, data.size(), fp);
+    fclose(fp);
 }
 }  // namespace
 
@@ -106,7 +130,7 @@ bool LoadTraceNamesFromJSON(const std::string jsonFilePath, std::vector<std::str
         return false;
     }
 
-    if (!doc.IsObject() || !doc.HasMember("traces") || !doc["traces"].IsArray())
+    if (!doc.IsArray())
     {
         return false;
     }
@@ -114,7 +138,7 @@ bool LoadTraceNamesFromJSON(const std::string jsonFilePath, std::vector<std::str
     // Read trace json into a list of trace names.
     std::vector<std::string> traces;
 
-    rapidjson::Document::Array traceArray = doc["traces"].GetArray();
+    rapidjson::Document::Array traceArray = doc.GetArray();
     for (rapidjson::SizeType arrayIndex = 0; arrayIndex < traceArray.Size(); ++arrayIndex)
     {
         const rapidjson::Document::ValueType &arrayElement = traceArray[arrayIndex];
@@ -124,9 +148,7 @@ bool LoadTraceNamesFromJSON(const std::string jsonFilePath, std::vector<std::str
             return false;
         }
 
-        std::vector<std::string> traceAndVersion;
-        angle::SplitStringAlongWhitespace(arrayElement.GetString(), &traceAndVersion);
-        traces.push_back(traceAndVersion[0]);
+        traces.push_back(arrayElement.GetString());
     }
 
     *namesOut = std::move(traces);
@@ -217,7 +239,9 @@ bool LoadTraceInfoFromJSON(const std::string &traceName,
     return true;
 }
 
-TraceLibrary::TraceLibrary(const std::string &traceName, const TraceInfo &traceInfo)
+TraceLibrary::TraceLibrary(const std::string &traceName,
+                           const TraceInfo &traceInfo,
+                           const std::string &baseDir)
 {
     std::stringstream libNameStr;
     SearchType searchType = SearchType::ModuleDir;
@@ -226,7 +250,7 @@ TraceLibrary::TraceLibrary(const std::string &traceName, const TraceInfo &traceI
     // This means we are using the binary build of traces on Android, which are
     // not bundled in the APK, but located in the app's home directory.
     searchType = SearchType::SystemDir;
-    libNameStr << "/data/user/0/com.android.angle.test/angle_traces/";
+    libNameStr << baseDir;
 #endif  // defined(ANGLE_TRACE_EXTERNAL_BINARIES)
 #if !defined(ANGLE_PLATFORM_WINDOWS)
     libNameStr << "lib";
@@ -234,6 +258,7 @@ TraceLibrary::TraceLibrary(const std::string &traceName, const TraceInfo &traceI
     libNameStr << traceName;
     std::string libName = libNameStr.str();
     std::string loadError;
+
     mTraceLibrary.reset(OpenSharedLibraryAndGetError(libName.c_str(), searchType, &loadError));
     if (mTraceLibrary->getNative() == nullptr)
     {
@@ -278,8 +303,11 @@ uint8_t *TraceLibrary::LoadBinaryData(const char *fileName)
         if (!UncompressData(compressedData, &mBinaryData))
         {
             // Workaround for sporadic failures https://issuetracker.google.com/296921272
+            SaveDebugFile(mDebugOutputDir, fileName, ".gzdbg_input.gz", compressedData);
+            SaveDebugFile(mDebugOutputDir, fileName, ".gzdbg_attempt1", mBinaryData);
             std::vector<uint8_t> uncompressedData;
             bool secondResult = UncompressData(compressedData, &uncompressedData);
+            SaveDebugFile(mDebugOutputDir, fileName, ".gzdbg_attempt2", uncompressedData);
             if (!secondResult)
             {
                 std::cerr << "Uncompress retry failed\n";

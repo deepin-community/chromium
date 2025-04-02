@@ -14,8 +14,8 @@
 #include "extensions/common/extension_id.h"
 #include "extensions/common/mojom/execution_world.mojom-shared.h"
 #include "extensions/common/mojom/host_id.mojom.h"
+#include "extensions/common/mojom/match_origin_as_fallback.mojom-shared.h"
 #include "extensions/common/mojom/run_location.mojom-shared.h"
-#include "extensions/common/script_constants.h"
 #include "extensions/common/url_pattern.h"
 #include "extensions/common/url_pattern_set.h"
 #include "url/gurl.h"
@@ -204,10 +204,10 @@ class UserScript {
 
   // Whether to match the origin as a fallback if the URL cannot be used
   // directly.
-  MatchOriginAsFallbackBehavior match_origin_as_fallback() const {
+  mojom::MatchOriginAsFallbackBehavior match_origin_as_fallback() const {
     return match_origin_as_fallback_;
   }
-  void set_match_origin_as_fallback(MatchOriginAsFallbackBehavior val) {
+  void set_match_origin_as_fallback(mojom::MatchOriginAsFallbackBehavior val) {
     match_origin_as_fallback_ = val;
   }
 
@@ -266,6 +266,11 @@ class UserScript {
   mojom::ExecutionWorld execution_world() const { return execution_world_; }
   void set_execution_world(mojom::ExecutionWorld world) {
     execution_world_ = world;
+  }
+
+  const std::optional<std::string>& world_id() const { return world_id_; }
+  void set_world_id(std::optional<std::string> world_id) {
+    world_id_ = std::move(world_id);
   }
 
   // Returns the script's ID without the appended prefix.
@@ -373,13 +378,17 @@ class UserScript {
   // origin matches a match pattern, if an appropriate URL cannot be found for
   // the frame for matching purposes, such as in the case of about:, data:, and
   // other schemes.
-  MatchOriginAsFallbackBehavior match_origin_as_fallback_ =
-      MatchOriginAsFallbackBehavior::kNever;
+  mojom::MatchOriginAsFallbackBehavior match_origin_as_fallback_ =
+      mojom::MatchOriginAsFallbackBehavior::kNever;
 
   // True if the script should be injected into an incognito tab.
   bool incognito_enabled_ = false;
 
   mojom::ExecutionWorld execution_world_ = mojom::ExecutionWorld::kIsolated;
+
+  // The ID of the unique world into which to inject, if any. If omitted, uses
+  // the default world for the given `execution_world_` type.
+  std::optional<std::string> world_id_;
 };
 
 using UserScriptList = std::vector<std::unique_ptr<UserScript>>;

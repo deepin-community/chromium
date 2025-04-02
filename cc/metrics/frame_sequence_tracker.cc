@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include "base/feature_list.h"
+#include "cc/base/features.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "components/viz/common/quads/compositor_frame_metadata.h"
 #include "ui/gfx/presentation_feedback.h"
@@ -41,6 +43,10 @@ const char* FrameSequenceTracker::GetFrameSequenceTrackerTypeName(
       return "SETMainThreadAnimation";
     case FrameSequenceTrackerType::kSETCompositorAnimation:
       return "SETCompositorAnimation";
+    case FrameSequenceTrackerType::kCompositorRasterAnimation:
+      return "RasterAnimation";
+    case FrameSequenceTrackerType::kCompositorNativeAnimation:
+      return "NativePropertyAnimation";
     case FrameSequenceTrackerType::kMaxType:
       return "";
   }
@@ -135,7 +141,7 @@ bool FrameSequenceTracker::ShouldIgnoreBeginFrameSource(
 }
 
 void FrameSequenceTracker::ResetAllStateIfPaused() {
-  // TODO(crbug.com/1256879): With FrameSequenceMetrics handling
+  // TODO(crbug.com/40200408): With FrameSequenceMetrics handling
   // FrameInfo::FrameFinalState::kNoUpdateDesired we likely do not need this
   // anymore.
   if (!reset_all_state_) {
@@ -201,14 +207,13 @@ void FrameSequenceTracker::AddSortedFrame(const viz::BeginFrameArgs& args,
         // termination.
         termination_status_ = TerminationStatus::kReadyForTermination;
       }
+    } else if (last_ended_frame_id_.sequence_number <
+               args.frame_id.sequence_number) {
+      // Don't count drops from after the sequence has begun termination.
+      return;
     }
   }
 
-  // Don't count drops from after the sequence has begun termination.
-  if (frame_info.final_state == FrameInfo::FrameFinalState::kDropped &&
-      last_ended_frame_id_.sequence_number < args.frame_id.sequence_number) {
-    return;
-  }
   if (metrics_)
     metrics_->AddSortedFrame(args, frame_info);
 }

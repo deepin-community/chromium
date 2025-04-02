@@ -4,6 +4,7 @@
 
 import("../../../scripts/build/ninja/devtools_entrypoint.gni")
 import("../../../scripts/build/ninja/devtools_module.gni")
+import("../../../scripts/build/typescript/typescript.gni")
 import("../visibility.gni")
 
 devtools_module("bindings") {
@@ -48,9 +49,10 @@ devtools_entrypoint("bundle") {
 
   visibility = [
     ":*",
-    "../../../test/unittests/*",
+    "../../core/sdk:unittests",
     "../../entrypoints/main/*",
     "../../legacy_test_runner/*",
+    "../../panels/ai_assistance/*",
     "../../panels/application/*",
     "../../panels/console/*",
     "../../panels/coverage/*",
@@ -58,8 +60,11 @@ devtools_entrypoint("bundle") {
     "../../panels/emulation/*",
     "../../panels/network/*",
     "../../panels/profiler/*",
+    "../../panels/protocol_monitor/*",
     "../../panels/recorder/*",
     "../../panels/sources/*",
+    "../../panels/timeline/*",
+    "../../testing/*",
     "../../ui/components/docs/performance_panel/*",
     "../../ui/components/linkifier/*",
     "../../ui/legacy/components/inline_editor/*",
@@ -74,4 +79,32 @@ devtools_entrypoint("bundle") {
   ]
 
   visibility += devtools_models_visibility
+}
+
+ts_library("unittests") {
+  testonly = true
+
+  sources = [
+    "CompilerScriptMapping.test.ts",
+    "ContentProviderBasedProject.test.ts",
+    "DebuggerLanguagePlugins.test.ts",
+    "DebuggerWorkspaceBinding.test.ts",
+    "DefaultScriptMapping.test.ts",
+    "FileUtils.test.ts",
+    "IgnoreListManager.test.ts",
+    "LiveLocation.test.ts",
+    "PresentationConsoleMessageHelper.test.ts",
+    "ResourceMapping.test.ts",
+    "ResourceScriptMapping.test.ts",
+    "ResourceUtils.test.ts",
+  ]
+
+  deps = [
+    ":bundle",
+    "../../core/common:bundle",
+    "../../testing",
+    "../persistence:bundle",
+    "../text_utils:bundle",
+    "../workspace:bundle",
+  ]
 }

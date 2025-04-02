@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "ui/base/x/x11_workspace_handler.h"
 
 #include "base/strings/string_number_conversions.h"
@@ -58,14 +63,14 @@ void X11WorkspaceHandler::OnEvent(const x11::Event& xev) {
 
 void X11WorkspaceHandler::OnWorkspaceResponse(
     x11::GetPropertyResponse response) {
-  if (!response || response->format != 32 || response->value->size() < 4) {
+  if (!response || response->format != 32 || response->value_len < 1) {
     return;
   }
   DCHECK_EQ(response->bytes_after, 0U);
   DCHECK_EQ(response->type, static_cast<x11::Atom>(x11::Atom::CARDINAL));
 
   uint32_t workspace;
-  memcpy(&workspace, response->value->data(), 4);
+  memcpy(&workspace, response->value->bytes(), 4);
   workspace_ = base::NumberToString(workspace);
   delegate_->OnCurrentWorkspaceChanged(workspace_);
 }

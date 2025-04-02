@@ -19,14 +19,19 @@
 
 .no-blocked-urls,
 .blocked-urls {
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden auto;
 }
 
 .no-blocked-urls {
   display: flex;
   justify-content: center;
   padding: 10px;
+
+  & devtools-button {
+    display: flex;
+    justify-content: center;
+    margin-top: var(--sys-size-8);
+  }
 }
 
 .no-blocked-urls > span {

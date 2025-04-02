@@ -10,11 +10,11 @@
 
 #include "constants/form_flags.h"
 #include "core/fpdfapi/page/cpdf_page.h"
+#include "core/fxcrt/check.h"
 #include "core/fxge/cfx_renderdevice.h"
 #include "fpdfsdk/cpdfsdk_pageview.h"
 #include "fpdfsdk/cpdfsdk_widget.h"
 #include "fpdfsdk/formfiller/cffl_perwindowdata.h"
-#include "third_party/base/check.h"
 
 CFFL_FormField::CFFL_FormField(CFFL_InteractiveFormFiller* pFormFiller,
                                CPDFSDK_Widget* pWidget)
@@ -336,7 +336,7 @@ CPWL_Wnd::CreateParams CFFL_FormField::GetCreateParam() {
   cp.nBorderStyle = m_pWidget->GetBorderStyle();
   switch (cp.nBorderStyle) {
     case BorderStyle::kDash:
-      cp.sDash = CPWL_Dash(3, 3, 0);
+      cp.sDash = CPWL_Dash{3, 3, 0};
       break;
     case BorderStyle::kBeveled:
     case BorderStyle::kInset:

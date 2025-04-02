@@ -127,7 +127,6 @@ void KioskAppUpdateService::OnRebootRequested(Reason reason) {
       break;
     default:
       NOTREACHED() << "Unknown reboot reason=" << reason;
-      return;
   }
 
   extensions::RuntimeEventRouter::DispatchOnRestartRequiredEvent(
@@ -156,9 +155,12 @@ KioskAppUpdateServiceFactory::KioskAppUpdateServiceFactory()
           "KioskAppUpdateService",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kOriginalOnly)
-              // TODO(crbug.com/1418376): Check if this service is needed in
+              // TODO(crbug.com/40257657): Check if this service is needed in
               // Guest mode.
               .WithGuest(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
               .Build()) {
   DependsOn(
       extensions::ExtensionsBrowserClient::Get()->GetExtensionSystemFactory());
@@ -170,8 +172,8 @@ KioskAppUpdateServiceFactory::~KioskAppUpdateServiceFactory() = default;
 KioskAppUpdateService* KioskAppUpdateServiceFactory::GetForProfile(
     Profile* profile) {
   // This should never be called unless we are running in forced app mode.
-  DCHECK(chrome::IsRunningInForcedAppMode());
-  if (!chrome::IsRunningInForcedAppMode()) {
+  DCHECK(IsRunningInForcedAppMode());
+  if (!IsRunningInForcedAppMode()) {
     return nullptr;
   }
 

@@ -10,6 +10,8 @@
 #include "chrome/browser/predictors/lcp_critical_path_predictor/lcp_critical_path_predictor_util.h"
 #include "components/page_load_metrics/browser/page_load_metrics_observer.h"
 #include "content/public/browser/page_user_data.h"
+#include "services/network/public/mojom/fetch_api.mojom.h"
+#include "url/origin.h"
 
 namespace internal {
 
@@ -17,8 +19,34 @@ namespace internal {
 extern const char kHistogramLCPPFirstContentfulPaint[];
 extern const char kHistogramLCPPLargestContentfulPaint[];
 extern const char kHistogramLCPPPredictResult[];
+extern const char kHistogramLCPPPredictSuccessLCPTiming[];
 extern const char kHistogramLCPPPredictHitIndex[];
 extern const char kHistogramLCPPActualLCPIndex[];
+extern const char kHistogramLCPPActualLCPIsImage[];
+extern const char kHistogramLCPPSubresourceCountPrecision[];
+extern const char kHistogramLCPPSubresourceCountRecall[];
+extern const char kHistogramLCPPSubresourceCountSameSiteRatio[];
+extern const char kHistogramLCPPSubresourceCountType[];
+extern const char kHistogramLCPPImageLoadingPriorityFrequencyOfActualPositive[];
+extern const char kHistogramLCPPImageLoadingPriorityFrequencyOfActualNegative[];
+extern const char
+    kHistogramLCPPImageLoadingPriorityConfidenceOfActualPositive[];
+extern const char
+    kHistogramLCPPImageLoadingPriorityConfidenceOfActualNegative[];
+extern const char kHistogramLCPPSubresourceFrequencyOfActualPositive[];
+extern const char kHistogramLCPPSubresourceFrequencyOfActualNegative[];
+extern const char kHistogramLCPPSubresourceConfidenceOfActualPositive[];
+extern const char kHistogramLCPPSubresourceConfidenceOfActualNegative[];
+extern const char kHistogramLCPPSubresourceFrequencyOfActualPositiveSameSite[];
+extern const char kHistogramLCPPSubresourceFrequencyOfActualNegativeSameSite[];
+extern const char kHistogramLCPPSubresourceConfidenceOfActualPositiveSameSite[];
+extern const char kHistogramLCPPSubresourceConfidenceOfActualNegativeSameSite[];
+extern const char kHistogramLCPPSubresourceFrequencyOfActualPositiveCrossSite[];
+extern const char kHistogramLCPPSubresourceFrequencyOfActualNegativeCrossSite[];
+extern const char
+    kHistogramLCPPSubresourceConfidenceOfActualPositiveCrossSite[];
+extern const char
+    kHistogramLCPPSubresourceConfidenceOfActualNegativeCrossSite[];
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -39,6 +67,12 @@ enum class LCPPPredictResult {
 // Since histogram counts only positive numbers but the indexes origin 0,
 // add 1 for offset.
 const int kLCPIndexHistogramOffset = 1;
+
+void MaybeReportConfidenceUMAsForTesting(
+    const GURL& commit_url,
+    const std::optional<predictors::LcppStat>& lcpp_stat_prelearn,
+    const predictors::LcppDataInputs& lcpp_data_inputs);
+
 }  // namespace internal
 
 // PageLoadMetricsObserver responsible for:
@@ -79,16 +113,19 @@ class LcpCriticalPathPredictorPageLoadMetricsObserver
       const LcpCriticalPathPredictorPageLoadMetricsObserver&) = delete;
   ~LcpCriticalPathPredictorPageLoadMetricsObserver() override;
 
-  void SetLcpElementLocator(const std::string& lcp_element_locator,
-                            std::optional<uint32_t> predicted_lcp_index);
+  void OnLcpUpdated(const std::optional<std::string>& lcp_element_locator,
+                    bool is_image_element,
+                    std::optional<uint32_t> predicted_lcp_index);
   void SetLcpInfluencerScriptUrls(
       const std::vector<GURL>& lcp_influencer_scripts);
   void SetPreconnectOrigins(const std::vector<GURL>& origins);
+  void SetUnusedPreloads(const std::vector<GURL>& unused_preloads);
   // Append fetched font URLs to the list to be passed to LCPP.
-  void AppendFetchedFontUrl(const GURL& font_url);
+  void AppendFetchedFontUrl(const GURL& font_url, bool hit);
   void AppendFetchedSubresourceUrl(
       const GURL& subresource_url,
-      const base::TimeDelta& subresource_load_start);
+      const base::TimeDelta& subresource_load_start,
+      network::mojom::RequestDestination request_destination);
 
  private:
   // PageLoadMetricsObserver implementation:
@@ -110,18 +147,22 @@ class LcpCriticalPathPredictorPageLoadMetricsObserver
   void OnFirstContentfulPaintInPage(
       const page_load_metrics::mojom::PageLoadTiming& timing) override;
   void ReportUMAForTimingPredictor(
-      std::optional<predictors::LcppData> lcpp_data_prelearn);
+      std::optional<predictors::LcppStat> lcpp_stat_prelearn,
+      base::TimeDelta lcp_timing);
 
   // True if the page is prerendered.
   bool is_prerender_ = false;
 
   // The URL of the last navigation commit.
   std::optional<GURL> commit_url_;
+  std::optional<url::Origin> initiator_origin_;
 
   // Flipped to true iff the navigation had associated non-empty LCPP hint data.
   bool is_lcpp_hinted_navigation_ = false;
 
   std::optional<predictors::LcppDataInputs> lcpp_data_inputs_;
+
+  std::optional<bool> is_lcp_element_image_;
 
   // Prediction result. This keeps SetLcpElementLocator's second argument.
   // `predicted_lcp_index` is predicted index of `lcp_element_locators` in

@@ -30,7 +30,6 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
-#include "third_party/blink/public/mojom/conversions/attribution_data_host.mojom.h"
 #include "url/gurl.h"
 
 namespace content {
@@ -88,6 +87,8 @@ class AttributionTriggerRegistrationBrowserTest
     auto data_host_manager =
         std::make_unique<AttributionDataHostManagerImpl>(mock_manager.get());
     mock_manager->SetDataHostManager(std::move(data_host_manager));
+    EXPECT_CALL(*mock_manager, UpdateLastNavigationTime)
+        .Times(testing::AnyNumber());
     static_cast<StoragePartitionImpl*>(
         web_contents()->GetBrowserContext()->GetDefaultStoragePartition())
         ->OverrideAttributionManagerForTesting(std::move(mock_manager));

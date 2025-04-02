@@ -11,7 +11,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <windows.h>
 
 #include <map>
 #include <memory>
@@ -25,6 +24,7 @@
 #include "base/containers/flat_map.h"
 #include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
+#include "base/win/windows_types.h"
 #include "chrome/installer/util/work_item_list.h"
 
 class RegistryEntry;

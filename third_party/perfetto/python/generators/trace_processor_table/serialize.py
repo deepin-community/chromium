@@ -41,7 +41,6 @@ class ColumnSerializer:
     self.data_layer_type = data_layer_type(table.table, self.parsed_col)
 
     self.is_implicit_id = self.parsed_col.is_implicit_id
-    self.is_implicit_type = self.parsed_col.is_implicit_type
     self.is_ancestor = self.parsed_col.is_ancestor
     self.is_string = parsed_type.cpp_type == 'StringPool::Id'
     self.is_optional = parsed_type.is_optional
@@ -53,26 +52,26 @@ class ColumnSerializer:
     return f'    using {self.name} = {self.typed_column_type};'
 
   def row_field(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if self.is_ancestor:
       return None
     return f'    {self.cpp_type} {self.name};'
 
   def row_param(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     return f'{self.cpp_type} in_{self.name} = {{}}'
 
   def parent_row_initializer(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if not self.is_ancestor:
       return None
     return f'in_{self.name}'
 
   def row_initializer(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if self.is_ancestor:
       return None
@@ -80,11 +79,11 @@ class ColumnSerializer:
 
   def const_row_ref_getter(self) -> Optional[str]:
     return f'''ColumnType::{self.name}::type {self.name}() const {{
-      return table_->{self.name}()[row_number_];
+      return table()->{self.name}()[row_number_];
     }}'''
 
   def row_ref_getter(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     return f'''void set_{self.name}(
         ColumnType::{self.name}::non_optional_type v) {{
@@ -92,7 +91,7 @@ class ColumnSerializer:
     }}'''
 
   def flag(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if self.is_ancestor:
       return None
@@ -106,7 +105,7 @@ class ColumnSerializer:
     '''
 
   def storage_init(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if self.is_ancestor:
       return None
@@ -116,7 +115,7 @@ class ColumnSerializer:
     return f'''{self.name}_({storage}::Create<{dense}>())'''
 
   def column_init(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if self.is_ancestor:
       return None
@@ -133,7 +132,7 @@ class ColumnSerializer:
     return f'    {self.name}_.ShrinkToFit();'
 
   def append(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if self.is_ancestor:
       return None
@@ -148,7 +147,7 @@ class ColumnSerializer:
   '''
 
   def mutable_accessor(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     return f'''
   {self.typed_column_type}* mutable_{self.name}() {{
@@ -158,7 +157,7 @@ class ColumnSerializer:
   '''
 
   def storage(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if self.is_ancestor:
       return None
@@ -169,25 +168,14 @@ class ColumnSerializer:
     name = self.name
     return f'''
     ColumnType::{self.name}::type {name}() const {{
-      const auto& col = table_->{name}();
+      const auto& col = table()->{name}();
       return col.GetAtIdx(
         iterator_.StorageIndexForColumn(col.index_in_table()));
     }}
     '''
 
-  def iterator_setter(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
-      return None
-    return f'''
-      void set_{self.name}(ColumnType::{self.name}::non_optional_type v) {{
-        auto* col = mutable_table_->mutable_{self.name}();
-        col->SetAtIdx(
-          iterator_.StorageIndexForColumn(col->index_in_table()), v);
-      }}
-    '''
-
   def static_schema(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     return f'''
     schema.columns.emplace_back(Table::Schema::Column{{
@@ -198,26 +186,26 @@ class ColumnSerializer:
     '''
 
   def row_eq(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     return f'ColumnType::{self.name}::Equals({self.name}, other.{self.name})'
 
   def extend_parent_param(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if self.is_ancestor:
       return None
     return f'ColumnStorage<ColumnType::{self.name}::stored_type> {self.name}'
 
   def extend_parent_param_arg(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if self.is_ancestor:
       return None
     return f'std::move({self.name})'
 
   def static_assert_flags(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if self.is_ancestor:
       return None
@@ -229,7 +217,7 @@ class ColumnSerializer:
     '''
 
   def extend_nullable_vector(self) -> Optional[str]:
-    if self.is_implicit_id or self.is_implicit_type:
+    if self.is_implicit_id:
       return None
     if self.is_ancestor:
       return None
@@ -242,7 +230,7 @@ class ColumnSerializer:
     if self.is_ancestor:
       return None
     return f'''
-  RefPtr<column::DataLayer> {self.name}_storage_layer_;
+  RefPtr<column::StorageLayer> {self.name}_storage_layer_;
   '''
 
   def null_layer(self) -> Optional[str]:
@@ -251,7 +239,7 @@ class ColumnSerializer:
     if not self.is_optional or self.is_string:
       return f''
     return f'''
-  RefPtr<column::DataLayer> {self.name}_null_layer_;
+  RefPtr<column::OverlayLayer> {self.name}_null_layer_;
   '''
 
   def storage_layer_create(self) -> str:
@@ -356,13 +344,11 @@ class TableSerializer(object):
     Row({param},
         std::nullptr_t = nullptr)
         : {self.parent_class_name}::Row({parent_row_init}){parent_separator}
-          {row_init} {{
-      type_ = "{self.table.sql_name}";
-    }}
+          {row_init} {{}}
     {self.foreach_col(ColumnSerializer.row_field)}
 
     bool operator==(const {self.table_name}::Row& other) const {{
-      return type() == other.type() && {row_eq};
+      return {row_eq};
     }}
   }};
     '''
@@ -396,7 +382,7 @@ class TableSerializer(object):
 
    private:
     {self.table_name}* mutable_table() const {{
-      return const_cast<{self.table_name}*>(table_);
+      return const_cast<{self.table_name}*>(table());
     }}
   }};
   static_assert(std::is_trivially_destructible_v<RowReference>,
@@ -435,9 +421,10 @@ class TableSerializer(object):
       {self.table_name}* self,
       const macros_internal::MacroTable* parent) {{
     std::vector<ColumnLegacy> columns =
-        CopyColumnsFromParentOrAddRootColumns(self, parent);
+        CopyColumnsFromParentOrAddRootColumns(parent);
     {olay}
     {col_init}
+    base::ignore_result(self);
     return columns;
   }}
 
@@ -472,7 +459,6 @@ class TableSerializer(object):
       '''
     return '''
     Id id = Id{row_number};
-    type_.Append(string_pool()->InternString(row.type()));
       '''
 
   def const_iterator(self) -> str:
@@ -502,25 +488,18 @@ class TableSerializer(object):
       '''
 
   def iterator(self) -> str:
-    iterator_setters = self.foreach_col(
-        ColumnSerializer.iterator_setter, delimiter='\n')
     return f'''
   class Iterator : public ConstIterator {{
     public:
-     {iterator_setters}
-
      RowReference row_reference() const {{
-       return RowReference(mutable_table_, CurrentRowNumber());
+       return {{const_cast<{self.table_name}*>(table()), CurrentRowNumber()}};
      }}
 
     private:
      friend class {self.table_name};
 
      explicit Iterator({self.table_name}* table, Table::Iterator iterator)
-        : ConstIterator(table, std::move(iterator)),
-          mutable_table_(table) {{}}
-
-     {self.table_name}* mutable_table_ = nullptr;
+        : ConstIterator(table, std::move(iterator)) {{}}
   }};
       '''
 
@@ -533,15 +512,15 @@ class TableSerializer(object):
         ColumnSerializer.extend_parent_param_arg, delimiter=', ')
     delim = ',' if params else ''
     return f'''
-  static std::unique_ptr<Table> ExtendParent(
+  static std::unique_ptr<{self.table_name}> ExtendParent(
       const {self.parent_class_name}& parent{delim}
       {params}) {{
-    return std::unique_ptr<Table>(new {self.table_name}(
+    return std::unique_ptr<{self.table_name}>(new {self.table_name}(
         parent.string_pool(), parent, RowMap(0, parent.row_count()){delim}
         {args}));
   }}
 
-  static std::unique_ptr<Table> SelectAndExtendParent(
+  static std::unique_ptr<{self.table_name}> SelectAndExtendParent(
       const {self.parent_class_name}& parent,
       std::vector<{self.parent_class_name}::RowNumber> parent_overlay{delim}
       {params}) {{
@@ -549,7 +528,7 @@ class TableSerializer(object):
     for (uint32_t i = 0; i < parent_overlay.size(); ++i) {{
       prs_untyped[i] = parent_overlay[i].row_number();
     }}
-    return std::unique_ptr<Table>(new {self.table_name}(
+    return std::unique_ptr<{self.table_name}>(new {self.table_name}(
         parent.string_pool(), parent, RowMap(std::move(prs_untyped)){delim}
         {args}));
   }}
@@ -586,12 +565,12 @@ class TableSerializer(object):
     {self.foreach_col(ColumnSerializer.static_assert_flags)}
     {self.foreach_col(ColumnSerializer.extend_nullable_vector)}
 
-    std::vector<RefPtr<column::DataLayer>> overlay_layers(OverlayCount(&parent) + 1);
+    std::vector<RefPtr<column::OverlayLayer>> overlay_layers(OverlayCount(&parent) + 1);
     for (uint32_t i = 0; i < overlay_layers.size(); ++i) {{
       if (overlays()[i].row_map().IsIndexVector()) {{
         overlay_layers[i].reset(new column::ArrangementOverlay(
             overlays()[i].row_map().GetIfIndexVector(),
-            Indices::State::kNonmonotonic));
+            column::DataLayerChain::Indices::State::kNonmonotonic));
       }} else if (overlays()[i].row_map().IsBitVector()) {{
         overlay_layers[i].reset(new column::SelectorOverlay(
             overlays()[i].row_map().GetIfBitVector()));
@@ -662,8 +641,6 @@ class {self.table_name} : public macros_internal::MacroTable {{
     Table::Schema schema;
     schema.columns.emplace_back(Table::Schema::Column{{
         "id", SqlValue::Type::kLong, true, true, false, false}});
-    schema.columns.emplace_back(Table::Schema::Column{{
-        "type", SqlValue::Type::kString, false, false, false, false}});
     {self.foreach_col(ColumnSerializer.static_schema)}
     return schema;
   }}
@@ -674,19 +651,27 @@ class {self.table_name} : public macros_internal::MacroTable {{
 
   Iterator IterateRows() {{ return Iterator(this, Table::IterateRows()); }}
 
-  ConstIterator FilterToIterator(
-      const std::vector<Constraint>& cs) const {{
-    return ConstIterator(
-      this, ApplyAndIterateRows(QueryToRowMap(cs, {{}})));
+  ConstIterator FilterToIterator(const Query& q) const {{
+    return ConstIterator(this, QueryToIterator(q));
   }}
 
-  Iterator FilterToIterator(
-      const std::vector<Constraint>& cs) {{
-    return Iterator(this, ApplyAndIterateRows(QueryToRowMap(cs, {{}})));
+  Iterator FilterToIterator(const Query& q) {{
+    return Iterator(this, QueryToIterator(q));
   }}
 
   void ShrinkToFit() {{
     {self.foreach_col(ColumnSerializer.shrink_to_fit)}
+  }}
+
+  ConstRowReference operator[](uint32_t r) const {{
+    return ConstRowReference(this, r);
+  }}
+  RowReference operator[](uint32_t r) {{ return RowReference(this, r); }}
+  ConstRowReference operator[](RowNumber r) const {{
+    return ConstRowReference(this, r.row_number());
+  }}
+  RowReference operator[](RowNumber r) {{
+    return RowReference(this, r.row_number());
   }}
 
   std::optional<ConstRowReference> FindById(Id find_id) const {{
@@ -730,7 +715,10 @@ class {self.table_name} : public macros_internal::MacroTable {{
 def serialize_header(ifdef_guard: str, tables: List[ParsedTable],
                      include_paths: List[str]) -> str:
   """Serializes a table header file containing the given set of tables."""
-  include_paths_str = '\n'.join([f'#include "{i}"' for i in include_paths])
+  # Replace the backslash with forward slash when building on Windows.
+  # Caused b/327985369 without the replace.
+  include_paths_str = '\n'.join([f'#include "{i}"' for i in include_paths
+                                ]).replace("\\", "/")
   tables_str = '\n\n'.join([TableSerializer(t).serialize() for t in tables])
   return f'''
 #ifndef {ifdef_guard}

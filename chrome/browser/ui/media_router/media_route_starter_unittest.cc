@@ -4,9 +4,10 @@
 
 #include "chrome/browser/ui/media_router/media_route_starter.h"
 
+#include <algorithm>
+
 #include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "build/build_config.h"
 #include "build/buildflag.h"
@@ -83,8 +84,9 @@ class MockPresentationRequestSourceObserver
   }
 
   ~MockPresentationRequestSourceObserver() override {
-    if (starter_)
+    if (starter_) {
       starter_->RemovePresentationRequestSourceObserver(this);
+    }
   }
 
   MOCK_METHOD(void, OnSourceUpdated, (std::u16string&));
@@ -199,7 +201,7 @@ class MediaRouteStarterTest : public ChromeRenderViewHostTestHarness {
     // this to occur).
     ON_CALL(*media_router(), UnregisterMediaSinksObserver(_))
         .WillByDefault([this](MediaSinksObserver* observer) {
-          auto it = base::ranges::find(media_sinks_observers_, observer);
+          auto it = std::ranges::find(media_sinks_observers_, observer);
           if (it != media_sinks_observers_.end()) {
             media_sinks_observers_.erase(it);
           }
@@ -348,8 +350,9 @@ class MediaRouteStarterTest : public ChromeRenderViewHostTestHarness {
         media_route_starter()->CreateRouteParameters(sink.id(), cast_mode);
     EXPECT_TRUE(params);
 
-    if (cast_mode == MediaCastMode::DESKTOP_MIRROR)
+    if (cast_mode == MediaCastMode::DESKTOP_MIRROR) {
       set_screen_capture_allowed_for_testing(true);
+    }
 
     StartRoute(std::move(params));
   }
@@ -889,7 +892,7 @@ TEST_F(MediaRouteStarterTest, StartRoute_StartPresentationContextError) {
 }
 
 TEST_F(MediaRouteStarterTest, GetScreenCapturePermission) {
-// TODO(https://crbug.com/1266425): Fix screen-capture tests on macOS.
+// TODO(crbug.com/40802122): Fix screen-capture tests on macOS.
 #if BUILDFLAG(IS_MAC)
   bool screen_capture_is_allowed = false;
 #else

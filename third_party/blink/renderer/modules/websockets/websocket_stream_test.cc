@@ -17,6 +17,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_dom_exception.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_websocket_close_info.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_websocket_error.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_websocket_open_info.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_websocket_stream_options.h"
 #include "third_party/blink/renderer/core/dom/abort_controller.h"
 #include "third_party/blink/renderer/core/dom/abort_signal.h"
@@ -126,8 +127,8 @@ TEST_F(WebSocketStreamTest, ConstructWithBadURL) {
   EXPECT_EQ(DOMExceptionCode::kSyntaxError,
             exception_state.CodeAs<DOMExceptionCode>());
   EXPECT_EQ(
-      "The URL's scheme must be either 'ws' or 'wss'. 'bad-scheme' is not "
-      "allowed.",
+      "The URL's scheme must be either 'http', 'https', 'ws', or 'wss'. "
+      "'bad-scheme' is not allowed.",
       exception_state.Message());
 }
 

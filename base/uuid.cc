@@ -2,12 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "base/uuid.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include <ostream>
+#include <string_view>
 
 #include "base/containers/span.h"
 #include "base/hash/hash.h"
@@ -116,28 +122,28 @@ Uuid Uuid::FormatRandomDataAsV4Impl(base::span<const uint8_t, 16> input) {
 }
 
 // static
-Uuid Uuid::ParseCaseInsensitive(StringPiece input) {
+Uuid Uuid::ParseCaseInsensitive(std::string_view input) {
   Uuid uuid;
   uuid.lowercase_ = GetCanonicalUuidInternal(input, /*strict=*/false);
   return uuid;
 }
 
 // static
-Uuid Uuid::ParseCaseInsensitive(StringPiece16 input) {
+Uuid Uuid::ParseCaseInsensitive(std::u16string_view input) {
   Uuid uuid;
   uuid.lowercase_ = GetCanonicalUuidInternal(input, /*strict=*/false);
   return uuid;
 }
 
 // static
-Uuid Uuid::ParseLowercase(StringPiece input) {
+Uuid Uuid::ParseLowercase(std::string_view input) {
   Uuid uuid;
   uuid.lowercase_ = GetCanonicalUuidInternal(input, /*strict=*/true);
   return uuid;
 }
 
 // static
-Uuid Uuid::ParseLowercase(StringPiece16 input) {
+Uuid Uuid::ParseLowercase(std::u16string_view input) {
   Uuid uuid;
   uuid.lowercase_ = GetCanonicalUuidInternal(input, /*strict=*/true);
   return uuid;
@@ -162,7 +168,7 @@ std::ostream& operator<<(std::ostream& out, const Uuid& uuid) {
 }
 
 size_t UuidHash::operator()(const Uuid& uuid) const {
-  // TODO(crbug.com/1026195): Avoid converting to string to take the hash when
+  // TODO(crbug.com/40108138): Avoid converting to string to take the hash when
   // the internal type is migrated to a non-string type.
   return FastHash(uuid.AsLowercaseString());
 }

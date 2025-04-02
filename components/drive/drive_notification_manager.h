@@ -10,15 +10,17 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/sequence_checker.h"
-#include "base/strings/string_piece.h"
 #include "base/time/default_tick_clock.h"
 #include "base/timer/timer.h"
+#include "components/drive/drive_export.h"
 #include "components/drive/drive_notification_observer.h"
+#include "components/drive/features.h"
 #include "components/invalidation/public/invalidation_handler.h"
 #include "components/invalidation/public/invalidation_util.h"
 #include "components/keyed_service/core/keyed_service.h"
@@ -33,8 +35,9 @@ namespace drive {
 // Conditions under which updates should be searched:
 // 1. XMPP invalidation is received from Google Drive.
 // 2. Polling timer counts down.
-class DriveNotificationManager : public KeyedService,
-                                 public invalidation::InvalidationHandler {
+class COMPONENTS_DRIVE_EXPORT DriveNotificationManager
+    : public KeyedService,
+      public invalidation::InvalidationHandler {
  public:
   // |clock| can be injected for testing.
   explicit DriveNotificationManager(
@@ -86,9 +89,12 @@ class DriveNotificationManager : public KeyedService,
   // Returns true if `IsRegistered()` and `invalidation_service_` is enabled.
   bool AreInvalidationsEnabled() const;
 
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
   enum NotificationSource {
-    NOTIFICATION_XMPP,
-    NOTIFICATION_POLLING,
+    kNotificationXMPP = 0,
+    kNotificationPolling = 1,
+    kMaxValue = kNotificationPolling
   };
 
   // Restarts the polling timer. Used for polling-based notification.
@@ -118,7 +124,7 @@ class DriveNotificationManager : public KeyedService,
   invalidation::Topic GetDriveInvalidationTopic() const;
   invalidation::Topic GetTeamDriveInvalidationTopic(
       const std::string& team_drive_id) const;
-  std::string ExtractTeamDriveId(base::StringPiece topic_name) const;
+  std::string ExtractTeamDriveId(std::string_view topic_name) const;
 
   raw_ptr<invalidation::InvalidationService> invalidation_service_;
   base::ObserverList<DriveNotificationObserver>::Unchecked observers_;

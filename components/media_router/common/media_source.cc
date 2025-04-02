@@ -2,15 +2,20 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "components/media_router/common/media_source.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <ostream>
 #include <string>
+#include <string_view>
 
-#include "base/ranges/algorithm.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
@@ -30,14 +35,14 @@ namespace {
 // See: https://www.ietf.org/rfc/rfc3406.txt
 constexpr char kAnyTabMediaUrn[] = "urn:x-org.chromium.media:source:tab:*";
 constexpr char kTabMediaUrnFormat[] = "urn:x-org.chromium.media:source:tab:%d";
-constexpr base::StringPiece kDesktopMediaUrnPrefix =
+constexpr std::string_view kDesktopMediaUrnPrefix =
     "urn:x-org.chromium.media:source:desktop:";
 // WARNING: If more desktop URN parameters are added in the future, the parsing
 // code will have to be smarter!
-constexpr base::StringPiece kDesktopMediaUrnAudioParam = "?with_audio=true";
-constexpr base::StringPiece kUnchosenDesktopMediaUrn =
+constexpr std::string_view kDesktopMediaUrnAudioParam = "?with_audio=true";
+constexpr std::string_view kUnchosenDesktopMediaUrn =
     "urn:x-org.chromium.media:source:desktop";
-constexpr base::StringPiece kUnchosenDesktopWithAudioMediaUrn =
+constexpr std::string_view kUnchosenDesktopWithAudioMediaUrn =
     "urn:x-org.chromium.media:source:desktop:?with_audio=true";
 
 // List of non-http(s) schemes that are allowed in a Presentation URL.
@@ -48,22 +53,20 @@ constexpr std::array<const char* const, 5> kAllowedSchemes{
 
 bool IsSchemeAllowed(const GURL& url) {
   return url.SchemeIsHTTPOrHTTPS() ||
-         base::ranges::any_of(
-             kAllowedSchemes,
-             [&url](const char* const scheme) { return url.SchemeIs(scheme); });
+         std::ranges::any_of(kAllowedSchemes, [&url](const char* const scheme) {
+           return url.SchemeIs(scheme);
+         });
 }
 
 bool IsSystemAudioCaptureSupported() {
   if (!media::IsSystemLoopbackCaptureSupported()) {
     return false;
   }
-#if BUILDFLAG(IS_MAC)
-  return base::FeatureList::IsEnabled(media::kMacLoopbackAudioForCast);
-#elif BUILDFLAG(IS_LINUX)
+#if BUILDFLAG(IS_LINUX)
   return base::FeatureList::IsEnabled(media::kPulseaudioLoopbackForCast);
 #else
   return true;
-#endif  // BUILDFLAG(IS_MAC)
+#endif  // BUILDFLAG(IS_LINUX)
 }
 
 }  // namespace
@@ -90,8 +93,9 @@ bool IsAutoJoinPresentationId(const std::string& presentation_id) {
 
 MediaSource::MediaSource(const MediaSource::Id& source_id) : id_(source_id) {
   GURL url(source_id);
-  if (IsValidPresentationUrl(url))
+  if (IsValidPresentationUrl(url)) {
     url_ = url;
+  }
 }
 
 MediaSource::MediaSource(const GURL& presentation_url)

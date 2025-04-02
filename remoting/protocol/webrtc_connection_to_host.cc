@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "remoting/protocol/webrtc_connection_to_host.h"
 
 #include <memory>
@@ -49,11 +54,16 @@ void WebrtcConnectionToHost::Connect(
 
   event_callback_ = event_callback;
 
-  SetState(CONNECTING, OK);
+  SetState(CONNECTING, ErrorCode::OK);
 }
 
 void WebrtcConnectionToHost::Disconnect(ErrorCode error) {
   session_->Close(error);
+}
+
+void WebrtcConnectionToHost::ApplyNetworkSettings(
+    const NetworkSettings& settings) {
+  transport_->ApplyNetworkSettings(settings);
 }
 
 const SessionConfig& WebrtcConnectionToHost::config() {
@@ -104,12 +114,12 @@ void WebrtcConnectionToHost::OnSessionStateChange(Session::State state) {
       break;
 
     case Session::AUTHENTICATED:
-      SetState(AUTHENTICATED, OK);
+      SetState(AUTHENTICATED, ErrorCode::OK);
       break;
 
     case Session::CLOSED:
       CloseChannels();
-      SetState(CLOSED, OK);
+      SetState(CLOSED, ErrorCode::OK);
       break;
 
     case Session::FAILED:
@@ -189,7 +199,7 @@ void WebrtcConnectionToHost::OnChannelClosed(
     ChannelDispatcherBase* channel_dispatcher) {
   LOG(ERROR) << "Channel " << channel_dispatcher->channel_name()
              << " was closed unexpectedly.";
-  SetState(FAILED, INCOMPATIBLE_PROTOCOL);
+  SetState(FAILED, ErrorCode::INCOMPATIBLE_PROTOCOL);
 }
 
 ConnectionToHost::State WebrtcConnectionToHost::state() const {
@@ -207,7 +217,7 @@ void WebrtcConnectionToHost::NotifyIfChannelsReady() {
   // Start forwarding clipboard and input events.
   clipboard_forwarder_.set_clipboard_stub(control_dispatcher_.get());
   event_forwarder_.set_input_stub(event_dispatcher_.get());
-  SetState(CONNECTED, OK);
+  SetState(CONNECTED, ErrorCode::OK);
 }
 
 WebrtcVideoRendererAdapter* WebrtcConnectionToHost::GetOrCreateVideoAdapter(
@@ -232,7 +242,7 @@ void WebrtcConnectionToHost::CloseChannels() {
 
 void WebrtcConnectionToHost::SetState(State state, ErrorCode error) {
   // |error| should be specified only when |state| is set to FAILED.
-  DCHECK(state == FAILED || error == OK);
+  DCHECK(state == FAILED || error == ErrorCode::OK);
 
   if (state != state_) {
     state_ = state;

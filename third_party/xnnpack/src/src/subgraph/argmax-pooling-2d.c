@@ -4,17 +4,16 @@
 // LICENSE file in the root directory of this source tree.
 
 #include <assert.h>
-#include <math.h>
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include <xnnpack.h>
-#include <xnnpack/log.h>
-#include <xnnpack/operator.h>
-#include <xnnpack/params.h>
-#include <xnnpack/subgraph.h>
-#include <xnnpack/subgraph-validation.h>
-
+#include "xnnpack.h"
+#include "xnnpack/log.h"
+#include "xnnpack/node-type.h"
+#include "xnnpack/subgraph-validation.h"
+#include "xnnpack/subgraph.h"
+#include "pthreadpool.h"
 
 static enum xnn_status create_argmax_pooling_operator(
   const struct xnn_node* node,
@@ -24,8 +23,6 @@ static enum xnn_status create_argmax_pooling_operator(
   struct xnn_code_cache* code_cache,
   xnn_weights_cache_t weights_cache)
 {
-  assert(node->compute_type == xnn_compute_type_fp32);
-
   assert(node->num_inputs == 1);
   const uint32_t input_id = node->inputs[0];
   assert(input_id != XNN_INVALID_VALUE_ID);
@@ -86,6 +83,7 @@ static enum xnn_status reshape_argmax_pooling_operator(
   output_value->shape.dim[2] = output_width;
   output_value->shape.dim[3] = channel_dim;
 
+  output_value->shape.num_dims = 4;
   const size_t new_size = xnn_tensor_get_size(output_value);
   if (new_size > output_value->size || opdata->workspace_size > old_workspace_size) {
     output_value->size = new_size;
@@ -235,7 +233,6 @@ enum xnn_status xnn_define_argmax_pooling_2d(
   }
 
   node->type = xnn_node_type_argmax_pooling_2d;
-  node->compute_type = xnn_compute_type_fp32;
   node->params.pooling_2d.padding_top = input_padding_top;
   node->params.pooling_2d.padding_right = input_padding_right;
   node->params.pooling_2d.padding_bottom = input_padding_bottom;

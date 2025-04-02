@@ -4,6 +4,7 @@
 
 #include "chrome/browser/signin/header_modification_delegate_impl.h"
 
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
@@ -25,6 +26,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "net/base/schemeful_site.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "extensions/browser/guest_view/web_view/web_view_renderer_state.h"
@@ -41,6 +43,17 @@
 #endif
 
 namespace signin {
+
+#if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
+namespace {
+bool IsFirstPartyRequest(ResponseAdapter* response_adapter) {
+  const url::Origin* top_frame_origin =
+      response_adapter->GetRequestTopFrameOrigin();
+  return top_frame_origin && net::SchemefulSite(*top_frame_origin) ==
+                                 net::SchemefulSite(response_adapter->GetUrl());
+}
+}  // namespace
+#endif  // BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
 
 #if BUILDFLAG(IS_ANDROID)
 HeaderModificationDelegateImpl::HeaderModificationDelegateImpl(
@@ -61,7 +74,7 @@ bool HeaderModificationDelegateImpl::ShouldInterceptNavigation(
     content::WebContents* contents) {
   if (profile_->IsOffTheRecord()) {
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
-    if (!switches::IsBoundSessionCredentialsEnabled()) {
+    if (!switches::IsBoundSessionCredentialsEnabled(profile_->GetPrefs())) {
       return false;
     }
 #else
@@ -86,11 +99,11 @@ void HeaderModificationDelegateImpl::ProcessRequest(
     // We expect seeing traffic from OTR profiles only if the feature is
     // enabled.
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
-    CHECK(switches::IsBoundSessionCredentialsEnabled());
-#else
-    CHECK(false);
-#endif
+    CHECK(switches::IsBoundSessionCredentialsEnabled(profile_->GetPrefs()));
     return;
+#else
+    NOTREACHED();
+#endif
   }
 
   const PrefService* prefs = profile_->GetPrefs();
@@ -151,19 +164,25 @@ void HeaderModificationDelegateImpl::ProcessResponse(
 
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
   if (gaia::HasGaiaSchemeHostPort(response_adapter->GetUrl()) &&
-      switches::IsBoundSessionCredentialsEnabled()) {
+      IsFirstPartyRequest(response_adapter) &&
+      switches::IsBoundSessionCredentialsEnabled(profile_->GetPrefs())) {
     BoundSessionCookieRefreshService* bound_session_cookie_refresh_service =
         BoundSessionCookieRefreshServiceFactory::GetForProfile(profile_);
     if (bound_session_cookie_refresh_service) {
       // Terminate the session if session termination header is set.
       bound_session_cookie_refresh_service->MaybeTerminateSession(
-          response_adapter->GetHeaders());
-
-      auto params = BoundSessionRegistrationFetcherParam::MaybeCreateInstance(
           response_adapter->GetUrl(), response_adapter->GetHeaders());
-      if (params.has_value()) {
+      auto params = BoundSessionRegistrationFetcherParam::CreateFromHeaders(
+          response_adapter->GetUrl(), response_adapter->GetHeaders());
+      for (auto&& param : std::move(params)) {
+        // `bound_session_cookie_refresh_service` currently can handle only one
+        // registration request. The service has logic to choose which request
+        // it should prioritize, so we're sending it multiple params to choose
+        // from.
+        // TODO(b/274774185): modify `CreateRegistrationRequest()` to accept a
+        // vector of params.
         bound_session_cookie_refresh_service->CreateRegistrationRequest(
-            std::move(params).value());
+            std::move(param));
       }
     }
   }
@@ -173,11 +192,11 @@ void HeaderModificationDelegateImpl::ProcessResponse(
     // We expect seeing traffic from OTR profiles only if the feature is
     // enabled.
 #if BUILDFLAG(ENABLE_BOUND_SESSION_CREDENTIALS)
-    CHECK(switches::IsBoundSessionCredentialsEnabled());
-#else
-    CHECK(false);
-#endif
+    CHECK(switches::IsBoundSessionCredentialsEnabled(profile_->GetPrefs()));
     return;
+#else
+    NOTREACHED();
+#endif
   }
 
   ProcessAccountConsistencyResponseHeaders(response_adapter, redirect_url,
@@ -193,7 +212,7 @@ bool HeaderModificationDelegateImpl::ShouldIgnoreGuestWebViewRequest(
   }
 
   if (extensions::WebViewRendererState::GetInstance()->IsGuest(
-          contents->GetPrimaryMainFrame()->GetProcess()->GetID())) {
+          contents->GetPrimaryMainFrame()->GetProcess()->GetDeprecatedID())) {
     CHECK(contents->GetSiteInstance()->IsGuest());
     return true;
   }

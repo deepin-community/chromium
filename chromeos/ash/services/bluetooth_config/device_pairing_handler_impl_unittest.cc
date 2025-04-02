@@ -4,7 +4,8 @@
 
 #include "chromeos/ash/services/bluetooth_config/device_pairing_handler_impl.h"
 
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
@@ -300,7 +301,7 @@ class DevicePairingHandlerImplTest : public testing::Test {
 
   std::vector<NiceMockDevice>::iterator FindDevice(
       const std::string& device_id) {
-    return base::ranges::find(
+    return std::ranges::find(
         mock_devices_, device_id,
         &testing::NiceMock<device::MockBluetoothDevice>::GetIdentifier);
   }
@@ -415,8 +416,9 @@ TEST_F(DevicePairingHandlerImplTest, DisableBluetoothBeforePairing) {
   CheckPairingHistograms(device::BluetoothTransportType::kInvalid,
                          /*type_count=*/1, /*failure_count=*/1,
                          /*success_count=*/0);
-  CheckPairingFailureHistogram(device::ConnectionFailureReason::kFailed,
-                               /*failure_count=*/1, /*filtered_count=*/1);
+  CheckPairingFailureHistogram(
+      device::ConnectionFailureReason::kBluetoothDisabled,
+      /*failure_count=*/1, /*filtered_count=*/1);
   CheckDurationHistogramMetrics(base::Milliseconds(0), /*success_count=*/0,
                                 /*failure_count=*/1,
                                 /*transport_name=*/"Invalid");
@@ -567,11 +569,11 @@ TEST_F(DevicePairingHandlerImplTest,
   // CancelPairing() won't be called since the device won't be found. We should
   // still return with a pairing result.
   EXPECT_EQ(num_cancel_pairing_calls(), 0u);
-  EXPECT_EQ(pairing_result(), mojom::PairingResult::kAuthFailed);
+  EXPECT_EQ(pairing_result(), mojom::PairingResult::kNonAuthFailure);
   CheckPairingHistograms(device::BluetoothTransportType::kInvalid,
                          /*type_count=*/1, /*failure_count=*/1,
                          /*success_count=*/0);
-  CheckPairingFailureHistogram(device::ConnectionFailureReason::kAuthFailed,
+  CheckPairingFailureHistogram(device::ConnectionFailureReason::kNotFound,
                                /*failure_count=*/1, /*filtered_count=*/1);
   CheckDurationHistogramMetrics(kTestDuration, /*success_count=*/0,
                                 /*failure_count=*/1,
@@ -737,7 +739,7 @@ TEST_F(DevicePairingHandlerImplTest, PairAuthRequestPinCodeRemoveDevice) {
   CheckPairingHistograms(device::BluetoothTransportType::kInvalid,
                          /*type_count=*/1, /*failure_count=*/1,
                          /*success_count=*/0);
-  CheckPairingFailureHistogram(device::ConnectionFailureReason::kFailed,
+  CheckPairingFailureHistogram(device::ConnectionFailureReason::kNotFound,
                                /*failure_count=*/1, /*filtered_count=*/1);
   CheckDurationHistogramMetrics(kTestDuration, /*success_count=*/0,
                                 /*failure_count=*/1,
@@ -787,7 +789,7 @@ TEST_F(DevicePairingHandlerImplTest, PairAuthRequestPasskeyRemoveDevice) {
   CheckPairingHistograms(device::BluetoothTransportType::kInvalid,
                          /*type_count=*/1, /*failure_count=*/1,
                          /*success_count=*/0);
-  CheckPairingFailureHistogram(device::ConnectionFailureReason::kFailed,
+  CheckPairingFailureHistogram(device::ConnectionFailureReason::kNotFound,
                                /*failure_count=*/1, /*filtered_count=*/1);
   CheckDurationHistogramMetrics(kTestDuration, /*success_count=*/0,
                                 /*failure_count=*/1,
@@ -1048,7 +1050,7 @@ TEST_F(DevicePairingHandlerImplTest, PairAuthConfirmPasskeyRemoveDevice) {
   CheckPairingHistograms(device::BluetoothTransportType::kInvalid,
                          /*type_count=*/1, /*failure_count=*/1,
                          /*success_count=*/0);
-  CheckPairingFailureHistogram(device::ConnectionFailureReason::kFailed,
+  CheckPairingFailureHistogram(device::ConnectionFailureReason::kNotFound,
                                /*failure_count=*/1, /*filtered_count=*/1);
   CheckDurationHistogramMetrics(kTestDuration, /*success_count=*/0,
                                 /*failure_count=*/1,

@@ -27,6 +27,7 @@
  * Known FOURCCs: 'ap4h' (444), 'apch' (HQ), 'apcn' (422), 'apcs' (LT), 'acpo' (Proxy)
  */
 
+#include "libavutil/mem.h"
 #include "libavutil/mem_internal.h"
 #include "libavutil/opt.h"
 #include "avcodec.h"
@@ -414,7 +415,7 @@ static void put_alpha_diff(PutBitContext *pb, int cur, int prev)
     const int dsize = 1 << dbits - 1;
     int diff = cur - prev;
 
-    diff = av_mod_uintp2(diff, abits);
+    diff = av_zero_extend(diff, abits);
     if (diff >= (1 << abits) - dsize)
         diff -= 1 << abits;
     if (diff < -dsize || diff > dsize || !diff) {
@@ -733,10 +734,10 @@ static int prores_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     uint8_t *buf;
     int compress_frame_size, pic_size, ret, is_top_field_first = 0;
     uint8_t frame_flags;
-    int frame_size = FFALIGN(avctx->width, 16) * FFALIGN(avctx->height, 16)*16 + 500 + AV_INPUT_BUFFER_MIN_SIZE; //FIXME choose tighter limit
+    int frame_size = FFALIGN(avctx->width, 16) * FFALIGN(avctx->height, 16)*16 + 500 + FF_INPUT_BUFFER_MIN_SIZE; //FIXME choose tighter limit
 
 
-    if ((ret = ff_alloc_packet(avctx, pkt, frame_size + AV_INPUT_BUFFER_MIN_SIZE)) < 0)
+    if ((ret = ff_alloc_packet(avctx, pkt, frame_size + FF_INPUT_BUFFER_MIN_SIZE)) < 0)
         return ret;
 
     buf = pkt->data;
@@ -856,7 +857,8 @@ static av_cold int prores_encode_init(AVCodecContext *avctx)
             avctx->profile = AV_PROFILE_PRORES_4444;
             av_log(avctx, AV_LOG_INFO,
                    "encoding with ProRes 4444+ (ap4h) profile\n");
-        }
+        } else
+            av_assert0(0);
     } else if (avctx->profile < AV_PROFILE_PRORES_PROXY
             || avctx->profile > AV_PROFILE_PRORES_XQ) {
         av_log(
@@ -936,6 +938,7 @@ static const AVOption options[] = {
 
 static const AVClass prores_enc_class = {
     .class_name = "ProRes encoder",
+    .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
@@ -953,6 +956,7 @@ const FFCodec ff_prores_aw_encoder = {
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS |
                       AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
     .p.pix_fmts     = pix_fmts,
+    .color_ranges   = AVCOL_RANGE_MPEG,
     .priv_data_size = sizeof(ProresContext),
     .init           = prores_encode_init,
     .close          = prores_encode_close,
@@ -970,6 +974,7 @@ const FFCodec ff_prores_encoder = {
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS |
                       AV_CODEC_CAP_ENCODER_REORDERED_OPAQUE,
     .p.pix_fmts     = pix_fmts,
+    .color_ranges   = AVCOL_RANGE_MPEG,
     .priv_data_size = sizeof(ProresContext),
     .init           = prores_encode_init,
     .close          = prores_encode_close,

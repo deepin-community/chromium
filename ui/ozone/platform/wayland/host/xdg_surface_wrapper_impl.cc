@@ -24,7 +24,6 @@ XDGSurfaceWrapperImpl::~XDGSurfaceWrapperImpl() {
 bool XDGSurfaceWrapperImpl::Initialize() {
   if (!connection_->shell()) {
     NOTREACHED() << "Wrong shell protocol";
-    return false;
   }
 
   xdg_surface_.reset(xdg_wm_base_get_xdg_surface(

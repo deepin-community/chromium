@@ -29,7 +29,6 @@
 
 #include <utility>
 
-#include "dawn/common/Log.h"
 #include "dawn/native/BindGroup.h"
 #include "dawn/native/BindGroupLayout.h"
 #include "dawn/native/Buffer.h"
@@ -199,22 +198,18 @@ static const char sCopyForBrowserShader[] = R"(
             @fragment
             fn copyTexture(@location(0) texcoord : vec2f
             ) -> @location(0) vec4f {
-                var color = textureSample(mySourceTexture, mySampler, texcoord);
-
-                // TODO(crbug.com/tint/1723): Discard before sampling should be valid.
                 discardIfOutsideOfCopy(texcoord);
 
+                var color = textureSample(mySourceTexture, mySampler, texcoord);
                 return transform(color);
             }
 
             @fragment
             fn copyExternalTexture(@location(0) texcoord : vec2f
             ) -> @location(0) vec4f {
-                var color = textureSampleBaseClampToEdge(mySourceExternalTexture, mySampler, texcoord);
-
-                // TODO(crbug.com/tint/1723): Discard before sampling should be valid.
                 discardIfOutsideOfCopy(texcoord);
 
+                var color = textureSampleBaseClampToEdge(mySourceExternalTexture, mySampler, texcoord);
                 return transform(color);
             }
         )";

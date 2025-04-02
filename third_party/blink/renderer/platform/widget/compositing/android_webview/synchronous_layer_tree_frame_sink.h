@@ -28,7 +28,6 @@
 #include "components/viz/common/surfaces/local_surface_id.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "components/viz/service/display/display_client.h"
-#include "components/viz/service/display_embedder/server_shared_bitmap_manager.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -108,9 +107,6 @@ class SynchronousLayerTreeFrameSink
                              bool hit_test_data_changed) override;
   void DidNotProduceFrame(const viz::BeginFrameAck& ack,
                           cc::FrameSkippedReason reason) override;
-  void DidAllocateSharedBitmap(base::ReadOnlySharedMemoryRegion region,
-                               const viz::SharedBitmapId& id) override;
-  void DidDeleteSharedBitmap(const viz::SharedBitmapId& id) override;
   void Invalidate(bool needs_draw) override;
 
   // viz::mojom::CompositorFrameSinkClient implementation.
@@ -159,20 +155,13 @@ class SynchronousLayerTreeFrameSink
   void DeliverMessages();
 
   const uint32_t layer_tree_frame_sink_id_;
-  const raw_ptr<SynchronousCompositorRegistry, ExperimentalRenderer>
-      registry_;  // Not owned.
+  const raw_ptr<SynchronousCompositorRegistry> registry_;  // Not owned.
 
   // Not owned.
-  raw_ptr<SynchronousLayerTreeFrameSinkClient, ExperimentalRenderer>
-      sync_client_ = nullptr;
-
-  // Used to allocate bitmaps in the software Display.
-  // TODO(crbug.com/692814): The Display never sends its resources out of
-  // process so there is no reason for it to use a SharedBitmapManager.
-  viz::ServerSharedBitmapManager shared_bitmap_manager_;
+  raw_ptr<SynchronousLayerTreeFrameSinkClient> sync_client_ = nullptr;
 
   // Only valid (non-null) during a DemandDrawSw() call.
-  SkCanvas* current_sw_canvas_ = nullptr;
+  raw_ptr<SkCanvas> current_sw_canvas_ = nullptr;
 
   cc::ManagedMemoryPolicy memory_policy_;
   bool in_software_draw_ = false;
@@ -229,8 +218,7 @@ class SynchronousLayerTreeFrameSink
   // Uses frame_sink_manager_.
   std::unique_ptr<viz::Display> display_;
   // Owned by |display_|.
-  raw_ptr<SoftwareOutputSurface, ExperimentalRenderer>
-      software_output_surface_ = nullptr;
+  raw_ptr<SoftwareOutputSurface> software_output_surface_ = nullptr;
   std::unique_ptr<viz::BeginFrameSource> synthetic_begin_frame_source_;
   std::unique_ptr<viz::ExternalBeginFrameSource> external_begin_frame_source_;
 

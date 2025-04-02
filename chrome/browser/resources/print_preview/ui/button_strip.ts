@@ -5,14 +5,10 @@
 import 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import 'chrome://resources/cr_elements/cr_hidden_style.css.js';
 import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
-import '../strings.m.js';
+import '/strings.m.js';
 
 import type {CrButtonElement} from 'chrome://resources/cr_elements/cr_button/cr_button.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
-// <if expr="is_chromeos">
-import {PluralStringProxyImpl} from 'chrome://resources/js/plural_string_proxy.js';
-import {IronA11yAnnouncer} from 'chrome://resources/polymer/v3_0/iron-a11y-announcer/iron-a11y-announcer.js';
-// </if>
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import type {Destination} from '../data/destination.js';
@@ -186,12 +182,11 @@ export class PrintPreviewButtonStripElement extends PolymerElement {
   }
 
   /**
-   * Uses IronA11yAnnouncer to notify screen readers that an error is set.
+   * Uses CrA11yAnnouncer to notify screen readers that an error is set.
    */
   private errorMessageChanged_() {
     if (this.errorMessage_ !== '') {
-      IronA11yAnnouncer.requestAvailability();
-      this.fire_('iron-announce', {text: this.errorMessage_});
+      getAnnouncerInstance().announce(this.errorMessage_);
     }
   }
   // </if>

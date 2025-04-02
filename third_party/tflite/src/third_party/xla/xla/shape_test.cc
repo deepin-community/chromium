@@ -15,10 +15,11 @@ limitations under the License.
 
 #include "xla/shape.h"
 
+#include <gtest/gtest.h>
 #include "absl/hash/hash_testing.h"
+#include "xla/hlo/testlib/test.h"
 #include "xla/layout.h"
 #include "xla/shape_util.h"
-#include "xla/test.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/test_benchmark.h"
 
@@ -88,6 +89,13 @@ TEST_F(ShapeTest, DynamicShapeToString) {
   EXPECT_EQ("f32[<=23,44,55]", array_shape.ToString());
 
   EXPECT_EQ("f32[?,784]", unbounded_.ToString());
+}
+
+TEST_F(ShapeTest, DeleteDimensions) {
+  Shape shape = ShapeUtil::MakeShapeWithDenseLayout(F32, {5, 3, 2, 7, 9},
+                                                    {2, 0, 1, 4, 3});
+  shape.DeleteDimensions({1, 2, 3});
+  EXPECT_EQ(shape, ShapeUtil::MakeShapeWithDenseLayout(F32, {5, 9}, {0, 1}));
 }
 
 TEST_F(ShapeTest, EqualityTest) {
@@ -185,6 +193,15 @@ TEST_F(ShapeTest, IsDynamicDimension) {
   EXPECT_FALSE(unbounded_.is_dynamic_dimension(1));
 }
 
+TEST_F(ShapeTest, IsStaticDimension) {
+  Shape dynamic_matrix = matrix_;
+  dynamic_matrix.set_dynamic_dimension(1, true);
+  EXPECT_TRUE(dynamic_matrix.is_static_dimension(0));
+  EXPECT_FALSE(dynamic_matrix.is_static_dimension(1));
+  EXPECT_FALSE(unbounded_.is_static_dimension(0));
+  EXPECT_TRUE(unbounded_.is_static_dimension(1));
+}
+
 TEST_F(ShapeTest, ProgramShapeToFromProto) {
   ProgramShape program_shape;
   *program_shape.add_parameters() = ShapeUtil::MakeShape(F32, {1, 2, 3});
@@ -254,6 +271,15 @@ TEST_F(ShapeTest, ProgramShapeToString) {
       "-> "
       "((opaque[], f32[], u32[1,2], s32[3,4]), u32[1,2], token[])",
       prog.ToString());
+}
+
+TEST_F(ShapeTest, IgnoreSplitsComparison) {
+  Shape shape = ShapeUtil::MakeShapeWithDenseLayout(F32, {256, 256}, {1, 0});
+  Shape other_shape = shape;
+  SplitConfig split_config(/*dimension=*/0, {128});
+  other_shape.mutable_layout()->add_split_configs(split_config);
+
+  EXPECT_TRUE(Shape::Equal().IgnoreSplitConfigInLayout()(shape, other_shape));
 }
 
 TEST_F(ShapeTest, SupportsAbslHash) {

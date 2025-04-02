@@ -13,7 +13,6 @@ MetricEvaluatorsHelperPosix::~MetricEvaluatorsHelperPosix() = default;
 
 std::optional<int> MetricEvaluatorsHelperPosix::GetFreePhysicalMemoryMb() {
   NOTREACHED();
-  return std::nullopt;
 }
 
 }  // namespace performance_monitor

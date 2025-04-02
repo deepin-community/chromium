@@ -19,6 +19,19 @@ limitations under the License.
 #include <string>
 #include <utility>
 
+#include "absl/container/flat_hash_set.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_module.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
+#include "xla/xla_data.pb.h"
+
 namespace xla {
 
 namespace {
@@ -61,7 +74,7 @@ AllReducePromotion::AllReducePromotion(
     absl::Span<std::pair<PrimitiveType, PrimitiveType> const> from_to_types)
     : pass_(from_to_types, IsAllReduce, CloneAllReduce) {}
 
-StatusOr<bool> AllReducePromotion::Run(
+absl::StatusOr<bool> AllReducePromotion::Run(
     HloModule* module,
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   return pass_.Run(module, execution_threads);

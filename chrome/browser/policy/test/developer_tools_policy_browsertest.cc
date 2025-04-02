@@ -4,6 +4,7 @@
 
 #include "base/files/file_path.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -64,7 +65,7 @@ void WaitForExtensionsDevModeControlsVisibility(
           "  }"
           "});",
           dev_controls_accessor_js, dev_controls_visibility_check_js,
-          (expected_visible ? "true" : "false"))));
+          base::ToString(expected_visible))));
 }
 
 // Utility to get a PolicyMap for setting the DeveloperToolsAvailability policy
@@ -327,7 +328,7 @@ IN_PROC_BROWSER_TEST_F(PolicyTest, DeveloperToolsDisabledExtensionsDevMode) {
 // blocked or allowed for different pages depending on the
 // DeveloperToolsAvailability policy setting. Note: javascript URLs are always
 // blocked on extension schemes, regardless of the policy setting.
-// TODO(crbug.com/1449633): The loading of a force installed extension in this
+// TODO(crbug.com/40064953): The loading of a force installed extension in this
 // test runs into an issue on branded Windows builders.
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING) && BUILDFLAG(IS_WIN)
 #define MAYBE_DebugURLsDisabledByDeveloperToolsAvailability \
@@ -347,7 +348,7 @@ IN_PROC_BROWSER_TEST_F(PolicyTest,
       base::FilePath().AppendASCII("devtools").AppendASCII("extensions"),
       base::FilePath().AppendASCII("options.crx")));
   extensions::ChromeTestExtensionLoader loader(browser()->profile());
-  // TODO(crbug.com/1447936): We shouldn't need to ignore manifest warnings
+  // TODO(crbug.com/40269105): We shouldn't need to ignore manifest warnings
   // here, but there's an issue related to the _metadata folder added for
   // content verification when force-installing an off-store crx in a branded
   // build, which produces an install warning.

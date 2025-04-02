@@ -4,12 +4,16 @@
 
 #include "content/browser/service_worker/service_worker_loader_helpers.h"
 
+#include <optional>
+#include <string_view>
+
 #include "base/command_line.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_split.h"
 #include "base/strings/stringprintf.h"
 #include "base/time/time.h"
 #include "components/network_session_configurator/common/network_switches.h"
+#include "content/browser/devtools/devtools_instrumentation.h"
 #include "content/browser/loader/browser_initiated_resource_request.h"
 #include "content/browser/service_worker/service_worker_consts.h"
 #include "content/common/features.h"
@@ -37,7 +41,7 @@ bool IsPathRestrictionSatisfiedInternal(
     const GURL& scope,
     const GURL& script_url,
     bool service_worker_allowed_header_supported,
-    const std::string* service_worker_allowed_header_value,
+    const std::optional<std::string_view>& service_worker_allowed_header_value,
     std::string* error_message) {
   DCHECK(scope.is_valid());
   DCHECK(!scope.has_ref());
@@ -97,6 +101,22 @@ bool IsPathRestrictionSatisfiedInternal(
   return true;
 }
 
+bool IsEligibleForSyntheticResponseInternal(const GURL& client_url,
+                                            const std::string& allowed_urls) {
+  const std::vector<std::string> parsed_urls = base::SplitString(
+      allowed_urls, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+  for (const auto& it : parsed_urls) {
+    const GURL url = GURL(it);
+    // TODO(crbug.com/352578800): It's OK to use `start_with()` as far as the
+    // variation of given `client_url` value is limited, but consider
+    // replacing it with the standard SW scope matching if possible.
+    if (client_url.spec().starts_with(it)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 bool CheckResponseHead(
@@ -115,7 +135,8 @@ bool CheckResponseHead(
     return false;
   }
 
-  if (net::IsCertStatusError(response_head.cert_status) &&
+  if (!devtools_instrumentation::ShouldBypassCertificateErrors() &&
+      net::IsCertStatusError(response_head.cert_status) &&
       !base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kIgnoreCertificateErrors)) {
     *out_completion_status = network::URLLoaderCompletionStatus(
@@ -155,7 +176,6 @@ bool ShouldBypassCacheDueToUpdateViaCache(
       return false;
   }
   NOTREACHED() << static_cast<int>(cache_mode);
-  return false;
 }
 
 bool ShouldValidateBrowserCacheForScript(
@@ -314,7 +334,7 @@ network::ResourceRequest CreateRequestForServiceWorkerScript(
 bool IsPathRestrictionSatisfied(
     const GURL& scope,
     const GURL& script_url,
-    const std::string* service_worker_allowed_header_value,
+    const std::optional<std::string_view>& service_worker_allowed_header_value,
     std::string* error_message) {
   return IsPathRestrictionSatisfiedInternal(scope, script_url, true,
                                             service_worker_allowed_header_value,
@@ -324,8 +344,8 @@ bool IsPathRestrictionSatisfied(
 bool IsPathRestrictionSatisfiedWithoutHeader(const GURL& scope,
                                              const GURL& script_url,
                                              std::string* error_message) {
-  return IsPathRestrictionSatisfiedInternal(scope, script_url, false, nullptr,
-                                            error_message);
+  return IsPathRestrictionSatisfiedInternal(scope, script_url, false,
+                                            std::nullopt, error_message);
 }
 
 const base::flat_set<std::string> FetchHandlerBypassedHashStrings() {
@@ -335,6 +355,22 @@ const base::flat_set<std::string> FetchHandlerBypassedHashStrings() {
           ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY));
 
   return *result;
+}
+
+bool IsEligibleForSyntheticResponse(const GURL& client_url) {
+  if (!base::FeatureList::IsEnabled(
+          blink::features::kServiceWorkerSyntheticResponse)) {
+    return false;
+  }
+  const std::string allowed_urls =
+      blink::features::kServiceWorkerSyntheticResponseAllowedUrls.Get();
+  return IsEligibleForSyntheticResponseInternal(client_url, allowed_urls);
+}
+
+bool IsEligibleForSyntheticResponseForTesting(  // IN-TEST
+    const GURL& client_url,
+    const std::string& allowed_urls) {
+  return IsEligibleForSyntheticResponseInternal(client_url, allowed_urls);
 }
 
 }  // namespace service_worker_loader_helpers

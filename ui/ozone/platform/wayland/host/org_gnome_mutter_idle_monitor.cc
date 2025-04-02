@@ -80,7 +80,6 @@ std::optional<base::TimeDelta> OrgGnomeMutterIdleMonitor::GetIdleTime() const {
 
     default:
       NOTREACHED();
-      return std::nullopt;
   }
 }
 

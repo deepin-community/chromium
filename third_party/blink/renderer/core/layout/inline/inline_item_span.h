@@ -38,11 +38,13 @@ struct InlineItemSpan final {
 
   const InlineItem* begin() const {
     SECURITY_DCHECK(begin_ < data_->items.size());
-    return data_->items.begin() + begin_;
+    // TODO(crbug.com/351564777): Resolve a buffer safety issue.
+    return UNSAFE_TODO(data_->items.data() + begin_);
   }
   const InlineItem* end() const {
     SECURITY_DCHECK(begin_ + size_ <= data_->items.size());
-    return begin() + size_;
+    // TODO(crbug.com/351564777): Resolve a buffer safety issue.
+    return UNSAFE_TODO(begin() + size_);
   }
 
   const InlineItem& front() const {

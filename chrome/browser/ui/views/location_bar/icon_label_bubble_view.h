@@ -17,6 +17,7 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/pointer/touch_ui_controller.h"
 #include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/rounded_corners_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/animation/ink_drop_host.h"
 #include "ui/views/animation/ink_drop_observer.h"
@@ -42,6 +43,15 @@ class IconLabelBubbleView : public views::InkDropObserver,
  public:
   static constexpr int kTrailingPaddingPreMd = 2;
 
+  // Determines when the icon label background should be visible.
+  enum class BackgroundVisibility {
+    kNever,
+    kWithLabel,
+    kAlways,
+  };
+
+  // TODO(tluk): These should be updated to return ColorIds instead of raw
+  // SkColors.
   class Delegate {
    public:
     // Returns the foreground color of items around the IconLabelBubbleView,
@@ -92,17 +102,26 @@ class IconLabelBubbleView : public views::InkDropObserver,
   void InkDropAnimationStarted() override;
   void InkDropRippleAnimationEnded(views::InkDropState state) override;
 
+  // views::LabelButton:
+  void Layout(PassKey) override;
+
   // Returns true when the label should be visible.
   virtual bool ShouldShowLabel() const;
 
-  // Call to have the icon label paint over a solid background when the label
-  // text is shown.
-  void SetPaintLabelOverSolidBackground(bool paint_label_over_solid_background);
+  virtual void SetBackgroundVisibility(
+      BackgroundVisibility background_visibility);
+
+  // Sets whether tonal colors are used for the background of the view when
+  // expanded to show the label.
+  virtual void SetUseTonalColorsWhenExpanded(bool use_tonal_colors);
 
   void SetLabel(const std::u16string& label);
   void SetLabel(const std::u16string& label,
                 const std::u16string& accessible_name);
   void SetFontList(const gfx::FontList& font_list);
+
+  gfx::RoundedCornersF GetCornerRadii() const;
+  void SetCornerRadii(const gfx::RoundedCornersF& radii);
 
   const views::View* GetImageContainerView() const {
     return image_container_view();
@@ -169,8 +188,8 @@ class IconLabelBubbleView : public views::InkDropObserver,
   virtual void OnTouchUiChanged();
 
   // views::LabelButton:
-  gfx::Size CalculatePreferredSize() const override;
-  void Layout(PassKey) override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   void OnThemeChanged() override;
   bool IsTriggerableEvent(const ui::Event& event) override;
@@ -228,17 +247,20 @@ class IconLabelBubbleView : public views::InkDropObserver,
   // Spacing between the image and the label.
   int GetInternalSpacing() const;
 
-  // Sets whether tonal colors are used for the background of the view when
+  // Gets whether tonal colors are used for the background of the view when
   // expanded to show the label.
-  void SetUseTonalColorsWhenExpanded(bool use_tonal_colors);
+  bool GetUseTonalColorsWhenExpanded() const {
+    return use_tonal_color_when_expanded_;
+  }
 
   // Subclasses that want extra spacing added to the internal spacing can
   // override this method. This may be used when we want to align the label text
   // to the suggestion text, like in the SelectedKeywordView.
   virtual int GetExtraInternalSpacing() const;
 
-  std::optional<ui::ColorId> GetCustomBackgroundColorId();
-  std::optional<ui::ColorId> GetCustomForegroundColorId();
+  // True if the icon color should match the label color specified by
+  // GetForegroundColor().
+  bool IconColorShouldMatchForeground() const;
 
   void SetCustomBackgroundColorId(const ui::ColorId color_id);
   void SetCustomForegroundColorId(const ui::ColorId color_id);
@@ -270,6 +292,11 @@ class IconLabelBubbleView : public views::InkDropObserver,
   // bounds and separator visibility.
   SkPath GetHighlightPath() const;
 
+  // Returns true if the view is painted on a solid background, or if it is
+  // intended to be transparent to the view over which it is painted. The view's
+  // background and foreground color accessors will reflect this preference.
+  bool PaintedOnSolidBackground() const;
+
   raw_ptr<Delegate, DanglingUntriaged> delegate_;
 
   // The contents of the bubble.
@@ -294,11 +321,10 @@ class IconLabelBubbleView : public views::InkDropObserver,
   // icon). Set before animation begins in AnimateIn().
   int grow_animation_starting_width_ = 0;
 
-  // Controls whether the icon label should be painted over a solid background
-  // when the label text is showing.
-  // TODO(tluk): Remove the opt-in after UX has conslusively decided how icon
-  // labels should be painted when the label text is shown.
-  bool paint_label_over_solid_background_ = false;
+  // Controls when the icon label background should be visible.
+  // TODO(tluk): Remove the kWithLabel opt-in after UX has conslusively decided
+  // how icon labels should be painted when the label text is shown.
+  BackgroundVisibility background_visibility_ = BackgroundVisibility::kNever;
 
   // Whether the tonal color should be used when the icon is expanded to show
   // the label.
@@ -315,6 +341,8 @@ class IconLabelBubbleView : public views::InkDropObserver,
 
   std::optional<ui::ColorId> background_color_id_;
   std::optional<ui::ColorId> foreground_color_id_;
+
+  std::optional<gfx::RoundedCornersF> radii_;
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_LOCATION_BAR_ICON_LABEL_BUBBLE_VIEW_H_

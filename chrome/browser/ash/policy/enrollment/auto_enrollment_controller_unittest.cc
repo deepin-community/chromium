@@ -16,6 +16,7 @@
 #include "base/test/scoped_command_line.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "chrome/browser/ash/login/oobe_configuration.h"
 #include "chrome/browser/ash/policy/enrollment/auto_enrollment_client.h"
 #include "chrome/browser/ash/policy/enrollment/auto_enrollment_state.h"
 #include "chrome/browser/ash/policy/server_backed_state/server_backed_state_keys_broker.h"
@@ -127,8 +128,8 @@ class ProxyAutoEnrollmentClientFactory : public AutoEnrollmentClient::Factory {
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       const std::string& device_serial_number,
       const std::string& device_brand_code,
-      std::unique_ptr<psm::RlweDmserverClient> psm_rlwe_dmserver_client)
-      override {
+      std::unique_ptr<psm::RlweDmserverClient> psm_rlwe_dmserver_client,
+      ash::OobeConfiguration* oobe_config) override {
     mock_->SetProgressCallback(progress_callback);
     return std::make_unique<ProxyAutoEnrollmentClient>(mock_);
   }
@@ -254,11 +255,6 @@ TEST_F(EnrollmentFwmpHelperTest, DevDisableBoot) {
 
 class AutoEnrollmentControllerBaseTest : public testing::Test {
  protected:
-  ~AutoEnrollmentControllerBaseTest() override {
-    AutoEnrollmentTypeChecker::
-        ClearUnifiedStateDeterminationKillSwitchForTesting();
-  }
-
   AutoEnrollmentControllerForTesting CreateController() {
     return AutoEnrollmentControllerForTesting(
         &mock_device_settings_service_, &fake_dm_service_,
@@ -304,10 +300,6 @@ class AutoEnrollmentControllerBaseTest : public testing::Test {
     command_line_.GetProcessCommandLine()->AppendSwitchASCII(
         ash::switches::kEnterpriseEnableUnifiedStateDetermination,
         switch_value);
-
-    const bool is_killed = !enabled;
-    AutoEnrollmentTypeChecker::SetUnifiedStateDeterminationKillSwitchForTesting(
-        is_killed);
   }
 
   void SetupForcedReenrollmentCheckType() {
@@ -397,6 +389,15 @@ class AutoEnrollmentControllerBaseTest : public testing::Test {
   ScopedFakeClientInitializer<ash::FakeSessionManagerClient>
       scoped_fake_session_manager_client_initializer_;
 };
+
+TEST_F(AutoEnrollmentControllerBaseTest, NoEarlyGuestMode) {
+  auto controller = CreateController();
+
+  // Guest signin should not be allowed before finishing state determination.
+  // In particular, it should not be allowed before even starting state
+  // determination.
+  EXPECT_FALSE(controller.IsGuestSigninAllowed());
+}
 
 class AutoEnrollmentControllerSafeguardTimeoutTest
     : public AutoEnrollmentControllerBaseTest {

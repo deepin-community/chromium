@@ -55,7 +55,6 @@ void RecursiveReadBookmarksFolder(
                    << ") Title=("
                    << (title ? base::SysNSStringToUTF8(title) : "Null title")
                    << ")";
-      return;
     }
   }
 

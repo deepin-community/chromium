@@ -26,10 +26,8 @@ class TrayBubbleView;
 class GlanceableTrayBubble;
 
 // This date tray is next to the `UnifiedSystemTray`. Activating this tray
-// results in the `CalendarView` showing in the `UnifiedSystemTray`'s bubble.
-// If GlanceablesV2 feature flag is enabled, it will instead show the
-// GlanceableTrayBubble.
-// TODO(b:277268122) update documentation.
+// results in the `GlanceableTrayBubble` showing in the `UnifiedSystemTray`'s
+// bubble.
 class ASH_EXPORT DateTray : public TrayBackgroundView,
                             public UnifiedSystemTray::Observer {
   METADATA_HEADER(DateTray, TrayBackgroundView)
@@ -42,37 +40,48 @@ class ASH_EXPORT DateTray : public TrayBackgroundView,
 
   // TrayBackgroundView:
   std::u16string GetAccessibleNameForBubble() override;
-  std::u16string GetAccessibleNameForTray() override;
   void HandleLocaleChange() override;
   void UpdateLayout() override;
   void UpdateAfterLoginStatusChange() override;
   void ShowBubble() override;
-  void CloseBubble() override;
+  void CloseBubbleInternal() override;
   void HideBubbleWithView(const TrayBubbleView* bubble_view) override;
   void HideBubble(const TrayBubbleView* bubble_view) override;
-  void ClickedOutsideBubble() override;
+  void ClickedOutsideBubble(const ui::LocatedEvent& event) override;
   void UpdateTrayItemColor(bool is_active) override;
 
   // UnifiedSystemTray::Observer:
   void OnOpeningCalendarView() override;
   void OnLeavingCalendarView() override;
 
+  // Calculates the accessible name for the date tray.
+  std::u16string CalculateAccessibleName();
+
   // Callback called when this tray is pressed.
   void OnButtonPressed(const ui::Event& event);
+
+  // Callback called when the |`time_tray_item_view_`|'s `time_view_`'s
+  // accessible name changes.
+  void OnTimeViewTextChanged(ax::mojom::StringAttribute attribute,
+                             const std::optional<std::string>& name);
 
   // `from_keyboard` - whether `ShowGlanceableBubble()` is being shown in
   // response to a keyboard event.
   void ShowGlanceableBubble(bool from_keyboard);
   void HideGlanceableBubble();
 
+  GlanceableTrayBubble* glanceables_bubble_for_test() const {
+    return bubble_.get();
+  }
+
  private:
   friend class DateTrayTest;
-  friend class GlanceablesPixelTest;
-  friend class GlanceablesBrowserTest;
-  friend class GlanceableTrayBubbleViewTest;
+
+  // Registers callbacks on the ViewAccessibility object.
+  void SubscribeCallbacksForAccessibility();
 
   // Owned by the views hierarchy.
-  raw_ptr<TimeTrayItemView> time_view_ = nullptr;
+  raw_ptr<TimeTrayItemView> time_tray_item_view_ = nullptr;
 
   // Owned by `StatusAreaWidget`.
   raw_ptr<UnifiedSystemTray> unified_system_tray_ = nullptr;
@@ -82,6 +91,8 @@ class ASH_EXPORT DateTray : public TrayBackgroundView,
 
   base::ScopedObservation<UnifiedSystemTray, UnifiedSystemTray::Observer>
       scoped_unified_system_tray_observer_{this};
+
+  base::CallbackListSubscription time_view_text_changed_subscription_;
 };
 
 }  // namespace ash

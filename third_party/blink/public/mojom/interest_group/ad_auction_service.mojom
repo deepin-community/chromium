@@ -128,14 +128,6 @@ interface AdAuctionService {
   FinalizeAd(string ads_guid, AuctionAdConfig config)
      => (url.mojom.Url? ad_display_url);
 
-  // Creates an auction nonce, a one-time ID uniquely associated with a single
-  // call to RunAdAuction. This nonce will need to be passed back in via a
-  // subsequent call to RunAdAuction via the AuctionAdConfig. This is currently
-  // only needed for auctions that use additional bids, for which the auction
-  // nonce will be included in each additional bid as a way of ensuring that
-  // those bids are only used in the auctions for which they were intended.
-  CreateAuctionNonce() => (mojo_base.mojom.Uuid nonce);
-
   // Triggers the ad auction to run in a sandboxed JavaScript process. The
   // auction scripts run in this process come from the `bidding_logic_url`'s of
   // the interest groups owned by `interest_group_buyers` and the auction
@@ -260,11 +252,10 @@ interface AdAuctionService {
                          array<AdKeywordReplacement> replacements) => ();
 
   // Gets the ad auction data for running an external auction on a bidding and
-  // auction server. Upon success the request will contain the encrypted ad
-  // auction data and `error_message` will be empty.
-  GetInterestGroupAdAuctionData(url.mojom.Origin seller,
-                                url.mojom.Origin? coordinator)
-      => (mojo_base.mojom.BigBuffer request,
-          mojo_base.mojom.Uuid? request_id,
-          string error_message);
+  // auction server. The requests will contain each seller's encrypted ad
+  // auction data upon success, or error message if there is one upon failure.
+  GetInterestGroupAdAuctionData(map<url.mojom.Origin, url.mojom.Origin?> sellers,
+                                AuctionDataConfig config)
+      => (array<AdAuctionPerSellerRequest> requests,
+          mojo_base.mojom.Uuid? request_id);
 };

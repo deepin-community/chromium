@@ -7,13 +7,6 @@
 
 #include "base/functional/callback_forward.h"
 
-template <class T>
-class scoped_refptr;
-
-namespace network {
-class SharedURLLoaderFactory;
-}
-
 namespace ash::system {
 class StatisticsProvider;
 }
@@ -39,7 +32,7 @@ class AutoEnrollmentTypeChecker {
 
   // Requirement for forced re-enrollment check.
   enum class FRERequirement {
-    // FRE check is disabled via command line.
+    // FRE check is disabled by the OS command line.
     kDisabled = 0,
     // The device was setup (has kActivateDateKey) but doesn't have the
     // kCheckEnrollmentKey entry in VPD.
@@ -68,15 +61,19 @@ class AutoEnrollmentTypeChecker {
     kUnknownDueToMissingSystemClockSync = 4,
   };
 
-  // Returns true when class has been initialized.
-  static bool Initialized();
-
-  // Perform async initialization of this class, which requires access to the
-  // network. Users must call this method and wait until `init_callback` has
-  // been invoked before calling any other non-testing functions below.
-  static void Initialize(
-      scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
-      base::OnceClosure init_callback);
+  // Status of the Unified State Determination.
+  enum class USDStatus {
+    // These values are persisted to logs. Entries should not be renumbered and
+    // numeric values should never be reused.
+    kDisabledViaNeverSwitch = 0,
+    // Deprecated: kDisabledViaKillSwitch = 1,
+    kDisabledOnUnbrandedBuild = 2,
+    kDisabledOnNonChromeDevice = 3,
+    kEnabledOnOfficialGoogleChrome = 4,
+    kEnabledOnOfficialGoogleFlex = 5,
+    kEnabledViaAlwaysSwitch = 6,
+    kMaxValue = kEnabledViaAlwaysSwitch
+  };
 
   // Returns true when unified state determination is enabled based on
   // command-line switch, official build status and server-based kill-switch.
@@ -84,9 +81,6 @@ class AutoEnrollmentTypeChecker {
 
   // Returns true if forced re-enrollment is enabled based on command-line
   // switch and official build status.
-  //
-  // Also returns true when unified enrollment is enabled. This allows legacy
-  // code to handle the unified enrollment state determination correctly.
   static bool IsFREEnabled();
 
   // Returns true if initial enrollment is enabled based on command-line
@@ -131,17 +125,6 @@ class AutoEnrollmentTypeChecker {
       ash::system::StatisticsProvider* statistics_provider,
       bool dev_disable_boot);
 
-  // Allows to configure unified state determination kill switch. Used for
-  // testing.
-  static void SetUnifiedStateDeterminationKillSwitchForTesting(bool is_killed);
-
-  // Clears unified state determination kill switch. Used for testing.
-  static void ClearUnifiedStateDeterminationKillSwitchForTesting();
-
-  // Checks if unified state determination is disabled using the server-based
-  // kill-switch. Used for testing.
-  static bool IsUnifiedStateDeterminationDisabledByKillSwitchForTesting();
-
  private:
   // Requirement for initial state determination.
   enum class InitialStateDeterminationRequirement {
@@ -160,6 +143,10 @@ class AutoEnrollmentTypeChecker {
   static FRERequirement GetFRERequirement(
       ash::system::StatisticsProvider* statistics_provider,
       bool dev_disable_boot);
+
+  // Returns requirement for FRE on Flex. Note that this method doesn't check
+  // whether it is running on Flex or not.
+  static FRERequirement GetFRERequirementOnFlex();
 
   // Returns requirement for initial state determination.
   static InitialStateDeterminationRequirement

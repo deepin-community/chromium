@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <optional>
+#include <string_view>
 
 #include "base/component_export.h"
 #include "base/files/file.h"
@@ -58,7 +59,7 @@ class COMPONENT_EXPORT(MEDIA_WEBRTC) AudioProcessor {
                                    base::TimeTicks audio_capture_time,
                                    std::optional<double> new_volume)>;
 
-  using LogCallback = base::RepeatingCallback<void(base::StringPiece)>;
+  using LogCallback = base::RepeatingCallback<void(std::string_view)>;
 
   // |deliver_processed_audio_callback| is used to deliver frames of processed
   // capture audio, from ProcessCapturedAudio(), and has to be valid for as long
@@ -84,7 +85,6 @@ class COMPONENT_EXPORT(MEDIA_WEBRTC) AudioProcessor {
       const media::AudioParameters& input_format,
       const media::AudioParameters& output_format,
       rtc::scoped_refptr<webrtc::AudioProcessing> webrtc_audio_processing,
-      bool stereo_mirroring,
       bool needs_playout_reference);
 
   ~AudioProcessor();
@@ -107,8 +107,7 @@ class COMPONENT_EXPORT(MEDIA_WEBRTC) AudioProcessor {
   void ProcessCapturedAudio(const media::AudioBus& audio_source,
                             base::TimeTicks audio_capture_time,
                             int num_preferred_channels,
-                            double volume,
-                            bool key_pressed);
+                            double volume);
 
   // Analyzes playout audio for e.g. echo cancellation.
   // Must be called on the playout thread.
@@ -185,7 +184,6 @@ class COMPONENT_EXPORT(MEDIA_WEBRTC) AudioProcessor {
                                     int process_frames,
                                     base::TimeDelta capture_delay,
                                     double volume,
-                                    bool key_pressed,
                                     int num_preferred_channels,
                                     float* const* output_ptrs);
 
@@ -201,10 +199,6 @@ class COMPONENT_EXPORT(MEDIA_WEBRTC) AudioProcessor {
   // The WebRTC audio processing module (APM). Performs the bulk of the audio
   // processing and resampling algorithms.
   const rtc::scoped_refptr<webrtc::AudioProcessing> webrtc_audio_processing_;
-
-  // If true, then the audio processor should swap the left and right channel of
-  // captured stereo audio.
-  const bool stereo_mirroring_;
 
   // If true, `OnPlayoutData()` should be called.
   const bool needs_playout_reference_;

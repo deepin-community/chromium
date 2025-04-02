@@ -2,13 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/shell_integration_win.h"
+
+#include <objbase.h>
 
 #include <shobjidl.h>
 #include <windows.h>
 
-#include <objbase.h>
-#include <propkey.h>  // Needs to come after shobjidl.h.
+#include <propkey.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <wrl/client.h>
@@ -36,12 +42,13 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/win/registry.h"
+#include "base/win/scoped_co_mem.h"
 #include "base/win/scoped_propvariant.h"
 #include "base/win/shlwapi.h"
 #include "base/win/shortcut.h"
 #include "chrome/browser/policy/policy_path_parser.h"
 #include "chrome/browser/shell_integration.h"
-#include "chrome/browser/web_applications/os_integration/web_app_shortcut_win.h"
+#include "chrome/browser/shortcuts/platform_util_win.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/browser/win/settings_app_monitor.h"
 #include "chrome/browser/win/util_win_service.h"
@@ -226,7 +233,6 @@ DefaultWebClientState GetDefaultWebClientStateFromShellUtilDefaultState(
       return DefaultWebClientState::OTHER_MODE_IS_DEFAULT;
   }
   NOTREACHED();
-  return DefaultWebClientState::UNKNOWN_DEFAULT;
 }
 
 // A recorder of user actions in the Windows Settings app.
@@ -360,7 +366,12 @@ class OpenSystemSettingsHelper {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
     // Make sure all the registry watchers have fired.
     if (--registry_watcher_count_ == 0) {
-      ConcludeInteraction();
+      // Give the ui automation events time to get processed, before finishing
+      // the system settings interaction.
+      timer_.Start(
+          FROM_HERE, base::Seconds(5),
+          base::BindOnce(&OpenSystemSettingsHelper::ConcludeInteraction,
+                         weak_ptr_factory_.GetWeakPtr()));
     }
   }
 
@@ -624,12 +635,19 @@ void MigrateChromeAndChromeProxyShortcuts(
 }
 
 std::wstring GetHttpSchemeUserChoiceProgId() {
-  std::wstring prog_id;
-  base::win::RegKey key(HKEY_CURRENT_USER, ShellUtil::kRegVistaUrlPrefs,
-                        KEY_QUERY_VALUE);
-  if (key.Valid())
-    key.ReadValue(L"ProgId", &prog_id);
-  return prog_id;
+  Microsoft::WRL::ComPtr<IApplicationAssociationRegistration> registration;
+  HRESULT hr = ::SHCreateAssociationRegistration(IID_PPV_ARGS(&registration));
+  if (FAILED(hr)) {
+    return std::wstring();
+  }
+
+  base::win::ScopedCoMem<wchar_t> prog_id;
+  hr = registration->QueryCurrentDefault(L"http", AT_URLPROTOCOL, AL_EFFECTIVE,
+                                         &prog_id);
+  if (FAILED(hr)) {
+    return std::wstring();
+  }
+  return prog_id.get();
 }
 
 }  // namespace
@@ -747,8 +765,6 @@ void SetAsDefaultBrowserUsingSystemSettings(
   base::FilePath chrome_exe;
   if (!base::PathService::Get(base::FILE_EXE, &chrome_exe)) {
     NOTREACHED() << "Error getting app exe path";
-    std::move(on_finished_callback).Run();
-    return;
   }
 
   // Create an action recorder that will open the settings app once it has
@@ -773,8 +789,6 @@ void SetAsDefaultClientForSchemeUsingSystemSettings(
   base::FilePath chrome_exe;
   if (!base::PathService::Get(base::FILE_EXE, &chrome_exe)) {
     NOTREACHED() << "Error getting app exe path";
-    std::move(on_finished_callback).Run();
-    return;
   }
 
   // The helper manages its own lifetime.
@@ -848,7 +862,7 @@ void MigrateTaskbarPinsCallback(const base::FilePath& taskbar_path,
   base::FilePath chrome_exe;
   if (!base::PathService::Get(base::FILE_EXE, &chrome_exe))
     return;
-  base::FilePath chrome_proxy_path(web_app::GetChromeProxyPath());
+  base::FilePath chrome_proxy_path(shortcuts::GetChromeProxyPath());
 
   if (!taskbar_path.empty()) {
     MigrateChromeAndChromeProxyShortcuts(chrome_exe, chrome_proxy_path,
@@ -929,7 +943,6 @@ int MigrateShortcutsInPathInternal(const base::FilePath& chrome_exe,
             S_OK) {
       // When in doubt, prefer not updating the shortcut.
       NOTREACHED();
-      continue;
     } else {
       switch (propvariant.get().vt) {
         case VT_EMPTY:
@@ -943,7 +956,6 @@ int MigrateShortcutsInPathInternal(const base::FilePath& chrome_exe,
           break;
         default:
           NOTREACHED();
-          continue;
       }
     }
 
@@ -958,7 +970,6 @@ int MigrateShortcutsInPathInternal(const base::FilePath& chrome_exe,
                                    propvariant.Receive()) != S_OK) {
         // When in doubt, prefer to not update the shortcut.
         NOTREACHED();
-        continue;
       }
       if (propvariant.get().vt == VT_BOOL &&
                  !!propvariant.get().boolVal) {

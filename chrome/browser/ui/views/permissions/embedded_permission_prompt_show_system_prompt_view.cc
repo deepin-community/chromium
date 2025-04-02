@@ -5,18 +5,23 @@
 #include "chrome/browser/ui/views/permissions/embedded_permission_prompt_show_system_prompt_view.h"
 
 #include "base/memory/weak_ptr.h"
-
 #include "chrome/browser/ui/url_identity.h"
 #include "components/permissions/features.h"
 #include "components/strings/grit/components_strings.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 
+DEFINE_CLASS_ELEMENT_IDENTIFIER_VALUE(
+    EmbeddedPermissionPromptShowSystemPromptView,
+    kMainViewId);
+
 EmbeddedPermissionPromptShowSystemPromptView::
     EmbeddedPermissionPromptShowSystemPromptView(
         Browser* browser,
         base::WeakPtr<EmbeddedPermissionPromptViewDelegate> delegate)
-    : EmbeddedPermissionPromptBaseView(browser, delegate) {}
+    : EmbeddedPermissionPromptBaseView(browser, delegate) {
+  SetProperty(views::kElementIdentifierKey, kMainViewId);
+}
 
 EmbeddedPermissionPromptShowSystemPromptView::
     ~EmbeddedPermissionPromptShowSystemPromptView() = default;
@@ -47,7 +52,6 @@ void EmbeddedPermissionPromptShowSystemPromptView::RunButtonCallback(
     int button_id) {
   // This view has no buttons.
   NOTREACHED();
-  return;
 }
 
 std::vector<

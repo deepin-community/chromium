@@ -49,7 +49,6 @@ KeyPersistenceDelegateFactory::CreateKeyPersistenceDelegate() {
   return std::make_unique<LinuxKeyPersistenceDelegate>();
 #else
   NOTREACHED();
-  return nullptr;
 #endif
 }
 

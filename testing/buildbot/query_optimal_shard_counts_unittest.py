@@ -5,19 +5,19 @@
 """Tests for query_optimal_shard_counts.py."""
 
 import datetime
-import sys
 import os
 import json
-import mock
 import platform
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                '..'))
-
+# //testing/buildbot imports.
 import query_optimal_shard_counts
+
+# Protected access is allowed for unittests.
+# pylint: disable=protected-access
 
 SUITE_DURATIONS_DEFAULT_DICT = {
     'shard_count': 10,

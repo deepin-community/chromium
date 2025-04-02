@@ -24,6 +24,7 @@ class PrefService;
 
 #if !BUILDFLAG(IS_ANDROID)
 class BatteryDischargeReporter;
+class PerformanceInterventionMetricsReporter;
 class PowerMetricsReporter;
 class ProcessMonitor;
 #endif
@@ -36,6 +37,10 @@ class PressureMetricsReporter;
 bool IsBundleForMixedDeviceAccordingToVersionCode(
     const std::string& version_code);
 #endif
+
+namespace web_app {
+class SamplingMetricsProvider;
+}  // namespace web_app
 
 namespace chrome {
 void AddMetricsExtraParts(ChromeBrowserMainParts* main_parts);
@@ -92,7 +97,7 @@ class ChromeBrowserMainExtraPartsMetrics : public ChromeBrowserMainExtraParts,
  private:
   // DisplayObserver overrides.
   void OnDisplayAdded(const display::Display& new_display) override;
-  void OnDisplayRemoved(const display::Display& old_display) override;
+  void OnDisplaysRemoved(const display::Displays& removed_displays) override;
   void OnDisplayMetricsChanged(const display::Display& display,
                                uint32_t changed_metrics) override;
 
@@ -113,6 +118,12 @@ class ChromeBrowserMainExtraPartsMetrics : public ChromeBrowserMainExtraParts,
   std::unique_ptr<PowerMetricsReporter> power_metrics_reporter_;
 
   std::unique_ptr<BatteryDischargeReporter> battery_discharge_reporter_;
+
+  std::unique_ptr<PerformanceInterventionMetricsReporter>
+      performance_intervention_metrics_reporter_;
+
+  // Reports PWA metrics.
+  std::unique_ptr<web_app::SamplingMetricsProvider> web_app_metrics_provider_;
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_LINUX)

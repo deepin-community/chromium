@@ -38,7 +38,17 @@ URLLoaderContextForTests::GetCoepReporter() const {
   return nullptr;
 }
 
+mojom::DocumentIsolationPolicyReporter*
+URLLoaderContextForTests::GetDipReporter() const {
+  return nullptr;
+}
+
 mojom::DevToolsObserver* URLLoaderContextForTests::GetDevToolsObserver() const {
+  return nullptr;
+}
+
+mojom::DeviceBoundSessionAccessObserver*
+URLLoaderContextForTests::GetDeviceBoundSessionAccessObserver() const {
   return nullptr;
 }
 
@@ -66,8 +76,8 @@ URLLoaderContextForTests::GetResourceSchedulerClient() const {
   return resource_scheduler_client_;
 }
 
-corb::PerFactoryState& URLLoaderContextForTests::GetMutableCorbState() {
-  return corb_state_;
+orb::PerFactoryState& URLLoaderContextForTests::GetMutableOrbState() {
+  return orb_state_;
 }
 
 bool URLLoaderContextForTests::DataUseUpdatesEnabled() {

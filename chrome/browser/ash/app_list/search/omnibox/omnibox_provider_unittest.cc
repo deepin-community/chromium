@@ -12,6 +12,7 @@
 #include "ash/constants/ash_pref_names.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/test/gtest_util.h"
 #include "chrome/browser/ash/app_list/search/search_controller.h"
 #include "chrome/browser/ash/app_list/search/test/test_search_controller.h"
 #include "chrome/browser/ash/app_list/test/test_app_list_controller_delegate.h"
@@ -22,11 +23,13 @@
 #include "components/omnibox/browser/autocomplete_controller.h"
 #include "components/omnibox/browser/fake_autocomplete_provider_client.h"
 #include "components/omnibox/browser/suggestion_answer.h"
+#include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/variations/scoped_variations_ids_provider.h"
 #include "components/variations/variations_ids_provider.h"
 #include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/omnibox_proto/answer_type.pb.h"
 
 namespace app_list::test {
 
@@ -50,7 +53,7 @@ AutocompleteMatch NewOmniboxResult(const std::string& url) {
 }
 
 AutocompleteMatch NewAnswerResult(const std::string& url,
-                                  SuggestionAnswer::AnswerType answer_type) {
+                                  omnibox::AnswerType answer_type) {
   AutocompleteMatch result;
 
   result.relevance = 1.0;
@@ -58,9 +61,10 @@ AutocompleteMatch NewAnswerResult(const std::string& url,
   result.stripped_destination_url = GURL(url);
   result.contents = u"contents";
   result.description = u"description";
-  SuggestionAnswer answer;
-  answer.set_type(answer_type);
-  result.answer = answer;
+  omnibox::RichAnswerTemplate answer_template;
+  answer_template.add_answers();
+  result.answer_template = answer_template;
+  result.answer_type = answer_type;
 
   return result;
 }
@@ -111,8 +115,10 @@ class OmniboxProviderTest : public testing::Test {
     // The profile needs a template URL service for history Omnibox results.
     profile_ = profile_manager_->CreateTestingProfile(
         chrome::kInitialProfile,
-        {{TemplateURLServiceFactory::GetInstance(),
-          base::BindRepeating(&TemplateURLServiceFactory::BuildInstanceFor)}});
+        {TestingProfile::TestingFactory{
+            TemplateURLServiceFactory::GetInstance(),
+            base::BindRepeating(
+                &TemplateURLServiceFactory::BuildInstanceFor)}});
 
     // Create client of our provider.
     search_controller_ = std::make_unique<TestSearchController>();
@@ -182,9 +188,8 @@ TEST_F(OmniboxProviderTest, Basic) {
   AutocompleteResult result;
 
   to_produce.emplace_back(NewOmniboxResult("https://example.com/result"));
-  to_produce.emplace_back(
-      NewAnswerResult("https://example.com/answer",
-                      SuggestionAnswer::AnswerType::ANSWER_TYPE_WEATHER));
+  to_produce.emplace_back(NewAnswerResult(
+      "https://example.com/answer", omnibox::AnswerType::ANSWER_TYPE_WEATHER));
   to_produce.emplace_back(NewOpenTabResult("https://example.com/open_tab"));
   result.AppendMatches(to_produce);
   ProduceResults(std::move(result));
@@ -235,10 +240,11 @@ TEST_F(OmniboxProviderTest, BadUrls) {
   AutocompleteResult result;
 
   to_produce.emplace_back(NewOmniboxResult(""));
-  to_produce.emplace_back(NewAnswerResult(
-      "badscheme", SuggestionAnswer::AnswerType::ANSWER_TYPE_WEATHER));
+  to_produce.emplace_back(
+      NewAnswerResult("badscheme", omnibox::AnswerType::ANSWER_TYPE_WEATHER));
   to_produce.emplace_back(NewOpenTabResult("http://?k=v"));
-  result.AppendMatches(to_produce);
+  // `destination_url` should be DCHECKed for validity when adding matches.
+  EXPECT_DCHECK_DEATH_WITH(result.AppendMatches(to_produce), "");
   ProduceResults(std::move(result));
 
   // None of the results should be accepted.
@@ -288,7 +294,7 @@ TEST_F(OmniboxProviderTest, UnhandledUrls) {
   to_produce.emplace_back(NewOmniboxResult("https://drive.google.com/doc1"));
   to_produce.emplace_back(
       NewAnswerResult("https://docs.google.com/doc2",
-                      SuggestionAnswer::AnswerType::ANSWER_TYPE_FINANCE));
+                      omnibox::AnswerType::ANSWER_TYPE_FINANCE));
   to_produce.emplace_back(NewOpenTabResult("https://drive.google.com/doc1"));
   to_produce.emplace_back(NewOpenTabResult("https://docs.google.com/doc2"));
   to_produce.emplace_back(NewOpenTabResult("file:///docs/doc3"));
@@ -306,8 +312,10 @@ TEST_F(OmniboxProviderTest, UnhandledUrls) {
 // search control.
 TEST_F(OmniboxProviderTest, WebSearchControl) {
   base::test::ScopedFeatureList scoped_feature_list_;
-  scoped_feature_list_.InitAndEnableFeature(
-      ash::features::kLauncherSearchControl);
+  scoped_feature_list_.InitWithFeatures(
+      {ash::features::kLauncherSearchControl,
+       ash::features::kFeatureManagementLocalImageSearch},
+      {});
   DisableWebSearch();
 
   StartSearch(u"query");
@@ -316,9 +324,8 @@ TEST_F(OmniboxProviderTest, WebSearchControl) {
   AutocompleteResult result;
 
   to_produce.emplace_back(NewOmniboxResult("https://example.com/result"));
-  to_produce.emplace_back(
-      NewAnswerResult("https://example.com/answer",
-                      SuggestionAnswer::AnswerType::ANSWER_TYPE_WEATHER));
+  to_produce.emplace_back(NewAnswerResult(
+      "https://example.com/answer", omnibox::AnswerType::ANSWER_TYPE_WEATHER));
   to_produce.emplace_back(NewOpenTabResult("https://example.com/open_tab"));
   result.AppendMatches(to_produce);
   ProduceResults(std::move(result));

@@ -4,15 +4,16 @@
 
 import {getRequiredElement} from 'chrome://resources/js/util.js';
 
-import {AudioSample, OutputPage} from './output_page.js';
+import type {AudioSample} from './output_page.js';
+import {OutputPage} from './output_page.js';
 import {PageNavigator} from './page.js';
 
 export class AudioPlayer extends HTMLElement {
   private sampleIdx: number;
-  private audioDiv: HTMLDivElement;
+  private audioDiv: HTMLElement;
   private audioPlay: HTMLButtonElement;
   private audioContext: AudioContext|null;
-  private audioQuery: HTMLDivElement;
+  private audioQuery: HTMLElement;
   private audioNameTag: HTMLParagraphElement;
   private audioExpectation: HTMLParagraphElement;
   private prevLink: HTMLButtonElement;
@@ -51,10 +52,10 @@ export class AudioPlayer extends HTMLElement {
   }
 
   setAudioExpectation() {
-    if (this.current!.pan == -1) {
+    if (this.current!.pan === -1) {
       this.audioExpectation.innerHTML =
           'Should hear audio coming from the left channel.';
-    } else if (this.current!.pan == 1) {
+    } else if (this.current!.pan === 1) {
       this.audioExpectation.innerHTML =
           'Should hear audio coming from the right channel.';
     } else {
@@ -81,7 +82,7 @@ export class AudioPlayer extends HTMLElement {
       oscNode.type = 'sine';
       oscNode.channelCount = this.current!.channelCount;
       oscNode.frequency.value = this.current!.freqency;
-      if (this.current!.channelCount == 2) {
+      if (this.current!.channelCount === 2) {
         const panNode = this.audioContext.createStereoPanner();
         panNode.pan.value = this.current!.pan;
         oscNode.connect(panNode);
@@ -118,19 +119,19 @@ export class AudioPlayer extends HTMLElement {
       this.timerId = null;
     }
     this.setUpAudioPlayer();
-    this.prevLink.hidden = this.sampleIdx == 0;
+    this.prevLink.hidden = this.sampleIdx === 0;
     this.audioQuery.hidden = true;
   }
 
   handleResponse(response: boolean) {
     OutputPage.getInstance().setOutputMapEntry(this.current!, response);
-    if (this.sampleIdx + 1 == this.audioSamples.length) {
+    if (this.sampleIdx + 1 === this.audioSamples.length) {
       PageNavigator.getInstance().showPage('feedback');
     } else {
       this.sampleIdx += 1;
       this.setUpAudioPlayer();
       this.audioQuery.hidden = true;
-      this.prevLink.hidden = this.sampleIdx == 0;
+      this.prevLink.hidden = this.sampleIdx === 0;
     }
   }
 }

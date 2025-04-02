@@ -50,7 +50,6 @@ void KeysAndDigestsToProtobuf(
     if (!item.second.is_string() ||
         !base::StringToUint(item.second.GetString(), &digest)) {
       NOTREACHED();
-      continue;
     }
     StateStoreData::Incidents::KeyDigestMapFieldEntry* key_digest =
         key_digest_pairs->Add();
@@ -69,14 +68,12 @@ void IncidentsSentToProtobuf(
     const base::Value::Dict* keys_and_digests = item.second.GetIfDict();
     if (!keys_and_digests) {
       NOTREACHED();
-      continue;
     }
     if (keys_and_digests->empty())
       continue;
     int incident_type = 0;
     if (!base::StringToInt(item.first, &incident_type)) {
       NOTREACHED();
-      continue;
     }
     StateStoreData::TypeIncidentsMapFieldEntry* entry =
         type_incidents_pairs->Add();
@@ -141,7 +138,6 @@ std::optional<base::Value::Dict> Load(Profile* profile) {
       return std::nullopt;
     case PlatformStateStoreLoadResult::NUM_RESULTS:
       NOTREACHED();
-      break;
   }
   return value_dict;
 #else

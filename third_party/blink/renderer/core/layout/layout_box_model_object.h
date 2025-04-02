@@ -29,7 +29,6 @@
 #include "third_party/blink/renderer/core/layout/background_bleed_avoidance.h"
 #include "third_party/blink/renderer/core/layout/content_change_type.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
 #include "third_party/blink/renderer/platform/text/writing_mode_utils.h"
 
 namespace blink {
@@ -296,27 +295,29 @@ class CORE_EXPORT LayoutBoxModelObject : public LayoutObject {
     NOT_DESTROYED();
     return BorderLeft() + BorderRight() + PaddingLeft() + PaddingRight();
   }
-  DISABLE_CFI_PERF LayoutUnit BorderAndPaddingLogicalHeight() const {
+  DISABLE_CFI_PERF LayoutUnit BorderAndPaddingBlockSize() const {
     NOT_DESTROYED();
-    return (StyleRef().HasBorder() || StyleRef().MayHavePadding())
-               ? BorderAndPaddingBlockStart() + BorderAndPaddingBlockEnd()
-               : LayoutUnit();
+    if (!StyleRef().HasBorder() && !StyleRef().MayHavePadding()) {
+      return LayoutUnit();
+    }
+    return IsHorizontalWritingMode() ? BorderAndPaddingHeight()
+                                     : BorderAndPaddingWidth();
   }
-  DISABLE_CFI_PERF LayoutUnit BorderAndPaddingLogicalWidth() const {
+  DISABLE_CFI_PERF LayoutUnit BorderAndPaddingInlineSize() const {
     NOT_DESTROYED();
-    return StyleRef().IsHorizontalWritingMode() ? BorderAndPaddingWidth()
-                                                : BorderAndPaddingHeight();
+    if (!StyleRef().HasBorder() && !StyleRef().MayHavePadding()) {
+      return LayoutUnit();
+    }
+    return IsHorizontalWritingMode() ? BorderAndPaddingWidth()
+                                     : BorderAndPaddingHeight();
   }
-  DISABLE_CFI_PERF LayoutUnit BorderAndPaddingLogicalLeft() const {
+  DISABLE_CFI_PERF LayoutUnit BorderAndPaddingInlineStart() const {
     NOT_DESTROYED();
-    return StyleRef().IsHorizontalWritingMode() ? BorderLeft() + PaddingLeft()
-                                                : BorderTop() + PaddingTop();
+    return BorderInlineStart() + PhysicalPaddingToLogical().InlineStart();
   }
-  DISABLE_CFI_PERF LayoutUnit BorderAndPaddingLogicalRight() const {
+  DISABLE_CFI_PERF LayoutUnit BorderAndPaddingInlineEnd() const {
     NOT_DESTROYED();
-    return StyleRef().IsHorizontalWritingMode()
-               ? BorderRight() + PaddingRight()
-               : BorderBottom() + PaddingBottom();
+    return BorderInlineEnd() + PaddingInlineEnd();
   }
 
   LayoutUnit PaddingLogicalHeight() const {
@@ -412,6 +413,10 @@ class CORE_EXPORT LayoutBoxModelObject : public LayoutObject {
 
  protected:
   void WillBeDestroyed() override;
+
+  PhysicalOffset OffsetFromContainerInternal(
+      const LayoutObject*,
+      MapCoordinatesFlags) const override;
 
   PhysicalOffset AdjustedPositionRelativeTo(const PhysicalOffset&,
                                             const Element*) const;

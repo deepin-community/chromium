@@ -9,12 +9,13 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/views/payments/validating_textfield.h"
 #include "components/autofill/core/browser/autofill_type.h"
+#include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/autofill_structured_address_component.h"
+#include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/geo/autofill_country.h"
 #include "components/autofill/core/browser/geo/phone_number_i18n.h"
-#include "components/autofill/core/browser/personal_data_manager.h"
-#include "components/autofill/core/browser/validation.h"
 #include "components/autofill/core/common/autofill_constants.h"
 #include "components/payments/content/payment_request_spec.h"
 #include "components/payments/content/payment_request_state.h"
@@ -45,7 +46,7 @@ ContactInfoEditorViewController::ContactInfoEditorViewController(
       on_edited_(std::move(on_edited)),
       on_added_(std::move(on_added)) {}
 
-ContactInfoEditorViewController::~ContactInfoEditorViewController() {}
+ContactInfoEditorViewController::~ContactInfoEditorViewController() = default;
 
 bool ContactInfoEditorViewController::IsEditingExistingItem() {
   return !!profile_to_edit_;
@@ -54,48 +55,53 @@ bool ContactInfoEditorViewController::IsEditingExistingItem() {
 std::vector<EditorField>
 ContactInfoEditorViewController::GetFieldDefinitions() {
   std::vector<EditorField> fields;
-  if (!spec())
+  if (!spec()) {
     return fields;
+  }
 
   if (spec()->request_payer_name()) {
-    fields.push_back(EditorField(
+    fields.emplace_back(
         autofill::NAME_FULL,
         l10n_util::GetStringUTF16(IDS_PAYMENTS_NAME_FIELD_IN_CONTACT_DETAILS),
-        EditorField::LengthHint::HINT_SHORT, /*required=*/true));
+        EditorField::LengthHint::HINT_SHORT, /*required=*/true);
   }
   if (spec()->request_payer_phone()) {
-    fields.push_back(EditorField(
+    fields.emplace_back(
         autofill::PHONE_HOME_WHOLE_NUMBER,
         l10n_util::GetStringUTF16(IDS_PAYMENTS_PHONE_FIELD_IN_CONTACT_DETAILS),
         EditorField::LengthHint::HINT_SHORT, /*required=*/true,
-        EditorField::ControlType::TEXTFIELD_NUMBER));
+        EditorField::ControlType::TEXTFIELD_NUMBER);
   }
   if (spec()->request_payer_email()) {
-    fields.push_back(EditorField(
+    fields.emplace_back(
         autofill::EMAIL_ADDRESS,
         l10n_util::GetStringUTF16(IDS_PAYMENTS_EMAIL_FIELD_IN_CONTACT_DETAILS),
-        EditorField::LengthHint::HINT_SHORT, /*required=*/true));
+        EditorField::LengthHint::HINT_SHORT, /*required=*/true);
   }
   return fields;
 }
 
 std::u16string ContactInfoEditorViewController::GetInitialValueForType(
     autofill::FieldType type) {
-  if (!profile_to_edit_)
+  if (!profile_to_edit_) {
     return std::u16string();
+  }
   return GetValueForType(*profile_to_edit_, type);
 }
 
 bool ContactInfoEditorViewController::ValidateModelAndSave() {
-  // TODO(crbug.com/712224): Move this method and its helpers to a base class
+  // TODO(crbug.com/40515884): Move this method and its helpers to a base class
   // shared with the Shipping Address editor.
-  if (!ValidateInputFields())
+  if (!ValidateInputFields()) {
     return false;
+  }
 
   if (profile_to_edit_) {
     PopulateProfile(profile_to_edit_);
-    if (!is_incognito())
-      state()->GetPersonalDataManager()->UpdateProfile(*profile_to_edit_);
+    if (!is_incognito()) {
+      state()->GetPersonalDataManager()->address_data_manager().UpdateProfile(
+          *profile_to_edit_);
+    }
     state()->profile_comparator()->Invalidate(*profile_to_edit_);
     std::move(on_edited_).Run();
     on_added_.Reset();
@@ -106,8 +112,10 @@ bool ContactInfoEditorViewController::ValidateModelAndSave() {
         std::make_unique<autofill::AutofillProfile>(
             autofill::i18n_model_definition::kLegacyHierarchyCountryCode);
     PopulateProfile(profile.get());
-    if (!is_incognito())
-      state()->GetPersonalDataManager()->AddProfile(*profile);
+    if (!is_incognito()) {
+      state()->GetPersonalDataManager()->address_data_manager().AddProfile(
+          *profile);
+    }
     std::move(on_added_).Run(*profile);
     on_edited_.Reset();
   }
@@ -124,11 +132,11 @@ ContactInfoEditorViewController::CreateValidationDelegate(
 std::unique_ptr<ui::ComboboxModel>
 ContactInfoEditorViewController::GetComboboxModelForType(
     const autofill::FieldType& type) {
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 std::u16string ContactInfoEditorViewController::GetSheetTitle() {
-  // TODO(crbug.com/712074): Title should reflect the missing information, if
+  // TODO(crbug.com/41313365): Title should reflect the missing information, if
   // applicable.
   return profile_to_edit_ ? l10n_util::GetStringUTF16(
                                 IDS_PAYMENTS_EDIT_CONTACT_DETAILS_LABEL)
@@ -145,7 +153,7 @@ void ContactInfoEditorViewController::PopulateProfile(
     autofill::AutofillProfile* profile) {
   for (const auto& field : text_fields()) {
     profile->SetInfoWithVerificationStatus(
-        autofill::AutofillType(field.second.type), field.first->GetText(),
+        field.second.type, field.first->GetText(),
         state()->GetApplicationLocale(),
         autofill::VerificationStatus::kUserVerified);
   }
@@ -174,7 +182,7 @@ ContactInfoEditorViewController::ContactInfoValidationDelegate::
     : field_(field), controller_(controller), locale_(locale) {}
 
 ContactInfoEditorViewController::ContactInfoValidationDelegate::
-    ~ContactInfoValidationDelegate() {}
+    ~ContactInfoValidationDelegate() = default;
 
 bool ContactInfoEditorViewController::ContactInfoValidationDelegate::
     ShouldFormat() {
@@ -197,8 +205,9 @@ bool ContactInfoEditorViewController::ContactInfoValidationDelegate::
 
 bool ContactInfoEditorViewController::ContactInfoValidationDelegate::
     TextfieldValueChanged(views::Textfield* textfield, bool was_blurred) {
-  if (!was_blurred)
+  if (!was_blurred) {
     return true;
+  }
 
   std::u16string error_message;
   bool is_valid = ValidateTextfield(textfield, &error_message);
@@ -209,8 +218,9 @@ bool ContactInfoEditorViewController::ContactInfoValidationDelegate::
 bool ContactInfoEditorViewController::ContactInfoValidationDelegate::
     ValidateTextfield(views::Textfield* textfield,
                       std::u16string* error_message) {
-  if (!controller_->spec())
+  if (!controller_->spec()) {
     return false;
+  }
 
   // Show errors from merchant's retry() call.
   autofill::AutofillProfile* invalid_contact_profile =
@@ -219,8 +229,9 @@ bool ContactInfoEditorViewController::ContactInfoValidationDelegate::
       textfield->GetText() ==
           controller_->GetValueForType(*invalid_contact_profile, field_.type)) {
     *error_message = controller_->spec()->GetPayerError(field_.type);
-    if (!error_message->empty())
+    if (!error_message->empty()) {
       return false;
+    }
   }
 
   bool is_valid = true;
@@ -262,7 +273,7 @@ bool ContactInfoEditorViewController::ContactInfoValidationDelegate::
         break;
 
       default:
-        NOTREACHED_NORETURN();
+        NOTREACHED();
     }
   }
 
@@ -273,13 +284,13 @@ bool ContactInfoEditorViewController::ContactInfoValidationDelegate::
     IsValidCombobox(ValidatingCombobox* combobox,
                     std::u16string* error_message) {
   // This UI doesn't contain any comboboxes.
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 bool ContactInfoEditorViewController::ContactInfoValidationDelegate::
     ComboboxValueChanged(ValidatingCombobox* combobox) {
   // This UI doesn't contain any comboboxes.
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 }  // namespace payments

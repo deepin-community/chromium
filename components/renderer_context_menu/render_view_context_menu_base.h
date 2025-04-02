@@ -23,9 +23,9 @@
 #include "content/public/browser/site_instance.h"
 #include "ppapi/buildflags/buildflags.h"
 #include "third_party/blink/public/common/tokens/tokens.h"
-#include "ui/base/models/simple_menu_model.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
+#include "ui/menus/simple_menu_model.h"
 
 namespace content {
 class RenderFrameHost;
@@ -39,7 +39,7 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
   // the embedder.
   class ToolkitDelegate {
    public:
-    virtual ~ToolkitDelegate() {}
+    virtual ~ToolkitDelegate() = default;
     // Initialize the toolkit's menu.
     virtual void Init(ui::SimpleMenuModel* menu_model) = 0;
 
@@ -196,7 +196,7 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
 
   content::ContextMenuParams params_;
   const raw_ptr<content::WebContents, DanglingUntriaged> source_web_contents_;
-  const raw_ptr<content::BrowserContext> browser_context_;
+  const raw_ptr<content::BrowserContext, DanglingUntriaged> browser_context_;
 
   ui::SimpleMenuModel menu_model_;
 
@@ -213,8 +213,8 @@ class RenderViewContextMenuBase : public ui::SimpleMenuModel::Delegate,
   scoped_refptr<content::SiteInstance> site_instance_;
 
   // Our observers.
-  mutable base::ObserverList<RenderViewContextMenuObserver>::Unchecked
-      observers_;
+  mutable base::ObserverList<
+      RenderViewContextMenuObserver>::UncheckedAndDanglingUntriaged observers_;
 
   // Whether a command has been executed. Used to track whether menu observers
   // should be notified of menu closing without execution.

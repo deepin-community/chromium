@@ -58,7 +58,7 @@ class DevToolsAndroidBridge : public KeyedService {
     ~Factory() override;
 
     // BrowserContextKeyedServiceFactory overrides:
-    KeyedService* BuildServiceInstanceFor(
+    std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
         content::BrowserContext* context) const override;
   };
 
@@ -77,11 +77,11 @@ class DevToolsAndroidBridge : public KeyedService {
    public:
     virtual void DeviceListChanged(const RemoteDevices& devices) = 0;
    protected:
-    virtual ~DeviceListListener() {}
+    virtual ~DeviceListListener() = default;
   };
 
   explicit DevToolsAndroidBridge(Profile* profile);
-
+  ~DevToolsAndroidBridge() override;
   DevToolsAndroidBridge(const DevToolsAndroidBridge&) = delete;
   DevToolsAndroidBridge& operator=(const DevToolsAndroidBridge&) = delete;
 
@@ -92,7 +92,7 @@ class DevToolsAndroidBridge : public KeyedService {
    public:
     virtual void DeviceCountChanged(int count) = 0;
    protected:
-    virtual ~DeviceCountListener() {}
+    virtual ~DeviceCountListener() = default;
   };
 
   void AddDeviceCountListener(DeviceCountListener* listener);
@@ -111,7 +111,7 @@ class DevToolsAndroidBridge : public KeyedService {
 
     virtual void PortStatusChanged(const ForwardingStatus&) = 0;
    protected:
-    virtual ~PortForwardingListener() {}
+    virtual ~PortForwardingListener() = default;
   };
 
   void AddPortForwardingListener(PortForwardingListener* listener);
@@ -150,7 +150,6 @@ class DevToolsAndroidBridge : public KeyedService {
       content::BrowserThread::UI>;
   friend class base::DeleteHelper<DevToolsAndroidBridge>;
 
-  ~DevToolsAndroidBridge() override;
 
   void StartDeviceListPolling();
   void StopDeviceListPolling();
@@ -169,7 +168,7 @@ class DevToolsAndroidBridge : public KeyedService {
       return weak_factory_.GetWeakPtr();
   }
 
-  Profile* const profile_;
+  const raw_ptr<Profile> profile_;
   std::unique_ptr<AndroidDeviceManager> device_manager_;
 
   using DeviceMap =

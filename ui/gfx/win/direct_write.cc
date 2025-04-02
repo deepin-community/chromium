@@ -7,9 +7,11 @@
 #include <wrl/client.h>
 
 #include <string>
+#include <string_view>
 
 #include "base/debug/alias.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "skia/ext/font_utils.h"
@@ -41,8 +43,7 @@ void CreateDWriteFactory(IDWriteFactory** factory) {
                           &factory_unknown);
   if (FAILED(hr)) {
     base::debug::Alias(&hr);
-    CHECK(false);
-    return;
+    NOTREACHED();
   }
   factory_unknown.CopyTo(factory);
 }
@@ -112,7 +113,7 @@ std::optional<std::string> RetrieveLocalizedString(
 }
 
 std::optional<std::string> RetrieveLocalizedFontName(
-    base::StringPiece font_name,
+    std::string_view font_name,
     const std::string& locale) {
   Microsoft::WRL::ComPtr<IDWriteFactory> factory;
   CreateDWriteFactory(&factory);

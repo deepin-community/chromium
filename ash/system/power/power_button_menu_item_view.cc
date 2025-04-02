@@ -61,7 +61,8 @@ PowerButtonMenuItemView::PowerButtonMenuItemView(
   title_->SetMaxLines(2);
   title_->SetEnabledColorId(cros_tokens::kTextColorPrimary);
   GetViewAccessibility().SetRole(ax::mojom::Role::kMenuItem);
-  GetViewAccessibility().OverrideName(title_->GetText());
+  GetViewAccessibility().SetName(title_->GetText(),
+                                 ax::mojom::NameFrom::kAttribute);
 
   SetBorder(views::CreateEmptyBorder(
       gfx::Insets::TLBR(kItemBorderThickness, kItemBorderThickness,
@@ -84,7 +85,8 @@ void PowerButtonMenuItemView::Layout(PassKey) {
                                   kMenuItemHeight - kTitleTopPadding));
 }
 
-gfx::Size PowerButtonMenuItemView::CalculatePreferredSize() const {
+gfx::Size PowerButtonMenuItemView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(kMenuItemWidth + 2 * kItemBorderThickness,
                    kMenuItemHeight + 2 * kItemBorderThickness);
 }

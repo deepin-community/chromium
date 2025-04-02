@@ -2,9 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/342213636): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/browser/memory_pressure/user_level_memory_pressure_signal_generator.h"
 
-#if BUILDFLAG(IS_ANDROID)
 #include <fcntl.h>
 #include <inttypes.h>
 #include <unistd.h>
@@ -47,17 +51,11 @@ base::TimeDelta MeasurementIntervalFor3GbDevices() {
 }
 
 base::TimeDelta MeasurementIntervalFor4GbDevices() {
-  static const base::FeatureParam<base::TimeDelta> kMeasurementInterval{
-      &content::features::kUserLevelMemoryPressureSignalOn4GbDevices,
-      "measurement_interval", kDefaultMeasurementInterval};
-  return kMeasurementInterval.Get();
+  return kDefaultMeasurementInterval;
 }
 
 base::TimeDelta MeasurementIntervalFor6GbDevices() {
-  static const base::FeatureParam<base::TimeDelta> kMeasurementInterval{
-      &content::features::kUserLevelMemoryPressureSignalOn6GbDevices,
-      "measurement_interval", kDefaultMeasurementInterval};
-  return kMeasurementInterval.Get();
+  return kDefaultMeasurementInterval;
 }
 
 // The memory threshold: 738 was selected at around the 99th percentile of
@@ -78,10 +76,7 @@ uint64_t MemoryThresholdParamFor3GbDevices() {
 constexpr size_t kMemoryThresholdMBOf4GbDevices = 458;
 
 uint64_t MemoryThresholdParamFor4GbDevices() {
-  static const base::FeatureParam<int> kMemoryThresholdParam{
-      &content::features::kUserLevelMemoryPressureSignalOn4GbDevices,
-      "memory_threshold_mb", kMemoryThresholdMBOf4GbDevices};
-  return base::as_unsigned(kMemoryThresholdParam.Get()) * k1MB;
+  return kMemoryThresholdMBOf4GbDevices * k1MB;
 }
 
 // The memory threshold: 494 was selected at around the 99th percentile of
@@ -90,10 +85,7 @@ uint64_t MemoryThresholdParamFor4GbDevices() {
 constexpr size_t kMemoryThresholdMBOf6GbDevices = 494;
 
 uint64_t MemoryThresholdParamFor6GbDevices() {
-  static const base::FeatureParam<int> kMemoryThresholdParam{
-      &content::features::kUserLevelMemoryPressureSignalOn6GbDevices,
-      "memory_threshold_mb", kMemoryThresholdMBOf6GbDevices};
-  return base::as_unsigned(kMemoryThresholdParam.Get()) * k1MB;
+  return kMemoryThresholdMBOf6GbDevices * k1MB;
 }
 
 }  // namespace
@@ -216,7 +208,7 @@ std::pair<uint64_t, uint64_t> UserLevelMemoryPressureSignalGenerator::
   // However, regarding the utility processes, their user ids are different.
   // So because of the hidepid=2 mount option, the browser process cannot
   // measure the private memory footprints of the utility processes.
-  // TODO(crbug.com/1393283): measure the private memory footprints of
+  // TODO(crbug.com/40248151): measure the private memory footprints of
   // the utility processes correctly.
   for (content::BrowserChildProcessHostIterator iter; !iter.Done(); ++iter) {
     add_process_private_footprint(
@@ -322,7 +314,7 @@ void UserLevelMemoryPressureSignalGenerator::ReportBeforeAfterMetrics(
 
 namespace {
 
-// TODO(crbug.com/1393283): if this feature is approved, refactor the duplicate
+// TODO(crbug.com/40248151): if this feature is approved, refactor the duplicate
 // code under //third_party/blink/renderer/controller. If not approved,
 // remove the code as soon as possible.
 std::optional<uint64_t> CalculateProcessMemoryFootprint(
@@ -394,4 +386,3 @@ UserLevelMemoryPressureSignalGenerator::GetPrivateFootprint(
 
 }  // namespace memory_pressure
 
-#endif  // BUILDFLAG(IS_ANDROID)

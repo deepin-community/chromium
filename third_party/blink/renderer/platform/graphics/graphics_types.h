@@ -28,9 +28,16 @@
 
 #include "cc/paint/paint_flags.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
-#include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "third_party/skia/include/core/SkPath.h"
+
+namespace gfx {
+class ColorSpace;
+}
+
+namespace WTF {
+class String;
+}
 
 namespace blink {
 
@@ -41,7 +48,6 @@ using DynamicRangeLimit = ::cc::PaintFlags::DynamicRangeLimitMixture;
 
 enum AlphaDisposition {
   kPremultiplyAlpha,
-  kUnpremultiplyAlpha,
   kDontChangeAlpha,
 };
 
@@ -85,11 +91,6 @@ enum InterpolationQuality {
   kInterpolationLow = static_cast<int>(cc::PaintFlags::FilterQuality::kLow),
   kInterpolationMedium =
       static_cast<int>(cc::PaintFlags::FilterQuality::kMedium),
-#if defined(WTF_USE_LOW_QUALITY_IMAGE_INTERPOLATION)
-  kInterpolationDefault = kInterpolationLow,
-#else
-  kInterpolationDefault = kInterpolationMedium,
-#endif
 };
 
 enum CompositeOperator {
@@ -153,12 +154,6 @@ enum class RasterMode {
 enum class RasterModeHint {
   kPreferGPU,
   kPreferCPU,
-};
-
-enum MailboxSyncMode {
-  kVerifiedSyncToken,
-  kUnverifiedSyncToken,
-  kOrderingBarrier,
 };
 
 enum AntiAliasingMode { kNotAntiAliased, kAntiAliased };
@@ -238,7 +233,7 @@ enum class FlushReason {
 
   // `OffscreenCanvas::commit` was called.
   // Should not happen while printing.
-  kOffscreenCanvasCommit = 5,
+  kOffscreenCanvasCommit_OBSOLETE = 5,
 
   // `OffscreenCanvas` dispatched a frame to the compositor as part of the
   // regular animation frame presentation flow.
@@ -356,35 +351,38 @@ enum class FlushReason {
 // Note that this is only appropriate to use in canvas globalCompositeOperator
 // cases.
 // TODO(vmpstr): Move these functions to near where they are used.
-PLATFORM_EXPORT String CanvasCompositeOperatorName(CompositeOperator,
-                                                   BlendMode);
-PLATFORM_EXPORT bool ParseCanvasCompositeAndBlendMode(const String&,
+PLATFORM_EXPORT WTF::String CanvasCompositeOperatorName(CompositeOperator,
+                                                        BlendMode);
+PLATFORM_EXPORT bool ParseCanvasCompositeAndBlendMode(const WTF::String&,
                                                       CompositeOperator&,
                                                       BlendMode&);
+PLATFORM_EXPORT InterpolationQuality GetDefaultInterpolationQuality();
 
-PLATFORM_EXPORT String BlendModeToString(BlendMode);
+PLATFORM_EXPORT WTF::String BlendModeToString(BlendMode);
 
-PLATFORM_EXPORT String ImageEncodingMimeTypeName(ImageEncodingMimeType);
-PLATFORM_EXPORT bool ParseImageEncodingMimeType(const String&,
+PLATFORM_EXPORT WTF::String ImageEncodingMimeTypeName(ImageEncodingMimeType);
+PLATFORM_EXPORT bool ParseImageEncodingMimeType(const WTF::String&,
                                                 ImageEncodingMimeType&);
 
-PLATFORM_EXPORT String LineCapName(LineCap);
-PLATFORM_EXPORT bool ParseLineCap(const String&, LineCap&);
+PLATFORM_EXPORT WTF::String LineCapName(LineCap);
+PLATFORM_EXPORT bool ParseLineCap(const WTF::String&, LineCap&);
 
-PLATFORM_EXPORT String LineJoinName(LineJoin);
-PLATFORM_EXPORT bool ParseLineJoin(const String&, LineJoin&);
+PLATFORM_EXPORT WTF::String LineJoinName(LineJoin);
+PLATFORM_EXPORT bool ParseLineJoin(const WTF::String&, LineJoin&);
 
-PLATFORM_EXPORT String TextAlignName(TextAlign);
-PLATFORM_EXPORT bool ParseTextAlign(const String&, TextAlign&);
+PLATFORM_EXPORT WTF::String TextAlignName(TextAlign);
+PLATFORM_EXPORT bool ParseTextAlign(const WTF::String&, TextAlign&);
 
-PLATFORM_EXPORT String TextBaselineName(TextBaseline);
-PLATFORM_EXPORT bool ParseTextBaseline(const String&, TextBaseline&);
+PLATFORM_EXPORT WTF::String TextBaselineName(TextBaseline);
+PLATFORM_EXPORT bool ParseTextBaseline(const WTF::String&, TextBaseline&);
 
-PLATFORM_EXPORT String PredefinedColorSpaceName(PredefinedColorSpace);
+PLATFORM_EXPORT WTF::String ImageDataStorageFormatName(ImageDataStorageFormat);
 
-PLATFORM_EXPORT String CanvasPixelFormatName(CanvasPixelFormat);
-
-PLATFORM_EXPORT String ImageDataStorageFormatName(ImageDataStorageFormat);
+// Return the gfx::ColorSpace or SkColorSpace for a PredefinedColorSpace.
+PLATFORM_EXPORT gfx::ColorSpace PredefinedColorSpaceToGfxColorSpace(
+    PredefinedColorSpace color_space);
+PLATFORM_EXPORT sk_sp<SkColorSpace> PredefinedColorSpaceToSkColorSpace(
+    PredefinedColorSpace color_space);
 
 }  // namespace blink
 

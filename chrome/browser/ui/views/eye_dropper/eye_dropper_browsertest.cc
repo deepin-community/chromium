@@ -18,7 +18,7 @@
 #include "content/public/test/browser_test.h"
 #include "ui/display/display_switches.h"
 
-// TODO(crbug.com/1448244): enable this test on all supported platforms.
+// TODO(crbug.com/40269208): enable this test on all supported platforms.
 #if BUILDFLAG(IS_WIN)
 #include "components/eye_dropper/eye_dropper_view.h"
 #endif
@@ -47,8 +47,9 @@ class EyeDropperBrowserTest : public UiBrowserTest,
 
   bool VerifyUi() override {
 #if BUILDFLAG(IS_WIN)
-    if (!eye_dropper_)
+    if (!eye_dropper_) {
       return false;
+    }
 
     views::Widget* widget =
         static_cast<eye_dropper::EyeDropperView*>(eye_dropper_.get())

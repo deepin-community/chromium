@@ -44,19 +44,12 @@ namespace blink {
 
 FontFallbackList::FontFallbackList(FontSelector* font_selector)
     : font_selector_(font_selector),
-      generation_(FontCache::Get().Generation()),
-      has_loading_fallback_(false),
-      has_custom_font_(false),
-      can_shape_word_by_word_(false),
-      can_shape_word_by_word_computed_(false),
-      is_invalid_(false),
-      nullify_primary_font_data_for_test_(false) {}
+      generation_(FontCache::Get().Generation()) {}
 
 void FontFallbackList::Trace(Visitor* visitor) const {
   visitor->Trace(font_list_);
   visitor->Trace(cached_primary_simple_font_data_);
   visitor->Trace(font_selector_);
-  visitor->Trace(ng_shape_cache_);
   visitor->Trace(shape_cache_);
 }
 
@@ -178,9 +171,8 @@ const FontData* FontFallbackList::GetFontData(
 
   if (font_selector_) {
     // Try the user's preferred standard font.
-    FontFamily font_family;
-    font_family.SetFamily(font_family_names::kWebkitStandard,
-                          FontFamily::Type::kGenericFamily);
+    FontFamily font_family(font_family_names::kWebkitStandard,
+                           FontFamily::Type::kGenericFamily);
     if (const FontData* data =
             font_selector_->GetFontData(font_description, font_family)) {
       return data;
@@ -225,6 +217,38 @@ const FontData* FontFallbackList::FontDataAt(
       has_custom_font_ = true;
   }
   return result;
+}
+
+void FontFallbackList::ComputeFontFeatures(
+    const FontDescription& font_description) {
+  DCHECK(!is_font_features_computed_);
+  is_font_features_computed_ = true;
+  font_features_.Initialize(font_description);
+  has_non_initial_font_features_ =
+      !font_features_.IsInitial() ||
+      // Features for `font-variant-alternates` is set in `GetFontData`.
+      font_description.GetFontVariantAlternates() ||
+      // Features for `font-variant-caps` is set while shaping.
+      font_description.VariantCaps() != FontDescription::kCapsNormal;
+}
+
+const FontFeatures& FontFallbackList::GetFontFeatures(
+    const FontDescription& font_description) {
+  if (!is_font_features_computed_) [[unlikely]] {
+    ComputeFontFeatures(font_description);
+  }
+  return font_features_;
+}
+
+bool FontFallbackList::HasNonInitialFontFeatures(
+    const FontDescription& font_description) {
+  if (HasCustomFont()) [[unlikely]] {
+    return true;
+  }
+  if (!is_font_features_computed_) [[unlikely]] {
+    ComputeFontFeatures(font_description);
+  }
+  return has_non_initial_font_features_;
 }
 
 bool FontFallbackList::ComputeCanShapeWordByWord(

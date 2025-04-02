@@ -31,11 +31,10 @@
 #include "chrome/browser/android/flags/chrome_cached_flags.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/common/chrome_features.h"
-#else
-#include "chrome/browser/search_engine_choice/search_engine_choice_client_side_trial.h"
 #endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
+#include "ash/login/ui/management_disclosure_field_trial.h"
 #include "chrome/common/channel_info.h"
 #include "chromeos/ash/services/multidevice_setup/public/cpp/first_run_field_trial.h"
 #endif
@@ -46,36 +45,21 @@
 #include "chromeos/startup/startup.h"  // nogncheck
 #endif
 
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt_trial.h"
+#endif
+
+#if BUILDFLAG(IS_LINUX)
+#include "base/nix/xdg_util.h"
+#include "ui/base/ui_base_features.h"
+#endif  // BUILDFLAG(IS_LINUX)
+
 ChromeBrowserFieldTrials::ChromeBrowserFieldTrials(PrefService* local_state)
     : local_state_(local_state) {
   DCHECK(local_state_);
 }
 
 ChromeBrowserFieldTrials::~ChromeBrowserFieldTrials() = default;
-
-void ChromeBrowserFieldTrials::OnVariationsSetupComplete() {
-#if BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_CHROMEOS_LACROS)
-  // Persistent histograms must be enabled ASAP, but depends on Features.
-  // For non-Fuchsia platforms, it is enabled earlier on, and is not controlled
-  // by variations.
-  // See //chrome/app/chrome_main_delegate.cc.
-  bool histogram_init_and_cleanup = true;
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // For Lacros, when prelaunching at login screen, we want to postpone the
-  // initialization and cleanup of persistent histograms to when the user has
-  // logged in and the cryptohome is accessible.
-  histogram_init_and_cleanup &= chromeos::IsLaunchedWithPostLoginParams();
-#endif
-  base::FilePath metrics_dir;
-  if (histogram_init_and_cleanup) {
-    if (base::PathService::Get(chrome::DIR_USER_DATA, &metrics_dir)) {
-      InstantiatePersistentHistogramsWithFeaturesAndCleanup(metrics_dir);
-    } else {
-      NOTREACHED();
-    }
-  }
-#endif  // BUILDFLAG(IS_FUCHSIA) || BUILDFLAG(IS_CHROMEOS_LACROS)
-}
 
 void ChromeBrowserFieldTrials::SetUpClientSideFieldTrials(
     bool has_seed,
@@ -93,15 +77,14 @@ void ChromeBrowserFieldTrials::SetUpClientSideFieldTrials(
       entropy_providers.default_entropy(), feature_list);
   metrics::CreateFallbackUkmSamplingTrialIfNeeded(
       entropy_providers.default_entropy(), feature_list);
-  if (!has_seed) {
+
 #if BUILDFLAG(IS_CHROMEOS_ASH)
+  if (!has_seed) {
     ash::multidevice_setup::CreateFirstRunFieldTrial(feature_list);
-#endif
-#if !BUILDFLAG(IS_ANDROID)
-    SearchEngineChoiceClientSideTrial::SetUpIfNeeded(
-        entropy_providers.default_entropy(), feature_list, local_state_);
-#endif
   }
+  ash::management_disclosure_field_trial::Create(feature_list, local_state_,
+                                                 entropy_providers);
+#endif
 }
 
 void ChromeBrowserFieldTrials::RegisterSyntheticTrials() {
@@ -145,7 +128,31 @@ void ChromeBrowserFieldTrials::RegisterSyntheticTrials() {
     ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
         kBackgroundThreadPoolTrial, group_name);
   }
-#else
-  SearchEngineChoiceClientSideTrial::RegisterSyntheticTrials();
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+  DefaultBrowserPromptTrial::EnsureStickToDefaultBrowserPromptCohort();
+#endif
 }
+
+#if BUILDFLAG(IS_LINUX)
+// On Linux/Desktop platform variants, such as ozone/wayland, some features
+// might need to be disabled as per OzonePlatform's runtime properties.
+// OzonePlatform selection and initialization, in turn, depend on Chrome flags
+// processing, namely 'ozone-platform-hint', so do it here.
+//
+// TODO(nickdiego): Move it back to ChromeMainDelegate::PostEarlyInitialization
+// once ozone-platform-hint flag is dropped.
+void ChromeBrowserFieldTrials::RegisterFeatureOverrides(
+    base::FeatureList* feature_list) {
+  auto env = base::Environment::Create();
+  std::string xdg_session_type;
+  const bool has_xdg_session_type =
+      env->GetVar(base::nix::kXdgSessionTypeEnvVar, &xdg_session_type);
+
+  if (has_xdg_session_type && xdg_session_type == "wayland") {
+    feature_list->RegisterExtraFeatureOverrides(
+        {{features::kEyeDropper, base::FeatureList::OVERRIDE_DISABLE_FEATURE}});
+  }
+}
+#endif  // BUILDFLAG(IS_LINUX)

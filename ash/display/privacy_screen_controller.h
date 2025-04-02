@@ -62,11 +62,13 @@ class ASH_EXPORT PrivacyScreenController
   void OnSigninScreenPrefServiceInitialized(PrefService* pref_service) override;
 
   // DisplayConfigurator::Observer:
-  void OnDisplayModeChanged(
+  void OnDisplayConfigurationChanged(
       const std::vector<raw_ptr<display::DisplaySnapshot, VectorExperimental>>&
           displays) override;
 
  private:
+  friend class PrivacyScreenToastControllerTest;
+
   // Calculates PrivacyScreen's logical status.
   bool CalculateCurrentStatus() const;
 

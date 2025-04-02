@@ -4,7 +4,6 @@
 
 #include "components/commerce/core/account_checker.h"
 
-#include <optional>
 #include <queue>
 #include <string>
 #include <unordered_map>
@@ -53,7 +52,9 @@ class SpyAccountChecker : public AccountChecker {
       signin::IdentityManager* identity_manager,
       syncer::SyncService* sync_service,
       scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
-      : AccountChecker(pref_service,
+      : AccountChecker("us",
+                       "en-us",
+                       pref_service,
                        identity_manager,
                        sync_service,
                        std::move(url_loader_factory)) {}
@@ -189,31 +190,6 @@ TEST_F(AccountCheckerTest, TestSendPriceEmailPrefOnPrefChange) {
   pref_service_.user_prefs_store()->WaitForValue(
       kPriceEmailNotificationsEnabled, base::Value(true));
   ASSERT_EQ(true, pref_service_.GetBoolean(kPriceEmailNotificationsEnabled));
-}
-
-TEST_F(AccountCheckerTest, TestBookmarksSyncState) {
-  syncer::UserSelectableTypeSet type_set;
-  type_set.Put(syncer::UserSelectableType::kBookmarks);
-  sync_service_->GetUserSettings()->SetSelectedTypes(false,
-                                                     std::move(type_set));
-
-  sync_service_->SetTransportState(syncer::SyncService::TransportState::ACTIVE);
-  ASSERT_TRUE(account_checker_->IsSyncingBookmarks());
-
-  sync_service_->SetTransportState(syncer::SyncService::TransportState::PAUSED);
-  ASSERT_FALSE(account_checker_->IsSyncingBookmarks());
-}
-
-TEST_F(AccountCheckerTest, TestBookmarksSyncState_NoBookmarks) {
-  // Intentionally pass an empty set to the set of things that are synced.
-  sync_service_->GetUserSettings()->SetSelectedTypes(
-      false, syncer::UserSelectableTypeSet());
-
-  sync_service_->SetTransportState(syncer::SyncService::TransportState::ACTIVE);
-  ASSERT_FALSE(account_checker_->IsSyncingBookmarks());
-
-  sync_service_->SetTransportState(syncer::SyncService::TransportState::PAUSED);
-  ASSERT_FALSE(account_checker_->IsSyncingBookmarks());
 }
 
 }  // namespace commerce

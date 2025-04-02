@@ -7,11 +7,16 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chrome/browser/ui/views/editor_menu/utils/pre_target_handler_view.h"
+#include "chrome/browser/ui/ash/editor_menu/utils/pre_target_handler_view.h"
+#include "chromeos/components/mahi/public/cpp/mahi_browser_util.h"
+#include "chromeos/components/mahi/public/cpp/mahi_util.h"
 #include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/views/controls/textfield/textfield_controller.h"
 
 namespace views {
+class FlexLayoutView;
 class ImageButton;
+class LabelButton;
 class UniqueWidgetPtr;
 }  // namespace views
 
@@ -22,29 +27,72 @@ class MahiMenuView : public chromeos::editor_menu::PreTargetHandlerView {
   METADATA_HEADER(MahiMenuView, chromeos::editor_menu::PreTargetHandlerView)
 
  public:
-  MahiMenuView();
+  // Enum that indicates where the Mahi Menu is shown. Different surfaces have
+  // different ways of providing content.
+  enum class Surface {
+    kBrowser,
+    kMediaApp,
+  };
 
+  struct ButtonStatus {
+    SelectedTextState summary_of_selection_eligibility =
+        SelectedTextState::kUnknown;
+    SelectedTextState elucidation_eligiblity = SelectedTextState::kUnknown;
+  };
+
+  explicit MahiMenuView(ButtonStatus button_status,
+                        Surface surface = Surface::kBrowser);
   MahiMenuView(const MahiMenuView&) = delete;
   MahiMenuView& operator=(const MahiMenuView&) = delete;
-
   ~MahiMenuView() override;
-
-  // chromeos::editor_menu::PreTargetHandlerView:
-  void RequestFocus() override;
 
   // Creates a menu widget that contains a `MahiMenuView`, configured with the
   // given `anchor_view_bounds`.
   static views::UniqueWidgetPtr CreateWidget(
-      const gfx::Rect& anchor_view_bounds);
+      const gfx::Rect& anchor_view_bounds,
+      const ButtonStatus& button_status,
+      const Surface surface = Surface::kBrowser);
+
+  // Returns the host widget's name.
+  static const char* GetWidgetName();
+
+  // chromeos::editor_menu::PreTargetHandlerView:
+  void RequestFocus() override;
 
   // Updates the bounds of the view according to the given `anchor_view_bounds`.
   void UpdateBounds(const gfx::Rect& anchor_view_bounds);
 
+  // views::WidgetObserver:
+  void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override;
+
  private:
-  // Button callback.
-  void OnSummaryButtonPressed();
+  class MenuTextfieldController;
+
+  // Buttons callback.
+  void OnButtonPressed(::chromeos::mahi::ButtonType button_type);
+
+  // Texfield callback.
+  void OnQuestionSubmitted();
+
+  std::unique_ptr<views::FlexLayoutView> CreateInputContainer();
+
+  // Controller for `textfield_`. Enables the
+  // `submit_question_button` only when the `textfield_` contains some input.
+  // Also, submits a question if the user presses the enter key while focused on
+  // the textfield.
+  std::unique_ptr<MenuTextfieldController> textfield_controller_;
 
   raw_ptr<views::ImageButton> settings_button_ = nullptr;
+  raw_ptr<views::LabelButton> summary_button_ = nullptr;
+  raw_ptr<views::LabelButton> elucidation_button_ = nullptr;
+  raw_ptr<views::Textfield> textfield_ = nullptr;
+  raw_ptr<views::ImageButton> submit_question_button_ = nullptr;
+
+  // Where the mahi menu widget is shown, currently it could be the browser (web
+  // pages) or the media app (pdf files).
+  const Surface surface_;
+
+  bool announcement_alerted_ = false;
 
   base::WeakPtrFactory<MahiMenuView> weak_ptr_factory_{this};
 };

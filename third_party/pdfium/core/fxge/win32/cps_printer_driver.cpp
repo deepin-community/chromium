@@ -11,17 +11,18 @@
 #include <sstream>
 #include <utility>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/data_vector.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/notreached.h"
 #include "core/fxcrt/retain_ptr.h"
+#include "core/fxge/agg/cfx_agg_imagerenderer.h"
 #include "core/fxge/cfx_fillrenderoptions.h"
 #include "core/fxge/cfx_path.h"
 #include "core/fxge/dib/cfx_dibbase.h"
 #include "core/fxge/dib/cfx_dibitmap.h"
-#include "core/fxge/dib/cfx_imagerenderer.h"
 #include "core/fxge/win32/cpsoutput.h"
-#include "third_party/base/check.h"
-#include "third_party/base/notreached.h"
 
 namespace {
 
@@ -39,7 +40,7 @@ CFX_PSRenderer::RenderingLevel RenderingLevelFromWindowsPrintMode(
       return CFX_PSRenderer::RenderingLevel::kLevel3Type42;
     default:
       // |mode| should be PostScript.
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 
@@ -72,12 +73,13 @@ CPSPrinterDriver::CPSPrinterDriver(HDC hDC,
     DWORD dwCount = ::GetRegionData(hRgn, 0, nullptr);
     if (dwCount) {
       DataVector<uint8_t> buffer(dwCount);
-      RGNDATA* pData = reinterpret_cast<RGNDATA*>(buffer.data());
+      // TODO(crbug.com/42271176): Resolve safety issue.
+      UNSAFE_TODO(RGNDATA* pData = reinterpret_cast<RGNDATA*>(buffer.data()));
       if (::GetRegionData(hRgn, dwCount, pData)) {
         CFX_Path path;
         for (uint32_t i = 0; i < pData->rdh.nCount; i++) {
-          RECT* pRect =
-              reinterpret_cast<RECT*>(pData->Buffer + pData->rdh.nRgnSize * i);
+          RECT* pRect = UNSAFE_TODO(
+              reinterpret_cast<RECT*>(pData->Buffer + pData->rdh.nRgnSize * i));
           path.AppendRect(static_cast<float>(pRect->left),
                           static_cast<float>(pRect->bottom),
                           static_cast<float>(pRect->right),
@@ -106,13 +108,13 @@ int CPSPrinterDriver::GetDeviceCaps(int caps_id) const {
     case FXDC_BITS_PIXEL:
       return m_nBitsPerPixel;
     case FXDC_RENDER_CAPS:
-      return FXRC_BIT_MASK;
+      return 0;
     case FXDC_HORZ_SIZE:
       return m_HorzSize;
     case FXDC_VERT_SIZE:
       return m_VertSize;
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
 }
 
@@ -145,17 +147,13 @@ bool CPSPrinterDriver::DrawPath(const CFX_Path& path,
                                 const CFX_GraphStateData* pGraphState,
                                 FX_ARGB fill_color,
                                 FX_ARGB stroke_color,
-                                const CFX_FillRenderOptions& fill_options,
-                                BlendMode blend_type) {
-  if (blend_type != BlendMode::kNormal)
-    return false;
+                                const CFX_FillRenderOptions& fill_options) {
   return m_PSRenderer.DrawPath(path, pObject2Device, pGraphState, fill_color,
                                stroke_color, fill_options);
 }
 
-bool CPSPrinterDriver::GetClipBox(FX_RECT* pRect) {
-  *pRect = m_PSRenderer.GetClipBox();
-  return true;
+FX_RECT CPSPrinterDriver::GetClipBox() const {
+  return m_PSRenderer.GetClipBox();
 }
 
 bool CPSPrinterDriver::SetDIBits(RetainPtr<const CFX_DIBBase> bitmap,
@@ -183,19 +181,20 @@ bool CPSPrinterDriver::StretchDIBits(RetainPtr<const CFX_DIBBase> bitmap,
                                     dest_top, dest_width, dest_height, options);
 }
 
-bool CPSPrinterDriver::StartDIBits(RetainPtr<const CFX_DIBBase> bitmap,
-                                   float alpha,
-                                   uint32_t color,
-                                   const CFX_Matrix& matrix,
-                                   const FXDIB_ResampleOptions& options,
-                                   std::unique_ptr<CFX_ImageRenderer>* handle,
-                                   BlendMode blend_type) {
+RenderDeviceDriverIface::StartResult CPSPrinterDriver::StartDIBits(
+    RetainPtr<const CFX_DIBBase> bitmap,
+    float alpha,
+    uint32_t color,
+    const CFX_Matrix& matrix,
+    const FXDIB_ResampleOptions& options,
+    BlendMode blend_type) {
   if (blend_type != BlendMode::kNormal || alpha != 1.0f) {
-    return false;
+    return {Result::kNotSupported, nullptr};
   }
 
-  *handle = nullptr;
-  return m_PSRenderer.DrawDIBits(std::move(bitmap), color, matrix, options);
+  bool success =
+      m_PSRenderer.DrawDIBits(std::move(bitmap), color, matrix, options);
+  return {success ? Result::kSuccess : Result::kFailure, nullptr};
 }
 
 bool CPSPrinterDriver::DrawDeviceText(
@@ -212,11 +211,11 @@ bool CPSPrinterDriver::DrawDeviceText(
 bool CPSPrinterDriver::MultiplyAlpha(float alpha) {
   // PostScript doesn't support transparency. All callers are using
   // `CFX_DIBitmap`-backed raster devices anyway.
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 bool CPSPrinterDriver::MultiplyAlphaMask(RetainPtr<const CFX_DIBitmap> mask) {
   // PostScript doesn't support transparency. All callers are using
   // `CFX_DIBitmap`-backed raster devices anyway.
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }

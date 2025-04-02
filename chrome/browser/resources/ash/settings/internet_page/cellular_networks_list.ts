@@ -20,27 +20,31 @@ import './esim_install_error_dialog.js';
 
 import {CellularSetupPageName} from 'chrome://resources/ash/common/cellular_setup/cellular_types.js';
 import {ESimManagerListenerMixin} from 'chrome://resources/ash/common/cellular_setup/esim_manager_listener_mixin.js';
-import {getEuicc, getPendingESimProfiles} from 'chrome://resources/ash/common/cellular_setup/esim_manager_utils.js';
+import {getEuicc} from 'chrome://resources/ash/common/cellular_setup/esim_manager_utils.js';
+import type {CrActionMenuElement} from 'chrome://resources/ash/common/cr_elements/cr_action_menu/cr_action_menu.js';
+import type {CrIconButtonElement} from 'chrome://resources/ash/common/cr_elements/cr_icon_button/cr_icon_button.js';
+import type {CrLazyRenderElement} from 'chrome://resources/ash/common/cr_elements/cr_lazy_render/cr_lazy_render.js';
+import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
+import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {loadTimeData} from 'chrome://resources/ash/common/load_time_data.m.js';
 import {getSimSlotCount} from 'chrome://resources/ash/common/network/cellular_utils.js';
 import {MojoInterfaceProviderImpl} from 'chrome://resources/ash/common/network/mojo_interface_provider.js';
 import {NetworkList} from 'chrome://resources/ash/common/network/network_list_types.js';
 import {OncMojo} from 'chrome://resources/ash/common/network/onc_mojo.js';
-import {CrActionMenuElement} from 'chrome://resources/ash/common/cr_elements/cr_action_menu/cr_action_menu.js';
-import {CrIconButtonElement} from 'chrome://resources/ash/common/cr_elements/cr_icon_button/cr_icon_button.js';
-import {CrLazyRenderElement} from 'chrome://resources/ash/common/cr_elements/cr_lazy_render/cr_lazy_render.js';
-import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
-import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {mojoString16ToString} from 'chrome://resources/js/mojo_type_util.js';
-import {ESimProfileProperties, ESimProfileRemote, EuiccRemote, ProfileInstallResult, ProfileState} from 'chrome://resources/mojo/chromeos/ash/services/cellular_setup/public/mojom/esim_manager.mojom-webui.js';
-import {CrosNetworkConfigInterface, GlobalPolicy, InhibitReason} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
+import type {ESimProfileProperties, ESimProfileRemote, EuiccRemote} from 'chrome://resources/mojo/chromeos/ash/services/cellular_setup/public/mojom/esim_manager.mojom-webui.js';
+import {ProfileInstallResult, ProfileState} from 'chrome://resources/mojo/chromeos/ash/services/cellular_setup/public/mojom/esim_manager.mojom-webui.js';
+import type {CrosNetworkConfigInterface, GlobalPolicy} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
+import {InhibitReason} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/cros_network_config.mojom-webui.js';
 import {DeviceStateType, NetworkType} from 'chrome://resources/mojo/chromeos/services/network_config/public/mojom/network_types.mojom-webui.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {castExists} from '../assert_extras.js';
 import {MultiDeviceBrowserProxyImpl} from '../multidevice_page/multidevice_browser_proxy.js';
-import {MultiDeviceFeatureState, MultiDevicePageContentData} from '../multidevice_page/multidevice_constants.js';
+import type {MultiDevicePageContentData} from '../multidevice_page/multidevice_constants.js';
+import {MultiDeviceFeatureState} from '../multidevice_page/multidevice_constants.js';
+import {routes} from '../router.js';
 
 import {getTemplate} from './cellular_networks_list.html.js';
 
@@ -216,14 +220,14 @@ export class CellularNetworksListElement extends
               loadTimeData.getBoolean('isInstantHotspotRebrandEnabled');
         },
       },
+
       /**
-       * Return true if SmdsSupportEnabled feature flag is enabled.
+       * Return true if multi device page is available to user.
        */
-      smdsSupportEnabled_: {
+      isMultiDevicePageAvailable_: {
         type: Boolean,
         value() {
-          return loadTimeData.valueExists('isSmdsSupportEnabled') &&
-              loadTimeData.getBoolean('isSmdsSupportEnabled');
+          return !!routes.MULTIDEVICE;
         },
       },
     };
@@ -251,7 +255,7 @@ export class CellularNetworksListElement extends
   private shouldShowEidDialog_: boolean;
   private shouldShowInstallErrorDialog_: boolean;
   private tetherNetworks_: OncMojo.NetworkStateProperties[];
-  private smdsSupportEnabled_: boolean;
+  private isMultiDevicePageAvailable_: boolean;
 
   constructor() {
     super();
@@ -266,41 +270,18 @@ export class CellularNetworksListElement extends
 
     this.addEventListener('install-profile', this.installProfile_);
 
-    this.addWebUiListener(
-        'settings.updateMultidevicePageContentData',
-        this.onMultiDevicePageContentDataChanged_.bind(this));
+    if (this.isMultiDevicePageAvailable_) {
+      this.addWebUiListener(
+          'settings.updateMultidevicePageContentData',
+          this.onMultiDevicePageContentDataChanged_.bind(this));
 
-    MultiDeviceBrowserProxyImpl.getInstance().getPageContentData().then(
-        this.onMultiDevicePageContentDataChanged_.bind(this));
-  }
-
-  override onProfileListChanged(euicc: EuiccRemote): void {
-    this.fetchEsimPendingProfileListForEuicc_(euicc);
+      MultiDeviceBrowserProxyImpl.getInstance().getPageContentData().then(
+          this.onMultiDevicePageContentDataChanged_.bind(this));
+    }
   }
 
   override onAvailableEuiccListChanged(): void {
     this.fetchEuiccAndEsimPendingProfileList_();
-  }
-
-  override async onProfileChanged(profile: ESimProfileRemote): Promise<void> {
-    if (this.smdsSupportEnabled_) {
-      return;
-    }
-    const response = await profile.getProperties();
-
-    const eSimPendingProfileItem = this.eSimPendingProfileItems_.find(item => {
-      if (typeof item.customData === 'object') {
-        return item.customData!.iccid === response.properties.iccid;
-      }
-      return false;
-    });
-    if (!eSimPendingProfileItem) {
-      return;
-    }
-    eSimPendingProfileItem.customItemType =
-        response.properties.state === ProfileState.kInstalling ?
-        NetworkList.CustomItemType.ESIM_INSTALLING_PROFILE :
-        NetworkList.CustomItemType.ESIM_PENDING_PROFILE;
   }
 
   private fetchEuiccAndEsimPendingProfileList_(): void {
@@ -309,20 +290,6 @@ export class CellularNetworksListElement extends
         return;
       }
       this.euicc_ = euicc;
-
-      if (this.smdsSupportEnabled_) {
-        return;
-      }
-
-      // Restricting managed cellular network should not show pending eSIM
-      // profiles.
-      if (this.globalPolicy &&
-          this.globalPolicy.allowOnlyPolicyCellularNetworks) {
-        this.eSimPendingProfileItems_ = [];
-        return;
-      }
-
-      this.fetchEsimPendingProfileListForEuicc_(euicc);
     });
   }
 
@@ -340,14 +307,6 @@ export class CellularNetworksListElement extends
     return !!this.euicc_ && eSimSlots > 0;
   }
 
-  private async fetchEsimPendingProfileListForEuicc_(euicc: EuiccRemote):
-      Promise<void> {
-    if (this.smdsSupportEnabled_) {
-      return;
-    }
-    const profiles = await getPendingESimProfiles(euicc);
-    this.processEsimPendingProfiles_(profiles);
-  }
 
   private async processEsimPendingProfiles_(profiles: ESimProfileRemote[]):
       Promise<void> {
@@ -428,6 +387,7 @@ export class CellularNetworksListElement extends
 
   private onMultiDevicePageContentDataChanged_(
       newData: MultiDevicePageContentData): void {
+    assert(this.isMultiDevicePageAvailable_);
     this.multiDevicePageContentData_ = newData;
   }
 

@@ -2,17 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "chrome/browser/webauthn/cablev2_devices.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/base64.h"
 #include "base/containers/contains.h"
 #include "base/feature_list.h"
 #include "base/i18n/time_formatting.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -49,7 +55,7 @@ bool CopyBytestring(std::array<uint8_t, N>* out, const std::string* value) {
     return false;
   }
 
-  base::ranges::copy(bytes, out->begin());
+  std::ranges::copy(bytes, out->begin());
   return true;
 }
 
@@ -92,9 +98,9 @@ const char kPairingPrefNewImpl[] = "new_impl";
 
 // NameForDisplay removes line-breaking characters from `raw_name` to ensure
 // that the transport-selection UI isn't too badly broken by nonsense names.
-static std::string NameForDisplay(base::StringPiece raw_name) {
+static std::string NameForDisplay(std::string_view raw_name) {
   std::u16string unicode_name = base::UTF8ToUTF16(raw_name);
-  base::StringPiece16 trimmed_name =
+  std::u16string_view trimmed_name =
       base::TrimWhitespace(unicode_name, base::TRIM_ALL);
   // These are all the Unicode mandatory line-breaking characters
   // (https://www.unicode.org/reports/tr14/tr14-32.html#Properties).
@@ -197,7 +203,7 @@ std::vector<std::unique_ptr<Pairing>> GetLinkedDevices(Profile* const profile) {
 // (after projecting with |NameForDisplay|). If so it appends a counter so that
 // it isn't.
 std::string FindUniqueName(const std::string& orig_name,
-                           base::span<const base::StringPiece> existing_names) {
+                           base::span<const std::string_view> existing_names) {
   std::string name = orig_name;
   std::string name_for_display = NameForDisplay(name);
   for (int i = 1;; i++) {
@@ -297,7 +303,7 @@ KnownDevices::~KnownDevices() = default;
 std::unique_ptr<KnownDevices> KnownDevices::FromProfile(Profile* profile) {
   if (profile->IsOffTheRecord()) {
     // For Incognito windows we collect the devices from the parent profile.
-    // The `AuthenticatorRequestDialogModel` will notice that it's an OTR
+    // The `AuthenticatorRequestDialogController` will notice that it's an OTR
     // profile and display a confirmation interstitial for makeCredential calls.
     profile = profile->GetOriginalProfile();
   }
@@ -347,8 +353,8 @@ std::vector<std::unique_ptr<Pairing>> MergeDevices(
   return ret;
 }
 
-std::vector<base::StringPiece> KnownDevices::Names() const {
-  std::vector<base::StringPiece> names;
+std::vector<std::string_view> KnownDevices::Names() const {
+  std::vector<std::string_view> names;
   names.reserve(this->synced_devices.size() + this->linked_devices.size());
   for (const std::unique_ptr<device::cablev2::Pairing>& device :
        this->synced_devices) {
@@ -382,7 +388,7 @@ void AddPairing(Profile* profile, std::unique_ptr<Pairing> pairing) {
   // identity key across. Rather than have duplicate pairings, we allow this
   // replacement once.
   //
-  // TODO(crbug.com/1442040): remove once the transition is firmly complete.
+  // TODO(crbug.com/40910325): remove once the transition is firmly complete.
   // Probably by May 2024.
   const std::string& claimed_name = pairing->name;
   if (pairing->from_new_implementation) {
@@ -436,7 +442,7 @@ bool RenamePairing(
     PrefService* pref_service,
     const std::array<uint8_t, device::kP256X962Length>& public_key,
     const std::string& new_name,
-    base::span<const base::StringPiece> existing_names) {
+    base::span<const std::string_view> existing_names) {
   const std::string name = FindUniqueName(new_name, existing_names);
   const std::string public_key_base64 = base::Base64Encode(public_key);
 

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "remoting/host/pam_authorization_factory_posix.h"
 
 #include <security/pam_appl.h>
@@ -25,13 +30,17 @@ class PamAuthorizer : public protocol::Authenticator {
   ~PamAuthorizer() override;
 
   // protocol::Authenticator:
+  protocol::CredentialsType credentials_type() const override;
+  const Authenticator& implementing_authenticator() const override;
   State state() const override;
   bool started() const override;
   RejectionReason rejection_reason() const override;
+  RejectionDetails rejection_details() const override;
   void ProcessMessage(const jingle_xmpp::XmlElement* message,
                       base::OnceClosure resume_callback) override;
   std::unique_ptr<jingle_xmpp::XmlElement> GetNextMessage() override;
   const std::string& GetAuthKey() const override;
+  const SessionPolicies* GetSessionPolicies() const override;
   std::unique_ptr<protocol::ChannelAuthenticator> CreateChannelAuthenticator()
       const override;
 
@@ -59,6 +68,15 @@ PamAuthorizer::PamAuthorizer(
 
 PamAuthorizer::~PamAuthorizer() {}
 
+protocol::CredentialsType PamAuthorizer::credentials_type() const {
+  return underlying_->credentials_type();
+}
+
+const protocol::Authenticator& PamAuthorizer::implementing_authenticator()
+    const {
+  return underlying_->implementing_authenticator();
+}
+
 protocol::Authenticator::State PamAuthorizer::state() const {
   if (local_login_status_ == DISALLOWED) {
     return REJECTED;
@@ -78,6 +96,14 @@ protocol::Authenticator::RejectionReason PamAuthorizer::rejection_reason()
   } else {
     return underlying_->rejection_reason();
   }
+}
+
+protocol::Authenticator::RejectionDetails PamAuthorizer::rejection_details()
+    const {
+  if (local_login_status_ == DISALLOWED) {
+    return RejectionDetails("Local login check failed.");
+  }
+  return underlying_->rejection_details();
 }
 
 void PamAuthorizer::ProcessMessage(const jingle_xmpp::XmlElement* message,
@@ -103,6 +129,10 @@ std::unique_ptr<jingle_xmpp::XmlElement> PamAuthorizer::GetNextMessage() {
 
 const std::string& PamAuthorizer::GetAuthKey() const {
   return underlying_->GetAuthKey();
+}
+
+const SessionPolicies* PamAuthorizer::GetSessionPolicies() const {
+  return underlying_->GetSessionPolicies();
 }
 
 std::unique_ptr<protocol::ChannelAuthenticator>

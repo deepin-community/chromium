@@ -24,7 +24,6 @@
 
 #include <algorithm>
 
-#include "fxbarcode/common/BC_CommonBitMatrix.h"
 #include "fxbarcode/datamatrix/BC_Encoder.h"
 #include "fxbarcode/datamatrix/BC_EncoderContext.h"
 #include "fxbarcode/datamatrix/BC_HighLevelEncoder.h"
@@ -42,12 +41,14 @@ WideString EncodeToEdifactCodewords(const WideString& sb) {
   wchar_t c3 = len >= 3 ? sb[2] : 0;
   wchar_t c4 = len >= 4 ? sb[3] : 0;
   int32_t v = (c1 << 18) + (c2 << 12) + (c3 << 6) + c4;
-  constexpr size_t kBuflen = 3;
+  static constexpr size_t kBuflen = 3;
   wchar_t cw[kBuflen];
   cw[0] = static_cast<wchar_t>((v >> 16) & 255);
   cw[1] = static_cast<wchar_t>((v >> 8) & 255);
   cw[2] = static_cast<wchar_t>(v & 255);
-  return WideString(cw, std::min(len, kBuflen));
+  // TODO(tsepez): stop putting binary data in strings.
+  return WideString(
+      WideStringView(pdfium::make_span(cw).first(std::min(len, kBuflen))));
 }
 
 bool HandleEOD(CBC_EncoderContext* context, const WideString& buffer) {

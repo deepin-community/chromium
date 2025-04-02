@@ -144,7 +144,6 @@ std::string GetDownloadBlockingExtensionMetricName(
           kInsecureDownloadHistogramTargetInsecure);
     case InsecureDownloadSecurityStatus::kDownloadIgnored:
       NOTREACHED();
-      break;
     case InsecureDownloadSecurityStatus::kInitiatorInsecureNonUniqueFileSecure:
       return GetDLBlockingHistogramName(
           kInsecureDownloadExtensionInitiatorInsecureNonUnique,
@@ -156,7 +155,6 @@ std::string GetDownloadBlockingExtensionMetricName(
           kInsecureDownloadHistogramTargetInsecure);
   }
   NOTREACHED();
-  return std::string();
 }
 
 // Get appropriate enum value for the initiator/download security state combo
@@ -227,6 +225,14 @@ struct InsecureDownloadData {
     // Extract extension.
 #if BUILDFLAG(IS_WIN)
     extension_ = base::WideToUTF8(path.FinalExtension());
+#elif BUILDFLAG(IS_ANDROID)
+    // If the file path is a content URI, extension should come from the file
+    // name.
+    if (path.IsContentUri()) {
+      extension_ = item->GetFileNameToReportUser().FinalExtension();
+    } else {
+      extension_ = path.FinalExtension();
+    }
 #else
     extension_ = path.FinalExtension();
 #endif
@@ -277,9 +283,9 @@ struct InsecureDownloadData {
     //  - anything extension related,
     //  - etc.
     //
-    // TODO(1029062): INTERNAL_API is also used for background fetch. That
-    // probably isn't the correct behavior, since INTERNAL_API is otherwise used
-    // for Chrome stuff. Background fetch should probably be HTTPS-only.
+    // TODO(crbug.com/40661154): INTERNAL_API is also used for background fetch.
+    // That probably isn't the correct behavior, since INTERNAL_API is otherwise
+    // used for Chrome stuff. Background fetch should probably be HTTPS-only.
     auto download_source = item->GetDownloadSource();
     auto transition_type = item->GetTransitionType();
     if (download_source == DownloadSource::RETRY ||
@@ -303,9 +309,10 @@ struct InsecureDownloadData {
       auto security_status =
           GetDownloadBlockingEnum(initiator_, download_delivered_securely,
                                   initiator_inferred, insecure_nonunique);
-      base::UmaHistogramEnumeration(
-          GetDownloadBlockingExtensionMetricName(security_status),
-          GetExtensionEnumFromString(extension_));
+      std::string metric_name =
+          GetDownloadBlockingExtensionMetricName(security_status);
+      base::UmaHistogramEnumeration(metric_name,
+                                    GetExtensionEnumFromString(extension_));
       base::UmaHistogramEnumeration(kInsecureDownloadHistogramName,
                                     security_status);
       download::RecordDownloadValidationMetrics(
@@ -335,7 +342,7 @@ struct InsecureDownloadData {
         download_source == DownloadSource::EXTENSION_INSTALLER) {
       is_insecure_download_ = false;
     } else {  // Not ignorable download.
-      // TODO(crbug.com/1352598): Add blocking metrics.
+      // TODO(crbug.com/40857867): Add blocking metrics.
       // insecure downloads are either delivered insecurely, or we can't trust
       // who told us to download them (i.e. have an insecure initiator).
       is_insecure_download_ =
@@ -411,9 +418,11 @@ void PrintConsoleMessage(const InsecureDownloadData& data) {
 bool IsDownloadPermittedByContentSettings(
     Profile* profile,
     const std::optional<url::Origin>& initiator) {
-  // TODO(crbug.com/1048957): Checking content settings crashes unit tests on
+  // TODO(crbug.com/40117459): Checking content settings crashes unit tests on
   // Android. It shouldn't.
-#if !BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
+  return false;
+#else
   HostContentSettingsMap* host_content_settings_map =
       HostContentSettingsMapFactory::GetForProfile(profile);
   ContentSettingsForOneType settings =
@@ -434,8 +443,6 @@ bool IsDownloadPermittedByContentSettings(
   }
   NOTREACHED();
 #endif
-
-  return false;
 }
 
 bool IsHttpsFirstModeEnabled(Profile* profile) {
@@ -463,11 +470,10 @@ InsecureDownloadStatus GetInsecureDownloadStatusForDownload(
     return InsecureDownloadStatus::SAFE;
   }
 
-  // When enabled, show a visible (bypassable) warning on insecure downloads.
+  // Show a visible (bypassable) warning on insecure downloads.
   // Since mixed download blocking is more severe, exclude mixed downloads from
   // this early-return to let the mixed download logic below apply.
-  if (base::FeatureList::IsEnabled(features::kInsecureDownloadWarnings) &&
-      data.is_insecure_download_ && !data.is_mixed_content_) {
+  if (data.is_insecure_download_ && !data.is_mixed_content_) {
     // Except when using HFM, don't warn on files that are likely to be safe.
     if (!IsHttpsFirstModeEnabled(profile) &&
         ContainsExtension(kSafeExtensions, data.extension_)) {

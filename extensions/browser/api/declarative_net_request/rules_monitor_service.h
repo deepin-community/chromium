@@ -11,6 +11,8 @@
 #include <set>
 #include <string>
 #include <vector>
+
+#include "base/auto_reset.h"
 #include "base/containers/flat_map.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -18,8 +20,8 @@
 #include "base/values.h"
 #include "extensions/browser/api/declarative_net_request/action_tracker.h"
 #include "extensions/browser/api/declarative_net_request/composite_matcher.h"
-#include "extensions/browser/api/declarative_net_request/declarative_net_request_prefs_helper.h"
 #include "extensions/browser/api/declarative_net_request/global_rules_tracker.h"
+#include "extensions/browser/api/declarative_net_request/prefs_helper.h"
 #include "extensions/browser/api/declarative_net_request/ruleset_manager.h"
 #include "extensions/browser/browser_context_keyed_api_factory.h"
 #include "extensions/browser/extension_registry.h"
@@ -47,6 +49,9 @@ enum class DynamicRuleUpdateAction;
 struct LoadRequestData;
 struct RuleCounts;
 
+using LoadRulesetThrottleCallback =
+    base::RepeatingCallback<void(base::OnceClosure)>;
+
 // Observes loading and unloading of extensions to load and unload their
 // rulesets for the Declarative Net Request API. Lives on the UI thread. Note: A
 // separate instance of RulesMonitorService is not created for incognito. Both
@@ -70,6 +75,7 @@ class RulesMonitorService : public BrowserContextKeyedAPI,
     virtual ~TestObserver() = default;
   };
 
+  explicit RulesMonitorService(content::BrowserContext* browser_context);
   RulesMonitorService(const RulesMonitorService&) = delete;
   RulesMonitorService& operator=(const RulesMonitorService&) = delete;
 
@@ -86,6 +92,12 @@ class RulesMonitorService : public BrowserContextKeyedAPI,
 
   static std::unique_ptr<RulesMonitorService> CreateInstanceForTesting(
       content::BrowserContext* context);
+
+  // Sets a `throttle` which blocks ruleset loads from completing on the UI
+  // thread until released.
+  static base::AutoReset<LoadRulesetThrottleCallback*>
+  SetLoadRulesetThrottleCallbackForTesting(
+      LoadRulesetThrottleCallback* throttle);
 
   // Updates the dynamic rules for the |extension| and then invokes
   // |callback| with an optional error.
@@ -104,7 +116,7 @@ class RulesMonitorService : public BrowserContextKeyedAPI,
 
   // Updates the set of disabled rule ids for the |ruleset_id| of the
   // |extension| and then invokes |callback| with an optional error.
-  using RuleIdsToUpdate = DeclarativeNetRequestPrefsHelper::RuleIdsToUpdate;
+  using RuleIdsToUpdate = PrefsHelper::RuleIdsToUpdate;
   void UpdateStaticRules(const Extension& extension,
                          RulesetID ruleset_id,
                          RuleIdsToUpdate rule_ids_to_update,
@@ -159,10 +171,6 @@ class RulesMonitorService : public BrowserContextKeyedAPI,
   class ApiCallQueue;
 
   friend class BrowserContextKeyedAPIFactory<RulesMonitorService>;
-
-  // The constructor is kept private since this should only be created by the
-  // BrowserContextKeyedAPIFactory.
-  explicit RulesMonitorService(content::BrowserContext* browser_context);
 
   // BrowserContextKeyedAPI implementation.
   static const char* service_name() { return "RulesMonitorService"; }
@@ -277,7 +285,7 @@ class RulesMonitorService : public BrowserContextKeyedAPI,
       update_dynamic_or_session_rules_queue_map_;
 
   // Session scoped rules value corresponding to extensions.
-  // TODO(crbug.com/1152430): Currently we are storing session scoped rules in
+  // TODO(crbug.com/40733652): Currently we are storing session scoped rules in
   // two forms: one as a base::Value::List and second in the indexed format as
   // part of RulesetMatcher, leading to double memory usage. We should be able
   // to do away with the base::Value::List representation.

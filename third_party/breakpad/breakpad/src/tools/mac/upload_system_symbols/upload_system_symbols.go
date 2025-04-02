@@ -55,6 +55,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"upload_system_symbols/arch"
+	"upload_system_symbols/archive"
 )
 
 var (
@@ -110,6 +113,7 @@ var (
 		regexp.MustCompile(`\.a$`),
 		regexp.MustCompile(`\.dat$`),
 	}
+	maxFileCreateTries = 10
 )
 
 func main() {
@@ -179,7 +183,7 @@ func getSystemRoots(tempDir string) []string {
 		if hasIPSW || hasRoot {
 			log.Fatalf("--installer, --ipsw, and --system-root are mutually exclusive")
 		}
-		if rs, err := extractSystems(Installer, *installer, tempDir); err != nil {
+		if rs, err := extractSystems(archive.Installer, *installer, tempDir); err != nil {
 			log.Fatalf("Couldn't extract installer at %s: %v", *installer, err)
 		} else {
 			return rs
@@ -188,7 +192,7 @@ func getSystemRoots(tempDir string) []string {
 		if hasRoot {
 			log.Fatalf("--installer, --ipsw, and --system-root are mutually exclusive")
 		}
-		if rs, err := extractSystems(IPSW, *ipsw, tempDir); err != nil {
+		if rs, err := extractSystems(archive.IPSW, *ipsw, tempDir); err != nil {
 			log.Fatalf("Couldn't extract IPSW at %s: %v", *ipsw, err)
 		} else {
 			return rs
@@ -221,6 +225,34 @@ func manglePath(path string) string {
 		}
 	}
 	return builder.String()
+}
+
+// createSymbolFile creates a writable file in `base` with a name derived from
+// `original_path`. It ensures that multiple threads can't simultaneously create
+// the same file for two `original_paths` that map to the same mangled name.
+// Returns the filename, the file, and an error if creating the file failed.
+func createSymbolFile(base string, original_path string, arch string) (filename string, f *os.File, err error) {
+	mangled := manglePath(original_path)
+	counter := 0
+	filebase := path.Join(base, mangled)
+	for {
+		var symfile string
+		if counter == 0 {
+			symfile = fmt.Sprintf("%s_%s.sym", filebase, arch)
+		} else {
+			symfile = fmt.Sprintf("%s_%s_%d.sym", filebase, arch, counter)
+		}
+		f, err := os.OpenFile(symfile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err == nil {
+			return symfile, f, nil
+		}
+		if os.IsExist(err) && counter < maxFileCreateTries {
+			counter++
+			continue
+		}
+		return "", nil, err
+	}
+
 }
 
 type WorkerPool struct {
@@ -356,9 +388,7 @@ func (dq *DumpQueue) worker() {
 	dumpSyms := path.Join(*breakpadTools, "dump_syms")
 
 	for req := range dq.queue {
-		filebase := path.Join(dq.dumpPath, manglePath(req.path))
-		symfile := fmt.Sprintf("%s_%s.sym", filebase, req.arch)
-		f, err := os.Create(symfile)
+		symfile, f, err := createSymbolFile(dq.dumpPath, req.path, req.arch)
 		if err != nil {
 			log.Fatalf("Error creating symbol file: %v", err)
 		}
@@ -506,11 +536,13 @@ func (fq *findQueue) worker() {
 }
 
 func (fq *findQueue) dumpMachOFile(fp string, image *macho.File) {
-	if image.Type != MachODylib && image.Type != MachOBundle && image.Type != MachODylinker {
+	if image.Type != arch.MachODylib &&
+		image.Type != arch.MachOBundle &&
+		image.Type != arch.MachODylinker {
 		return
 	}
 
-	arch := getArchStringFromHeader(image.FileHeader)
+	arch := arch.GetArchStringFromHeader(image.FileHeader)
 	if arch == "" {
 		// Don't know about this architecture type.
 		return
@@ -521,14 +553,14 @@ func (fq *findQueue) dumpMachOFile(fp string, image *macho.File) {
 	}
 }
 
-// extractSystems extracts any dyld shared caches from `archive`, then extracts the caches
+// extractSystems extracts any dyld shared caches from `archivePath`, then extracts the caches
 // into macOS system libraries, returning the locations on disk of any systems extracted.
-func extractSystems(format ArchiveFormat, archive string, extractPath string) ([]string, error) {
+func extractSystems(format archive.ArchiveFormat, archivePath string, extractPath string) ([]string, error) {
 	cachesPath := path.Join(extractPath, "caches")
 	if err := os.MkdirAll(cachesPath, 0755); err != nil {
 		return nil, err
 	}
-	if err := ExtractCaches(format, archive, cachesPath, true); err != nil {
+	if err := archive.ExtractCaches(format, archivePath, cachesPath, true); err != nil {
 		return nil, err
 	}
 	files, err := os.ReadDir(cachesPath)

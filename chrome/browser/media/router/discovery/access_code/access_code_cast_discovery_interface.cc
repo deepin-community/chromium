@@ -103,20 +103,6 @@ AccessCodeCastDiscoveryInterface::AccessCodeCastDiscoveryInterface(
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 }
 
-AccessCodeCastDiscoveryInterface::AccessCodeCastDiscoveryInterface(
-    Profile* profile,
-    const std::string& access_code,
-    LoggerImpl* logger,
-    signin::IdentityManager* identity_manager,
-    std::unique_ptr<EndpointFetcher> endpoint_fetcher)
-    : profile_(profile),
-      access_code_(access_code),
-      logger_(logger),
-      identity_manager_(identity_manager),
-      endpoint_fetcher_(std::move(endpoint_fetcher)) {
-  DCHECK(profile_);
-}
-
 AccessCodeCastDiscoveryInterface::~AccessCodeCastDiscoveryInterface() = default;
 
 void AccessCodeCastDiscoveryInterface::ReportErrorViaCallback(
@@ -151,7 +137,7 @@ AddSinkResultCode AccessCodeCastDiscoveryInterface::GetErrorFromResponse(
   switch (*http_code) {
     // 401
     case net::HTTP_UNAUTHORIZED:
-      ABSL_FALLTHROUGH_INTENDED;
+      [[fallthrough]];
     // 403
     case net::HTTP_FORBIDDEN:
       return AddSinkResultCode::AUTH_ERROR;
@@ -162,14 +148,14 @@ AddSinkResultCode AccessCodeCastDiscoveryInterface::GetErrorFromResponse(
 
     // 408
     case net::HTTP_REQUEST_TIMEOUT:
-      ABSL_FALLTHROUGH_INTENDED;
+      [[fallthrough]];
     // 502
     case net::HTTP_GATEWAY_TIMEOUT:
       return AddSinkResultCode::SERVER_ERROR;
 
     // 412
     case net::HTTP_PRECONDITION_FAILED:
-      ABSL_FALLTHROUGH_INTENDED;
+      [[fallthrough]];
     // 417
     case net::HTTP_EXPECTATION_FAILED:
       return AddSinkResultCode::INVALID_ACCESS_CODE;
@@ -188,7 +174,6 @@ AddSinkResultCode AccessCodeCastDiscoveryInterface::GetErrorFromResponse(
 
     case net::HTTP_OK:
       NOTREACHED();
-      ABSL_FALLTHROUGH_INTENDED;
     default:
       return AddSinkResultCode::HTTP_RESPONSE_CODE_ERROR;
   }
@@ -279,6 +264,17 @@ void AccessCodeCastDiscoveryInterface::ValidateDiscoveryAccessCode(
   fetcher_ptr->Fetch(
       base::BindOnce(&AccessCodeCastDiscoveryInterface::HandleServerResponse,
                      weak_ptr_factory_.GetWeakPtr()));
+}
+
+std::unique_ptr<EndpointFetcher>
+AccessCodeCastDiscoveryInterface::CreateEndpointFetcherForTesting(
+    const std::string& access_code) {
+  return CreateEndpointFetcher(access_code);
+}
+
+void AccessCodeCastDiscoveryInterface::HandleServerErrorForTesting(
+    std::unique_ptr<EndpointResponse> endpoint_response) {
+  HandleServerError(std::move(endpoint_response));
 }
 
 void AccessCodeCastDiscoveryInterface::HandleServerResponse(

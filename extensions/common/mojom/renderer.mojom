@@ -60,6 +60,10 @@ struct UserScriptWorldInfo {
   // The corresponding extension ID.
   string extension_id;
 
+  // The ID of the world to configure. If omitted, configures the default
+  // user script world.
+  string? world_id;
+
   // A custom CSP for the user script world, if any.
   string? csp;
 
@@ -99,11 +103,9 @@ interface Renderer {
   SetDeveloperMode(bool developer_mode_only);
 
   // Informs the renderer what channel (dev, beta, stable, etc) and user session
-  // type is running. |is_lock_screen_context| represents whether the browser
-  // context is associated with Chrome OS lock screen.
+  // type is running.
   SetSessionInfo(Channel channel,
-                 FeatureSessionType session,
-                 bool is_lock_screen_context);
+                 FeatureSessionType session);
 
   // Tells the renderer process the platform's system font.
   SetSystemFont(string font_family, string font_size);
@@ -115,8 +117,13 @@ interface Renderer {
   // is only used for testing.
   SetScriptingAllowlist(array<string> extension_ids);
 
-  // Updates the user script world accordiging to `info`.
-  UpdateUserScriptWorld(UserScriptWorldInfo info);
+  // Updates the user script worlds accordiging to `infos`.
+  UpdateUserScriptWorlds(array<UserScriptWorldInfo> infos);
+
+  // Clears configurations associated with the given `extension_id` and
+  // `world_id`.
+  ClearUserScriptWorldConfig(string extension_id,
+                             string? world_id);
 
   // Asks the lazy background page if it is ready to be suspended and replies
   // back to the browser. This is sent when the page is considered idle.

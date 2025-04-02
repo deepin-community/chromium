@@ -8,10 +8,10 @@
 #include <optional>
 #include <string>
 
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom-forward.h"
 #include "third_party/blink/public/common/common_export.h"
 #include "third_party/blink/public/mojom/permissions/permission.mojom-forward.h"
 #include "third_party/blink/public/mojom/permissions/permission_status.mojom-shared.h"
-#include "third_party/blink/public/mojom/permissions_policy/permissions_policy_feature.mojom-forward.h"
 
 namespace blink {
 
@@ -34,7 +34,7 @@ enum class PermissionType {
   BACKGROUND_SYNC = 10,
   // FLASH = 11,
   SENSORS = 12,
-  ACCESSIBILITY_EVENTS = 13,
+  // ACCESSIBILITY_EVENTS = 13,  // Deprecated.
   // CLIPBOARD_READ = 14, // Replaced by CLIPBOARD_READ_WRITE in M81.
   // CLIPBOARD_WRITE = 15, // Replaced by CLIPBOARD_SANITIZED_WRITE in M81.
   PAYMENT_HANDLER = 16,
@@ -59,9 +59,15 @@ enum class PermissionType {
   SMART_CARD = 35,
   WEB_PRINTING = 36,
   SPEAKER_SELECTION = 37,
+  KEYBOARD_LOCK = 38,
+  POINTER_LOCK = 39,
+  AUTOMATIC_FULLSCREEN = 40,
+  HAND_TRACKING = 41,
+  WEB_APP_INSTALLATION = 42,
 
   // Always keep this at the end.
   NUM,
+  MIN_VALUE = MIDI_SYSEX,
 };
 
 // Converts a permission string ("granted", "denied", "prompt") into a
@@ -88,15 +94,17 @@ PermissionDescriptorToPermissionType(
 // information for making the decision and the caller needs to extract it from
 // the descriptor and provide it.
 BLINK_COMMON_EXPORT std::optional<PermissionType>
-PermissionDescriptorInfoToPermissionType(mojom::PermissionName name,
-                                         bool midi_sysex,
-                                         bool camera_ptz,
-                                         bool clipboard_will_be_sanitized,
-                                         bool clipboard_has_user_gesture);
+PermissionDescriptorInfoToPermissionType(
+    mojom::PermissionName name,
+    bool midi_sysex,
+    bool camera_ptz,
+    bool clipboard_will_be_sanitized,
+    bool clipboard_has_user_gesture,
+    bool fullscreen_allow_without_user_gesture);
 
 // Converts `permission` type into the corresponding permission policy feature.
 // If there is no, returns nullopt.
-BLINK_COMMON_EXPORT std::optional<mojom::PermissionsPolicyFeature>
+BLINK_COMMON_EXPORT std::optional<network::mojom::PermissionsPolicyFeature>
 PermissionTypeToPermissionsPolicyFeature(PermissionType permission);
 
 }  // namespace blink

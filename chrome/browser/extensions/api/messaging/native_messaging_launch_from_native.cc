@@ -5,6 +5,7 @@
 #include "chrome/browser/extensions/api/messaging/native_messaging_launch_from_native.h"
 
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -115,7 +116,7 @@ class NativeMessagingHostErrorReporter : public NativeMessageHost::Client {
   void CloseChannel(const std::string& error_message) override {
     DCHECK_CURRENTLY_ON(content::BrowserThread::IO);
 
-    timeout_.AbandonAndStop();
+    timeout_.Stop();
 
     base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
   }
@@ -206,7 +207,7 @@ ScopedNativeMessagingErrorTimeoutOverrideForTest::
   g_native_messaging_host_timeout_override = nullptr;
 }
 
-bool IsValidConnectionId(const base::StringPiece connection_id) {
+bool IsValidConnectionId(std::string_view connection_id) {
   return connection_id.size() <= 20 &&
          base::ContainsOnlyChars(
              connection_id,
@@ -235,7 +236,7 @@ void LaunchNativeMessageHostFromNativeApp(const ExtensionId& extension_id,
       true /* is_opener */, extensions::mojom::SerializationFormat::kJson);
   extensions::MessageService* const message_service =
       extensions::MessageService::Get(profile);
-  // TODO(crbug.com/967262): Apply policy for allow_user_level.
+  // TODO(crbug.com/41461105): Apply policy for allow_user_level.
   auto native_message_host = NativeMessageProcessHost::CreateWithLauncher(
       extension_id, host_id,
       NativeProcessLauncher::CreateDefault(

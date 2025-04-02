@@ -288,7 +288,6 @@ MediaControlsRotateToFullscreenDelegate::ComputeScreenOrientation() const {
   }
 
   NOTREACHED();
-  return SimpleOrientation::kUnknown;
 }
 
 void MediaControlsRotateToFullscreenDelegate::Trace(Visitor* visitor) const {

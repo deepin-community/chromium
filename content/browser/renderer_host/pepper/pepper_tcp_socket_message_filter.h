@@ -18,7 +18,6 @@
 #include "base/memory/weak_ptr.h"
 #include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "content/browser/renderer_host/pepper/browser_ppapi_host_impl.h"
 #include "content/common/content_export.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
@@ -351,7 +350,7 @@ class CONTENT_EXPORT PepperTCPSocketMessageFilter
 
   bool pending_accept_;
 
-  uint32_t pending_read_size_;
+  size_t pending_read_size_;
   ppapi::host::ReplyMessageContext pending_read_context_;
   // This is set to an error other than PP_OK_COMPLETIONPENDING when a read
   // error is received through the SocketObserver interface. If the

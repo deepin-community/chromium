@@ -429,7 +429,6 @@ static bool SniffForOfficeDocs(std::string_view content,
         return true;
       case DOC_TYPE_NONE:
         NOTREACHED();
-        return false;
     }
   } else if (office_version == "OOXML") {
     switch (type) {
@@ -447,12 +446,10 @@ static bool SniffForOfficeDocs(std::string_view content,
         return true;
       case DOC_TYPE_NONE:
         NOTREACHED();
-        return false;
     }
   }
 
   NOTREACHED();
-  return false;
 }
 
 static bool IsOfficeType(const std::string& type_hint) {

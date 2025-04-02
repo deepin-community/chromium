@@ -2,11 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
-import * as LitHtml from '../../../ui/lit-html/lit-html.js';
-import computedStyleTraceStyles from './computedStyleTrace.css.js';
+import * as UI from '../../../ui/legacy/legacy.js';
+import {html, render} from '../../../ui/lit/lit.js';
 
-const {render, html} = LitHtml;
+import computedStyleTraceStylesRaw from './computedStyleTrace.css.js';
+
+// TODO(crbug.com/391381439): Fully migrate off of constructed style sheets.
+const computedStyleTraceStyles = new CSSStyleSheet();
+computedStyleTraceStyles.replaceSync(computedStyleTraceStylesRaw.cssContent);
 
 export interface ComputedStyleTraceData {
   selector: string;
@@ -16,7 +19,6 @@ export interface ComputedStyleTraceData {
 }
 
 export class ComputedStyleTrace extends HTMLElement {
-  static readonly litTagName = LitHtml.literal`devtools-computed-style-trace`;
   readonly #shadow = this.attachShadow({mode: 'open'});
 
   #selector = '';
@@ -25,7 +27,8 @@ export class ComputedStyleTrace extends HTMLElement {
   #ruleOriginNode?: Node;
 
   connectedCallback(): void {
-    this.#shadow.adoptedStyleSheets = [computedStyleTraceStyles];
+    UI.UIUtils.injectCoreStyles(this.#shadow);
+    this.#shadow.adoptedStyleSheets.push(computedStyleTraceStyles);
   }
 
   set data(data: ComputedStyleTraceData) {
@@ -53,10 +56,9 @@ export class ComputedStyleTrace extends HTMLElement {
   }
 }
 
-ComponentHelpers.CustomElements.defineComponent('devtools-computed-style-trace', ComputedStyleTrace);
+customElements.define('devtools-computed-style-trace', ComputedStyleTrace);
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface HTMLElementTagNameMap {
     'devtools-computed-style-trace': ComputedStyleTrace;
   }

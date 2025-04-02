@@ -4,8 +4,11 @@
 
 #include "media/capture/video/win/gpu_memory_buffer_tracker_win.h"
 
+#include <dxgi1_2.h>
+
 #include "base/check.h"
 #include "base/logging.h"
+#include "base/memory/raw_span.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "base/trace_event/trace_event.h"
@@ -15,8 +18,7 @@
 #include "media/base/win/mf_helpers.h"
 #include "media/capture/video/video_capture_buffer_handle.h"
 #include "ui/gfx/geometry/size.h"
-
-#include <dxgi1_2.h>
+#include "ui/gfx/gpu_memory_buffer.h"
 
 namespace media {
 
@@ -38,7 +40,7 @@ class DXGIGMBTrackerHandle : public media::VideoCaptureBufferHandle {
   }
 
  private:
-  base::span<uint8_t> data_;
+  base::raw_span<uint8_t> data_;
   HANDLE dxgi_handle_;
   raw_ptr<ID3D11Device> d3d11_device_;
 };
@@ -113,7 +115,6 @@ bool GpuMemoryBufferTrackerWin::Init(const gfx::Size& dimensions,
   // Only support NV12
   if (format != PIXEL_FORMAT_NV12) {
     NOTREACHED() << "Unsupported VideoPixelFormat " << format;
-    return false;
   }
 
   if (is_external_dxgi_handle_) {
@@ -122,8 +123,9 @@ bool GpuMemoryBufferTrackerWin::Init(const gfx::Size& dimensions,
   }
 
   gfx::GpuMemoryBufferHandle gmb_handle;
-  gmb_handle.dxgi_handle = CreateNV12Texture(d3d_device_.Get(), dimensions);
-  gmb_handle.dxgi_token = gfx::DXGIHandleToken();
+  gmb_handle.type = gfx::DXGI_SHARED_HANDLE;
+  gmb_handle.set_dxgi_handle(
+      gfx::DXGIHandle(CreateNV12Texture(d3d_device_.Get(), dimensions)));
   return CreateBufferInternal(std::move(gmb_handle), std::move(dimensions));
 }
 
@@ -136,13 +138,13 @@ bool GpuMemoryBufferTrackerWin::IsSameGpuMemoryBuffer(
   // On Windows, we need use 'dxgi_token' to decide whether the two handles
   // point to same gmb instead of handle directly since handle could be
   // duplicated, please see GpuMemoryBufferImplDXGI::CloneHandle.
-  return buffer_->GetToken() == handle.dxgi_token;
+  return buffer_->GetToken() == handle.dxgi_handle().token();
 }
 
 bool GpuMemoryBufferTrackerWin::CreateBufferInternal(
     gfx::GpuMemoryBufferHandle buffer_handle,
     const gfx::Size& dimensions) {
-  if (!buffer_handle.dxgi_handle.IsValid()) {
+  if (!buffer_handle.dxgi_handle().IsValid()) {
     LOG(ERROR) << "dxgi_handle is not valid.";
     return false;
   }
@@ -153,7 +155,6 @@ bool GpuMemoryBufferTrackerWin::CreateBufferInternal(
       gpu::GpuMemoryBufferImpl::DestructionCallback(), nullptr, nullptr);
   if (!buffer_) {
     NOTREACHED() << "Failed to create GPU memory buffer";
-    return false;
   }
 
   region_ = base::UnsafeSharedMemoryRegion::Create(GetMemorySizeInBytes());
@@ -220,7 +221,7 @@ GpuMemoryBufferTrackerWin::GetGpuMemoryBufferHandle() {
     return gfx::GpuMemoryBufferHandle();
   }
   auto handle = buffer_->CloneHandle();
-  handle.region = region_.Duplicate();
+  handle.set_region(region_.Duplicate());
   return handle;
 }
 

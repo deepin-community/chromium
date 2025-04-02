@@ -70,7 +70,15 @@ enum class PixelLocalMemberType : uint8_t {
 enum class InterpolationType : uint8_t { kPerspective, kLinear, kFlat, kUnknown };
 
 /// Type of interpolation sampling of a stage variable.
-enum class InterpolationSampling : uint8_t { kNone, kCenter, kCentroid, kSample, kUnknown };
+enum class InterpolationSampling : uint8_t {
+    kNone,
+    kCenter,
+    kCentroid,
+    kSample,
+    kFirst,
+    kEither,
+    kUnknown
+};
 
 /// Reflection data about an entry point input or output.
 struct StageVariable {
@@ -92,6 +100,8 @@ struct StageVariable {
         std::optional<uint32_t> location;
         /// Value of the color attribute, if set.
         std::optional<uint32_t> color;
+        /// Value of the blend_src attribute, if set.
+        std::optional<uint32_t> blend_src;
     } attributes;
     /// Scalar type that the variable is composed of.
     ComponentType component_type = ComponentType::kUnknown;
@@ -197,6 +207,13 @@ struct EntryPoint {
     bool vertex_index_used = false;
     /// Does the entry point use the instance_index builtin
     bool instance_index_used = false;
+    /// Does the entry point have a textureLoad call with a texture_depth??? texture
+    bool has_texture_load_with_depth_texture = false;
+    /// Does the entry point use texture_depth??? with a non-comparison sampler.
+    bool has_depth_texture_with_non_comparison_sampler = false;
+    /// The array length of the clip_distances builtin. Holding no value means the clip_distances
+    /// is not used.
+    std::optional<uint32_t> clip_distances_size;
 };
 
 }  // namespace tint::inspector

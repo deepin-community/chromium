@@ -15,7 +15,6 @@
 #include "base/memory/raw_ptr.h"
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/metrics/metrics_reporting_state.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile.h"
@@ -54,10 +53,6 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/widget/widget.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/browser_process.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
 namespace {
 
 views::BubbleDialogDelegate* g_instance_for_test = nullptr;
@@ -71,12 +66,14 @@ bool DoesSupportConsentCheck() {
 }
 
 void OpenUmaLink(Browser* browser, const ui::Event& event) {
-  browser->OpenURL(content::OpenURLParams(
-      GURL("https://support.google.com/chrome/answer/96817"),
-      content::Referrer(),
-      ui::DispositionFromEventFlags(event.flags(),
-                                    WindowOpenDisposition::NEW_FOREGROUND_TAB),
-      ui::PAGE_TRANSITION_LINK, false));
+  browser->OpenURL(
+      content::OpenURLParams(
+          GURL("https://support.google.com/chrome/answer/96817"),
+          content::Referrer(),
+          ui::DispositionFromEventFlags(
+              event.flags(), WindowOpenDisposition::NEW_FOREGROUND_TAB),
+          ui::PAGE_TRANSITION_LINK, false),
+      /*navigation_handle_callback=*/{});
 }
 
 DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kUmaConsentCheckboxId);
@@ -125,7 +122,8 @@ class SessionCrashedBubbleDelegate : public ui::DialogModelDelegate {
     if (dialog_model()
             ->GetCheckboxByUniqueId(kUmaConsentCheckboxId)
             ->is_checked()) {
-      ChangeMetricsReportingState(true);
+      ChangeMetricsReportingState(
+          true, ChangeMetricsReportingStateCalledFrom::kSessionCrashedDialog);
     }
   }
 

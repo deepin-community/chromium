@@ -4,6 +4,7 @@
 
 #include "extensions/renderer/extension_localization_throttle.h"
 
+#include "base/containers/span.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string_util.h"
@@ -121,16 +122,10 @@ class ExtensionLocalizationURLLoader : public network::mojom::URLLoaderClient,
                    int32_t intra_priority_value) override {
     source_url_loader_->SetPriority(priority, intra_priority_value);
   }
-  void PauseReadingBodyFromNet() override {
-    source_url_loader_->PauseReadingBodyFromNet();
-  }
-  void ResumeReadingBodyFromNet() override {
-    source_url_loader_->ResumeReadingBodyFromNet();
-  }
 
   // mojo::DataPipeDrainer
-  void OnDataAvailable(const void* data, size_t num_bytes) override {
-    data_.append(static_cast<const char*>(data), num_bytes);
+  void OnDataAvailable(base::span<const uint8_t> data) override {
+    data_.append(base::as_string_view(data));
   }
   void OnDataComplete() override {
     data_drainer_.reset();

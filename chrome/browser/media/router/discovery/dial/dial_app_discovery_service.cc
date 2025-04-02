@@ -4,11 +4,13 @@
 
 #include "chrome/browser/media/router/discovery/dial/dial_app_discovery_service.h"
 
-#include "base/containers/cxx20_erase.h"
+#include <vector>
+
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
 #include "base/time/default_clock.h"
 #include "chrome/browser/media/router/data_decoder_util.h"
 #include "net/http/http_status_code.h"
@@ -76,7 +78,7 @@ void DialAppDiscoveryService::SetParserForTest(
 
 void DialAppDiscoveryService::RemovePendingRequest(
     DialAppDiscoveryService::PendingRequest* request) {
-  base::EraseIf(pending_requests_, [&request](const auto& entry) {
+  std::erase_if(pending_requests_, [&request](const auto& entry) {
     return entry.get() == request;
   });
 }
@@ -153,7 +155,7 @@ void DialAppDiscoveryService::PendingRequest::OnDialAppInfoParsed(
         LoggerImpl::Severity::kInfo, mojom::LogCategory::kDiscovery,
         kLoggerComponent,
         base::StringPrintf("DIAL sink supports disconnect: %s",
-                           parsed_app_info->allow_stop ? "true" : "false"),
+                           base::ToString(parsed_app_info->allow_stop)),
         sink_id_, "", "");
 
     RecordDialFetchAppInfo(DialAppInfoResultCode::kOk);

@@ -158,7 +158,6 @@ bool IDBKeyPath::IsValid() const {
       return true;
   }
   NOTREACHED();
-  return false;
 }
 
 v8::Local<v8::Value> IDBKeyPath::ToV8(ScriptState* script_state) const {
@@ -172,7 +171,6 @@ v8::Local<v8::Value> IDBKeyPath::ToV8(ScriptState* script_state) const {
       return ToV8Traits<IDLSequence<IDLString>>::ToV8(script_state, Array());
   }
   NOTREACHED();
-  return v8::Undefined(isolate);
 }
 
 bool IDBKeyPath::operator==(const IDBKeyPath& other) const {
@@ -188,7 +186,6 @@ bool IDBKeyPath::operator==(const IDBKeyPath& other) const {
       return array_ == other.array_;
   }
   NOTREACHED();
-  return false;
 }
 
 }  // namespace blink

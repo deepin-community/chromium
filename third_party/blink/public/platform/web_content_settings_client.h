@@ -9,9 +9,6 @@
 #include <utility>
 
 #include "base/functional/callback.h"
-#include "base/time/time.h"
-#include "third_party/blink/public/common/client_hints/enabled_client_hints.h"
-#include "third_party/blink/public/mojom/navigation/renderer_content_settings.mojom.h"
 
 namespace blink {
 
@@ -46,23 +43,6 @@ class WebContentSettingsClient {
   // Blocks until done.
   virtual bool AllowStorageAccessSync(StorageType storage_type) { return true; }
 
-  // Controls whether images are allowed for this frame.
-  virtual bool AllowImage(bool enabled_per_settings, const WebURL& image_url) {
-    return enabled_per_settings;
-  }
-
-  // Controls whether scripts are allowed to execute for this frame.
-  virtual bool AllowScript(bool enabled_per_settings) {
-    return enabled_per_settings;
-  }
-
-  // Controls whether scripts loaded from the given URL are allowed to execute
-  // for this frame.
-  virtual bool AllowScriptFromSource(bool enabled_per_settings,
-                                     const WebURL& script_url) {
-    return enabled_per_settings;
-  }
-
   // Controls whether insecure scripts are allowed to execute for this frame.
   virtual bool AllowRunningInsecureContent(bool enabled_per_settings,
                                            const WebURL&) {
@@ -74,9 +54,6 @@ class WebContentSettingsClient {
 
   // Controls whether access to write the clipboard is allowed for this frame.
   virtual bool AllowWriteToClipboard() { return false; }
-
-  // Controls whether enabling Web Components API for this frame.
-  virtual bool AllowWebComponents(bool default_value) { return default_value; }
 
   // Controls whether to enable MutationEvents for this frame.
   // The common use case of this method is actually to selectively disable
@@ -95,20 +72,9 @@ class WebContentSettingsClient {
   // enabled.
   virtual void DidNotAllowImage() {}
 
-  // Called to persist the received client hint preferences when |url| was
-  // fetched. The preferences should be persisted for |duration|.
-  virtual void PersistClientHints(
-      const EnabledClientHints& enabled_client_hints,
-      base::TimeDelta duration,
-      const blink::WebURL& url) {}
-
   // Controls whether mixed content autoupgrades should be allowed in this
   // frame.
   virtual bool ShouldAutoupgradeMixedContent() { return true; }
-
-  // Controls whether the ViewTransition callback needs to be larger than
-  // default.
-  virtual bool IncreaseViewTransitionCallbackTimeout() const { return false; }
 
   virtual ~WebContentSettingsClient() = default;
 };

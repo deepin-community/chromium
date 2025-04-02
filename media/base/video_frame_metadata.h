@@ -17,6 +17,14 @@
 
 namespace media {
 
+// A container for information about effects that might be applied to a frame.
+struct EffectInfo {
+  bool enabled;
+  bool operator==(const EffectInfo& other) const {
+    return enabled == other.enabled;
+  }
+};
+
 // NOTE: When adding new VideoFrameMetadata fields, please ensure you update the
 // MergeMetadataFrom() method.
 struct MEDIA_EXPORT VideoFrameMetadata {
@@ -28,8 +36,8 @@ struct MEDIA_EXPORT VideoFrameMetadata {
   // Merges internal values from |metadata_source|.
   void MergeMetadataFrom(const VideoFrameMetadata& metadata_source);
 
-  // CLear metadata fields that only make sense for texture backed frames.
-  void ClearTextureFrameMedatada();
+  // Clear metadata fields that only make sense for texture backed frames.
+  void ClearTextureFrameMetadata();
 
   // Sources of VideoFrames use this marker to indicate that the associated
   // VideoFrame can be overlaid, case in which its contents do not need to be
@@ -166,20 +174,18 @@ struct MEDIA_EXPORT VideoFrameMetadata {
   std::optional<unsigned int> hw_va_protected_session_id;
 #endif
 
-  // An UnguessableToken that identifies VideoOverlayFactory that created
-  // this VideoFrame. It's used by Cast to help with video hole punch.
-  std::optional<base::UnguessableToken> overlay_plane_id;
+  // An UnguessableToken that can track a frame's underlying platform specific
+  // resources or identify its source. For "hole" VideoFrame's, it is used to
+  // identifies VideoOverlayFactory that created the frame. If this is set, it
+  // should not be modified.
+  std::optional<base::UnguessableToken> tracking_token;
 
   // Whether this frame was decoded in a power efficient way.
   bool power_efficient = false;
 
-  // Implemented only for single texture backed frames, true means the origin of
-  // the texture is top left and false means bottom left.
-  bool texture_origin_is_top_left = true;
-
   // CompositorFrameMetadata variables associated with this frame. Used for
   // remote debugging.
-  // TODO(crbug.com/832220): Use a customized dictionary value instead of
+  // TODO(crbug.com/40571471): Use a customized dictionary value instead of
   // using these keys directly.
   std::optional<double> device_scale_factor;
   std::optional<double> page_scale_factor;
@@ -222,11 +228,15 @@ struct MEDIA_EXPORT VideoFrameMetadata {
   // information.
   std::optional<int> maximum_composition_delay_in_frames;
 
-  // Identifies a BeginFrameArgs (along with the source_id).
+  // Identifies a BeginFrameArgs
   // See comments in components/viz/common/frame_sinks/begin_frame_args.h.
   //
   // Only set for video frames produced by the frame sink video capturer.
   std::optional<uint64_t> frame_sequence;
+  std::optional<uint64_t> source_id;
+
+  // Information about any background blur effect applied to the frame.
+  std::optional<EffectInfo> background_blur;
 };
 
 }  // namespace media

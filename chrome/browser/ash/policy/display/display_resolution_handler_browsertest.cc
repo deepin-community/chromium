@@ -11,16 +11,18 @@
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/to_string.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
 #include "chrome/browser/ash/policy/core/device_policy_builder.h"
 #include "chrome/browser/ash/policy/display/device_display_cros_browser_test.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/test/base/mixin_based_in_process_browser_test.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "content/public/test/browser_test.h"
@@ -102,23 +104,25 @@ void SetPolicyValue(em::ChromeDeviceSettingsProto* proto,
   std::string json;
   if (policy.external_width) {
     json_entries.push_back("\"external_width\": " +
-                           std::to_string(*policy.external_width));
+                           base::NumberToString(*policy.external_width));
   }
   if (policy.external_height) {
     json_entries.push_back("\"external_height\": " +
-                           std::to_string(*policy.external_height));
+                           base::NumberToString(*policy.external_height));
   }
   if (policy.external_scale_percentage) {
-    json_entries.push_back("\"external_scale_percentage\": " +
-                           std::to_string(*policy.external_scale_percentage));
+    json_entries.push_back(
+        "\"external_scale_percentage\": " +
+        base::NumberToString(*policy.external_scale_percentage));
   }
   if (policy.internal_scale_percentage) {
-    json_entries.push_back("\"internal_scale_percentage\": " +
-                           std::to_string(*policy.internal_scale_percentage));
+    json_entries.push_back(
+        "\"internal_scale_percentage\": " +
+        base::NumberToString(*policy.internal_scale_percentage));
   }
 
   json_entries.push_back(std::string("\"recommended\": ") +
-                         (recommended ? "true" : "false"));
+                         base::ToString(recommended));
   proto->mutable_device_display_resolution()->set_device_display_resolution(
       "{" + base::JoinString(json_entries, ",") + "}");
 }
@@ -166,7 +170,7 @@ class DeviceDisplayResolutionTestBase
   }
 
  protected:
-  DeviceDisplayResolutionTestBase() {}
+  DeviceDisplayResolutionTestBase() = default;
 
   void SetPolicy(PolicyValue policy, bool recommended) {
     em::ChromeDeviceSettingsProto& proto(device_policy()->payload());
@@ -178,7 +182,7 @@ class DeviceDisplayResolutionTestBase
 
 class DeviceDisplayResolutionTest : public DeviceDisplayResolutionTestBase {
  public:
-  DeviceDisplayResolutionTest() {}
+  DeviceDisplayResolutionTest() = default;
 
   DeviceDisplayResolutionTest(const DeviceDisplayResolutionTest&) = delete;
   DeviceDisplayResolutionTest& operator=(const DeviceDisplayResolutionTest&) =
@@ -384,7 +388,7 @@ INSTANTIATE_TEST_SUITE_P(PolicyDeviceDisplayResolution,
 class DeviceDisplayResolutionRecommendedTest
     : public DeviceDisplayResolutionTestBase {
  public:
-  DeviceDisplayResolutionRecommendedTest() {}
+  DeviceDisplayResolutionRecommendedTest() = default;
 
   DeviceDisplayResolutionRecommendedTest(
       const DeviceDisplayResolutionRecommendedTest&) = delete;
@@ -406,7 +410,7 @@ class DeviceDisplayResolutionRecommendedTest
         extensions::DisplayInfoProvider::Get();
     ASSERT_TRUE(provider);
     provider->SetDisplayProperties(
-        std::to_string(display_id), std::move(props),
+        base::NumberToString(display_id), std::move(props),
         base::BindOnce(
             [](base::OnceClosure quit_closure, std::optional<std::string>) {
               std::move(quit_closure).Run();

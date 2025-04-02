@@ -5,8 +5,8 @@
 #include "chrome/browser/fast_checkout/fast_checkout_trigger_validator_impl.h"
 
 #include "chrome/browser/fast_checkout/fast_checkout_capabilities_fetcher.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/logging/log_manager.h"
-#include "components/autofill/core/browser/personal_data_manager.h"
 #include "components/autofill/core/common/autofill_internals/log_message.h"
 #include "components/autofill/core/common/autofill_internals/logging_scope.h"
 #include "components/autofill/core/common/logging/log_macros.h"
@@ -66,13 +66,17 @@ FastCheckoutTriggerOutcome FastCheckoutTriggerValidatorImpl::ShouldRun(
   }
 
   // Trigger only on focusable fields.
-  if (!field.is_focusable) {
+  if (!field.is_focusable()) {
     LogAutofillInternals("not triggered because field was not focusable.");
     return FastCheckoutTriggerOutcome::kFailureFieldNotFocusable;
   }
 
   // Trigger only on empty fields.
-  if (!field.value.empty()) {
+  // TODO: crbug.com/40227496 - `field.value()` is ambiguous: sometimes it's the
+  // current value, sometimes it's the initial value. The reason is that some
+  // callers upcast `field` from `AutofillField`, whose `value()` is the initial
+  // value. The feature `kAutofillFixValueSemantics` fixes this.
+  if (!field.value().empty()) {
     LogAutofillInternals("not triggered because field was not empty.");
     return FastCheckoutTriggerOutcome::kFailureFieldNotEmpty;
   }
@@ -98,22 +102,23 @@ bool FastCheckoutTriggerValidatorImpl::IsTriggerForm(
   if (!capabilities_fetcher_) {
     return false;
   }
-  // TODO(crbug.com/1356498): Stop calculating the signature once the form
+  // TODO(crbug.com/40236321): Stop calculating the signature once the form
   // signature has been moved to `form_data`.
   // Check browser form's signature and renderer form's signature.
   autofill::FormSignature form_signature =
       autofill::CalculateFormSignature(form);
-  bool is_trigger_form = capabilities_fetcher_->IsTriggerFormSupported(
-                             form.main_frame_origin, form_signature) ||
-                         capabilities_fetcher_->IsTriggerFormSupported(
-                             form.main_frame_origin, field.host_form_signature);
+  bool is_trigger_form =
+      capabilities_fetcher_->IsTriggerFormSupported(form.main_frame_origin(),
+                                                    form_signature) ||
+      capabilities_fetcher_->IsTriggerFormSupported(
+          form.main_frame_origin(), field.host_form_signature());
   if (!is_trigger_form) {
     LogAutofillInternals(
         "not triggered because there is no Fast Checkout support for form "
         "signatures {" +
         base::NumberToString(form_signature.value()) + ", " +
-        base::NumberToString(field.host_form_signature.value()) +
-        "} on origin " + form.main_frame_origin.Serialize() + ".");
+        base::NumberToString(field.host_form_signature().value()) +
+        "} on origin " + form.main_frame_origin().Serialize() + ".");
   }
   return is_trigger_form;
 }
@@ -122,12 +127,12 @@ FastCheckoutTriggerOutcome
 FastCheckoutTriggerValidatorImpl::HasValidPersonalData() const {
   autofill::PersonalDataManager* pdm =
       personal_data_helper_->GetPersonalDataManager();
-  if (!pdm->IsAutofillProfileEnabled()) {
+  if (!pdm->address_data_manager().IsAutofillProfileEnabled()) {
     LogAutofillInternals("not triggered because Autofill profile is disabled.");
     return FastCheckoutTriggerOutcome::kFailureAutofillProfileDisabled;
   }
 
-  if (!pdm->IsAutofillPaymentMethodsEnabled()) {
+  if (!pdm->payments_data_manager().IsAutofillPaymentMethodsEnabled()) {
     LogAutofillInternals(
         "not triggered because Autofill credit card is disabled.");
     return FastCheckoutTriggerOutcome::kFailureAutofillCreditCardDisabled;
@@ -154,7 +159,7 @@ FastCheckoutTriggerValidatorImpl::HasValidPersonalData() const {
 
 void FastCheckoutTriggerValidatorImpl::LogAutofillInternals(
     std::string message) const {
-  LOG_AF(autofill_client_->GetLogManager())
+  LOG_AF(autofill_client_->GetCurrentLogManager())
       << autofill::LoggingScope::kFastCheckout
       << autofill::LogMessage::kFastCheckout << message;
 }

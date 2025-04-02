@@ -6,6 +6,8 @@
 
 #include <stddef.h>
 
+#include <optional>
+
 #include "base/base64.h"
 #include "base/command_line.h"
 #include "base/files/file_util.h"
@@ -31,7 +33,6 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace base {
 namespace {
@@ -731,7 +732,7 @@ bool ValidateTestResultObject(const Value::Dict& iteration_data,
 
 // Validate |root| dictionary value contains a list with |values|
 // at |key| value.
-bool ValidateStringList(const absl::optional<Value::Dict>& root,
+bool ValidateStringList(const std::optional<Value::Dict>& root,
                         const std::string& key,
                         std::vector<const char*> values) {
   const Value::List* list = root->FindList(key);
@@ -788,7 +789,7 @@ TEST_F(TestLauncherTest, JsonSummary) {
   EXPECT_TRUE(test_launcher.Run(command_line.get()));
 
   // Validate the resulting JSON file is the expected output.
-  absl::optional<Value::Dict> root = test_launcher_utils::ReadSummary(path);
+  std::optional<Value::Dict> root = test_launcher_utils::ReadSummary(path);
   ASSERT_TRUE(root);
   EXPECT_TRUE(
       ValidateStringList(root, "all_tests",
@@ -839,7 +840,7 @@ TEST_F(TestLauncherTest, JsonSummaryWithDisabledTests) {
   EXPECT_TRUE(test_launcher.Run(command_line.get()));
 
   // Validate the resulting JSON file is the expected output.
-  absl::optional<Value::Dict> root = test_launcher_utils::ReadSummary(path);
+  std::optional<Value::Dict> root = test_launcher_utils::ReadSummary(path);
   ASSERT_TRUE(root);
   Value::Dict* dict = root->FindDict("test_locations");
   ASSERT_TRUE(dict);
@@ -927,9 +928,17 @@ TEST_F(UnitTestLauncherDelegateTester, GetCommandLine) {
   base::FilePath result_file;
   CreateNewTempDirectory(FilePath::StringType(), &temp_dir);
 
+  // Make sure that `--gtest_filter` from the original command line is dropped
+  // from a command line passed to the child process, since `--gtest_filter` is
+  // also specified in the flagfile.
+  CommandLine::ForCurrentProcess()->AppendSwitchASCII("gtest_filter", "*");
+  // But other random flags should be preserved.
+  CommandLine::ForCurrentProcess()->AppendSwitch("mochi-are-delicious");
   CommandLine cmd_line =
       delegate_ptr->GetCommandLine(test_names, temp_dir, &result_file);
   EXPECT_TRUE(cmd_line.HasSwitch("single-process-tests"));
+  EXPECT_FALSE(cmd_line.HasSwitch("gtest_filter"));
+  EXPECT_TRUE(cmd_line.HasSwitch("mochi-are-delicious"));
   EXPECT_EQ(cmd_line.GetSwitchValuePath("test-launcher-output"), result_file);
 
   const int size = 2048;
@@ -969,7 +978,7 @@ TEST_F(ResultWatcherTest, PollCompletesQuickly) {
 
   MockResultWatcher result_watcher(result_file, 2);
   EXPECT_CALL(result_watcher, WaitWithTimeout(_))
-      .WillOnce(DoAll(InvokeWithoutArgs([&]() {
+      .WillOnce(DoAll(InvokeWithoutArgs([&] {
                         task_environment.AdvanceClock(Milliseconds(1500));
                       }),
                       Return(true)));
@@ -997,38 +1006,36 @@ TEST_F(ResultWatcherTest, PollCompletesSlowly) {
   bool done = false;
   EXPECT_CALL(result_watcher, WaitWithTimeout(_))
       .Times(10)
-      .WillRepeatedly(
-          DoAll(Invoke([&](TimeDelta timeout) {
-                  task_environment.AdvanceClock(timeout);
-                  // Append a result with "time" (duration) as 40.000s and
-                  // "timestamp" (test start) as `Now()` - 45s.
-                  AppendToFile(
-                      result_file,
-                      StrCat({"    <testcase name=\"B\" status=\"run\" "
-                              "time=\"40.000\" classname=\"A\" timestamp=\"",
-                              TimeFormatAsIso8601(Time::Now() - Seconds(45))
-                                  .c_str(),
-                              "\">\n", "    </testcase>\n"}));
-                  checks++;
-                  if (checks == 10) {
-                    AppendToFile(result_file,
-                                 "  </testsuite>\n"
-                                 "</testsuites>\n");
-                    done = true;
-                  } else {
-                    // Append a preliminary result for the next test that
-                    // started when the last test completed (i.e., `Now()` - 45s
-                    // + 40s).
-                    AppendToFile(
-                        result_file,
-                        StrCat({"    <x-teststart name=\"B\" classname=\"A\" "
-                                "timestamp=\"",
-                                TimeFormatAsIso8601(Time::Now() - Seconds(5))
-                                    .c_str(),
-                                "\" />\n"}));
-                  }
-                }),
-                ReturnPointee(&done)));
+      .WillRepeatedly(DoAll(
+          Invoke([&](TimeDelta timeout) {
+            task_environment.AdvanceClock(timeout);
+            // Append a result with "time" (duration) as 40.000s and
+            // "timestamp" (test start) as `Now()` - 45s.
+            AppendToFile(
+                result_file,
+                StrCat({"    <testcase name=\"B\" status=\"run\" "
+                        "time=\"40.000\" classname=\"A\" timestamp=\"",
+                        TimeFormatAsIso8601(Time::Now() - Seconds(45)).c_str(),
+                        "\">\n", "    </testcase>\n"}));
+            checks++;
+            if (checks == 10) {
+              AppendToFile(result_file,
+                           "  </testsuite>\n"
+                           "</testsuites>\n");
+              done = true;
+            } else {
+              // Append a preliminary result for the next test that
+              // started when the last test completed (i.e., `Now()` - 45s
+              // + 40s).
+              AppendToFile(
+                  result_file,
+                  StrCat({"    <x-teststart name=\"B\" classname=\"A\" "
+                          "timestamp=\"",
+                          TimeFormatAsIso8601(Time::Now() - Seconds(5)).c_str(),
+                          "\" />\n"}));
+            }
+          }),
+          ReturnPointee(&done)));
 
   ASSERT_TRUE(result_watcher.PollUntilDone(Seconds(45)));
   // The first check occurs 45s after the batch starts, so the sequence of
@@ -1211,7 +1218,7 @@ TEST_F(UnitTestLauncherDelegateTester, RunMockTests) {
   GetAppOutputAndError(command_line, &output);
 
   // Validate the resulting JSON file is the expected output.
-  absl::optional<Value::Dict> root = test_launcher_utils::ReadSummary(path);
+  std::optional<Value::Dict> root = test_launcher_utils::ReadSummary(path);
   ASSERT_TRUE(root);
 
   const Value::Dict* dict = root->FindDict("test_locations");
@@ -1283,7 +1290,7 @@ TEST(ProcessGTestOutputTest, RunMockTests) {
   EXPECT_GT(*test_results[2].timestamp, Time());
 }
 
-// TODO(crbug.com/1498237): Enable the test once GetAppOutputAndError
+// TODO(crbug.com/40287376): Enable the test once GetAppOutputAndError
 // can collect stdout and stderr on Fuchsia.
 #if !BUILDFLAG(IS_FUCHSIA)
 TEST(ProcessGTestOutputTest, FoundTestCaseNotEnforced) {
@@ -1344,15 +1351,16 @@ TEST(ProcessGTestOutputTest, FoundTestCaseNotEnforced) {
 }
 #endif  // !BUILDFLAG(IS_FUCHSIA)
 
-// TODO(crbug.com/1094369): Enable leaked-child checks on other platforms.
+// TODO(crbug.com/40135391): Enable leaked-child checks on other platforms.
 #if BUILDFLAG(IS_FUCHSIA)
 
 // Test that leaves a child process running. The test is DISABLED_, so it can
 // be launched explicitly by RunMockLeakProcessTest
 
 MULTIPROCESS_TEST_MAIN(LeakChildProcess) {
-  while (true)
+  while (true) {
     PlatformThread::Sleep(base::Seconds(1));
+  }
 }
 
 TEST(LeakedChildProcessTest, DISABLED_LeakChildProcess) {
@@ -1381,7 +1389,7 @@ TEST_F(UnitTestLauncherDelegateTester, LeakedChildProcess) {
   GetAppOutputWithExitCode(command_line, &output, &exit_code);
 
   // Validate that we actually ran a test.
-  absl::optional<Value::Dict> root = test_launcher_utils::ReadSummary(path);
+  std::optional<Value::Dict> root = test_launcher_utils::ReadSummary(path);
   ASSERT_TRUE(root);
 
   Value::Dict* dict = root->FindDict("test_locations");

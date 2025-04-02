@@ -25,7 +25,7 @@
 #include "ui/message_center/public/cpp/notifier_id.h"
 #include "url/origin.h"
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "chrome/common/extensions/api/notifications.h"
 #include "extensions/browser/event_router.h"
 #include "extensions/browser/extension_event_histogram_value.h"
@@ -53,14 +53,13 @@ NotifierStateTracker::NotifierStateTracker(Profile* profile)
           base::Unretained(prefs::kMessageCenterDisabledExtensionIds),
           base::Unretained(&disabled_extension_ids_)));
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   extension_registry_observation_.Observe(
       extensions::ExtensionRegistry::Get(profile_));
 #endif
 }
 
-NotifierStateTracker::~NotifierStateTracker() {
-}
+NotifierStateTracker::~NotifierStateTracker() = default;
 
 bool NotifierStateTracker::IsNotifierEnabled(
     const NotifierId& notifier_id) const {
@@ -91,7 +90,6 @@ bool NotifierStateTracker::IsNotifierEnabled(
       return true;
 #else
       NOTREACHED();
-      break;
 #endif
     case message_center::NotifierType::PHONE_HUB:
 #if BUILDFLAG(IS_CHROMEOS_ASH)
@@ -103,7 +101,6 @@ bool NotifierStateTracker::IsNotifierEnabled(
   }
 
   NOTREACHED();
-  return false;
 }
 
 void NotifierStateTracker::SetNotifierEnabled(
@@ -116,15 +113,15 @@ void NotifierStateTracker::SetNotifierEnabled(
   base::Value id;
   switch (notifier_id.type) {
     case message_center::NotifierType::APPLICATION:
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
       pref_name = prefs::kMessageCenterDisabledExtensionIds;
       add_new_item = !enabled;
       id = base::Value(notifier_id.id);
       FirePermissionLevelChangedEvent(notifier_id, enabled);
+      break;
 #else
       NOTREACHED();
 #endif
-      break;
     default:
       NOTREACHED();
   }
@@ -153,7 +150,7 @@ void NotifierStateTracker::OnStringListPrefChanged(
   }
 }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 void NotifierStateTracker::OnExtensionUninstalled(
     content::BrowserContext* browser_context,
     const extensions::Extension* extension,

@@ -33,6 +33,7 @@
 #include <map>
 #include <string>
 
+#include "absl/container/flat_hash_map.h"
 #include "dawn/common/Constants.h"
 #include "dawn/common/ContentLessObjectCacheable.h"
 #include "dawn/common/SlabAllocator.h"
@@ -54,7 +55,8 @@ struct ExternalTextureBindingExpansion {
     BindingNumber params;
 };
 
-using ExternalTextureBindingExpansionMap = std::map<BindingNumber, ExternalTextureBindingExpansion>;
+using ExternalTextureBindingExpansionMap =
+    absl::flat_hash_map<BindingNumber, ExternalTextureBindingExpansion>;
 
 MaybeError ValidateBindGroupLayoutDescriptor(DeviceBase* device,
                                              const BindGroupLayoutDescriptor* descriptor,
@@ -91,12 +93,14 @@ class BindGroupLayoutInternalBase : public ApiObjectBase,
                         const BindGroupLayoutInternalBase* b) const;
     };
 
+    bool IsEmpty() const;
     BindingIndex GetBindingCount() const;
     // Returns |BindingIndex| because buffers are packed at the front.
     BindingIndex GetBufferCount() const;
     // Returns |BindingIndex| because dynamic buffers are packed at the front.
     BindingIndex GetDynamicBufferCount() const;
     uint32_t GetUnverifiedBufferCount() const;
+    uint32_t GetStaticSamplerCount() const;
 
     // Used to get counts and validate them in pipeline layout creation. Other getters
     // should be used to get typed integer counts.
@@ -108,6 +112,8 @@ class BindGroupLayoutInternalBase : public ApiObjectBase,
     const ExternalTextureBindingExpansionMap& GetExternalTextureBindingExpansionMap() const;
 
     uint32_t GetUnexpandedBindingCount() const;
+
+    bool NeedsCrossBindingValidation() const;
 
     // Tests that the BindingInfo of two bind groups are equal.
     bool IsLayoutEqual(const BindGroupLayoutInternalBase* other) const;
@@ -151,9 +157,10 @@ class BindGroupLayoutInternalBase : public ApiObjectBase,
     }
 
   private:
-    BindGroupLayoutInternalBase(DeviceBase* device, ObjectBase::ErrorTag tag, const char* label);
+    BindGroupLayoutInternalBase(DeviceBase* device, ObjectBase::ErrorTag tag, StringView label);
 
     BindingCounts mBindingCounts = {};
+    bool mNeedsCrossBindingValidation = false;
     ityp::vector<BindingIndex, BindingInfo> mBindingInfo;
 
     // Map from BindGroupLayoutEntry.binding to packed indices.

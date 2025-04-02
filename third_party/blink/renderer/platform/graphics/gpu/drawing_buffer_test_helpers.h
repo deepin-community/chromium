@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GPU_DRAWING_BUFFER_TEST_HELPERS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_GPU_DRAWING_BUFFER_TEST_HELPERS_H_
 
@@ -15,9 +20,10 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/web_graphics_context_3d_provider.h"
-#include "third_party/blink/renderer/platform/graphics/canvas_color_params.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/drawing_buffer.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/extensions_3d_util.h"
+#include "third_party/blink/renderer/platform/graphics/graphics_types.h"
+#include "third_party/blink/renderer/platform/graphics/test/test_webgraphics_shared_image_interface_provider.h"
 #include "ui/gl/gpu_preference.h"
 
 namespace blink {
@@ -40,12 +46,12 @@ class WebGraphicsContext3DProviderForTests
       std::unique_ptr<gpu::gles2::GLES2Interface> gl)
       : gl_(std::move(gl)),
         test_shared_image_interface_(
-            base::MakeRefCounted<viz::TestSharedImageInterface>()) {}
+            base::MakeRefCounted<gpu::TestSharedImageInterface>()) {}
   WebGraphicsContext3DProviderForTests(
       std::unique_ptr<gpu::webgpu::WebGPUInterface> webgpu)
       : webgpu_(std::move(webgpu)),
         test_shared_image_interface_(
-            base::MakeRefCounted<viz::TestSharedImageInterface>()) {}
+            base::MakeRefCounted<gpu::TestSharedImageInterface>()) {}
 
   gpu::InterfaceBase* InterfaceBase() override { return gl_.get(); }
   gpu::gles2::GLES2Interface* ContextGL() override { return gl_.get(); }
@@ -74,7 +80,7 @@ class WebGraphicsContext3DProviderForTests
   cc::ImageDecodeCache* ImageDecodeCache(SkColorType color_type) override {
     return &image_decode_cache_;
   }
-  viz::TestSharedImageInterface* SharedImageInterface() override {
+  gpu::TestSharedImageInterface* SharedImageInterface() override {
     return test_shared_image_interface_.get();
   }
   void CopyVideoFrame(media::PaintCanvasVideoRenderer* video_render,
@@ -88,6 +94,8 @@ class WebGraphicsContext3DProviderForTests
     return 0;
   }
 
+  gpu::GpuFeatureInfo& GetMutableGpuFeatureInfo() { return gpu_feature_info_; }
+
  private:
   cc::StubDecodeCache image_decode_cache_;
   std::unique_ptr<gpu::gles2::GLES2Interface> gl_;
@@ -95,7 +103,7 @@ class WebGraphicsContext3DProviderForTests
   gpu::Capabilities capabilities_;
   gpu::GpuFeatureInfo gpu_feature_info_;
   WebglPreferences webgl_preferences_;
-  scoped_refptr<viz::TestSharedImageInterface> test_shared_image_interface_;
+  scoped_refptr<gpu::TestSharedImageInterface> test_shared_image_interface_;
 };
 
 class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
@@ -105,6 +113,9 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
   void BindTexture(GLenum target, GLuint texture) override {
     if (target == GL_TEXTURE_2D)
       state_.active_texture2d_binding = texture;
+    if (target == GL_TEXTURE_2D_ARRAY) {
+      state_.active_texture2darray_binding = texture;
+    }
     if (target == GL_TEXTURE_CUBE_MAP)
       state_.active_texturecubemap_binding = texture;
     bound_textures_.insert(target, texture);
@@ -212,13 +223,6 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
     }
   }
 
-  void ProduceTextureDirectCHROMIUM(GLuint texture, GLbyte* mailbox) override {
-    ++current_mailbox_byte_;
-    memset(mailbox, current_mailbox_byte_, GL_MAILBOX_SIZE_CHROMIUM);
-    ASSERT_TRUE(texture_sizes_.Contains(texture));
-    most_recently_produced_size_ = texture_sizes_.at(texture);
-  }
-
   void TexImage2D(GLenum target,
                   GLint level,
                   GLint internalformat,
@@ -293,6 +297,10 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
   void DrawingBufferClientRestoreTexture2DBinding() override {
     state_.active_texture2d_binding = saved_state_.active_texture2d_binding;
   }
+  void DrawingBufferClientRestoreTexture2DArrayBinding() override {
+    state_.active_texture2darray_binding =
+        saved_state_.active_texture2darray_binding;
+  }
   void DrawingBufferClientRestoreTextureCubeMapBinding() override {
     state_.active_texturecubemap_binding =
         saved_state_.active_texturecubemap_binding;
@@ -325,6 +333,9 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
   void DrawingBufferClientRestorePixelLocalStorage() override {
     // Not unit tested yet. Tested with end-to-end tests.
   }
+  void DrawingBufferClientInitializeLayer(cc::Layer* layer) override {
+    // Not unit tested yet. Tested with end-to-end tests.
+  }
 
   // Testing methods.
   gpu::SyncToken MostRecentlyWaitedSyncToken() const {
@@ -349,6 +360,8 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
     EXPECT_EQ(state_.pack_alignment, saved_state_.pack_alignment);
     EXPECT_EQ(state_.active_texture2d_binding,
               saved_state_.active_texture2d_binding);
+    EXPECT_EQ(state_.active_texture2darray_binding,
+              saved_state_.active_texture2darray_binding);
     EXPECT_EQ(state_.active_texturecubemap_binding,
               saved_state_.active_texturecubemap_binding);
     EXPECT_EQ(state_.renderbuffer_binding, saved_state_.renderbuffer_binding);
@@ -392,6 +405,8 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
 
     // The bound 2D texture for the active texture unit.
     GLuint active_texture2d_binding = 0;
+    // The bound 2D array texture for the active texture unit.
+    GLuint active_texture2darray_binding = 0;
     // The bound cube map texture for the active texture unit.
     GLuint active_texturecubemap_binding = 0;
     GLuint renderbuffer_binding = 0;
@@ -404,7 +419,6 @@ class GLES2InterfaceForTests : public gpu::gles2::GLES2InterfaceStub,
   State saved_state_;
 
   gpu::SyncToken most_recently_waited_sync_token_;
-  GLbyte current_mailbox_byte_ = 0;
   gfx::Size most_recently_produced_size_;
   GLuint current_image_id_ = 1;
   HashMap<GLuint, gfx::Size> texture_sizes_;
@@ -417,6 +431,8 @@ class DrawingBufferForTests : public DrawingBuffer {
  public:
   static scoped_refptr<DrawingBufferForTests> Create(
       std::unique_ptr<WebGraphicsContext3DProvider> context_provider,
+      std::unique_ptr<TestWebGraphicsSharedImageInterfaceProvider>
+          shared_image_interface_provider_for_sw,
       const Platform::GraphicsInfo& graphics_info,
       DrawingBuffer::Client* client,
       const gfx::Size& size,
@@ -433,6 +449,9 @@ class DrawingBufferForTests : public DrawingBuffer {
       drawing_buffer->BeginDestruction();
       return nullptr;
     }
+    drawing_buffer->SetSharedImageInterfaceProviderForSoftwareRenderingTest(
+        std::move(shared_image_interface_provider_for_sw));
+
     return drawing_buffer;
   }
 
@@ -458,7 +477,6 @@ class DrawingBufferForTests : public DrawingBuffer {
             false /* wantDepth */,
             false /* wantStencil */,
             DrawingBuffer::kAllowChromiumImage /* ChromiumImageUsage */,
-            cc::PaintFlags::FilterQuality::kLow,
             PredefinedColorSpace::kSRGB,
             gl::GpuPreference::kHighPerformance),
         live_(nullptr) {}
@@ -472,14 +490,16 @@ class DrawingBufferForTests : public DrawingBuffer {
     return static_cast<GLES2InterfaceForTests*>(ContextGL());
   }
 
-  viz::TestSharedImageInterface* SharedImageInterfaceForTests() {
-    return static_cast<viz::TestSharedImageInterface*>(
+  gpu::TestSharedImageInterface* SharedImageInterfaceForTests() {
+    return static_cast<gpu::TestSharedImageInterface*>(
         ContextProvider()->SharedImageInterface());
   }
 
-  raw_ptr<bool, ExperimentalRenderer> live_;
+  raw_ptr<bool> live_;
 
-  int RecycledBitmapCount() { return recycled_bitmaps_.size(); }
+  int RecycledSoftwareResourceCount() {
+    return recycled_software_resources_.size();
+  }
 };
 
 }  // blink

@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <memory>
 
 #include "base/command_line.h"
+#include "base/containers/heap_array.h"
 #include "base/memory/raw_ptr.h"
 #include "base/process/process.h"
 #include "base/threading/platform_thread.h"
@@ -23,7 +29,6 @@
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/command_buffer/service/gpu_tracer.h"
 #include "gpu/command_buffer/service/logger.h"
-#include "gpu/command_buffer/service/mailbox_manager_impl.h"
 #include "gpu/command_buffer/service/memory_tracking.h"
 #include "gpu/command_buffer/service/passthrough_discardable_manager.h"
 #include "gpu/command_buffer/service/service_discardable_manager.h"
@@ -117,7 +122,6 @@ class RecordReplayCommandBuffer : public CommandBufferDirect {
         break;
       case kReplay:
         NOTREACHED();
-        break;
     }
   }
 
@@ -170,8 +174,10 @@ class RecordReplayContext : public GpuControl {
       context_ = context_stub;
     } else {
       gl::GLContextAttribs attribs;
-      if (gpu_preferences_.use_passthrough_cmd_decoder)
+      if (gpu_preferences_.use_passthrough_cmd_decoder) {
         attribs.bind_generates_resource = bind_generates_resource;
+        attribs.allow_client_arrays = false;
+      }
       surface_ = gl::init::CreateOffscreenGLSurface(gl::GetDefaultDisplay(),
                                                     gfx::Size());
       context_ = gl::init::CreateGLContext(share_group_.get(), surface_.get(),
@@ -181,7 +187,7 @@ class RecordReplayContext : public GpuControl {
 
     scoped_refptr<gles2::FeatureInfo> feature_info = new gles2::FeatureInfo();
     scoped_refptr<gles2::ContextGroup> context_group = new gles2::ContextGroup(
-        gpu_preferences_, true, &mailbox_manager_, nullptr /* memory_tracker */,
+        gpu_preferences_, true, nullptr /* memory_tracker */,
         &translator_cache_, &completeness_cache_, feature_info,
         bind_generates_resource, nullptr /* progress_reporter */,
         GpuFeatureInfo(), &discardable_manager_,
@@ -293,15 +299,9 @@ class RecordReplayContext : public GpuControl {
 
   void FlushPendingWork() override { NOTREACHED(); }
 
-  uint64_t GenerateFenceSyncRelease() override {
-    NOTREACHED();
-    return 0;
-  }
+  uint64_t GenerateFenceSyncRelease() override { NOTREACHED(); }
 
-  bool IsFenceSyncReleased(uint64_t release) override {
-    NOTREACHED();
-    return true;
-  }
+  bool IsFenceSyncReleased(uint64_t release) override { NOTREACHED(); }
 
   void SignalSyncToken(const gpu::SyncToken& sync_token,
                        base::OnceClosure callback) override {
@@ -314,12 +314,10 @@ class RecordReplayContext : public GpuControl {
 
   bool CanWaitUnverifiedSyncToken(const gpu::SyncToken& sync_token) override {
     NOTREACHED();
-    return true;
   }
 
   GpuPreferences gpu_preferences_;
 
-  gles2::MailboxManagerImpl mailbox_manager_;
   scoped_refptr<gl::GLShareGroup> share_group_;
   ServiceDiscardableManager discardable_manager_;
   PassthroughDiscardableManager passthrough_discardable_manager_;
@@ -427,8 +425,6 @@ class DecoderPerfTest : public testing::Test {
     gl_->Viewport(0, 0, 256, 256);
   }
 
-  void TearDown() override { context_.reset(); }
-
   void StartRecord() { context_->StartRecord(); }
 
   void StartReplay() { context_->StartReplay(); }
@@ -446,11 +442,11 @@ class DecoderPerfTest : public testing::Test {
       GLint log_length = 0;
       gl_->GetShaderiv(shader, GL_INFO_LOG_LENGTH, &log_length);
       if (log_length) {
-        std::unique_ptr<GLchar[]> log(new GLchar[log_length]);
+        auto log = base::HeapArray<GLchar>::WithSize(log_length);
         GLsizei returned_log_length = 0;
         gl_->GetShaderInfoLog(shader, log_length, &returned_log_length,
-                              log.get());
-        LOG(ERROR) << std::string(log.get(), returned_log_length);
+                              log.data());
+        LOG(ERROR) << std::string(log.data(), returned_log_length);
       }
       gl_->DeleteShader(shader);
       return 0;

@@ -104,7 +104,6 @@ class PLATFORM_EXPORT Image : public ThreadSafeRefCounted<Image> {
   virtual bool IsSVGImage() const { return false; }
   virtual bool IsBitmapImage() const { return false; }
   virtual bool IsStaticBitmapImage() const { return false; }
-  virtual bool IsPlaceholderImage() const { return false; }
 
   virtual bool CurrentFrameKnownToBeOpaque() = 0;
 
@@ -118,7 +117,7 @@ class PLATFORM_EXPORT Image : public ThreadSafeRefCounted<Image> {
   virtual bool CurrentFrameHasSingleSecurityOrigin() const { return false; }
 
   static Image* NullImage();
-  bool IsNull() const { return Size().IsEmpty(); }
+  bool IsNull() const { return this == NullImage(); }
 
   virtual bool HasIntrinsicSize() const { return true; }
 
@@ -279,7 +278,6 @@ class PLATFORM_EXPORT Image : public ThreadSafeRefCounted<Image> {
     }
 
     NOTREACHED();
-    return PaintImage::DecodingMode::kUnspecified;
   }
 
   virtual PaintImage PaintImageForCurrentFrame() = 0;

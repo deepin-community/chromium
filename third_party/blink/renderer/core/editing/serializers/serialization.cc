@@ -68,8 +68,11 @@
 #include "third_party/blink/renderer/core/html/html_div_element.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/html/html_head_element.h"
+#include "third_party/blink/renderer/core/html/html_html_element.h"
 #include "third_party/blink/renderer/core/html/html_quote_element.h"
 #include "third_party/blink/renderer/core/html/html_span_element.h"
+#include "third_party/blink/renderer/core/html/html_style_element.h"
 #include "third_party/blink/renderer/core/html/html_table_cell_element.h"
 #include "third_party/blink/renderer/core/html/html_table_element.h"
 #include "third_party/blink/renderer/core/html/html_template_element.h"
@@ -680,6 +683,14 @@ DocumentFragment* CreateFragmentForInnerOuterHTML(
         markup, document, *fragment, *context_element, parser_content_policy,
         parser_behavior, &log_tag_stats);
     if (parsed_fast_path) {
+      if (RuntimeEnabledFeatures::DOMInsertionFasterEnabled()) {
+        fragment->SetHoldsUnnotifiedChildren(true);
+        fragment->ParserFinishedBuildingDocumentFragment(
+            DocumentFragment::ShouldNotifyInsertedNodes::kSkip);
+      } else {
+        fragment->ParserFinishedBuildingDocumentFragment(
+            DocumentFragment::ShouldNotifyInsertedNodes::kNotify);
+      }
       LogFastPathParserTotalTime(parse_timer.Elapsed());
 #if DCHECK_IS_ON()
       // As a sanity check for the fast-path, create another fragment using
@@ -704,8 +715,8 @@ DocumentFragment* CreateFragmentForInnerOuterHTML(
     return fragment;
   }
 
-  bool was_valid = fragment->ParseXML(markup, context_element,
-                                      parser_content_policy, &exception_state);
+  bool was_valid = fragment->ParseXML(markup, context_element, exception_state,
+                                      parser_content_policy);
   if (!was_valid) {
     exception_state.ThrowDOMException(
         DOMExceptionCode::kSyntaxError,
@@ -742,7 +753,7 @@ DocumentFragment* CreateFragmentForTransformToFragment(
     fragment->ParserAppendChild(Text::Create(output_doc, source_string));
   } else {
     bool successful_parse =
-        fragment->ParseXML(source_string, nullptr,
+        fragment->ParseXML(source_string, nullptr, IGNORE_EXCEPTION,
                            kAllowScriptingContentAndDoNotMarkAlreadyStarted);
     if (!successful_parse)
       return nullptr;
@@ -862,7 +873,8 @@ void MergeWithNextTextNode(Text* text_node, ExceptionState& exception_state) {
 static Document* CreateStagingDocumentForMarkupSanitization(
     AgentGroupScheduler& agent_group_scheduler) {
   Page* page = Page::CreateNonOrdinary(GetStaticEmptyChromeClientInstance(),
-                                       agent_group_scheduler);
+                                       agent_group_scheduler,
+                                       /*color_provider_colors=*/nullptr);
 
   page->GetSettings().SetScriptEnabled(false);
   page->GetSettings().SetPluginsEnabled(false);
@@ -878,8 +890,9 @@ static Document* CreateStagingDocumentForMarkupSanitization(
       nullptr,  // Frame* parent
       nullptr,  // Frame* previous_sibling
       FrameInsertType::kInsertInConstructor, blink::LocalFrameToken(),
-      nullptr,  // WindowAgentFactory*
-      nullptr   // InterfaceRegistry*
+      nullptr,            // WindowAgentFactory*
+      nullptr,            // InterfaceRegistry*
+      mojo::NullRemote()  // BrowserInterfaceBroker
   );
   // Don't leak the actual viewport size to unsanitized markup
   LocalFrameView* frame_view =
@@ -912,9 +925,7 @@ static bool ContainsStyleElements(const DocumentFragment& fragment) {
 static bool StripSVGUseNonLocalHrefs(Node& node) {
   if (auto* use = DynamicTo<SVGUseElement>(node)) {
     SVGURLReferenceResolver resolver(use->HrefString(), use->GetDocument());
-    if ((RuntimeEnabledFeatures::PastingBlocksSVGUseNonLocalHrefsEnabled() &&
-         !resolver.IsLocal()) ||
-        resolver.AbsoluteUrl().ProtocolIsData()) {
+    if (!resolver.IsLocal() || resolver.AbsoluteUrl().ProtocolIsData()) {
       node.remove();
     }
     return true;

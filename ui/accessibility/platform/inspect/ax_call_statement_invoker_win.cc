@@ -13,7 +13,7 @@
 #define DEFINE_IA2_QI_ENTRY(ia2_interface)                                    \
   if (interface_name == #ia2_interface) {                                     \
     Microsoft::WRL::ComPtr<ia2_interface> obj;                                \
-    HRESULT hr = ui::IA2QueryInterface<ia2_interface>(target.Get(), &obj);    \
+    HRESULT hr = IA2QueryInterface<ia2_interface>(target.Get(), &obj);        \
     if (hr == S_OK)                                                           \
       return AXOptionalObject({obj});                                         \
     if (hr == E_NOINTERFACE)                                                  \
@@ -429,9 +429,6 @@ AXOptionalObject AXCallStatementInvokerWin::SetSelections(
 
   std::vector<IA2TextSelection> selections =
       PropertyNodeToIA2TextSelectionArray(property_node.arguments[0]);
-  if (selections.size() == 0) {
-    return AXOptionalObject::Error("Empty IA2TextSelection array is given");
-  }
 
   if (target->setSelections(selections.size(), selections.data()) == S_OK) {
     return AXOptionalObject({target});

@@ -14,6 +14,10 @@
 
 class GURL;
 
+namespace blink::mojom {
+class Manifest;
+}
+
 namespace content {
 class BrowserContext;
 class WebContents;
@@ -68,16 +72,18 @@ class WebappsClient {
   virtual AppBannerManager* GetAppBannerManager(
       content::WebContents* web_contents) = 0;
 
-  // Returns whether the current page is already installed as a web app, or
-  // should be considered as installed. Returns true if there is an installed
-  // web app within the BrowserContext of |web_contents()| that contains |url|
-  // within its scope, and false otherwise. For example, the URL
-  // https://example.com/a/b/c/d.html is contained within a web app with scope
-  // https://example.com/a/b/.
-  virtual bool IsWebAppConsideredFullyInstalled(
-      content::BrowserContext* browsing_context,
+  using WebAppInstallationConflictCallback = base::OnceCallback<void(bool)>;
+  // Returns if any current installations conflict with a new web app with the
+  // given start_url and manifest_id using callback. See the implementing class
+  // for more details on their behavior. Returning true here signifies that an
+  // app is already installed here.
+  // Note: The callback is executed synchonously within the function call on
+  // desktop.
+  virtual void DoesNewWebAppConflictWithExistingInstallation(
+      content::BrowserContext* browser_context,
       const GURL& start_url,
-      const ManifestId& manifest_id) const = 0;
+      const ManifestId& manifest_id,
+      WebAppInstallationConflictCallback callback) const = 0;
 
   // Returns if the web contents this manager is on is inside of an app context.
   virtual bool IsInAppBrowsingContext(
@@ -90,12 +96,21 @@ class WebappsClient {
       const GURL& site_url) const = 0;
 
   // Tracks whether the current site URL obtained from the web_contents is fully
-  // installed. The only difference from IsWebAppConsideredFullyInstalled() is
-  // that the former considers the scope obtained from a manifest as check for
-  // if an app is already installed.
+  // installed. The only difference from
+  // DoesNewWebAppConflictWithExistingInstallation() is that the former
+  // considers the scope obtained from a manifest as check for if an app is
+  // already installed.
   virtual bool IsAppFullyInstalledForSiteUrl(
       content::BrowserContext* browsing_context,
       const GURL& site_url) const = 0;
+  virtual bool IsUrlControlledBySeenManifest(
+      content::BrowserContext* browsing_context,
+      const GURL& site_url) const = 0;
+
+  // Called when a manifest is seen by the AppBannerManager. This manifest
+  // must be non-empty. Note that this may be the 'default' manifest.
+  virtual void OnManifestSeen(content::BrowserContext* browsing_context,
+                              const blink::mojom::Manifest& manifest) const = 0;
 
   // The user has ignored the installation dialog and it went away due to
   // another interaction (e.g. the tab was changed, page navigated, etc).
@@ -127,7 +142,7 @@ class WebappsClient {
   virtual bool IsInstallationInProgress(content::WebContents* web_contents,
                                         const GURL& manifest_id) = 0;
 
-  virtual bool CanShowAppBanners(content::WebContents* web_contents) = 0;
+  virtual bool CanShowAppBanners(const content::WebContents* web_contents) = 0;
 
   virtual void OnWebApkInstallInitiatedFromAppMenu(
       content::WebContents* web_contents) = 0;
@@ -138,6 +153,12 @@ class WebappsClient {
   virtual void InstallShortcut(content::WebContents* web_contents,
                                const AddToHomescreenParams& params) = 0;
 #endif
+
+  // Returns the id of the app that controls the last committed url of the given
+  // `web_contents`.
+  // Note: On Android this always returns `std::nullopt`.
+  virtual std::optional<webapps::AppId> GetAppIdForWebContents(
+      content::WebContents* web_contents) = 0;
 
  protected:
   segmentation_platform::SegmentationPlatformService*

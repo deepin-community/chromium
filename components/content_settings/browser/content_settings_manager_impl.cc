@@ -128,13 +128,13 @@ void ContentSettingsManagerImpl::Create(
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   base::ThreadPool::CreateSingleThreadTaskRunner(
       {base::TaskPriority::USER_BLOCKING})
-      ->PostTask(
-          FROM_HERE,
-          base::BindOnce(&ContentSettingsManagerImpl::CreateOnThread,
-                         render_process_host->GetID(), std::move(receiver),
-                         delegate->GetCookieSettings(
-                             render_process_host->GetBrowserContext()),
-                         std::move(delegate)));
+      ->PostTask(FROM_HERE,
+                 base::BindOnce(&ContentSettingsManagerImpl::CreateOnThread,
+                                render_process_host->GetDeprecatedID(),
+                                std::move(receiver),
+                                delegate->GetCookieSettings(
+                                    render_process_host->GetBrowserContext()),
+                                std::move(delegate)));
 }
 
 void ContentSettingsManagerImpl::Clone(
@@ -156,7 +156,7 @@ void ContentSettingsManagerImpl::AllowStorageAccess(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   GURL url = origin.GetURL();
 
-  // TODO(crbug.com/1386190): Consider whether the following check should
+  // TODO(crbug.com/40247160): Consider whether the following check should
   // get CookieSettingOverrides from the frame rather than default to none.
 
   CookieSettingsBase::CookieSettingWithMetadata cookie_settings;
@@ -182,6 +182,17 @@ void ContentSettingsManagerImpl::AllowStorageAccess(
   // simulate Chrome's behavior when 3P cookies are turned down to help
   // developers test their site.
   if (!allowed && net::cookie_util::IsForceThirdPartyCookieBlockingEnabled()) {
+    allowed = true;
+  }
+
+  // Allow unpartitioned storage access when the
+  // kNativeUnpartitionedStoragePermittedWhen3PCOff feature is enabled. This
+  // developer flag is used to simulate Chrome's unpartitioned storage behavior
+  // that is otherwise unreachable through command line flags. (Fixes
+  // crbug.com/357784801)
+  if (!allowed &&
+      base::FeatureList::IsEnabled(
+          features::kNativeUnpartitionedStoragePermittedWhen3PCOff)) {
     allowed = true;
   }
   if (delegate_->AllowStorageAccess(
@@ -217,7 +228,9 @@ ContentSettingsManagerImpl::ContentSettingsManagerImpl(
     scoped_refptr<CookieSettings> cookie_settings)
     : delegate_(std::move(delegate)),
       render_process_id_(render_process_id),
-      cookie_settings_(cookie_settings) {}
+      cookie_settings_(cookie_settings) {
+  CHECK(cookie_settings_);
+}
 
 ContentSettingsManagerImpl::ContentSettingsManagerImpl(
     const ContentSettingsManagerImpl& other)

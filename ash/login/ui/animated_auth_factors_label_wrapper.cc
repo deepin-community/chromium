@@ -15,6 +15,7 @@
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/view_class_properties.h"
 
@@ -44,8 +45,7 @@ class AuthFactorsLabel : public views::Label {
   METADATA_HEADER(AuthFactorsLabel, views::Label)
 
  public:
-  AuthFactorsLabel(bool visible_to_screen_reader)
-      : visible_to_screen_reader_(visible_to_screen_reader) {
+  AuthFactorsLabel(bool visible_to_screen_reader) {
     SetSubpixelRenderingEnabled(false);
     SetAutoColorReadabilityEnabled(false);
     SetEnabledColorId(kColorAshTextColorSecondary);
@@ -54,31 +54,16 @@ class AuthFactorsLabel : public views::Label {
     SetLineHeight(kLabelLineHeightDp);
     SizeToFit(kAuthFactorsViewWidthDp);
     SetVerticalAlignment(gfx::VerticalAlignment::ALIGN_TOP);
+    GetViewAccessibility().SetIsIgnored(!visible_to_screen_reader);
   }
 
   AuthFactorsLabel(const AuthFactorsLabel&) = delete;
   AuthFactorsLabel& operator=(const AuthFactorsLabel&) = delete;
 
-  // views::Label:
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override {
-    if (!visible_to_screen_reader_) {
-      node_data->AddState(ax::mojom::State::kInvisible);
-      return;
-    }
-
-    views::Label::GetAccessibleNodeData(node_data);
-  }
-
   gfx::Size CalculatePreferredSize(
       const views::SizeBounds& available_size) const override {
     return gfx::Size(kAuthFactorsViewWidthDp, kLabelWrapperHeightDp);
   }
-
- private:
-  // If false, then this label should be excluded from the accessibility tree.
-  // Used when the label is meant purely for animation purposes and does not
-  // represent content that should be made accessible.
-  bool visible_to_screen_reader_ = true;
 };
 
 BEGIN_METADATA(AuthFactorsLabel)
@@ -125,7 +110,7 @@ void AnimatedAuthFactorsLabelWrapper::SetLabelTextAndAccessibleName(
   std::u16string previous_text = current_label_->GetText();
 
   current_label_->SetText(l10n_util::GetStringUTF16(label_id));
-  current_label_->SetAccessibleName(
+  current_label_->GetViewAccessibility().SetName(
       l10n_util::GetStringUTF16(accessible_name_id));
   SetProperty(views::kMarginsKey,
               gfx::Insets::TLBR(kSpacingBetweenIconsAndLabelDp, 0, 0, 0));
@@ -201,7 +186,8 @@ void AnimatedAuthFactorsLabelWrapper::SetLabelTextAndAccessibleName(
       current_label_opacity_seq.release());
 }
 
-gfx::Size AnimatedAuthFactorsLabelWrapper::CalculatePreferredSize() const {
+gfx::Size AnimatedAuthFactorsLabelWrapper::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
   return gfx::Size(kAuthFactorsViewWidthDp, kLabelWrapperHeightDp);
 }
 

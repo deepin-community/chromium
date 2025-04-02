@@ -9,26 +9,41 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
-#include "base/logging.h"
 #include "base/notreached.h"
-#include "remoting/base/corp_session_authz_service_client.h"
+#include "base/strings/stringprintf.h"
 #include "remoting/base/protobuf_http_status.h"
+#include "remoting/base/session_authz_service_client.h"
 #include "remoting/proto/session_authz_service.h"
 #include "remoting/protocol/authenticator.h"
+#include "remoting/protocol/credentials_type.h"
 #include "remoting/protocol/session_authz_reauthorizer.h"
 
 namespace remoting::protocol {
 
 SessionAuthzAuthenticator::SessionAuthzAuthenticator(
+    CredentialsType credentials_type,
     std::unique_ptr<SessionAuthzServiceClient> service_client,
     const CreateBaseAuthenticatorCallback& create_base_authenticator_callback)
-    : service_client_(std::move(service_client)),
-      create_base_authenticator_callback_(create_base_authenticator_callback) {}
+    : credentials_type_(credentials_type),
+      service_client_(std::move(service_client)),
+      create_base_authenticator_callback_(create_base_authenticator_callback) {
+  DCHECK(credentials_type == CredentialsType::CLOUD_SESSION_AUTHZ ||
+         credentials_type == CredentialsType::CORP_SESSION_AUTHZ);
+}
 
 SessionAuthzAuthenticator::~SessionAuthzAuthenticator() = default;
 
 void SessionAuthzAuthenticator::Start(base::OnceClosure resume_callback) {
   GenerateHostToken(std::move(resume_callback));
+}
+
+CredentialsType SessionAuthzAuthenticator::credentials_type() const {
+  return credentials_type_;
+}
+
+const Authenticator& SessionAuthzAuthenticator::implementing_authenticator()
+    const {
+  return *this;
 }
 
 Authenticator::State SessionAuthzAuthenticator::state() const {
@@ -60,6 +75,16 @@ Authenticator::RejectionReason SessionAuthzAuthenticator::rejection_reason()
     return session_authz_rejection_reason_;
   }
   return underlying_->rejection_reason();
+}
+
+Authenticator::RejectionDetails SessionAuthzAuthenticator::rejection_details()
+    const {
+  DCHECK_EQ(state(), REJECTED);
+
+  if (session_authz_state_ == SessionAuthzState::FAILED) {
+    return rejection_details_;
+  }
+  return underlying_->rejection_details();
 }
 
 void SessionAuthzAuthenticator::ProcessMessage(
@@ -107,11 +132,32 @@ const std::string& SessionAuthzAuthenticator::GetAuthKey() const {
   return underlying_->GetAuthKey();
 }
 
+const SessionPolicies* SessionAuthzAuthenticator::GetSessionPolicies() const {
+  DCHECK_EQ(state(), ACCEPTED);
+
+  return session_policies_.has_value() ? &session_policies_.value() : nullptr;
+}
+
 std::unique_ptr<ChannelAuthenticator>
 SessionAuthzAuthenticator::CreateChannelAuthenticator() const {
   DCHECK_EQ(state(), ACCEPTED);
 
   return underlying_->CreateChannelAuthenticator();
+}
+
+void SessionAuthzAuthenticator::SetReauthorizerForTesting(
+    std::unique_ptr<SessionAuthzReauthorizer> reauthorizer) {
+  reauthorizer_ = std::move(reauthorizer);
+}
+
+void SessionAuthzAuthenticator::SetSessionIdForTesting(
+    std::string_view session_id) {
+  session_id_ = session_id;
+}
+
+void SessionAuthzAuthenticator::SetHostTokenForTesting(
+    std::string_view host_token) {
+  host_token_ = host_token;
 }
 
 void SessionAuthzAuthenticator::GenerateHostToken(
@@ -156,10 +202,9 @@ void SessionAuthzAuthenticator::VerifySessionToken(
     const jingle_xmpp::XmlElement& message,
     base::OnceClosure resume_callback) {
   session_authz_state_ = SessionAuthzState::VERIFYING_SESSION_TOKEN;
-  internal::VerifySessionTokenRequestStruct request;
-  request.session_token = message.TextNamed(kSessionTokenTag);
+  std::string session_token = message.TextNamed(kSessionTokenTag);
   service_client_->VerifySessionToken(
-      request,
+      session_token,
       base::BindOnce(&SessionAuthzAuthenticator::OnVerifiedSessionToken,
                      base::Unretained(this), message,
                      std::move(resume_callback)));
@@ -176,10 +221,12 @@ void SessionAuthzAuthenticator::OnVerifiedSessionToken(
     return;
   }
   if (response->session_id != session_id_) {
-    LOG(ERROR) << "Session token verification failed. Expected session ID: "
-               << session_id_ << ", actual: " << response->session_id;
     session_authz_state_ = SessionAuthzState::FAILED;
     session_authz_rejection_reason_ = RejectionReason::INVALID_ACCOUNT_ID;
+    rejection_details_ = RejectionDetails(base::StringPrintf(
+        "Session token verification failed. Expected session ID: %s, actual: "
+        "%s",
+        session_id_, response->session_id));
     std::move(resume_callback).Run();
     return;
   }
@@ -188,6 +235,7 @@ void SessionAuthzAuthenticator::OnVerifiedSessionToken(
   // The other side already started the SPAKE authentication.
   underlying_ = create_base_authenticator_callback_.Run(response->shared_secret,
                                                         WAITING_MESSAGE);
+  session_policies_ = std::move(response->session_policies);
   verify_token_response_ = std::move(response);
   underlying_->ProcessMessage(&message, std::move(resume_callback));
   StartReauthorizerIfNecessary();
@@ -197,9 +245,9 @@ void SessionAuthzAuthenticator::HandleSessionAuthzError(
     const std::string_view& action_name,
     const ProtobufHttpStatus& status) {
   DCHECK(!status.ok());
-  LOG(ERROR) << "SessionAuthz " << action_name
-             << " error, code: " << static_cast<int>(status.error_code())
-             << ", message: " << status.error_message();
+  rejection_details_ = RejectionDetails(base::StringPrintf(
+      "SessionAuthz %s error, code: %d, message: %s", action_name,
+      static_cast<int>(status.error_code()), status.error_message()));
   session_authz_state_ = SessionAuthzState::FAILED;
   switch (status.error_code()) {
     case ProtobufHttpStatus::Code::PERMISSION_DENIED:

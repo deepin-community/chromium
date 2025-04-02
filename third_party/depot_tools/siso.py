@@ -15,10 +15,45 @@ import sys
 import gclient_paths
 
 
+def checkOutdir(args):
+    subcmd = ''
+    out_dir = "."
+    for i, arg in enumerate(args):
+        if not arg.startswith("-") and not subcmd:
+            subcmd = arg
+            continue
+        if arg == "-C":
+            out_dir = args[i + 1]
+        elif arg.startswith("-C"):
+            out_dir = arg[2:]
+    if subcmd != "ninja":
+        return
+    ninja_marker = os.path.join(out_dir, ".ninja_deps")
+    if os.path.exists(ninja_marker):
+        print("depot_tools/siso.py: %s contains Ninja state file.\n"
+              "Use `autoninja` to use reclient,\n"
+              "or run `gn clean %s` to switch from ninja to siso\n" %
+              (out_dir, out_dir),
+              file=sys.stderr)
+        sys.exit(1)
+
+
 def main(args):
-    # Propagate signals to siso process so that it can run cleanup steps.
-    # Siso will be terminated immediately after the second Ctrl-C.
-    signal.signal(signal.SIGINT, lambda signum, frame: None)
+    # Do not raise KeyboardInterrupt on SIGINT so as to give siso time to run
+    # cleanup tasks. Siso will be terminated immediately after the second
+    # Ctrl-C.
+    original_sigint_handler = signal.getsignal(signal.SIGINT)
+
+    def _ignore(signum, frame):
+        try:
+            # Call the original signal handler.
+            original_sigint_handler(signum, frame)
+        except KeyboardInterrupt:
+            # Do not reraise KeyboardInterrupt so as to not kill siso too early.
+            pass
+
+    signal.signal(signal.SIGINT, _ignore)
+
     if not sys.platform.startswith('win'):
         signal.signal(signal.SIGTERM, lambda signum, frame: None)
 
@@ -39,6 +74,12 @@ def main(args):
         os.environ.pop("CPATH", None)
         os.environ.pop("LIBRARY_PATH", None)
         os.environ.pop("SDKROOT", None)
+
+    # if user doesn't set PYTHONPYCACHEPREFIX and PYTHONDONTWRITEBYTECODE
+    # set PYTHONDONTWRITEBYTECODE=1 not to create many *.pyc in workspace
+    # and keep workspace clean.
+    if not os.environ.get("PYTHONPYCACHEPREFIX"):
+        os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 
     environ = os.environ.copy()
 
@@ -74,11 +115,24 @@ def main(args):
             for line in f.readlines():
                 k, v = line.rstrip().split('=', 1)
                 env[k] = v
-        siso_path = siso_override_path or os.path.join(
-            base_path, 'third_party', 'siso',
-            'siso' + gclient_paths.GetExeSuffix())
-        if os.path.isfile(siso_path):
-            return subprocess.call([siso_path] + args[1:], env=env)
+        siso_paths = [
+            siso_override_path,
+            os.path.join(base_path, 'third_party', 'siso', 'cipd',
+                         'siso' + gclient_paths.GetExeSuffix()),
+            os.path.join(base_path, 'third_party', 'siso',
+                         'siso' + gclient_paths.GetExeSuffix()),
+        ]
+        for siso_path in siso_paths:
+            if siso_path and os.path.isfile(siso_path):
+                checkOutdir(args[1:])
+                return subprocess.call([siso_path] + args[1:], env=env)
+        print(
+            'depot_tools/siso.py: Could not find siso in third_party/siso '
+            'of the current project. Did you run gclient sync?',
+            file=sys.stderr)
+        return 1
+    if siso_override_path:
+        return subprocess.call([siso_override_path] + args[1:])
 
     print(
         'depot_tools/siso.py: Could not find .sisoenv under build/config/siso '

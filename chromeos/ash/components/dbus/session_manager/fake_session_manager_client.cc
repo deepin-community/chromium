@@ -151,7 +151,6 @@ std::string GetStubPolicyFilenamePostfix(
              descriptor.component_id();
   }
   NOTREACHED();
-  return std::string();
 }
 
 // Returns the last part of the stub policy file path consisting of the filename
@@ -180,7 +179,6 @@ base::FilePath GetStubRelativePolicyPath(
     }
     default:
       NOTREACHED();
-      return base::FilePath();
   }
 }
 
@@ -217,7 +215,6 @@ base::FilePath GetStubPolicyFilePath(
     }
     default:
       NOTREACHED();
-      return base::FilePath();
   }
 }
 
@@ -390,6 +387,9 @@ void FakeSessionManagerClient::StartSessionEx(
   StartSession(cryptohome_id);
 }
 
+void FakeSessionManagerClient::EmitStartedUserSession(
+    const cryptohome::AccountIdentifier& cryptohome_id) {}
+
 void FakeSessionManagerClient::StopSession(
     login_manager::SessionStopReason reason) {
   session_stopped_ = true;
@@ -436,24 +436,6 @@ void FakeSessionManagerClient::ClearForcedReEnrollmentVpd(
   PostReply(FROM_HERE, std::move(callback), true);
 }
 
-void FakeSessionManagerClient::UnblockDevModeForEnrollment(
-    chromeos::VoidDBusMethodCallback callback) {
-  unblock_dev_mode_enrollment_call_count_++;
-  PostReply(FROM_HERE, std::move(callback), true);
-}
-
-void FakeSessionManagerClient::UnblockDevModeForInitialStateDetermination(
-    chromeos::VoidDBusMethodCallback callback) {
-  unblock_dev_mode_init_state_call_count_++;
-  PostReply(FROM_HERE, std::move(callback), true);
-}
-
-void FakeSessionManagerClient::UnblockDevModeForCarrierLock(
-    chromeos::VoidDBusMethodCallback callback) {
-  unblock_dev_mode_carrier_lock_call_count_++;
-  PostReply(FROM_HERE, std::move(callback), true);
-}
-
 void FakeSessionManagerClient::StartTPMFirmwareUpdate(
     const std::string& update_mode) {
   last_tpm_firmware_update_mode_ = update_mode;
@@ -494,55 +476,6 @@ bool FakeSessionManagerClient::BlockingRequestBrowserDataBackwardMigration(
 void FakeSessionManagerClient::RetrieveActiveSessions(
     ActiveSessionsCallback callback) {
   PostReply(FROM_HERE, std::move(callback), user_sessions_);
-}
-
-void FakeSessionManagerClient::RetrieveDevicePolicy(
-    RetrievePolicyCallback callback) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE, kEmptyAccountId);
-  RetrievePolicy(descriptor, std::move(callback));
-}
-
-RetrievePolicyResponseType
-FakeSessionManagerClient::BlockingRetrieveDevicePolicy(
-    std::string* policy_out) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE, kEmptyAccountId);
-  return BlockingRetrievePolicy(descriptor, policy_out);
-}
-
-void FakeSessionManagerClient::RetrievePolicyForUser(
-    const cryptohome::AccountIdentifier& cryptohome_id,
-    RetrievePolicyCallback callback) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_USER, cryptohome_id.account_id());
-  RetrievePolicy(descriptor, std::move(callback));
-}
-
-RetrievePolicyResponseType
-FakeSessionManagerClient::BlockingRetrievePolicyForUser(
-    const cryptohome::AccountIdentifier& cryptohome_id,
-    std::string* policy_out) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_USER, cryptohome_id.account_id());
-  return BlockingRetrievePolicy(descriptor, policy_out);
-}
-
-void FakeSessionManagerClient::RetrieveDeviceLocalAccountPolicy(
-    const std::string& account_id,
-    RetrievePolicyCallback callback) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT, account_id);
-  RetrievePolicy(descriptor, std::move(callback));
-}
-
-RetrievePolicyResponseType
-FakeSessionManagerClient::BlockingRetrieveDeviceLocalAccountPolicy(
-    const std::string& account_id,
-    std::string* policy_out) {
-  login_manager::PolicyDescriptor descriptor = MakeChromePolicyDescriptor(
-      login_manager::ACCOUNT_TYPE_DEVICE_LOCAL_ACCOUNT, account_id);
-  return BlockingRetrievePolicy(descriptor, policy_out);
 }
 
 void FakeSessionManagerClient::RetrievePolicy(

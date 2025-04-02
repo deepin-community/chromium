@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ash/profiles/profile_helper.h"
 
+#include <algorithm>
 #include <memory>
 #include <set>
 #include <string>
@@ -15,9 +16,8 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/ranges/algorithm.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/system/sys_info.h"
 #include "base/threading/thread_restrictions.h"
@@ -25,10 +25,10 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_types_ash.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_types.h"
 #include "components/account_id/account_id.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -60,7 +60,8 @@ class ProfileHelperImpl : public ProfileHelper {
   std::unique_ptr<BrowserContextHelper> browser_context_helper_;
 
   // Used for testing by unit tests and FakeUserManager.
-  std::map<const user_manager::User*, Profile*> user_to_profile_for_testing_;
+  std::map<const user_manager::User*, raw_ptr<Profile, CtnExperimental>>
+      user_to_profile_for_testing_;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -89,11 +90,6 @@ base::FilePath ProfileHelper::GetProfilePathByUserIdHash(
 }
 
 // static
-base::FilePath ProfileHelper::GetSigninProfileDir() {
-  return BrowserContextHelper::Get()->GetSigninBrowserContextPath();
-}
-
-// static
 Profile* ProfileHelper::GetSigninProfile() {
   return Profile::FromBrowserContext(
       BrowserContextHelper::Get()->DeprecatedGetOrCreateSigninBrowserContext());
@@ -114,22 +110,7 @@ base::FilePath ProfileHelper::GetUserProfileDir(
 
 // static
 bool ProfileHelper::IsSigninProfile(const Profile* profile) {
-  return ::IsSigninProfile(profile);
-}
-
-// static
-bool ProfileHelper::IsSigninProfileInitialized() {
-  return BrowserContextHelper::Get()->GetSigninBrowserContext();
-}
-
-// static
-bool ProfileHelper::IsLockScreenAppProfile(const Profile* profile) {
-  return ::IsLockScreenAppProfile(profile);
-}
-
-// static
-base::FilePath ProfileHelper::GetLockScreenAppProfilePath() {
-  return BrowserContextHelper::Get()->GetLockScreenAppBrowserContextPath();
+  return ash::IsSigninBrowserContext(const_cast<Profile*>(profile));
 }
 
 // static
@@ -145,7 +126,7 @@ Profile* ProfileHelper::GetLockScreenProfile() {
 
 // static
 bool ProfileHelper::IsLockScreenProfile(const Profile* profile) {
-  return ::IsLockScreenProfile(profile);
+  return ash::IsLockScreenBrowserContext(const_cast<Profile*>(profile));
 }
 
 // static
@@ -168,12 +149,12 @@ bool ProfileHelper::IsEphemeralUserProfile(const Profile* profile) {
 
 // static
 bool ProfileHelper::IsUserProfile(const Profile* profile) {
-  return ::IsUserProfile(profile);
+  return ash::IsUserBrowserContext(const_cast<Profile*>(profile));
 }
 
 // static
 bool ProfileHelper::IsUserProfilePath(const base::FilePath& profile_path) {
-  return ::IsUserProfilePath(profile_path);
+  return ash::IsUserBrowserContextBaseName(profile_path);
 }
 
 // static
@@ -195,7 +176,7 @@ ProfileHelperImpl::ProfileHelperImpl(
 ProfileHelperImpl::~ProfileHelperImpl() = default;
 
 Profile* ProfileHelperImpl::GetProfileByAccountId(const AccountId& account_id) {
-  // TODO(crbug.com/1325210): Remove test injection from here.
+  // TODO(crbug.com/40225390): Remove test injection from here.
   if (!user_to_profile_for_testing_.empty()) {
     const auto* user = user_manager::UserManager::Get()->FindUser(account_id);
     auto it = user_to_profile_for_testing_.find(user);
@@ -209,7 +190,7 @@ Profile* ProfileHelperImpl::GetProfileByAccountId(const AccountId& account_id) {
 }
 
 Profile* ProfileHelperImpl::GetProfileByUser(const user_manager::User* user) {
-  // TODO(crbug.com/1325210): Remove test injection from here.
+  // TODO(crbug.com/40225390): Remove test injection from here.
   if (!user_to_profile_for_testing_.empty()) {
     auto it = user_to_profile_for_testing_.find(user);
     if (it != user_to_profile_for_testing_.end()) {

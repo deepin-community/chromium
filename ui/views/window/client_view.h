@@ -36,6 +36,8 @@ class VIEWS_EXPORT ClientView : public View {
   // ClientView subclasses can override this default behavior to allow the
   // close to be blocked until the user corrects mistakes, accepts a warning
   // dialog, etc.
+  //
+  // DEPRECATED. Don't use this. See Widget::MakeCloseSynchronous().
   virtual CloseRequestResult OnWindowCloseRequested();
 
   // Notification that the widget is closing.
@@ -61,14 +63,13 @@ class VIEWS_EXPORT ClientView : public View {
   virtual void UpdateWindowRoundedCorners(int corner_radius);
 
   // Overridden from View:
-  gfx::Size CalculatePreferredSize() const override;
-  int GetHeightForWidth(int width) const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& available_size) const override;
   gfx::Size GetMinimumSize() const override;
   gfx::Size GetMaximumSize() const override;
 
  protected:
   // Overridden from View:
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   void ViewHierarchyChanged(
       const ViewHierarchyChangedDetails& details) override;
@@ -89,7 +90,7 @@ class VIEWS_EXPORT ClientView : public View {
   // pointed to by `contents_view_`, even though `contents_view_` was previously
   // a child view of `this`.
   //
-  // TODO(https://crbug.com/1475438): Fix that. Good luck!
+  // TODO(crbug.com/40279653): Fix that. Good luck!
   raw_ptr<View, DisableDanglingPtrDetection> contents_view_;
 };
 

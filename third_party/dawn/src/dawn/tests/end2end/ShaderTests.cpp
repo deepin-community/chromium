@@ -37,6 +37,18 @@ namespace dawn {
 namespace {
 
 class ShaderTests : public DawnTest {
+  protected:
+    wgpu::RequiredLimits GetRequiredLimits(const wgpu::SupportedLimits& supported) override {
+        // Just copy all the limits, though all we really care about is
+        // maxStorageBuffersInFragmentStage
+        // maxStorageTexturesInFragmentStage
+        // maxStorageBuffersInVertexStage
+        // maxStorageTexturesInVertexStage
+        wgpu::RequiredLimits required = {};
+        required.limits = supported.limits;
+        return required;
+    }
+
   public:
     wgpu::Buffer CreateBuffer(const std::vector<uint32_t>& data,
                               wgpu::BufferUsage usage = wgpu::BufferUsage::Storage |
@@ -1220,10 +1232,10 @@ TEST_P(ShaderTests, FragmentInputIsSubsetOfVertexOutput) {
     wgpu::ShaderModule vsModule = utils::CreateShaderModule(device, R"(
 struct ShaderIO {
     @location(1) var1: f32,
-    @location(3) @interpolate(flat) var3: u32,
-    @location(5) @interpolate(flat) var5: i32,
+    @location(3) @interpolate(flat, either) var3: u32,
+    @location(5) @interpolate(flat, either) var5: i32,
     @location(7) var7: f32,
-    @location(9) @interpolate(flat) var9: u32,
+    @location(9) @interpolate(flat, either) var9: u32,
     @builtin(position) pos: vec4f,
 }
 
@@ -1247,7 +1259,7 @@ struct ShaderIO {
 
     wgpu::ShaderModule fsModule = utils::CreateShaderModule(device, R"(
 struct ShaderIO {
-    @location(3) @interpolate(flat) var3: u32,
+    @location(3) @interpolate(flat, either) var3: u32,
     @location(7) var7: f32,
 }
 
@@ -1830,6 +1842,11 @@ TEST_P(ShaderTests, Robustness_Uniform_Mat4x3) {
 // GLSL. If not renamed properly, names of binding at (2, 2) in the vertex stage and (0, 3) in the
 // fragment stage can possibly collide.
 TEST_P(ShaderTests, StorageAcrossStages) {
+    // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 6 OpenGLES
+    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsARM());
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInFragmentStage < 4);
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInVertexStage < 3);
+
     wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
         @group(2) @binding(2) var<storage> u0_2: f32;
         @group(1) @binding(1) var<storage> u0_1: f32;
@@ -1867,6 +1884,11 @@ TEST_P(ShaderTests, StorageAcrossStages) {
 // GLSL. If not renamed properly, names of binding at (2, 2) in the vertex stage and (0, 3) in the
 // fragment stage can possibly collide.
 TEST_P(ShaderTests, StorageAcrossStagesStruct) {
+    // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 6 OpenGLES
+    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsARM());
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInFragmentStage < 2);
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInVertexStage < 1);
+
     wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
         struct block {
             inner: f32
@@ -1899,6 +1921,11 @@ TEST_P(ShaderTests, StorageAcrossStagesStruct) {
 // GLSL. If not renamed properly, names of binding at (2, 2) in the vertex stage and (0, 3) in the
 // fragment stage can possibly collide.
 TEST_P(ShaderTests, StorageAcrossStagesSeparateModules) {
+    // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 6 OpenGLES
+    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsARM());
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInFragmentStage < 4);
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInVertexStage < 3);
+
     wgpu::ShaderModule vsModule = utils::CreateShaderModule(device, R"(
         @group(2) @binding(2) var<storage> u0_2: f32;
         @group(1) @binding(1) var<storage> u0_1: f32;
@@ -1935,6 +1962,11 @@ TEST_P(ShaderTests, StorageAcrossStagesSeparateModules) {
 
 // Deliberately mismatch an SSBO block name at differrent stages.
 TEST_P(ShaderTests, StorageAcrossStagesSeparateModuleMismatch) {
+    // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 6 OpenGLES
+    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsARM());
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInFragmentStage < 1);
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInVertexStage < 2);
+
     wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
         @group(0) @binding(0) var<storage> tint_symbol_ubo_0: f32;
         @group(0) @binding(1) var<storage> tint_symbol_ubo_1: u32;
@@ -1960,6 +1992,11 @@ TEST_P(ShaderTests, StorageAcrossStagesSeparateModuleMismatch) {
 
 // Having different block contents at the same binding point used in different stages is allowed.
 TEST_P(ShaderTests, StorageAcrossStagesSameBindingPointCollide) {
+    // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 6 OpenGLES
+    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsARM());
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInFragmentStage < 1);
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInVertexStage < 1);
+
     wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
         struct X { x : vec4f }
         struct Y { y : vec4i }
@@ -1988,6 +2025,11 @@ TEST_P(ShaderTests, StorageAcrossStagesSameBindingPointCollide) {
 // Having different block contents at the same binding point used in different stages is allowed,
 // with or without struct wrapper.
 TEST_P(ShaderTests, StorageAcrossStagesSameBindingPointCollideMixedStructDef) {
+    // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 6 OpenGLES
+    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsARM());
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInFragmentStage < 1);
+    DAWN_SUPPRESS_TEST_IF(GetSupportedLimits().limits.maxStorageBuffersInVertexStage < 1);
+
     wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
         struct X { x : vec4f }
 
@@ -2180,7 +2222,7 @@ TEST_P(ShaderTests, FragDepthAndInstanceIndex) {
     desc.cFragment.module = module;
     desc.cFragment.targetCount = 0;
     wgpu::DepthStencilState* dsState = desc.EnableDepthStencil();
-    dsState->depthWriteEnabled = true;
+    dsState->depthWriteEnabled = wgpu::OptionalBool::True;
     dsState->depthCompare = wgpu::CompareFunction::Always;
 
     device.CreateRenderPipeline(&desc);
@@ -2242,6 +2284,9 @@ TEST_P(ShaderTests, UniformAcrossStagesSameBindingPointCollideMixedStructDef) {
 
 // Test that the `w` component of fragment builtin position behaves correctly.
 TEST_P(ShaderTests, FragmentPositionW) {
+    // TODO(crbug.com/dawn/2295): diagnose this failure on Pixel 4 OpenGLES
+    DAWN_SUPPRESS_TEST_IF(IsOpenGLES() && IsAndroid() && IsQualcomm());
+
     wgpu::ShaderModule vsModule = utils::CreateShaderModule(device, R"(
 @vertex fn main(@builtin(vertex_index) vertex_index : u32) -> @builtin(position) vec4f {
   let pos = array(
@@ -2486,6 +2531,89 @@ fn main() {
     queue.Submit(1, &commands);
 
     EXPECT_BUFFER_U32_RANGE_EQ(expected.data(), output, 0, expected.size());
+}
+
+// A regression test for chromium:341282611. Test that Vulkan shader module cache should take the
+// primitive type into account because for `PointList` we should generate `PointSize` in the SPIRV
+// of the vertex shader.
+TEST_P(ShaderTests, SameShaderModuleToRenderPointAndNonPoint) {
+    std::string shader = R"(
+@vertex
+fn vs_main() -> @builtin(position) vec4f {
+    return vec4f(0.0, 0.0, 0.0, 1.0);
+}
+@fragment
+fn fs_main() -> @location(0) vec4f {
+    return vec4f(0.0, 0.0, 0.0, 1.0);
+}
+)";
+    wgpu::PipelineLayoutDescriptor layoutDesc = {};
+    layoutDesc.bindGroupLayoutCount = 0;
+    wgpu::PipelineLayout layout = device.CreatePipelineLayout(&layoutDesc);
+
+    wgpu::ShaderModule shaderModule = utils::CreateShaderModule(device, shader.c_str());
+    utils::ComboRenderPipelineDescriptor rpDesc;
+    rpDesc.vertex.module = shaderModule;
+    rpDesc.vertex.entryPoint = "vs_main";
+    rpDesc.layout = layout;
+    rpDesc.cFragment.module = shaderModule;
+    rpDesc.cFragment.entryPoint = "fs_main";
+
+    utils::BasicRenderPass renderPass = utils::CreateBasicRenderPass(device, 64, 64);
+    rpDesc.cTargets[0].format = renderPass.colorFormat;
+
+    wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+    wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderPass.renderPassInfo);
+    {
+        rpDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+        wgpu::RenderPipeline pipeline = device.CreateRenderPipeline(&rpDesc);
+        pass.SetPipeline(pipeline);
+        pass.Draw(3);
+    }
+    {
+        rpDesc.primitive.topology = wgpu::PrimitiveTopology::PointList;
+        wgpu::RenderPipeline pipeline = device.CreateRenderPipeline(&rpDesc);
+        pass.SetPipeline(pipeline);
+        pass.Draw(1);
+    }
+    pass.End();
+    wgpu::CommandBuffer commandBuffer = encoder.Finish();
+    queue.Submit(1, &commandBuffer);
+}
+
+// Regression test for crbug.com/dawn/380433758.
+TEST_P(ShaderTests, DuplicateTexture) {
+    wgpu::ShaderModule module = utils::CreateShaderModule(device, R"(
+fn sample(t: texture_2d<f32>, s: sampler) -> vec4f {
+  return textureSampleLevel(t, s, vec2f(0), 0);
+}
+
+fn useCombos0() -> vec4f {
+  return sample(tex0_0, smp0_0);
+}
+
+fn useCombos1() -> vec4f {
+  return sample(tex1_15, smp0_0);
+}
+
+@group(0) @binding(0) var tex0_0: texture_2d<f32>;
+@group(0) @binding(1) var tex1_15: texture_2d<f32>;
+@group(0) @binding(2) var smp0_0: sampler;
+
+@vertex fn vs() -> @builtin(position) vec4f {
+  return useCombos0();
+}
+
+@fragment fn fs() -> @location(0) vec4f {
+  return vec4f(useCombos1());
+}
+)");
+
+    utils::ComboRenderPipelineDescriptor desc;
+    desc.vertex.module = module;
+    desc.cFragment.module = module;
+
+    device.CreateRenderPipeline(&desc);
 }
 
 DAWN_INSTANTIATE_TEST(ShaderTests,

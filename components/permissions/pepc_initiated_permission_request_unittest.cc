@@ -17,7 +17,6 @@
 #include "components/permissions/test/test_permissions_client.h"
 #include "content/public/browser/permission_controller_delegate.h"
 #include "content/public/browser/render_frame_host.h"
-#include "content/public/common/content_features.h"
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/render_frame_host_test_support.h"
 #include "content/public/test/test_browser_context.h"
@@ -42,7 +41,7 @@ class PEPCInitiatedPermissionRequestTest
     : public content::RenderViewHostTestHarness {
  public:
   PEPCInitiatedPermissionRequestTest()
-      : scoped_feature_list_(features::kPermissionElement) {}
+      : scoped_feature_list_(blink::features::kPermissionElement) {}
   PEPCInitiatedPermissionRequestTest(
       const PEPCInitiatedPermissionRequestTest&) = delete;
   PEPCInitiatedPermissionRequestTest& operator=(
@@ -272,7 +271,7 @@ TEST_F(PEPCInitiatedPermissionRequestTest,
 
   blink::ParsedPermissionsPolicy frame_policy;
   frame_policy.emplace_back(
-      blink::mojom::PermissionsPolicyFeature::kMicrophone,
+      network::mojom::PermissionsPolicyFeature::kMicrophone,
       /*allowed_origins=*/
       std::vector{*blink::OriginWithPossibleWildcards::FromOrigin(
           url::Origin::Create(origin()))},
@@ -301,7 +300,7 @@ TEST_F(PEPCInitiatedPermissionRequestTest,
 TEST_F(PEPCInitiatedPermissionRequestTest,
        PEPCRequestBlockedWithoutFeaturePolicy) {
   blink::ParsedPermissionsPolicy frame_policy;
-  frame_policy.push_back({blink::mojom::PermissionsPolicyFeature::kMicrophone,
+  frame_policy.push_back({network::mojom::PermissionsPolicyFeature::kMicrophone,
                           /*allowed_origins=*/
                           {*blink::OriginWithPossibleWildcards::FromOrigin(
                               url::Origin::Create(GURL("http://fakeurl.com")))},

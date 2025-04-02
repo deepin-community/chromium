@@ -8,7 +8,7 @@
  * protocol handlers category under Site Settings.
  */
 
-import 'chrome://resources/cr_components/settings_prefs/prefs.js';
+import '/shared/settings/prefs/prefs.js';
 import 'chrome://resources/cr_elements/cr_action_menu/cr_action_menu.js';
 import 'chrome://resources/cr_elements/cr_icon_button/cr_icon_button.js';
 import 'chrome://resources/cr_elements/cr_radio_group/cr_radio_group.js';
@@ -16,8 +16,8 @@ import 'chrome://resources/cr_elements/cr_link_row/cr_link_row.js';
 import 'chrome://resources/cr_elements/cr_toggle/cr_toggle.js';
 import 'chrome://resources/cr_elements/cr_shared_style.css.js';
 import 'chrome://resources/cr_elements/icons.html.js';
-import 'chrome://resources/polymer/v3_0/iron-flex-layout/iron-flex-layout-classes.js';
 import '../controls/settings_toggle_button.js';
+import '../privacy_icons.html.js';
 import '../privacy_page/collapse_radio_button.js';
 import '../settings_shared.css.js';
 import '../site_favicon.js';
@@ -49,6 +49,7 @@ export interface AppHandlerEntry {
   protocol_display_name: string;
   spec: string;
   app_id: string;
+  app_name?: string;
 }
 
 export interface AppProtocolEntry {
@@ -304,6 +305,14 @@ export class ProtocolHandlersElement extends ProtocolHandlersElementBase {
     this.actionMenuModel_ = event.model.item;
     this.shadowRoot!.querySelector('cr-action-menu')!.showAt(
         event.target as HTMLElement);
+  }
+
+  private getNameCssClass_(item: AppHandlerEntry): string {
+    return item.app_name ? '' : 'url-directionality';
+  }
+
+  private getNameText_(item: AppHandlerEntry): string {
+    return item.app_name || item.host;
   }
 }
 

@@ -28,7 +28,7 @@
 #include "url/url_constants.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/file_manager/app_id.h"
+#include "chromeos/ash/components/file_manager/app_id.h"
 #include "extensions/common/constants.h"
 #endif
 
@@ -45,7 +45,7 @@ TranslateService::TranslateService()
   resource_request_allowed_notifier_.Init(this, true /* leaky */);
 }
 
-TranslateService::~TranslateService() {}
+TranslateService::~TranslateService() = default;
 
 // static
 void TranslateService::Initialize() {
@@ -100,7 +100,6 @@ void TranslateService::OnResourceRequestsAllowed() {
       translate::TranslateDownloadManager::GetInstance()->language_list();
   if (!language_list) {
     NOTREACHED();
-    return;
   }
 
   language_list->SetResourceRequestsAllowed(

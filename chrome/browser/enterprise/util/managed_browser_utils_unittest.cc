@@ -12,6 +12,8 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+#include "chrome/browser/ui/ui_features.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
@@ -51,7 +53,7 @@ MATCHER_P(CertEq, expected_cert, "") {
 TEST(ManagedBrowserUtils, NoPolicies) {
   content::BrowserTaskEnvironment task_environment;
   TestingProfile profile;
-  EXPECT_FALSE(chrome::enterprise_util::IsBrowserManaged(&profile));
+  EXPECT_FALSE(enterprise_util::IsBrowserManaged(&profile));
 }
 
 TEST(ManagedBrowserUtils, HasManagedConnector) {
@@ -60,14 +62,13 @@ TEST(ManagedBrowserUtils, HasManagedConnector) {
   builder.OverridePolicyConnectorIsManagedForTesting(true);
 
   std::unique_ptr<TestingProfile> profile = builder.Build();
-  EXPECT_TRUE(chrome::enterprise_util::IsBrowserManaged(profile.get()));
+  EXPECT_TRUE(enterprise_util::IsBrowserManaged(profile.get()));
 }
 
 TEST(ManagedBrowserUtils, GetRequestingUrl) {
   GURL expected("https://hostname:1234");
   net::HostPortPair host_port_pair("hostname", 1234);
-  EXPECT_EQ(expected,
-            chrome::enterprise_util::GetRequestingUrl(host_port_pair));
+  EXPECT_EQ(expected, enterprise_util::GetRequestingUrl(host_port_pair));
 }
 
 #if !BUILDFLAG(IS_CHROMEOS_ASH)
@@ -79,27 +80,101 @@ class ManagedBrowserUtilsTest : public testing::Test {
     mock_provider_->Init();
     policy::BrowserPolicyConnectorBase::SetPolicyProviderForTesting(
         mock_provider_.get());
+    ASSERT_TRUE(profile_manager_.SetUp());
+    profile_ = profile_manager_.CreateTestingProfile("profile_name");
   }
+
   void TearDown() override {
     mock_provider_->Shutdown();
     policy::BrowserPolicyConnectorBase::SetPolicyProviderForTesting(nullptr);
   }
+
+  TestingProfile* profile() { return profile_; }
+
   content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<policy::MockConfigurationPolicyProvider> mock_provider_;
+  TestingProfileManager profile_manager_{TestingBrowserProcess::GetGlobal()};
+  raw_ptr<TestingProfile> profile_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(ManagedBrowserUtilsTest, HasMachineLevelPolicies) {
-  TestingProfile profile;
-
   policy::PolicyMap map;
   map.Set("test-policy", policy::POLICY_LEVEL_MANDATORY,
           policy::POLICY_SCOPE_USER, policy::POLICY_SOURCE_PLATFORM,
           base::Value("hello"), nullptr);
   mock_provider_->UpdateChromePolicy(map);
 
-  EXPECT_TRUE(chrome::enterprise_util::IsBrowserManaged(&profile));
+  EXPECT_TRUE(enterprise_util::IsBrowserManaged(profile()));
 }
 #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+TEST_F(ManagedBrowserUtilsTest, WorkProfileDefaultLabel) {
+  scoped_feature_list_.InitAndEnableFeature(
+      features::kEnterpriseProfileBadgingForAvatar);
+  // Ensure enterprise badging can be shown.
+  std::u16string work_label = u"Work";
+
+  {
+    enterprise_util::SetUserAcceptedAccountManagement(profile(), true);
+    EXPECT_EQ(enterprise_util::GetEnterpriseLabel(profile()), work_label);
+  }
+
+  {
+    enterprise_util::SetUserAcceptedAccountManagement(profile(), false);
+    EXPECT_NE(enterprise_util::GetEnterpriseLabel(profile()), work_label);
+  }
+}
+
+TEST_F(ManagedBrowserUtilsTest, DefaultLabelDisabledbyPolicy) {
+  scoped_feature_list_.InitAndEnableFeature(
+      features::kEnterpriseProfileBadgingForAvatar);
+  std::u16string work_label = u"Work";
+  profile()->GetPrefs()->SetInteger(
+      prefs::kEnterpriseProfileBadgeToolbarSettings, 1);
+  enterprise_util::SetUserAcceptedAccountManagement(profile(), true);
+
+  // There should be no text because the policy fully disables badging.
+  EXPECT_EQ(enterprise_util::GetEnterpriseLabel(profile()), std::u16string());
+}
+
+TEST_F(ManagedBrowserUtilsTest, CustomLabelDisabledbyPolicy) {
+  scoped_feature_list_.InitAndEnableFeature(
+      features::kEnterpriseProfileBadgingForAvatar);
+  profile()->GetPrefs()->SetString(prefs::kEnterpriseCustomLabelForProfile,
+                                   "Custom Label");
+  profile()->GetPrefs()->SetInteger(
+      prefs::kEnterpriseProfileBadgeToolbarSettings, 1);
+  enterprise_util::SetUserAcceptedAccountManagement(profile(), true);
+
+  // There should be no label because the policy fully disables badging.
+  EXPECT_EQ(enterprise_util::GetEnterpriseLabel(profile()), std::u16string());
+}
+
+TEST_F(ManagedBrowserUtilsTest, CustomLabelTruncated) {
+  scoped_feature_list_.InitAndEnableFeature(
+      features::kEnterpriseProfileBadgingForAvatar);
+  profile()->GetPrefs()->SetString(prefs::kEnterpriseCustomLabelForProfile,
+                                   "Custom Label Can Be Max 16 Characters");
+  enterprise_util::SetUserAcceptedAccountManagement(profile(), true);
+
+  EXPECT_EQ(enterprise_util::GetEnterpriseLabel(profile()),
+            u"Custom Label Can Be Max 16 Characters");
+  // The text should be truncated to 16 characters followed by ellipsis.
+  EXPECT_EQ(enterprise_util::GetEnterpriseLabel(profile(), true),
+            u"Custom Label Can…");
+}
+
+TEST_F(ManagedBrowserUtilsTest, DefaultLabelGatedBehindFeature) {
+  scoped_feature_list_.InitAndDisableFeature(
+      features::kEnterpriseProfileBadgingForAvatar);
+  enterprise_util::SetUserAcceptedAccountManagement((profile()), true);
+
+  // The text should be truncated to 16 characters followed by ellipsis.
+  EXPECT_EQ(enterprise_util::GetEnterpriseLabel((profile())), std::u16string());
+}
+#endif
 
 class AutoSelectCertificateTest : public testing::Test {
  protected:
@@ -178,7 +253,7 @@ TEST_F(AutoSelectCertificateTest, NoPolicyAppliedReturnsNoMatch) {
   net::ClientCertIdentityList client_certs_list = GetDefaultClientCertList();
 
   net::ClientCertIdentityList matching_certs_list, nonmatching_certs_list;
-  chrome::enterprise_util::AutoSelectCertificates(
+  enterprise_util::AutoSelectCertificates(
       profile(), requesting_url, std::move(client_certs_list),
       &matching_certs_list, &nonmatching_certs_list);
 
@@ -199,7 +274,7 @@ TEST_F(AutoSelectCertificateTest,
   SetPolicyValueInContentSettings(std::move(filters));
 
   net::ClientCertIdentityList matching_certs_list, nonmatching_certs_list;
-  chrome::enterprise_util::AutoSelectCertificates(
+  enterprise_util::AutoSelectCertificates(
       profile(), requesting_url, std::move(client_certs_list),
       &matching_certs_list, &nonmatching_certs_list);
 
@@ -220,7 +295,7 @@ TEST_F(AutoSelectCertificateTest,
 
   net::ClientCertIdentityList matching_certs_list, nonmatching_certs_list;
 
-  chrome::enterprise_util::AutoSelectCertificates(
+  enterprise_util::AutoSelectCertificates(
       profile(), requesting_url, std::move(client_certs_list),
       &matching_certs_list, &nonmatching_certs_list);
 
@@ -242,7 +317,7 @@ TEST_F(AutoSelectCertificateTest,
 
   net::ClientCertIdentityList matching_certs_list, nonmatching_certs_list;
 
-  chrome::enterprise_util::AutoSelectCertificates(
+  enterprise_util::AutoSelectCertificates(
       profile(), requesting_url, std::move(client_certs_list),
       &matching_certs_list, &nonmatching_certs_list);
 
@@ -264,7 +339,7 @@ TEST_F(AutoSelectCertificateTest,
 
   net::ClientCertIdentityList matching_certs_list, nonmatching_certs_list;
 
-  chrome::enterprise_util::AutoSelectCertificates(
+  enterprise_util::AutoSelectCertificates(
       profile(), requesting_url, std::move(client_certs_list),
       &matching_certs_list, &nonmatching_certs_list);
 
@@ -283,7 +358,7 @@ TEST_F(AutoSelectCertificateTest, IssuerNotMatchingDoesntSelectCerts) {
 
   net::ClientCertIdentityList matching_certs_list, nonmatching_certs_list;
 
-  chrome::enterprise_util::AutoSelectCertificates(
+  enterprise_util::AutoSelectCertificates(
       profile(), requesting_url, std::move(client_certs_list),
       &matching_certs_list, &nonmatching_certs_list);
 
@@ -303,7 +378,7 @@ TEST_F(AutoSelectCertificateTest, SubjectNotMatchingDoesntSelectCerts) {
 
   net::ClientCertIdentityList matching_certs_list, nonmatching_certs_list;
 
-  chrome::enterprise_util::AutoSelectCertificates(
+  enterprise_util::AutoSelectCertificates(
       profile(), requesting_url, std::move(client_certs_list),
       &matching_certs_list, &nonmatching_certs_list);
 
@@ -322,7 +397,7 @@ TEST_F(AutoSelectCertificateTest, MatchingCertOnDifferentUrlDoesntSelectCerts) {
   SetPolicyValueInContentSettings(std::move(filters));
 
   net::ClientCertIdentityList matching_certs_list, nonmatching_certs_list;
-  chrome::enterprise_util::AutoSelectCertificates(
+  enterprise_util::AutoSelectCertificates(
       profile(), requesting_url, std::move(client_certs_list),
       &matching_certs_list, &nonmatching_certs_list);
 

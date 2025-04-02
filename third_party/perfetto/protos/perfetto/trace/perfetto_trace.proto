@@ -243,6 +243,10 @@ message TracingServiceState {
     // the build system and the repo (standalone vs AOSP).
     // This is intended for human debugging only.
     optional string sdk_version = 4;
+
+    // Returns true if the process appears to be frozen (Android only).
+    // Introduced in Perfetto V49 / Android 24Q4.
+    optional bool frozen = 6;
   }
 
   // Describes a data source registered by a producer. Data sources are listed
@@ -339,13 +343,11 @@ enum BuiltinClock {
   BUILTIN_CLOCK_MONOTONIC_COARSE = 4;
   BUILTIN_CLOCK_MONOTONIC_RAW = 5;
   BUILTIN_CLOCK_BOOTTIME = 6;
+  BUILTIN_CLOCK_TSC = 9;
+  BUILTIN_CLOCK_PERF = 10;
   BUILTIN_CLOCK_MAX_ID = 63;
 
   reserved 7, 8;
-
-  // An internal CL (ag/16521245) has taken this for BUILTIN_CLOCK_TSC.
-  // That might get upstreamed later on. Avoid diverging on this ID in future.
-  reserved 9;
 }
 
 // End of protos/perfetto/common/builtin_clock.proto
@@ -361,6 +363,125 @@ message AndroidGameInterventionListConfig {
 }
 
 // End of protos/perfetto/config/android/android_game_intervention_list_config.proto
+
+// Begin of protos/perfetto/config/android/android_input_event_config.proto
+
+// Custom configuration for the "android.input.inputevent" data source.
+//
+// NOTE: Input traces can only be taken on debuggable (userdebug/eng) builds!
+//
+// Next ID: 5
+message AndroidInputEventConfig {
+  // Trace modes are tracing presets that are included in the system.
+  enum TraceMode {
+    // Preset mode for maximal tracing.
+    // WARNING: This will bypass all privacy measures on debuggable builds, and
+    // will record all
+    //          input events processed by the system, regardless of the context
+    //          in which they were processed. It should only be used for tracing
+    //          on a local device or for tests. It should NEVER be used for
+    //          field tracing.
+    TRACE_MODE_TRACE_ALL = 0;
+    // Use the tracing rules defined in this config to specify what events to
+    // trace.
+    TRACE_MODE_USE_RULES = 1;
+  }
+
+  // The tracing mode to use. If unspecified, it will default to
+  // TRACE_MODE_USE_RULES.
+  optional TraceMode mode = 1;
+
+  // The level of tracing that should be applied to an event.
+  enum TraceLevel {
+    // Do not trace the input event.
+    TRACE_LEVEL_NONE = 0;
+    // Trace the event as a redacted event, where certain sensitive fields are
+    // omitted from the trace, including the coordinates of pointer events and
+    // the key/scan codes of key events.
+    TRACE_LEVEL_REDACTED = 1;
+    // Trace the complete event.
+    TRACE_LEVEL_COMPLETE = 2;
+  }
+
+  // A rule that specifies the TraceLevel for an event based on matching
+  // conditions. All matchers in the rule are optional. To trigger this rule, an
+  // event must match all of its specified matchers (i.e. the matchers function
+  // like a series of conditions connected by a logical 'AND' operator). A rule
+  // with no specified matchers will match all events. Next ID: 6
+  message TraceRule {
+    // The trace level to be used for events that trigger this rule.
+    // If unspecified, TRACE_LEVEL_NONE will be used by default.
+    optional TraceLevel trace_level = 1;
+
+    // --- Optional Matchers ---
+
+    // Package matchers
+    //
+    // Respectively matches if all or any of the target apps for this event are
+    // contained in the specified list of package names.
+    //
+    // Intended usage:
+    //   - Use match_all_packages to selectively allow tracing for the listed
+    //   packages.
+    //   - Use match_any_packages to selectively deny tracing for certain
+    //   packages.
+    //
+    // WARNING: Great care must be taken when designing rules for field tracing!
+    //          This is because each event is almost always sent to more than
+    //          one app.
+    //              For example, when allowing tracing for a package that has a
+    //              spy window
+    //          over the display (e.g. SystemUI) using match_any_packages,
+    //          essentially all input will be recorded on that display. This is
+    //          because the events will be sent to the spy as well as the
+    //          foreground app, and regardless of what the foreground app is,
+    //          the event will end up being traced.
+    //              Alternatively, when attempting to block tracing for specific
+    //              packages using
+    //          match_all_packages, no events will likely be blocked. This is
+    //          because the event will also be sent to other apps (such as, but
+    //          not limited to, ones with spy windows), so the matcher will not
+    //          match unless all other targets are also listed under the
+    //          match_all_packages list.
+    repeated string match_all_packages = 2;
+    repeated string match_any_packages = 3;
+
+    // Matches if the event is secure, which means that at least one of the
+    // targets of this event is using the window flag FLAG_SECURE.
+    optional bool match_secure = 4;
+
+    // Matches if there was an active IME connection while this event was being
+    // processed.
+    optional bool match_ime_connection_active = 5;
+  }
+
+  // The list of rules to use to determine the trace level of events.
+  // Each event will be traced using the TraceLevel of the first rule that it
+  // triggers from this list. The rules are evaluated in the order in which they
+  // are specified. If an event does not match any of the rules,
+  // TRACE_LEVEL_NONE will be used by default.
+  repeated TraceRule rules = 2;
+
+  // --- Control flags ---
+
+  // Trace input events processed by the system as they are being dispatched
+  // to application windows. All trace rules will apply.
+  //   - If this flag is used without enabling trace_dispatcher_window_dispatch,
+  //   it will
+  //     trace InputDispatcher's inbound events (which does not include events
+  //     synthesized within InputDispatcher) that match the rules.
+  //   - If used with trace_dispatcher_window_dispatch, all inbound and outbound
+  //   events
+  //     matching the rules, including all events synthesized within
+  //     InputDispatcher, will be traced.
+  optional bool trace_dispatcher_input_events = 3;
+
+  // Trace details about which windows the system is sending each input event
+  // to. All trace rules will apply.
+  optional bool trace_dispatcher_window_dispatch = 4;
+}
+
+// End of protos/perfetto/config/android/android_input_event_config.proto
 
 // Begin of protos/perfetto/common/android_log_constants.proto
 
@@ -461,7 +582,7 @@ message AndroidSdkSyspropGuardConfig {
   //   - debug.tracing.ctl.renderengine.skia_use_perfetto_track_events
   //
   // Does not affect actual track_event data *collection*, which must be
-  // configured seperately.
+  // configured separately.
   optional bool surfaceflinger_skia_track_events = 1;
 
   // If true, configures HWUI apps to initialize Skia's Perfetto integration
@@ -482,7 +603,7 @@ message AndroidSdkSyspropGuardConfig {
   //   - debug.tracing.ctl.hwui.skia_use_perfetto_track_events.<package.name>
   //
   // Does not affect actual track_event data *collection*, which must be
-  // configured seperately.
+  // configured separately.
   optional bool hwui_skia_track_events = 2;
 
   // If non-empty, hwui_skia_track_events applies to only the packages listed.
@@ -506,6 +627,16 @@ message AndroidSystemPropertyConfig {
 }
 
 // End of protos/perfetto/config/android/android_system_property_config.proto
+
+// Begin of protos/perfetto/config/android/kernel_wakelocks_config.proto
+
+// Data source that records kernel (and native) wakelock data.
+message KernelWakelocksConfig {
+  // Record at this frequency.
+  optional uint32 poll_ms = 1;
+}
+
+// End of protos/perfetto/config/android/kernel_wakelocks_config.proto
 
 // Begin of protos/perfetto/config/android/network_trace_config.proto
 
@@ -558,6 +689,32 @@ message PackagesListConfig {
 
 // End of protos/perfetto/config/android/packages_list_config.proto
 
+// Begin of protos/perfetto/config/android/pixel_modem_config.proto
+
+// Data source that records events from the modem.
+message PixelModemConfig {
+  // Event group to record, as defined by the modem.
+  enum EventGroup {
+    EVENT_GROUP_UNKNOWN = 0;
+
+    // Events suitable for low bandwidth tracing only.
+    EVENT_GROUP_LOW_BANDWIDTH = 1;
+
+    // Events suitable for high and low bandwidth tracing.
+    EVENT_GROUP_HIGH_AND_LOW_BANDWIDTH = 2;
+  }
+
+  optional EventGroup event_group = 1;
+
+  // If set, record only events with these hashes.
+  repeated int64 pigweed_hash_allow_list = 2;
+
+  // If set and allow_list is not set, deny events with these hashes.
+  repeated int64 pigweed_hash_deny_list = 3;
+}
+
+// End of protos/perfetto/config/android/pixel_modem_config.proto
+
 // Begin of protos/perfetto/common/protolog_common.proto
 
 enum ProtoLogLevel {
@@ -591,6 +748,9 @@ message ProtoLogConfig {
   repeated ProtoLogGroup group_overrides = 1;
   // Specified what tracing mode to use for the tracing instance.
   optional TracingMode tracing_mode = 2;
+  // If set, any message with log level higher than this level (inclusive) will
+  // be traced. Group overrides take precedence over this value.
+  optional ProtoLogLevel default_log_from_level = 3;
 }
 
 message ProtoLogGroup {
@@ -673,6 +833,42 @@ message SurfaceFlingerTransactionsConfig {
 
 // End of protos/perfetto/config/android/surfaceflinger_transactions_config.proto
 
+// Begin of protos/perfetto/config/android/windowmanager_config.proto
+
+// Custom configuration for the "android.windowmanager" data source.
+message WindowManagerConfig {
+  enum LogFrequency {
+    LOG_FREQUENCY_UNSPECIFIED = 0;
+
+    // Trace state snapshots when a frame is committed.
+    LOG_FREQUENCY_FRAME = 1;
+
+    // Trace state snapshots every time a transaction is committed.
+    LOG_FREQUENCY_TRANSACTION = 2;
+
+    // Trace single state snapshots when the data source is started.
+    LOG_FREQUENCY_SINGLE_DUMP = 3;
+  }
+  optional LogFrequency log_frequency = 1;
+
+  enum LogLevel {
+    LOG_LEVEL_UNSPECIFIED = 0;
+
+    // Logs all elements with maximum amount of information.
+    LOG_LEVEL_VERBOSE = 1;
+
+    // Logs all elements but doesn't write all configuration data.
+    LOG_LEVEL_DEBUG = 2;
+
+    // Logs only visible elements, with the minimum amount of performance
+    // overhead
+    LOG_LEVEL_CRITICAL = 3;
+  }
+  optional LogLevel log_level = 2;
+}
+
+// End of protos/perfetto/config/android/windowmanager_config.proto
+
 // Begin of protos/perfetto/config/chrome/chrome_config.proto
 
 message ChromeConfig {
@@ -705,6 +901,15 @@ message ChromeConfig {
 }
 
 // End of protos/perfetto/config/chrome/chrome_config.proto
+
+// Begin of protos/perfetto/config/chrome/system_metrics.proto
+
+message ChromiumSystemMetricsConfig {
+  // Samples counters every X ms.
+  optional uint32 sampling_interval_ms = 1;
+}
+
+// End of protos/perfetto/config/chrome/system_metrics.proto
 
 // Begin of protos/perfetto/config/chrome/v8_config.proto
 
@@ -745,14 +950,52 @@ message EtwConfig {
 
 // Begin of protos/perfetto/config/ftrace/ftrace_config.proto
 
-// Next id: 26.
+// Next id: 31
 message FtraceConfig {
+  // Ftrace events to record, example: "sched/sched_switch".
   repeated string ftrace_events = 1;
+
+  message KprobeEvent {
+    enum KprobeType {
+      KPROBE_TYPE_UNKNOWN = 0;
+      KPROBE_TYPE_KPROBE = 1;
+      KPROBE_TYPE_KRETPROBE = 2;
+      KPROBE_TYPE_BOTH = 3;
+    }
+    // Kernel function name to attach to, for example "fuse_file_write_iter"
+    optional string probe = 1;
+    optional KprobeType type = 2;
+  }
+
+  // Ftrace events to record, specific for kprobes and kretprobes
+  repeated KprobeEvent kprobe_events = 30;
+
+  // Android-specific event categories:
   repeated string atrace_categories = 2;
   repeated string atrace_apps = 3;
-  // *Per-CPU* buffer size.
+  // Some processes can emit data through atrace or through the perfetto SDK via
+  // the "track_event" data source. For these categories, the SDK will be
+  // preferred, if possible, for this config.
+  repeated string atrace_categories_prefer_sdk = 28;
+
+  // Size of each per-cpu kernel ftrace ring buffer.
+  // Not guaranteed if there are multiple concurrent tracing sessions, as the
+  // buffers cannot be resized without pausing recording in the kernel.
   optional uint32 buffer_size_kb = 10;
+
+  // If set, specifies how often the tracing daemon reads from the kernel ring
+  // buffer. Not guaranteed if there are multiple concurrent tracing sessions.
+  // Leave unset unless you're fine-tuning a local config.
   optional uint32 drain_period_ms = 11;
+
+  // If set, the tracing daemon will read kernel ring buffers as soon as
+  // they're filled past this percentage of occupancy. In other words, a value
+  // of 50 means that a read pass is triggered as soon as any per-cpu buffer is
+  // half-full. Not guaranteed if there are multiple concurrent tracing
+  // sessions.
+  // Currently does nothing on Linux kernels below v6.9.
+  // Introduced in: perfetto v48.
+  optional uint32 drain_buffer_percent = 29;
 
   // Configuration for compact encoding of scheduler events. When enabled (and
   // recording the relevant ftrace events), specific high-volume events are
@@ -852,9 +1095,12 @@ message FtraceConfig {
   // Introduced in: Android T.
   optional bool disable_generic_events = 16;
 
-  // The list of syscalls that should be recorded by sys_{enter,exit} ftrace
-  // events. When empty, all syscalls are recorded. If neither sys_{enter,exit}
-  // are enabled, this setting has no effect. Example: ["sys_read", "sys_open"].
+  // The subset of syscalls to record. To record all syscalls, leave this unset
+  // and add "ftrace_events: raw_syscalls/sys_{enter,exit}" to the config.
+  // * before perfetto v43, requires the config to also enable
+  //   raw_syscalls/sys_{enter,exit}.
+  // * perfetto v43+ does the right thing if you set only this field.
+  // Example: ["sys_read", "sys_open"].
   // Introduced in: Android U.
   repeated string syscall_events = 18;
 
@@ -921,6 +1167,27 @@ message FtraceConfig {
   //  * ftrace_events
   //  * buffer_size_kb
   optional string instance_name = 25;
+
+  // If true, |buffer_size_kb| is interpreted as a lower bound, allowing the
+  // implementation to choose a bigger buffer size.
+  //
+  // Most configs for perfetto v43+ should simply leave both fields unset.
+  //
+  // If you need a config compatible with a range of perfetto builds and you
+  // used to set a non-default buffer_size_kb, consider setting both fields.
+  // Example:
+  //   buffer_size_kb: 4096
+  //   buffer_size_lower_bound: true
+  // On older builds, the per-cpu buffers will be exactly 4 MB.
+  // On v43+, buffers will be at least 4 MB.
+  // In both cases, neither is guaranteed if there are other concurrent
+  // perfetto ftrace sessions, as the buffers cannot be resized without pausing
+  // the recording in the kernel.
+  // Introduced in: perfetto v43.
+  optional bool buffer_size_lower_bound = 27;
+
+  // Previously drain_buffer_percent, perfetto v43-v47.
+  reserved 26;
 }
 
 // End of protos/perfetto/config/ftrace/ftrace_config.proto
@@ -943,6 +1210,26 @@ message GpuCounterConfig {
 }
 
 // End of protos/perfetto/config/gpu/gpu_counter_config.proto
+
+// Begin of protos/perfetto/config/gpu/gpu_renderstages_config.proto
+
+message GpuRenderStagesConfig {
+  // Enable to separate the color and depth/stencil load and store stages
+  // into a separate stages. If disabled, the depth/stencil load and store
+  // stages will be combined.  Disabled by default. This option has no effect if
+  // Low Overhead mode is enabled.
+  optional bool full_loadstore = 1;
+
+  // Use the low overhead mode for traces. In this mode render stages are
+  // combined into a single workload stage. This provides less granular data but
+  // induces minimal GPU overhead. Disabled by default.
+  optional bool low_overhead = 2;
+
+  // Trace metrics to capture for each render stage
+  repeated string trace_metrics = 3;
+}
+
+// End of protos/perfetto/config/gpu/gpu_renderstages_config.proto
 
 // Begin of protos/perfetto/config/gpu/vulkan_memory_config.proto
 
@@ -1066,7 +1353,6 @@ message ProcessStatsConfig {
 
     DISABLE_ON_DEMAND = 2;
   }
-
   repeated Quirks quirks = 1;
 
   // If enabled all processes will be scanned and dumped when the trace starts.
@@ -1080,14 +1366,9 @@ message ProcessStatsConfig {
   // /proc/pid/status and oom_score_adj every X ms.
   // It will also sample /proc/pid/smaps_rollup if scan_smaps_rollup = true.
   // This is required to be > 100ms to avoid excessive CPU usage.
-  // TODO(primiano): add CPU cost for change this value.
   optional uint32 proc_stats_poll_ms = 4;
 
-  // If empty samples stats for all processes. If non empty samples stats only
-  // for processes matching the given string in their argv0 (i.e. the first
-  // entry of /proc/pid/cmdline).
-  // TODO(primiano): implement this feature.
-  // repeated string proc_stats_filter = 5;
+  // id 5 never used
 
   // This is required to be either = 0 or a multiple of |proc_stats_poll_ms|
   // (default: |proc_stats_poll_ms|). If = 0, will be set to
@@ -1095,22 +1376,30 @@ message ProcessStatsConfig {
   // multiple.
   optional uint32 proc_stats_cache_ttl_ms = 6;
 
-  // DEPRECATED record_thread_time_in_state
-  reserved 7;
-
-  // DEPRECATED thread_time_in_state_cache_size
-  reserved 8;
-
-  // If true this will resolve filedescriptors for each process so these
-  // can be mapped to their actual device or file.
-  // Requires raw_syscalls/sys_exit ftrace events to be enabled or
+  // Niche feature: If true this will resolve file descriptors for each process
+  // so these can be mapped to their actual device or file.
+  // Requires raw_syscalls/sys_{enter,exit} ftrace events to be enabled or
   // new fds opened after initially scanning a process will not be
   // recognized.
   optional bool resolve_process_fds = 9;
 
-  // If enabled memory stats from /proc/pid/smaps_rollup will be included
-  // in process stats.
+  // If true, output will include memory stats from /proc/pid/smaps_rollup.
   optional bool scan_smaps_rollup = 10;
+
+  // If true: process descriptions will include process age (starttime in
+  // /proc/pid/stat).
+  // Introduced in: perfetto v44.
+  optional bool record_process_age = 11;
+
+  // If true and |proc_stats_poll_ms| is true, process stats will include time
+  // spent running in user/kernel mode (utime/stime in /proc/pid/stat).
+  // Introduced in: perfetto v44.
+  optional bool record_process_runtime = 12;
+
+  // record_thread_time_in_state
+  reserved 7;
+  // thread_time_in_state_cache_size
+  reserved 8;
 }
 
 // End of protos/perfetto/config/process_stats/process_stats_config.proto
@@ -1513,6 +1802,19 @@ message PerfEvents {
   }
 }
 
+// Additional events associated with a leader.
+// Configuration is similar to Timebase event. Because data acquisition is
+// driven by the leader there is no option to configure the clock or the
+// frequency.
+message FollowerEvent {
+  oneof event {
+    PerfEvents.Counter counter = 1;
+    PerfEvents.Tracepoint tracepoint = 2;
+    PerfEvents.RawEvent raw_event = 3;
+  }
+  optional string name = 4;
+}
+
 // End of protos/perfetto/common/perf_events.proto
 
 // Begin of protos/perfetto/config/profiling/perf_event_config.proto
@@ -1533,11 +1835,14 @@ message PerfEvents {
 //     }
 //   }
 //
-// Next id: 19
+// Next id: 20
 message PerfEventConfig {
   // What event to sample on, and how often.
   // Defined in common/perf_events.proto.
   optional PerfEvents.Timebase timebase = 15;
+
+  // Other events associated with the leader described in the timebase.
+  repeated FollowerEvent followers = 19;
 
   // If set, the profiler will sample userspace processes' callstacks at the
   // interval specified by the |timebase|.
@@ -1711,6 +2016,8 @@ message PerfEventConfig {
     UNWIND_SKIP = 1;
     // Use libunwindstack (default):
     UNWIND_DWARF = 2;
+    // Use userspace frame pointer unwinder:
+    UNWIND_FRAME_POINTER = 3;
   }
 }
 
@@ -1776,11 +2083,9 @@ enum AtomId {
   ATOM_LMK_KILL_OCCURRED = 51;
   ATOM_PICTURE_IN_PICTURE_STATE_CHANGED = 52;
   ATOM_WIFI_MULTICAST_LOCK_STATE_CHANGED = 53;
-  ATOM_LMK_STATE_CHANGED = 54;
   ATOM_APP_START_MEMORY_STATE_CAPTURED = 55;
   ATOM_SHUTDOWN_SEQUENCE_REPORTED = 56;
   ATOM_BOOT_SEQUENCE_REPORTED = 57;
-  ATOM_DAVEY_OCCURRED = 58;
   ATOM_OVERLAY_STATE_CHANGED = 59;
   ATOM_FOREGROUND_SERVICE_STATE_CHANGED = 60;
   ATOM_CALL_STATE_CHANGED = 61;
@@ -2097,7 +2402,6 @@ enum AtomId {
   ATOM_PRIVACY_TOGGLE_DIALOG_INTERACTION = 382;
   ATOM_APP_SEARCH_OPTIMIZE_STATS_REPORTED = 383;
   ATOM_NON_A11Y_TOOL_SERVICE_WARNING_REPORT = 384;
-  ATOM_APP_SEARCH_SET_SCHEMA_STATS_REPORTED = 385;
   ATOM_APP_COMPAT_STATE_CHANGED = 386;
   ATOM_SIZE_COMPAT_RESTART_BUTTON_EVENT_REPORTED = 387;
   ATOM_SPLITSCREEN_UI_CHANGED = 388;
@@ -2122,7 +2426,6 @@ enum AtomId {
   ATOM_CLIPBOARD_CLEARED = 408;
   ATOM_VM_CREATION_REQUESTED = 409;
   ATOM_NEARBY_DEVICE_SCAN_STATE_CHANGED = 410;
-  ATOM_CAMERA_COMPAT_CONTROL_EVENT_REPORTED = 411;
   ATOM_APPLICATION_LOCALES_CHANGED = 412;
   ATOM_MEDIAMETRICS_AUDIOTRACKSTATUS_REPORTED = 413;
   ATOM_FOLD_STATE_DURATION_REPORTED = 414;
@@ -2146,8 +2449,6 @@ enum AtomId {
   ATOM_HOTWORD_DETECTION_SERVICE_RESTARTED = 432;
   ATOM_HOTWORD_DETECTOR_KEYPHRASE_TRIGGERED = 433;
   ATOM_HOTWORD_DETECTOR_EVENTS = 434;
-  ATOM_AD_SERVICES_API_CALLED = 435;
-  ATOM_AD_SERVICES_MESUREMENT_REPORTS_UPLOADED = 436;
   ATOM_BOOT_COMPLETED_BROADCAST_COMPLETION_LATENCY_REPORTED = 437;
   ATOM_CONTACTS_INDEXER_UPDATE_STATS_REPORTED = 440;
   ATOM_APP_BACKGROUND_RESTRICTIONS_INFO = 441;
@@ -2191,25 +2492,14 @@ enum AtomId {
   ATOM_CB_MODULE_ERROR_REPORTED = 480;
   ATOM_CB_SERVICE_FEATURE_CHANGED = 481;
   ATOM_CB_RECEIVER_FEATURE_CHANGED = 482;
-  ATOM_JSSCRIPTENGINE_LATENCY_REPORTED = 483;
   ATOM_PRIVACY_SIGNAL_NOTIFICATION_INTERACTION = 484;
   ATOM_PRIVACY_SIGNAL_ISSUE_CARD_INTERACTION = 485;
   ATOM_PRIVACY_SIGNALS_JOB_FAILURE = 486;
   ATOM_VIBRATION_REPORTED = 487;
   ATOM_UWB_RANGING_START = 489;
-  ATOM_MOBILE_DATA_DOWNLOAD_FILE_GROUP_STATUS_REPORTED = 490;
   ATOM_APP_COMPACTED_V2 = 491;
-  ATOM_AD_SERVICES_SETTINGS_USAGE_REPORTED = 493;
   ATOM_DISPLAY_BRIGHTNESS_CHANGED = 494;
   ATOM_ACTIVITY_ACTION_BLOCKED = 495;
-  ATOM_BACKGROUND_FETCH_PROCESS_REPORTED = 496;
-  ATOM_UPDATE_CUSTOM_AUDIENCE_PROCESS_REPORTED = 497;
-  ATOM_RUN_AD_BIDDING_PROCESS_REPORTED = 498;
-  ATOM_RUN_AD_SCORING_PROCESS_REPORTED = 499;
-  ATOM_RUN_AD_SELECTION_PROCESS_REPORTED = 500;
-  ATOM_RUN_AD_BIDDING_PER_CA_PROCESS_REPORTED = 501;
-  ATOM_MOBILE_DATA_DOWNLOAD_DOWNLOAD_RESULT_REPORTED = 502;
-  ATOM_MOBILE_DATA_DOWNLOAD_FILE_GROUP_STORAGE_STATS_REPORTED = 503;
   ATOM_NETWORK_DNS_SERVER_SUPPORT_REPORTED = 504;
   ATOM_VM_BOOTED = 505;
   ATOM_VM_EXITED = 506;
@@ -2218,7 +2508,6 @@ enum AtomId {
   ATOM_MEDIAMETRICS_SPATIALIZERDEVICEENABLED_REPORTED = 509;
   ATOM_MEDIAMETRICS_HEADTRACKERDEVICEENABLED_REPORTED = 510;
   ATOM_MEDIAMETRICS_HEADTRACKERDEVICESUPPORTED_REPORTED = 511;
-  ATOM_AD_SERVICES_MEASUREMENT_REGISTRATIONS = 512;
   ATOM_HEARING_AID_INFO_REPORTED = 513;
   ATOM_DEVICE_WIDE_JOB_CONSTRAINT_CHANGED = 514;
   ATOM_AMBIENT_MODE_CHANGED = 515;
@@ -2240,9 +2529,6 @@ enum AtomId {
   ATOM_BLUETOOTH_LOCAL_SUPPORTED_FEATURES_REPORTED = 532;
   ATOM_BLUETOOTH_GATT_APP_INFO = 533;
   ATOM_BRIGHTNESS_CONFIGURATION_UPDATED = 534;
-  ATOM_AD_SERVICES_GET_TOPICS_REPORTED = 535;
-  ATOM_AD_SERVICES_EPOCH_COMPUTATION_GET_TOP_TOPICS_REPORTED = 536;
-  ATOM_AD_SERVICES_EPOCH_COMPUTATION_CLASSIFIER_REPORTED = 537;
   ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_LAUNCHED = 538;
   ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_FINISHED = 539;
   ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_CONNECTION_REPORTED = 540;
@@ -2280,12 +2566,10 @@ enum AtomId {
   ATOM_MEDIAMETRICS_MIDI_DEVICE_CLOSE_REPORTED = 576;
   ATOM_BIOMETRIC_TOUCH_REPORTED = 577;
   ATOM_HOTWORD_AUDIO_EGRESS_EVENT_REPORTED = 578;
-  ATOM_APP_SEARCH_SCHEMA_MIGRATION_STATS_REPORTED = 579;
   ATOM_LOCATION_ENABLED_STATE_CHANGED = 580;
   ATOM_IME_REQUEST_FINISHED = 581;
   ATOM_USB_COMPLIANCE_WARNINGS_REPORTED = 582;
   ATOM_APP_SUPPORTED_LOCALES_CHANGED = 583;
-  ATOM_GRAMMATICAL_INFLECTION_CHANGED = 584;
   ATOM_MEDIA_PROVIDER_VOLUME_RECOVERY_REPORTED = 586;
   ATOM_BIOMETRIC_PROPERTIES_COLLECTED = 587;
   ATOM_KERNEL_WAKEUP_ATTRIBUTED = 588;
@@ -2298,7 +2582,11 @@ enum AtomId {
   ATOM_WS_NOTIFICATION_UPDATED = 596;
   ATOM_NETWORK_VALIDATION_FAILURE_STATS_DAILY_REPORTED = 601;
   ATOM_WS_COMPLICATION_TAPPED = 602;
-  ATOM_WS_WEAR_TIME_SESSION = 610;
+  ATOM_WS_NOTIFICATION_BLOCKING = 780;
+  ATOM_WS_NOTIFICATION_BRIDGEMODE_UPDATED = 822;
+  ATOM_WS_NOTIFICATION_DISMISSAL_ACTIONED = 823;
+  ATOM_WS_NOTIFICATION_ACTIONED = 824;
+  ATOM_WS_NOTIFICATION_LATENCY = 880;
   ATOM_WIFI_BYTES_TRANSFER = 10000;
   ATOM_WIFI_BYTES_TRANSFER_BY_FG_BG = 10001;
   ATOM_MOBILE_BYTES_TRANSFER = 10002;
@@ -2471,6 +2759,405 @@ enum AtomId {
   ATOM_NOTIFICATION_MEMORY_USE = 10174;
   ATOM_HDR_CAPABILITIES = 10175;
   ATOM_WS_FAVOURITE_WATCH_FACE_LIST_SNAPSHOT = 10176;
+  ATOM_ACCESSIBILITY_CHECK_RESULT_REPORTED = 910;
+  ATOM_ADAPTIVE_AUTH_UNLOCK_AFTER_LOCK_REPORTED = 820;
+  ATOM_THERMAL_STATUS_CALLED = 772;
+  ATOM_THERMAL_HEADROOM_CALLED = 773;
+  ATOM_THERMAL_HEADROOM_THRESHOLDS_CALLED = 774;
+  ATOM_ADPF_HINT_SESSION_TID_CLEANUP = 839;
+  ATOM_THERMAL_HEADROOM_THRESHOLDS = 10201;
+  ATOM_ADPF_SESSION_SNAPSHOT = 10218;
+  ATOM_JSSCRIPTENGINE_LATENCY_REPORTED = 483;
+  ATOM_AD_SERVICES_API_CALLED = 435;
+  ATOM_AD_SERVICES_MESUREMENT_REPORTS_UPLOADED = 436;
+  ATOM_MOBILE_DATA_DOWNLOAD_FILE_GROUP_STATUS_REPORTED = 490;
+  ATOM_MOBILE_DATA_DOWNLOAD_DOWNLOAD_RESULT_REPORTED = 502;
+  ATOM_AD_SERVICES_SETTINGS_USAGE_REPORTED = 493;
+  ATOM_BACKGROUND_FETCH_PROCESS_REPORTED = 496;
+  ATOM_UPDATE_CUSTOM_AUDIENCE_PROCESS_REPORTED = 497;
+  ATOM_RUN_AD_BIDDING_PROCESS_REPORTED = 498;
+  ATOM_RUN_AD_SCORING_PROCESS_REPORTED = 499;
+  ATOM_RUN_AD_SELECTION_PROCESS_REPORTED = 500;
+  ATOM_RUN_AD_BIDDING_PER_CA_PROCESS_REPORTED = 501;
+  ATOM_MOBILE_DATA_DOWNLOAD_FILE_GROUP_STORAGE_STATS_REPORTED = 503;
+  ATOM_AD_SERVICES_MEASUREMENT_REGISTRATIONS = 512;
+  ATOM_AD_SERVICES_GET_TOPICS_REPORTED = 535;
+  ATOM_AD_SERVICES_EPOCH_COMPUTATION_GET_TOP_TOPICS_REPORTED = 536;
+  ATOM_AD_SERVICES_EPOCH_COMPUTATION_CLASSIFIER_REPORTED = 537;
+  ATOM_AD_SERVICES_BACK_COMPAT_GET_TOPICS_REPORTED = 598;
+  ATOM_AD_SERVICES_BACK_COMPAT_EPOCH_COMPUTATION_CLASSIFIER_REPORTED = 599;
+  ATOM_AD_SERVICES_MEASUREMENT_DEBUG_KEYS = 640;
+  ATOM_AD_SERVICES_ERROR_REPORTED = 662;
+  ATOM_AD_SERVICES_BACKGROUND_JOBS_EXECUTION_REPORTED = 663;
+  ATOM_AD_SERVICES_MEASUREMENT_DELAYED_SOURCE_REGISTRATION = 673;
+  ATOM_AD_SERVICES_MEASUREMENT_ATTRIBUTION = 674;
+  ATOM_AD_SERVICES_MEASUREMENT_JOBS = 675;
+  ATOM_AD_SERVICES_MEASUREMENT_WIPEOUT = 676;
+  ATOM_AD_SERVICES_MEASUREMENT_AD_ID_MATCH_FOR_DEBUG_KEYS = 695;
+  ATOM_AD_SERVICES_ENROLLMENT_DATA_STORED = 697;
+  ATOM_AD_SERVICES_ENROLLMENT_FILE_DOWNLOADED = 698;
+  ATOM_AD_SERVICES_ENROLLMENT_MATCHED = 699;
+  ATOM_AD_SERVICES_CONSENT_MIGRATED = 702;
+  ATOM_AD_SERVICES_ENROLLMENT_FAILED = 714;
+  ATOM_AD_SERVICES_MEASUREMENT_CLICK_VERIFICATION = 756;
+  ATOM_AD_SERVICES_ENCRYPTION_KEY_FETCHED = 765;
+  ATOM_AD_SERVICES_ENCRYPTION_KEY_DB_TRANSACTION_ENDED = 766;
+  ATOM_DESTINATION_REGISTERED_BEACONS = 767;
+  ATOM_REPORT_INTERACTION_API_CALLED = 768;
+  ATOM_INTERACTION_REPORTING_TABLE_CLEARED = 769;
+  ATOM_APP_MANIFEST_CONFIG_HELPER_CALLED = 788;
+  ATOM_AD_FILTERING_PROCESS_JOIN_CA_REPORTED = 793;
+  ATOM_AD_FILTERING_PROCESS_AD_SELECTION_REPORTED = 794;
+  ATOM_AD_COUNTER_HISTOGRAM_UPDATER_REPORTED = 795;
+  ATOM_SIGNATURE_VERIFICATION = 807;
+  ATOM_K_ANON_IMMEDIATE_SIGN_JOIN_STATUS_REPORTED = 808;
+  ATOM_K_ANON_BACKGROUND_JOB_STATUS_REPORTED = 809;
+  ATOM_K_ANON_INITIALIZE_STATUS_REPORTED = 810;
+  ATOM_K_ANON_SIGN_STATUS_REPORTED = 811;
+  ATOM_K_ANON_JOIN_STATUS_REPORTED = 812;
+  ATOM_K_ANON_KEY_ATTESTATION_STATUS_REPORTED = 813;
+  ATOM_GET_AD_SELECTION_DATA_API_CALLED = 814;
+  ATOM_GET_AD_SELECTION_DATA_BUYER_INPUT_GENERATED = 815;
+  ATOM_BACKGROUND_JOB_SCHEDULING_REPORTED = 834;
+  ATOM_TOPICS_ENCRYPTION_EPOCH_COMPUTATION_REPORTED = 840;
+  ATOM_TOPICS_ENCRYPTION_GET_TOPICS_REPORTED = 841;
+  ATOM_ADSERVICES_SHELL_COMMAND_CALLED = 842;
+  ATOM_UPDATE_SIGNALS_API_CALLED = 843;
+  ATOM_ENCODING_JOB_RUN = 844;
+  ATOM_ENCODING_JS_FETCH = 845;
+  ATOM_ENCODING_JS_EXECUTION = 846;
+  ATOM_PERSIST_AD_SELECTION_RESULT_CALLED = 847;
+  ATOM_SERVER_AUCTION_KEY_FETCH_CALLED = 848;
+  ATOM_SERVER_AUCTION_BACKGROUND_KEY_FETCH_ENABLED = 849;
+  ATOM_AD_SERVICES_MEASUREMENT_PROCESS_ODP_REGISTRATION = 864;
+  ATOM_AD_SERVICES_MEASUREMENT_NOTIFY_REGISTRATION_TO_ODP = 865;
+  ATOM_SELECT_ADS_FROM_OUTCOMES_API_CALLED = 876;
+  ATOM_REPORT_IMPRESSION_API_CALLED = 877;
+  ATOM_AD_SERVICES_ENROLLMENT_TRANSACTION_STATS = 885;
+  ATOM_AD_SERVICES_COBALT_LOGGER_EVENT_REPORTED = 902;
+  ATOM_AD_SERVICES_COBALT_PERIODIC_JOB_EVENT_REPORTED = 903;
+  ATOM_UPDATE_SIGNALS_PROCESS_REPORTED = 905;
+  ATOM_TOPICS_SCHEDULE_EPOCH_JOB_SETTING_REPORTED = 930;
+  ATOM_AI_WALLPAPERS_BUTTON_PRESSED = 706;
+  ATOM_AI_WALLPAPERS_TEMPLATE_SELECTED = 707;
+  ATOM_AI_WALLPAPERS_TERM_SELECTED = 708;
+  ATOM_AI_WALLPAPERS_WALLPAPER_SET = 709;
+  ATOM_AI_WALLPAPERS_SESSION_SUMMARY = 710;
+  ATOM_APEX_INSTALLATION_REQUESTED = 732;
+  ATOM_APEX_INSTALLATION_STAGED = 733;
+  ATOM_APEX_INSTALLATION_ENDED = 734;
+  ATOM_APP_SEARCH_SET_SCHEMA_STATS_REPORTED = 385;
+  ATOM_APP_SEARCH_SCHEMA_MIGRATION_STATS_REPORTED = 579;
+  ATOM_APP_SEARCH_USAGE_SEARCH_INTENT_STATS_REPORTED = 825;
+  ATOM_APP_SEARCH_USAGE_SEARCH_INTENT_RAW_QUERY_STATS_REPORTED = 826;
+  ATOM_APP_SEARCH_APPS_INDEXER_STATS_REPORTED = 909;
+  ATOM_ART_DATUM_REPORTED = 332;
+  ATOM_ART_DEVICE_DATUM_REPORTED = 550;
+  ATOM_ART_DATUM_DELTA_REPORTED = 565;
+  ATOM_ART_DEX2OAT_REPORTED = 929;
+  ATOM_ART_DEVICE_STATUS = 10205;
+  ATOM_BACKGROUND_DEXOPT_JOB_ENDED = 467;
+  ATOM_PREREBOOT_DEXOPT_JOB_ENDED = 883;
+  ATOM_ODREFRESH_REPORTED = 366;
+  ATOM_ODSIGN_REPORTED = 548;
+  ATOM_AUTOFILL_UI_EVENT_REPORTED = 603;
+  ATOM_AUTOFILL_FILL_REQUEST_REPORTED = 604;
+  ATOM_AUTOFILL_FILL_RESPONSE_REPORTED = 605;
+  ATOM_AUTOFILL_SAVE_EVENT_REPORTED = 606;
+  ATOM_AUTOFILL_SESSION_COMMITTED = 607;
+  ATOM_AUTOFILL_FIELD_CLASSIFICATION_EVENT_REPORTED = 659;
+  ATOM_CAR_RECENTS_EVENT_REPORTED = 770;
+  ATOM_CAR_CALM_MODE_EVENT_REPORTED = 797;
+  ATOM_CAR_WAKEUP_FROM_SUSPEND_REPORTED = 852;
+  ATOM_PLUGIN_INITIALIZED = 655;
+  ATOM_BLUETOOTH_HASHED_DEVICE_NAME_REPORTED = 613;
+  ATOM_BLUETOOTH_L2CAP_COC_CLIENT_CONNECTION = 614;
+  ATOM_BLUETOOTH_L2CAP_COC_SERVER_CONNECTION = 615;
+  ATOM_BLUETOOTH_LE_SESSION_CONNECTED = 656;
+  ATOM_RESTRICTED_BLUETOOTH_DEVICE_NAME_REPORTED = 666;
+  ATOM_BLUETOOTH_PROFILE_CONNECTION_ATTEMPTED = 696;
+  ATOM_BLUETOOTH_CONTENT_PROFILE_ERROR_REPORTED = 781;
+  ATOM_BLUETOOTH_RFCOMM_CONNECTION_ATTEMPTED = 782;
+  ATOM_REMOTE_DEVICE_INFORMATION_WITH_METRIC_ID = 862;
+  ATOM_LE_APP_SCAN_STATE_CHANGED = 870;
+  ATOM_LE_RADIO_SCAN_STOPPED = 871;
+  ATOM_LE_SCAN_RESULT_RECEIVED = 872;
+  ATOM_LE_SCAN_ABUSED = 873;
+  ATOM_LE_ADV_STATE_CHANGED = 874;
+  ATOM_LE_ADV_ERROR_REPORTED = 875;
+  ATOM_A2DP_SESSION_REPORTED = 904;
+  ATOM_BLUETOOTH_CROSS_LAYER_EVENT_REPORTED = 916;
+  ATOM_BROADCAST_AUDIO_SESSION_REPORTED = 927;
+  ATOM_BROADCAST_AUDIO_SYNC_REPORTED = 928;
+  ATOM_BLUETOOTH_RFCOMM_CONNECTION_REPORTED_AT_CLOSE = 982;
+  ATOM_BLUETOOTH_LE_CONNECTION = 988;
+  ATOM_BROADCAST_SENT = 922;
+  ATOM_CAMERA_FEATURE_COMBINATION_QUERY_EVENT = 900;
+  ATOM_CERTIFICATE_TRANSPARENCY_LOG_LIST_STATE_CHANGED = 934;
+  ATOM_CERTIFICATE_TRANSPARENCY_LOG_LIST_UPDATE_FAILED = 972;
+  ATOM_DAILY_KEEPALIVE_INFO_REPORTED = 650;
+  ATOM_NETWORK_REQUEST_STATE_CHANGED = 779;
+  ATOM_TETHERING_ACTIVE_SESSIONS_REPORTED = 925;
+  ATOM_NETWORK_STATS_RECORDER_FILE_OPERATED = 783;
+  ATOM_CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED = 979;
+  ATOM_APF_SESSION_INFO_REPORTED = 777;
+  ATOM_IP_CLIENT_RA_INFO_REPORTED = 778;
+  ATOM_VPN_CONNECTION_STATE_CHANGED = 850;
+  ATOM_VPN_CONNECTION_REPORTED = 851;
+  ATOM_CPU_POLICY = 10199;
+  ATOM_CREDENTIAL_MANAGER_API_CALLED = 585;
+  ATOM_CREDENTIAL_MANAGER_INIT_PHASE_REPORTED = 651;
+  ATOM_CREDENTIAL_MANAGER_CANDIDATE_PHASE_REPORTED = 652;
+  ATOM_CREDENTIAL_MANAGER_FINAL_PHASE_REPORTED = 653;
+  ATOM_CREDENTIAL_MANAGER_TOTAL_REPORTED = 667;
+  ATOM_CREDENTIAL_MANAGER_FINALNOUID_REPORTED = 668;
+  ATOM_CREDENTIAL_MANAGER_GET_REPORTED = 669;
+  ATOM_CREDENTIAL_MANAGER_AUTH_CLICK_REPORTED = 670;
+  ATOM_CREDENTIAL_MANAGER_APIV2_CALLED = 671;
+  ATOM_CRONET_ENGINE_CREATED = 703;
+  ATOM_CRONET_TRAFFIC_REPORTED = 704;
+  ATOM_CRONET_ENGINE_BUILDER_INITIALIZED = 762;
+  ATOM_CRONET_HTTP_FLAGS_INITIALIZED = 763;
+  ATOM_CRONET_INITIALIZED = 764;
+  ATOM_DESKTOP_MODE_UI_CHANGED = 818;
+  ATOM_DESKTOP_MODE_SESSION_TASK_UPDATE = 819;
+  ATOM_DESKTOP_MODE_TASK_SIZE_UPDATED = 935;
+  ATOM_DEVICE_LOCK_CHECK_IN_REQUEST_REPORTED = 726;
+  ATOM_DEVICE_LOCK_PROVISIONING_COMPLETE_REPORTED = 727;
+  ATOM_DEVICE_LOCK_KIOSK_APP_REQUEST_REPORTED = 728;
+  ATOM_DEVICE_LOCK_CHECK_IN_RETRY_REPORTED = 789;
+  ATOM_DEVICE_LOCK_PROVISION_FAILURE_REPORTED = 790;
+  ATOM_DEVICE_LOCK_LOCK_UNLOCK_DEVICE_FAILURE_REPORTED = 791;
+  ATOM_DEVICE_POLICY_MANAGEMENT_MODE = 10216;
+  ATOM_DEVICE_POLICY_STATE = 10217;
+  ATOM_DISPLAY_MODE_DIRECTOR_VOTE_CHANGED = 792;
+  ATOM_EXTERNAL_DISPLAY_STATE_CHANGED = 806;
+  ATOM_DND_STATE_CHANGED = 657;
+  ATOM_DREAM_SETTING_CHANGED = 705;
+  ATOM_DREAM_SETTING_SNAPSHOT = 10192;
+  ATOM_EXPRESS_EVENT_REPORTED = 528;
+  ATOM_EXPRESS_HISTOGRAM_SAMPLE_REPORTED = 593;
+  ATOM_EXPRESS_UID_EVENT_REPORTED = 644;
+  ATOM_EXPRESS_UID_HISTOGRAM_SAMPLE_REPORTED = 658;
+  ATOM_FEDERATED_COMPUTE_API_CALLED = 712;
+  ATOM_FEDERATED_COMPUTE_TRAINING_EVENT_REPORTED = 771;
+  ATOM_EXAMPLE_ITERATOR_NEXT_LATENCY_REPORTED = 838;
+  ATOM_FULL_SCREEN_INTENT_LAUNCHED = 631;
+  ATOM_BAL_ALLOWED = 632;
+  ATOM_IN_TASK_ACTIVITY_STARTED = 685;
+  ATOM_DEVICE_ORIENTATION_CHANGED = 906;
+  ATOM_CACHED_APPS_HIGH_WATERMARK = 10189;
+  ATOM_STYLUS_PREDICTION_METRICS_REPORTED = 718;
+  ATOM_USER_RISK_EVENT_REPORTED = 725;
+  ATOM_MEDIA_PROJECTION_STATE_CHANGED = 729;
+  ATOM_MEDIA_PROJECTION_TARGET_CHANGED = 730;
+  ATOM_EXCESSIVE_BINDER_PROXY_COUNT_REPORTED = 853;
+  ATOM_PROXY_BYTES_TRANSFER_BY_FG_BG = 10200;
+  ATOM_MOBILE_BYTES_TRANSFER_BY_PROC_STATE = 10204;
+  ATOM_BIOMETRIC_FRR_NOTIFICATION = 817;
+  ATOM_SENSITIVE_CONTENT_MEDIA_PROJECTION_SESSION = 830;
+  ATOM_SENSITIVE_NOTIFICATION_APP_PROTECTION_SESSION = 831;
+  ATOM_SENSITIVE_NOTIFICATION_APP_PROTECTION_APPLIED = 832;
+  ATOM_SENSITIVE_NOTIFICATION_REDACTION = 833;
+  ATOM_SENSITIVE_CONTENT_APP_PROTECTION = 835;
+  ATOM_APP_RESTRICTION_STATE_CHANGED = 866;
+  ATOM_BATTERY_USAGE_STATS_PER_UID = 10209;
+  ATOM_POSTGC_MEMORY_SNAPSHOT = 924;
+  ATOM_POWER_SAVE_TEMP_ALLOWLIST_CHANGED = 926;
+  ATOM_APP_OP_ACCESS_TRACKED = 931;
+  ATOM_CONTENT_OR_FILE_URI_EVENT_REPORTED = 933;
+  ATOM_APPLICATION_GRAMMATICAL_INFLECTION_CHANGED = 584;
+  ATOM_SYSTEM_GRAMMATICAL_INFLECTION_CHANGED = 816;
+  ATOM_BATTERY_HEALTH = 10220;
+  ATOM_HDMI_EARC_STATUS_REPORTED = 701;
+  ATOM_HDMI_SOUNDBAR_MODE_STATUS_REPORTED = 724;
+  ATOM_HEALTH_CONNECT_API_CALLED = 616;
+  ATOM_HEALTH_CONNECT_USAGE_STATS = 617;
+  ATOM_HEALTH_CONNECT_STORAGE_STATS = 618;
+  ATOM_HEALTH_CONNECT_API_INVOKED = 643;
+  ATOM_EXERCISE_ROUTE_API_CALLED = 654;
+  ATOM_HEALTH_CONNECT_EXPORT_INVOKED = 907;
+  ATOM_HEALTH_CONNECT_IMPORT_INVOKED = 918;
+  ATOM_HEALTH_CONNECT_EXPORT_IMPORT_STATS_REPORTED = 919;
+  ATOM_HEALTH_CONNECT_UI_IMPRESSION = 623;
+  ATOM_HEALTH_CONNECT_UI_INTERACTION = 624;
+  ATOM_HEALTH_CONNECT_APP_OPENED_REPORTED = 625;
+  ATOM_HOTWORD_EGRESS_SIZE_ATOM_REPORTED = 761;
+  ATOM_IKE_SESSION_TERMINATED = 678;
+  ATOM_IKE_LIVENESS_CHECK_SESSION_VALIDATED = 760;
+  ATOM_NEGOTIATED_SECURITY_ASSOCIATION = 821;
+  ATOM_KEYBOARD_CONFIGURED = 682;
+  ATOM_KEYBOARD_SYSTEMS_EVENT_REPORTED = 683;
+  ATOM_INPUTDEVICE_USAGE_REPORTED = 686;
+  ATOM_INPUT_EVENT_LATENCY_REPORTED = 932;
+  ATOM_TOUCHPAD_USAGE = 10191;
+  ATOM_KERNEL_OOM_KILL_OCCURRED = 754;
+  ATOM_EMERGENCY_STATE_CHANGED = 633;
+  ATOM_CHRE_SIGNIFICANT_MOTION_STATE_CHANGED = 868;
+  ATOM_POPULATION_DENSITY_PROVIDER_LOADING_REPORTED = 1002;
+  ATOM_DENSITY_BASED_COARSE_LOCATIONS_USAGE_REPORTED = 1003;
+  ATOM_DENSITY_BASED_COARSE_LOCATIONS_PROVIDER_QUERY_REPORTED = 1004;
+  ATOM_MEDIA_CODEC_RECLAIM_REQUEST_COMPLETED = 600;
+  ATOM_MEDIA_CODEC_STARTED = 641;
+  ATOM_MEDIA_CODEC_STOPPED = 642;
+  ATOM_MEDIA_CODEC_RENDERED = 684;
+  ATOM_MEDIA_EDITING_ENDED_REPORTED = 798;
+  ATOM_MTE_STATE = 10181;
+  ATOM_MICROXR_DEVICE_BOOT_COMPLETE_REPORTED = 901;
+  ATOM_NFC_OBSERVE_MODE_STATE_CHANGED = 855;
+  ATOM_NFC_FIELD_CHANGED = 856;
+  ATOM_NFC_POLLING_LOOP_NOTIFICATION_REPORTED = 857;
+  ATOM_NFC_PROPRIETARY_CAPABILITIES_REPORTED = 858;
+  ATOM_ONDEVICEPERSONALIZATION_API_CALLED = 711;
+  ATOM_COMPONENT_STATE_CHANGED_REPORTED = 863;
+  ATOM_PDF_LOAD_REPORTED = 859;
+  ATOM_PDF_API_USAGE_REPORTED = 860;
+  ATOM_PDF_SEARCH_REPORTED = 861;
+  ATOM_PRESSURE_STALL_INFORMATION = 10229;
+  ATOM_PERMISSION_RATIONALE_DIALOG_VIEWED = 645;
+  ATOM_PERMISSION_RATIONALE_DIALOG_ACTION_REPORTED = 646;
+  ATOM_APP_DATA_SHARING_UPDATES_NOTIFICATION_INTERACTION = 647;
+  ATOM_APP_DATA_SHARING_UPDATES_FRAGMENT_VIEWED = 648;
+  ATOM_APP_DATA_SHARING_UPDATES_FRAGMENT_ACTION_REPORTED = 649;
+  ATOM_ENHANCED_CONFIRMATION_DIALOG_RESULT_REPORTED = 827;
+  ATOM_ENHANCED_CONFIRMATION_RESTRICTION_CLEARED = 828;
+  ATOM_PHOTOPICKER_SESSION_INFO_REPORTED = 886;
+  ATOM_PHOTOPICKER_API_INFO_REPORTED = 887;
+  ATOM_PHOTOPICKER_UI_EVENT_LOGGED = 888;
+  ATOM_PHOTOPICKER_MEDIA_ITEM_STATUS_REPORTED = 889;
+  ATOM_PHOTOPICKER_PREVIEW_INFO_LOGGED = 890;
+  ATOM_PHOTOPICKER_MENU_INTERACTION_LOGGED = 891;
+  ATOM_PHOTOPICKER_BANNER_INTERACTION_LOGGED = 892;
+  ATOM_PHOTOPICKER_MEDIA_LIBRARY_INFO_LOGGED = 893;
+  ATOM_PHOTOPICKER_PAGE_INFO_LOGGED = 894;
+  ATOM_PHOTOPICKER_MEDIA_GRID_SYNC_INFO_REPORTED = 895;
+  ATOM_PHOTOPICKER_ALBUM_SYNC_INFO_REPORTED = 896;
+  ATOM_PHOTOPICKER_SEARCH_INFO_REPORTED = 897;
+  ATOM_SEARCH_DATA_EXTRACTION_DETAILS_REPORTED = 898;
+  ATOM_EMBEDDED_PHOTOPICKER_INFO_REPORTED = 899;
+  ATOM_ATOM_9999 = 9999;
+  ATOM_ATOM_99999 = 99999;
+  ATOM_SCREEN_OFF_REPORTED = 776;
+  ATOM_SCREEN_TIMEOUT_OVERRIDE_REPORTED = 836;
+  ATOM_SCREEN_INTERACTIVE_SESSION_REPORTED = 837;
+  ATOM_SCREEN_DIM_REPORTED = 867;
+  ATOM_MEDIA_PROVIDER_DATABASE_ROLLBACK_REPORTED = 784;
+  ATOM_BACKUP_SETUP_STATUS_REPORTED = 785;
+  ATOM_RANGING_SESSION_CONFIGURED = 993;
+  ATOM_RANGING_SESSION_STARTED = 994;
+  ATOM_RANGING_SESSION_CLOSED = 995;
+  ATOM_RANGING_TECHNOLOGY_STARTED = 996;
+  ATOM_RANGING_TECHNOLOGY_STOPPED = 997;
+  ATOM_RKPD_POOL_STATS = 664;
+  ATOM_RKPD_CLIENT_OPERATION = 665;
+  ATOM_SANDBOX_API_CALLED = 488;
+  ATOM_SANDBOX_ACTIVITY_EVENT_OCCURRED = 735;
+  ATOM_SDK_SANDBOX_RESTRICTED_ACCESS_IN_SESSION = 796;
+  ATOM_SANDBOX_SDK_STORAGE = 10159;
+  ATOM_SELINUX_AUDIT_LOG = 799;
+  ATOM_SETTINGS_SPA_REPORTED = 622;
+  ATOM_TEST_EXTENSION_ATOM_REPORTED = 660;
+  ATOM_TEST_RESTRICTED_ATOM_REPORTED = 672;
+  ATOM_STATS_SOCKET_LOSS_REPORTED = 752;
+  ATOM_LOCKSCREEN_SHORTCUT_SELECTED = 611;
+  ATOM_LOCKSCREEN_SHORTCUT_TRIGGERED = 612;
+  ATOM_LAUNCHER_IMPRESSION_EVENT_V2 = 716;
+  ATOM_DISPLAY_SWITCH_LATENCY_TRACKED = 753;
+  ATOM_NOTIFICATION_LISTENER_SERVICE = 829;
+  ATOM_NAV_HANDLE_TOUCH_POINTS = 869;
+  ATOM_COMMUNAL_HUB_WIDGET_EVENT_REPORTED = 908;
+  ATOM_COMMUNAL_HUB_SNAPSHOT = 10226;
+  ATOM_EMERGENCY_NUMBER_DIALED = 637;
+  ATOM_CALL_STATS = 10221;
+  ATOM_CALL_AUDIO_ROUTE_STATS = 10222;
+  ATOM_TELECOM_API_STATS = 10223;
+  ATOM_TELECOM_ERROR_STATS = 10224;
+  ATOM_CELLULAR_RADIO_POWER_STATE_CHANGED = 713;
+  ATOM_EMERGENCY_NUMBERS_INFO = 10180;
+  ATOM_DATA_NETWORK_VALIDATION = 10207;
+  ATOM_DATA_RAT_STATE_CHANGED = 854;
+  ATOM_CONNECTED_CHANNEL_CHANGED = 882;
+  ATOM_IWLAN_UNDERLYING_NETWORK_VALIDATION_RESULT_REPORTED = 923;
+  ATOM_QUALIFIED_RAT_LIST_CHANGED = 634;
+  ATOM_QNS_IMS_CALL_DROP_STATS = 635;
+  ATOM_QNS_FALLBACK_RESTRICTION_CHANGED = 636;
+  ATOM_QNS_RAT_PREFERENCE_MISMATCH_INFO = 10177;
+  ATOM_QNS_HANDOVER_TIME_MILLIS = 10178;
+  ATOM_QNS_HANDOVER_PINGPONG = 10179;
+  ATOM_SATELLITE_CONTROLLER = 10182;
+  ATOM_SATELLITE_SESSION = 10183;
+  ATOM_SATELLITE_INCOMING_DATAGRAM = 10184;
+  ATOM_SATELLITE_OUTGOING_DATAGRAM = 10185;
+  ATOM_SATELLITE_PROVISION = 10186;
+  ATOM_SATELLITE_SOS_MESSAGE_RECOMMENDER = 10187;
+  ATOM_CARRIER_ROAMING_SATELLITE_SESSION = 10211;
+  ATOM_CARRIER_ROAMING_SATELLITE_CONTROLLER_STATS = 10212;
+  ATOM_CONTROLLER_STATS_PER_PACKAGE = 10213;
+  ATOM_SATELLITE_ENTITLEMENT = 10214;
+  ATOM_SATELLITE_CONFIG_UPDATER = 10215;
+  ATOM_SATELLITE_ACCESS_CONTROLLER = 10219;
+  ATOM_CELLULAR_IDENTIFIER_DISCLOSED = 800;
+  ATOM_THREADNETWORK_TELEMETRY_DATA_REPORTED = 738;
+  ATOM_THREADNETWORK_TOPO_ENTRY_REPEATED = 739;
+  ATOM_THREADNETWORK_DEVICE_INFO_REPORTED = 740;
+  ATOM_BOOT_INTEGRITY_INFO_REPORTED = 775;
+  ATOM_TV_LOW_POWER_STANDBY_POLICY = 679;
+  ATOM_EXTERNAL_TV_INPUT_EVENT = 717;
+  ATOM_TEST_UPROBESTATS_ATOM_REPORTED = 915;
+  ATOM_UWB_ACTIVITY_INFO = 10188;
+  ATOM_MEDIATOR_UPDATED = 721;
+  ATOM_SYSPROXY_BLUETOOTH_BYTES_TRANSFER = 10196;
+  ATOM_SYSPROXY_CONNECTION_UPDATED = 786;
+  ATOM_WEAR_COMPANION_CONNECTION_STATE = 921;
+  ATOM_MEDIA_ACTION_REPORTED = 608;
+  ATOM_MEDIA_CONTROLS_LAUNCHED = 609;
+  ATOM_MEDIA_SESSION_STATE_CHANGED = 677;
+  ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_DEVICE_SCAN_API_LATENCY = 757;
+  ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_SASS_DEVICE_UNAVAILABLE = 758;
+  ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_FASTPAIR_API_TIMEOUT = 759;
+  ATOM_WEAR_MODE_STATE_CHANGED = 715;
+  ATOM_RENDERER_INITIALIZED = 736;
+  ATOM_SCHEMA_VERSION_RECEIVED = 737;
+  ATOM_LAYOUT_INSPECTED = 741;
+  ATOM_LAYOUT_EXPRESSION_INSPECTED = 742;
+  ATOM_LAYOUT_ANIMATIONS_INSPECTED = 743;
+  ATOM_MATERIAL_COMPONENTS_INSPECTED = 744;
+  ATOM_TILE_REQUESTED = 745;
+  ATOM_STATE_RESPONSE_RECEIVED = 746;
+  ATOM_TILE_RESPONSE_RECEIVED = 747;
+  ATOM_INFLATION_FINISHED = 748;
+  ATOM_INFLATION_FAILED = 749;
+  ATOM_IGNORED_INFLATION_FAILURES_REPORTED = 750;
+  ATOM_DRAWABLE_RENDERED = 751;
+  ATOM_WEAR_TIME_SYNC_REQUESTED = 911;
+  ATOM_WEAR_TIME_UPDATE_STARTED = 912;
+  ATOM_WEAR_TIME_SYNC_ATTEMPT_COMPLETED = 913;
+  ATOM_WEAR_TIME_CHANGED = 914;
+  ATOM_WEAR_ADAPTIVE_SUSPEND_STATS_REPORTED = 619;
+  ATOM_WEAR_POWER_ANOMALY_SERVICE_OPERATIONAL_STATS_REPORTED = 620;
+  ATOM_WEAR_POWER_ANOMALY_SERVICE_EVENT_STATS_REPORTED = 621;
+  ATOM_WS_WEAR_TIME_SESSION = 610;
+  ATOM_WS_INCOMING_CALL_ACTION_REPORTED = 626;
+  ATOM_WS_CALL_DISCONNECTION_REPORTED = 627;
+  ATOM_WS_CALL_DURATION_REPORTED = 628;
+  ATOM_WS_CALL_USER_EXPERIENCE_LATENCY_REPORTED = 629;
+  ATOM_WS_CALL_INTERACTION_REPORTED = 630;
+  ATOM_WS_ON_BODY_STATE_CHANGED = 787;
+  ATOM_WS_WATCH_FACE_RESTRICTED_COMPLICATIONS_IMPACTED = 802;
+  ATOM_WS_WATCH_FACE_DEFAULT_RESTRICTED_COMPLICATIONS_REMOVED = 803;
+  ATOM_WS_COMPLICATIONS_IMPACTED_NOTIFICATION_EVENT_REPORTED = 804;
+  ATOM_WS_REMOTE_EVENT_USAGE_REPORTED = 920;
+  ATOM_WS_BUGREPORT_REQUESTED = 936;
+  ATOM_WS_BUGREPORT_TRIGGERED = 937;
+  ATOM_WS_BUGREPORT_FINISHED = 938;
+  ATOM_WS_BUGREPORT_RESULT_RECEIVED = 939;
+  ATOM_WS_STANDALONE_MODE_SNAPSHOT = 10197;
+  ATOM_WS_FAVORITE_WATCH_FACE_SNAPSHOT = 10206;
+  ATOM_WS_PHOTOS_WATCH_FACE_FEATURE_SNAPSHOT = 10225;
+  ATOM_WS_WATCH_FACE_CUSTOMIZATION_SNAPSHOT = 10227;
+  ATOM_WEAR_POWER_MENU_OPENED = 731;
+  ATOM_WEAR_ASSISTANT_OPENED = 755;
+  ATOM_FIRST_OVERLAY_STATE_CHANGED = 917;
   ATOM_WIFI_AWARE_NDP_REPORTED = 638;
   ATOM_WIFI_AWARE_ATTACH_REPORTED = 639;
   ATOM_WIFI_SELF_RECOVERY_TRIGGERED = 661;
@@ -2485,126 +3172,17 @@ enum AtomId {
   ATOM_WIFI_LOCAL_ONLY_REQUEST_SCAN_TRIGGERED = 693;
   ATOM_WIFI_THREAD_TASK_EXECUTED = 694;
   ATOM_WIFI_STATE_CHANGED = 700;
+  ATOM_PNO_SCAN_STARTED = 719;
+  ATOM_PNO_SCAN_STOPPED = 720;
+  ATOM_WIFI_IS_UNUSABLE_REPORTED = 722;
+  ATOM_WIFI_AP_CAPABILITIES_REPORTED = 723;
+  ATOM_SOFT_AP_STATE_CHANGED = 805;
+  ATOM_SCORER_PREDICTION_RESULT_REPORTED = 884;
   ATOM_WIFI_AWARE_CAPABILITIES = 10190;
   ATOM_WIFI_MODULE_INFO = 10193;
-  ATOM_SETTINGS_SPA_REPORTED = 622;
-  ATOM_EXPRESS_EVENT_REPORTED = 528;
-  ATOM_EXPRESS_HISTOGRAM_SAMPLE_REPORTED = 593;
-  ATOM_EXPRESS_UID_EVENT_REPORTED = 644;
-  ATOM_EXPRESS_UID_HISTOGRAM_SAMPLE_REPORTED = 658;
-  ATOM_PERMISSION_RATIONALE_DIALOG_VIEWED = 645;
-  ATOM_PERMISSION_RATIONALE_DIALOG_ACTION_REPORTED = 646;
-  ATOM_APP_DATA_SHARING_UPDATES_NOTIFICATION_INTERACTION = 647;
-  ATOM_APP_DATA_SHARING_UPDATES_FRAGMENT_VIEWED = 648;
-  ATOM_APP_DATA_SHARING_UPDATES_FRAGMENT_ACTION_REPORTED = 649;
-  ATOM_WS_INCOMING_CALL_ACTION_REPORTED = 626;
-  ATOM_WS_CALL_DISCONNECTION_REPORTED = 627;
-  ATOM_WS_CALL_DURATION_REPORTED = 628;
-  ATOM_WS_CALL_USER_EXPERIENCE_LATENCY_REPORTED = 629;
-  ATOM_WS_CALL_INTERACTION_REPORTED = 630;
-  ATOM_FULL_SCREEN_INTENT_LAUNCHED = 631;
-  ATOM_BAL_ALLOWED = 632;
-  ATOM_IN_TASK_ACTIVITY_STARTED = 685;
-  ATOM_CACHED_APPS_HIGH_WATERMARK = 10189;
-  ATOM_ODREFRESH_REPORTED = 366;
-  ATOM_ODSIGN_REPORTED = 548;
-  ATOM_ART_DATUM_REPORTED = 332;
-  ATOM_ART_DEVICE_DATUM_REPORTED = 550;
-  ATOM_ART_DATUM_DELTA_REPORTED = 565;
-  ATOM_BACKGROUND_DEXOPT_JOB_ENDED = 467;
-  ATOM_WEAR_ADAPTIVE_SUSPEND_STATS_REPORTED = 619;
-  ATOM_WEAR_POWER_ANOMALY_SERVICE_OPERATIONAL_STATS_REPORTED = 620;
-  ATOM_WEAR_POWER_ANOMALY_SERVICE_EVENT_STATS_REPORTED = 621;
-  ATOM_EMERGENCY_STATE_CHANGED = 633;
-  ATOM_DND_STATE_CHANGED = 657;
-  ATOM_MTE_STATE = 10181;
-  ATOM_AD_SERVICES_BACK_COMPAT_GET_TOPICS_REPORTED = 598;
-  ATOM_AD_SERVICES_BACK_COMPAT_EPOCH_COMPUTATION_CLASSIFIER_REPORTED = 599;
-  ATOM_AD_SERVICES_MEASUREMENT_DEBUG_KEYS = 640;
-  ATOM_AD_SERVICES_ERROR_REPORTED = 662;
-  ATOM_AD_SERVICES_BACKGROUND_JOBS_EXECUTION_REPORTED = 663;
-  ATOM_AD_SERVICES_MEASUREMENT_DELAYED_SOURCE_REGISTRATION = 673;
-  ATOM_AD_SERVICES_MEASUREMENT_ATTRIBUTION = 674;
-  ATOM_AD_SERVICES_MEASUREMENT_JOBS = 675;
-  ATOM_AD_SERVICES_MEASUREMENT_WIPEOUT = 676;
-  ATOM_AD_SERVICES_CONSENT_MIGRATED = 702;
-  ATOM_RKPD_POOL_STATS = 664;
-  ATOM_RKPD_CLIENT_OPERATION = 665;
-  ATOM_AUTOFILL_UI_EVENT_REPORTED = 603;
-  ATOM_AUTOFILL_FILL_REQUEST_REPORTED = 604;
-  ATOM_AUTOFILL_FILL_RESPONSE_REPORTED = 605;
-  ATOM_AUTOFILL_SAVE_EVENT_REPORTED = 606;
-  ATOM_AUTOFILL_SESSION_COMMITTED = 607;
-  ATOM_AUTOFILL_FIELD_CLASSIFICATION_EVENT_REPORTED = 659;
-  ATOM_TEST_EXTENSION_ATOM_REPORTED = 660;
-  ATOM_TEST_RESTRICTED_ATOM_REPORTED = 672;
-  ATOM_STATS_SOCKET_LOSS_REPORTED = 752;
-  ATOM_PLUGIN_INITIALIZED = 655;
-  ATOM_TV_LOW_POWER_STANDBY_POLICY = 679;
-  ATOM_LOCKSCREEN_SHORTCUT_SELECTED = 611;
-  ATOM_LOCKSCREEN_SHORTCUT_TRIGGERED = 612;
-  ATOM_EMERGENCY_NUMBERS_INFO = 10180;
-  ATOM_QUALIFIED_RAT_LIST_CHANGED = 634;
-  ATOM_QNS_IMS_CALL_DROP_STATS = 635;
-  ATOM_QNS_FALLBACK_RESTRICTION_CHANGED = 636;
-  ATOM_QNS_RAT_PREFERENCE_MISMATCH_INFO = 10177;
-  ATOM_QNS_HANDOVER_TIME_MILLIS = 10178;
-  ATOM_QNS_HANDOVER_PINGPONG = 10179;
-  ATOM_SATELLITE_CONTROLLER = 10182;
-  ATOM_SATELLITE_SESSION = 10183;
-  ATOM_SATELLITE_INCOMING_DATAGRAM = 10184;
-  ATOM_SATELLITE_OUTGOING_DATAGRAM = 10185;
-  ATOM_SATELLITE_PROVISION = 10186;
-  ATOM_SATELLITE_SOS_MESSAGE_RECOMMENDER = 10187;
-  ATOM_IKE_SESSION_TERMINATED = 678;
-  ATOM_IKE_LIVENESS_CHECK_SESSION_VALIDATED = 760;
-  ATOM_BLUETOOTH_HASHED_DEVICE_NAME_REPORTED = 613;
-  ATOM_BLUETOOTH_L2CAP_COC_CLIENT_CONNECTION = 614;
-  ATOM_BLUETOOTH_L2CAP_COC_SERVER_CONNECTION = 615;
-  ATOM_BLUETOOTH_LE_SESSION_CONNECTED = 656;
-  ATOM_RESTRICTED_BLUETOOTH_DEVICE_NAME_REPORTED = 666;
-  ATOM_BLUETOOTH_PROFILE_CONNECTION_ATTEMPTED = 696;
-  ATOM_HEALTH_CONNECT_UI_IMPRESSION = 623;
-  ATOM_HEALTH_CONNECT_UI_INTERACTION = 624;
-  ATOM_HEALTH_CONNECT_APP_OPENED_REPORTED = 625;
-  ATOM_HEALTH_CONNECT_API_CALLED = 616;
-  ATOM_HEALTH_CONNECT_USAGE_STATS = 617;
-  ATOM_HEALTH_CONNECT_STORAGE_STATS = 618;
-  ATOM_HEALTH_CONNECT_API_INVOKED = 643;
-  ATOM_EXERCISE_ROUTE_API_CALLED = 654;
-  ATOM_ATOM_9999 = 9999;
-  ATOM_ATOM_99999 = 99999;
-  ATOM_THREADNETWORK_TELEMETRY_DATA_REPORTED = 738;
-  ATOM_THREADNETWORK_TOPO_ENTRY_REPEATED = 739;
-  ATOM_THREADNETWORK_DEVICE_INFO_REPORTED = 740;
-  ATOM_EMERGENCY_NUMBER_DIALED = 637;
-  ATOM_SANDBOX_API_CALLED = 488;
-  ATOM_SANDBOX_ACTIVITY_EVENT_OCCURRED = 735;
-  ATOM_SANDBOX_SDK_STORAGE = 10159;
-  ATOM_CRONET_ENGINE_CREATED = 703;
-  ATOM_CRONET_TRAFFIC_REPORTED = 704;
-  ATOM_CRONET_ENGINE_BUILDER_INITIALIZED = 762;
-  ATOM_CRONET_HTTP_FLAGS_INITIALIZED = 763;
-  ATOM_CRONET_INITIALIZED = 764;
-  ATOM_DAILY_KEEPALIVE_INFO_REPORTED = 650;
-  ATOM_IP_CLIENT_RA_INFO_REPORTED = 778;
-  ATOM_APF_SESSION_INFO_REPORTED = 777;
-  ATOM_CREDENTIAL_MANAGER_API_CALLED = 585;
-  ATOM_CREDENTIAL_MANAGER_INIT_PHASE_REPORTED = 651;
-  ATOM_CREDENTIAL_MANAGER_CANDIDATE_PHASE_REPORTED = 652;
-  ATOM_CREDENTIAL_MANAGER_FINAL_PHASE_REPORTED = 653;
-  ATOM_CREDENTIAL_MANAGER_TOTAL_REPORTED = 667;
-  ATOM_CREDENTIAL_MANAGER_FINALNOUID_REPORTED = 668;
-  ATOM_CREDENTIAL_MANAGER_GET_REPORTED = 669;
-  ATOM_CREDENTIAL_MANAGER_AUTH_CLICK_REPORTED = 670;
-  ATOM_CREDENTIAL_MANAGER_APIV2_CALLED = 671;
-  ATOM_UWB_ACTIVITY_INFO = 10188;
-  ATOM_MEDIA_ACTION_REPORTED = 608;
-  ATOM_MEDIA_CONTROLS_LAUNCHED = 609;
-  ATOM_MEDIA_CODEC_RECLAIM_REQUEST_COMPLETED = 600;
-  ATOM_MEDIA_CODEC_STARTED = 641;
-  ATOM_MEDIA_CODEC_STOPPED = 642;
-  ATOM_MEDIA_CODEC_RENDERED = 684;
+  ATOM_WIFI_SETTING_INFO = 10194;
+  ATOM_WIFI_COMPLEX_SETTING_INFO = 10195;
+  ATOM_WIFI_CONFIGURED_NETWORK_INFO = 10198;
 }
 // End of protos/perfetto/config/statsd/atom_ids.proto
 
@@ -2676,6 +3254,11 @@ enum MeminfoCounters {
   MEMINFO_VMALLOC_CHUNK = 31;
   MEMINFO_CMA_TOTAL = 32;
   MEMINFO_CMA_FREE = 33;
+  MEMINFO_GPU = 34;
+  MEMINFO_ZRAM = 35;
+  MEMINFO_MISC = 36;
+  MEMINFO_ION_HEAP = 37;
+  MEMINFO_ION_HEAP_POOL = 38;
 }
 
 // Counter definitions for Linux's /proc/vmstat.
@@ -2934,6 +3517,18 @@ message SysStatsConfig {
   // Polls /proc/pressure/* every X ms, if non-zero.
   // This is required to be > 10ms to avoid excessive CPU usage.
   optional uint32 psi_period_ms = 11;
+
+  // Polls /sys/class/thermal/* every X ms, if non-zero.
+  // This is required to be > 10ms to avoid excessive CPU usage.
+  optional uint32 thermal_period_ms = 12;
+
+  // Polls /sys/devices/system/cpu/cpu*/cpuidle/state* every X ms, if non-zero.
+  // This is required to be > 10ms to avoid excessive CPU usage.
+  optional uint32 cpuidle_period_ms = 13;
+
+  // Polls device-specific GPU frequency info every X ms, if non-zero.
+  // This is required to be > 10ms to avoid excessive CPU usage.
+  optional uint32 gpufreq_period_ms = 14;
 }
 
 // End of protos/perfetto/config/sys_stats/sys_stats_config.proto
@@ -3016,23 +3611,27 @@ message TrackEventConfig {
   //   7. Pattern matches in disabled categories.
   //   8. Pattern matches in disabled tags.
   //
-  // If none of the steps produced a match, the category is enabled by default.
+  // If none of the steps produced a match:
+  //  - In the C++ SDK (`perfetto::Category`), categories are enabled by
+  //  default.
+  //  - In the C SDK (`PerfettoTeCategory`), categories are disabled by default.
   //
   // Examples:
   //
   //  - To enable all non-slow/debug categories:
   //
-  //       No configuration needed, happens by default.
+  //       enabled_categories: "*"
   //
-  //  - To enable a specific category:
+  //  - To enable specific categories:
   //
-  //       disabled_categories = ["*"]
-  //       enabled_categories = ["my_category"]
+  //       disabled_categories: "*"
+  //       enabled_categories: "my_category"
+  //       enabled_categories: "my_category2"
   //
   //  - To enable only categories with a specific tag:
   //
-  //       disabled_tags = ["*"]
-  //       enabled_tags = ["my_tag"]
+  //       disabled_tags: "*"
+  //       enabled_tags: "my_tag"
   //
 
   // Default: []
@@ -3084,7 +3683,7 @@ message TrackEventConfig {
 // Begin of protos/perfetto/config/data_source_config.proto
 
 // The configuration that is passed to each data source when starting tracing.
-// Next id: 127
+// Next id: 134
 message DataSourceConfig {
   enum SessionInitiator {
     SESSION_INITIATOR_UNSPECIFIED = 0;
@@ -3162,7 +3761,7 @@ message DataSourceConfig {
   optional AndroidPowerConfig android_power_config = 106 [lazy = true];
   // Data source name: android.log
   optional AndroidLogConfig android_log_config = 107 [lazy = true];
-  // TODO(fmayer): Add data source name for this.
+  // Data source name: gpu.counters
   optional GpuCounterConfig gpu_counter_config = 108 [lazy = true];
   // Data source name: android.game_interventions
   optional AndroidGameInterventionListConfig
@@ -3229,6 +3828,25 @@ message DataSourceConfig {
   // Data source name: android.protolog
   optional ProtoLogConfig protolog_config = 126 [lazy = true];
 
+  // Data source name: android.input.inputevent
+  optional AndroidInputEventConfig android_input_event_config = 128
+      [lazy = true];
+
+  // Data source name: android.pixel.modem
+  optional PixelModemConfig pixel_modem_config = 129 [lazy = true];
+
+  // Data source name: android.windowmanager
+  optional WindowManagerConfig windowmanager_config = 130 [lazy = true];
+
+  // Data source name: org.chromium.system_metrics
+  optional ChromiumSystemMetricsConfig chromium_system_metrics = 131 [lazy = true];
+
+  // Data source name: android.kernel_wakelocks
+  optional KernelWakelocksConfig kernel_wakelocks_config = 132 [lazy = true];
+
+  // Data source name: gpu.renderstages
+  optional GpuRenderStagesConfig gpu_renderstages_config = 133 [lazy = true];
+
   // This is a fallback mechanism to send a free-form text config to the
   // producer. In theory this should never be needed. All the code that
   // is part of the platform (i.e. traced service) is supposed to *not* truncate
@@ -3254,7 +3872,7 @@ message DataSourceConfig {
 // It contains the general config for the logging buffer(s) and the configs for
 // all the data source being enabled.
 //
-// Next id: 39.
+// Next id: 40.
 message TraceConfig {
   message BufferConfig {
     optional uint32 size_kb = 1;
@@ -3289,7 +3907,7 @@ message TraceConfig {
     // that case we don't want to retain another in-memory copy of the buffer.
     optional bool transfer_on_clone = 5;
 
-    // Used in conjuction with transfer_on_clone. When true the buffer is
+    // Used in conjunction with transfer_on_clone. When true the buffer is
     // cleared before issuing the Flush(reason=kTraceClone). This is to ensure
     // that if the data source took too long to write the data in a previous
     // clone-related flush, we don't end up with a mixture of leftovers from
@@ -3462,7 +4080,9 @@ message TraceConfig {
     // a 24 hour period.
     // On R-, this override only affected userdebug builds. Since S, it also
     // affects user builds.
-    optional uint64 max_upload_per_day_bytes = 1;
+    // In 24Q3+ (V+), this override is a noop because upload guardrail logic
+    // was removed from Perfetto.
+    optional uint64 max_upload_per_day_bytes = 1 [deprecated = true];
 
     // Overrides the guardrail for maximum trace buffer size.
     // Available on U+
@@ -3664,11 +4284,8 @@ message TraceConfig {
   }
   optional IncrementalStateConfig incremental_state_config = 21;
 
-  // Additional guardrail used by the Perfetto command line client.
-  // On user builds when --dropbox is set perfetto will refuse to trace unless
-  // this is also set.
-  // Added in Q.
-  optional bool allow_user_build_tracing = 19;
+  // No longer needed as we unconditionally allow tracing on user builds.
+  optional bool allow_user_build_tracing = 19 [deprecated = true];
 
   // If set the tracing service will ensure there is at most one tracing session
   // with this key.
@@ -3918,6 +4535,51 @@ message TraceConfig {
     optional uint32 max_delay_ms = 2;
   }
   optional CmdTraceStartDelay cmd_trace_start_delay = 35;
+
+  // When non-empty, ensures that for a each semaphore named `name at most
+  // `max_other_session_count`` *other* sessions (whose value is taken of the
+  // minimum of all values specified by this config or any already-running
+  // session) can be be running.
+  //
+  // If a semaphore "acquisition" fails, EnableTracing will return an error
+  // and the tracing session will not be started (or elgible to start in
+  // the case of deferred sessions).
+  //
+  // This is easiest to explain with an example. Suppose the tracing service has
+  // the following active tracing sessions:
+  //   S1 = [{name=foo, max_other_session_count=2},
+  //         {name=bar, max_other_session_count=0}]
+  //   S2 = [{name=foo, max_other_session_count=1},
+  //         {name=baz, max_other_session_count=1}]
+  //
+  // Then, for a new session, the following would be the expected behaviour of
+  // EnableSession given the state of `session_semaphores`.
+  //   Q: session_semaphores = []
+  //   A: Allowed because it does not specify any semaphores. Will be allowed
+  //      no matter the state of any other tracing session.
+  //   Q: session_semaphores = [{name=baz, max_other_session_count=1}]
+  //   A: Allowed because both S2 and this config specify
+  //      max_other_session_count=1 for baz.
+  //   Q: session_semaphores = [{name=foo, max_other_session_count=3}]
+  //   A: Denied because S2 specified max_other_session_count=1 for foo and S1
+  //      takes that slot.
+  //   Q: session_semaphores = [{name=bar, max_other_session_count=0}]
+  //   A: Denied because S1 takes the the slot specified by both S1 and
+  //      this config.
+  //
+  // Introduced in 24Q3 (Android V).
+  message SessionSemaphore {
+    // The name of the semaphore. Acts as a unique identifier across all
+    // tracing sessions (including the one being started).
+    optional string name = 1;
+
+    // The maximum number of *other* sesssions which specify the same semaphore
+    // which can be active. The minimum of this value across all tracing
+    // sessions and the value specified by the config is used when deciding
+    // whether the tracing session can be started.
+    optional uint64 max_other_session_count = 2;
+  }
+  repeated SessionSemaphore session_semaphores = 39;
 }
 
 // End of protos/perfetto/config/trace_config.proto
@@ -4162,125 +4824,6 @@ message AndroidGameInterventionList {
 
 // End of protos/perfetto/trace/android/android_game_intervention_list.proto
 
-// Begin of protos/perfetto/trace/android/android_input_event.proto
-
-// A representation of an Android MotionEvent.
-// See: https://developer.android.com/reference/android/view/MotionEvent
-message AndroidMotionEvent {
-  // A representation of one pointer inside a MotionEvent.
-  // Each Pointer contains the values present in its corresponding
-  // MotionEvent.PointerCoords and MotionEvent.PointerProperties.
-  message Pointer {
-     message AxisValue {
-      optional int32 axis = 1;
-      optional float value = 2;
-    }
-    repeated AxisValue axis_value = 1;
-    optional int32 pointer_id = 2;
-    optional int32 tool_type = 3;
-  }
-
-  // The randomly-generated ID used to track the event through the pipeline.
-  optional fixed32 event_id = 1;
-  // The event's timestamp - generated by the kernel.
-  optional int64 event_time_nanos = 2;
-  optional uint32 source = 3;
-  optional int32 action = 4;
-  optional int32 device_id = 5;
-  // Use a signed int for display_id, because -1 (DISPLAY_IS_NONE) is a common value.
-  optional sint32 display_id = 6;
-  optional int32 classification = 7;
-  optional uint32 flags = 8;
-  repeated Pointer pointer = 9;
-
-  // Field numbers 10-15 are reserved for commonly used fields.
-
-  // If this event was synthesized as a result of one or more different
-  // event, original_event_ids are the event_ids associated with the original events.
-  // For example, if this is an ACTION_HOVER_ENTER event that is synthesized
-  // due to an ACTION_HOVER_MOVE event entering the bounds of a window, the
-  // id of the original hover move event will be listed here.
-  repeated fixed32 original_event_id = 16 [packed = true];
-  // The timestamp of the ACTION_DOWN event associated with this gesture.
-  optional int64 down_time_nanos = 17;
-  optional float cursor_position_x = 18;
-  optional float cursor_position_y = 19;
-  optional int32 action_button = 20;
-  optional uint32 button_state = 21;
-  optional uint32 meta_state = 22;
-  optional uint32 policy_flags = 23;
-  optional float precision_x = 24;
-  optional float precision_y = 25;
-}
-
-// A representation of an Android KeyEvent.
-// See: https://developer.android.com/reference/android/view/KeyEvent
-message AndroidKeyEvent {
-  // The randomly-generated ID used to track the event through the pipeline.
-  optional fixed32 event_id = 1;
-  // The event's timestamp - generated by the kernel.
-  optional int64 event_time_nanos = 2;
-  // The timestamp of the ACTION_DOWN event associated with this gesture.
-  optional int64 down_time_nanos = 3;
-  optional uint32 source = 4;
-  optional int32 action = 5;
-  optional int32 device_id = 6;
-  // Use a signed int for display_id, because -1 (DISPLAY_IS_NONE) is a common value.
-  optional sint32 display_id = 7;
-  optional int32 key_code = 8;
-  optional uint32 scan_code = 9;
-  optional uint32 meta_state = 10;
-  optional int32 repeat_count = 11;
-  optional uint32 flags = 12;
-  optional uint32 policy_flags = 13;
-}
-
-// An event that traces an input event being dispatched by the system to one window.
-message AndroidWindowInputDispatchEvent {
-  // Stores x/y values for each pointer sent to the window for events
-  // that are dispatched to a certain location on the screen. This is not relevant
-  // for KeyEvents and MotionEvents that are dispatched to focused windows.
-  message DispatchedPointer {
-    optional int32 pointer_id = 1;
-    // The coordinates of the pointer in the logical display space, AKA "raw coordinates".
-    optional float x_in_display = 2;
-    optional float y_in_display = 3;
-    // The axis values for this pointer that were modified by the window transform.
-    repeated AndroidMotionEvent.Pointer.AxisValue axis_value_in_window = 4;
-  }
-
-  // The event_id of the event that was dispatched to the window.
-  optional fixed32 event_id = 1;
-  // The vsync_id of the frame in which the decision was made to dispatch the event to
-  // the window.
-  optional int64 vsync_id = 2;
-  // The id of the window to which the event was dispatched.
-  optional int32 window_id = 3;
-  // Only relevant for MotionEvents that are dispatched to a screen location.
-  // Each DispatchedPointer has a 1:1 correspondence with the Pointers in the AndroidMotionEvent.
-  repeated DispatchedPointer dispatched_pointer = 4;
-  // The event flags that were used when dispatching the event to this window.
-  // If the same event is dispatched to more than one window, it is possible that they
-  // were dispatched using different flag values for each window.
-  optional uint32 resolved_flags = 5;
-}
-
-message AndroidInputEvent {
-  oneof event {
-    // Traces input events received by or generated by InputDispatcher
-    AndroidMotionEvent dispatcher_motion_event = 1;
-    AndroidMotionEvent dispatcher_motion_event_sensitive = 2;
-    AndroidKeyEvent dispatcher_key_event = 3;
-    AndroidKeyEvent dispatcher_key_event_sensitive = 4;
-
-    // Traces an event being dispatched to a window.
-    AndroidWindowInputDispatchEvent dispatcher_window_dispatch_event = 5;
-    AndroidWindowInputDispatchEvent dispatcher_window_dispatch_event_sensitive = 6;
-  }
-}
-
-// End of protos/perfetto/trace/android/android_input_event.proto
-
 // Begin of protos/perfetto/trace/android/android_log.proto
 
 message AndroidLogPacket {
@@ -4354,6 +4897,53 @@ message AndroidSystemProperty {
 }
 
 // End of protos/perfetto/trace/android/android_system_property.proto
+
+// Begin of protos/perfetto/trace/android/bluetooth_trace.proto
+
+// Describes the packet type and direction. CMD and EVT are unidirectional, so
+// no need to differentiate the direction.
+enum BluetoothTracePacketType {
+  HCI_CMD = 1;
+  HCI_EVT = 2;
+  HCI_ACL_RX = 3;
+  HCI_ACL_TX = 4;
+  HCI_SCO_RX = 5;
+  HCI_SCO_TX = 6;
+  HCI_ISO_RX = 7;
+  HCI_ISO_TX = 8;
+}
+
+// Trace event for bluetooth
+message BluetoothTraceEvent {
+
+  // Packet type and direction
+  optional BluetoothTracePacketType packet_type = 1;
+
+  // Total count of the packets collected during the collection interval
+  optional uint32 count = 2;
+
+  // Total cumulative length of the packets collected during the collection
+  // interval
+  optional uint32 length = 3;
+
+  // The collection interval in ms. This is the duration between the first and
+  // last packets collected.
+  optional uint32 duration = 4;
+
+  // In case of CMD type, further breakdown of the type of command
+  optional uint32 op_code = 5;
+
+  // In the case of EVT type, further breakdown of the type of event
+  optional uint32 event_code = 6;
+
+  // When applicable for EVT type, further breakdown of event type into specific
+  // subevent
+  optional uint32 subevent_code = 7;
+
+  // Associated handle for the bluetooth packet
+  optional uint32 connection_handle = 8;
+}
+// End of protos/perfetto/trace/android/bluetooth_trace.proto
 
 // Begin of protos/perfetto/trace/android/camera_event.proto
 
@@ -4740,6 +5330,42 @@ message InitialDisplayState {
 
 // End of protos/perfetto/trace/android/initial_display_state.proto
 
+// Begin of protos/perfetto/trace/android/kernel_wakelock_data.proto
+
+message KernelWakelockData {
+  message Wakelock {
+    enum Type {
+      WAKELOCK_TYPE_UNKNOWN = 0;
+      WAKELOCK_TYPE_KERNEL = 1;
+      WAKELOCK_TYPE_NATIVE = 2;
+    }
+
+    // Interning id.
+    optional uint32 wakelock_id = 1;
+
+    // Name of the wakelock.
+    optional string wakelock_name = 2;
+
+    // Type of the wakelock. We record data about both true kernel wakelocks
+    // and "native" wakelocks which are taken in userspace but are more
+    // conceptually similar to kernel wakelocks than normal userspace ones.
+    optional Type wakelock_type = 3;
+  }
+
+  // This is only emitted when we encounter new wakelocks.
+  repeated Wakelock wakelock = 1;
+
+  // Interning id.
+  repeated uint32 wakelock_id = 2 [packed = true];
+
+  // If we interned the wakelock name in this packet, this is the total time
+  // the wakelock has been held.
+  // If not, it's a delta from the last time we saw it.
+  repeated uint64 time_held_millis = 3 [packed = true];
+}
+
+// End of protos/perfetto/trace/android/kernel_wakelock_data.proto
+
 // Begin of protos/perfetto/trace/android/network_trace.proto
 
 enum TrafficDirection {
@@ -4844,6 +5470,27 @@ message PackagesList {
 
 // End of protos/perfetto/trace/android/packages_list.proto
 
+// Begin of protos/perfetto/trace/android/pixel_modem_events.proto
+
+message PixelModemEvents {
+  // Pigweed-format dehydrated events.
+  repeated bytes events = 1;
+
+  // Timestamps of the events, converted to CLOCK_BOOTTIME. The first
+  // timestamp is the absolute timestamp of the first event. Subsequent
+  // timestamps are deltas from the previous timestamp.
+  // The nth entry from `events` gets the nth entry here.
+  repeated uint64 event_time_nanos = 2;
+}
+
+// NB: this is not emitted in the trace but can be prepended later.
+message PixelModemTokenDatabase {
+  // Pigweed-format database to allow event rehydration.
+  optional bytes database = 1;
+}
+
+// End of protos/perfetto/trace/android/pixel_modem_events.proto
+
 // Begin of protos/perfetto/trace/android/protolog.proto
 
 /* represents a single log entry */
@@ -4874,6 +5521,8 @@ message ProtoLogViewerConfig {
     optional ProtoLogLevel level = 3;
     // the id of the log group this message belongs to
     optional uint32 group_id = 4;
+    // path to the file where the message was logged
+    optional string location = 5;
   }
 
   /* information about a ProtoLog log group */
@@ -4987,19 +5636,23 @@ message ShellHandlerMapping {
 
 // End of protos/perfetto/trace/android/shell_transition.proto
 
-// Begin of protos/perfetto/trace/android/surfaceflinger_common.proto
-
-message RegionProto {
-  // Previously: uint64 id
-  reserved 1;
-  repeated RectProto rect = 2;
-}
+// Begin of protos/perfetto/trace/android/graphics/rect.proto
 
 message RectProto {
   optional int32 left = 1;
   optional int32 top = 2;
   optional int32 right = 3;
   optional int32 bottom = 4;
+}
+
+// End of protos/perfetto/trace/android/graphics/rect.proto
+
+// Begin of protos/perfetto/trace/android/surfaceflinger_common.proto
+
+message RegionProto {
+  // Previously: uint64 id
+  reserved 1;
+  repeated RectProto rect = 2;
 }
 
 message SizeProto {
@@ -5063,6 +5716,11 @@ message ColorTransformProto {
   repeated float val = 1 [packed = true];
 }
 
+enum TrustedOverlay {
+  UNSET = 0;
+  DISABLED = 1;
+  ENABLED = 2;
+};
 // End of protos/perfetto/trace/android/surfaceflinger_common.proto
 
 // Begin of protos/perfetto/trace/android/surfaceflinger_layers.proto
@@ -5098,12 +5756,15 @@ message LayersSnapshotProto {
   // elapsed realtime in nanos since boot of when this entry was logged
   optional sfixed64 elapsed_realtime_nanos = 1;
 
-  // where the trace originated
+  // SurfaceFlinger's stage where the snapshot was triggered.
+  // Currently either "visibleRegionsDirty" or "bufferLatched".
   optional string where = 2;
 
   optional LayersProto layers = 3;
 
   // Blob for the current HWC information for all layers, reported by dumpsys.
+  // Example:
+  //   "maxDownScale: 4, maxFullWidth: 8192, HWState: 1, AssignedState: 3, ..."
   optional string hwc_blob = 4;
 
   // Excludes state sent during composition like visible region and composition
@@ -5125,6 +5786,7 @@ message LayersProto {
 
 message DisplayProto {
   optional uint64 id = 1;
+  // Display descriptor, e.g. "Built-In Screen"
   optional string name = 2;
   optional uint32 layer_stack = 3;
   optional SizeProto size = 4;
@@ -5148,8 +5810,10 @@ enum HwcCompositionType {
   // Similar to DEVICE, but the layer position may have been asynchronously set
   // through setCursorPosition
   HWC_TYPE_CURSOR = 4;
-  // Layer was composited by the device via a sideband stream.
+  // Layer was composited by the device via a sideband stream
   HWC_TYPE_SIDEBAND = 5;
+   // Layer was composited by hardware optimized for display decoration
+  HWC_TYPE_DISPLAY_DECORATION = 6;
 }
 
 // Information about each layer.
@@ -5157,12 +5821,14 @@ message LayerProto {
   // unique id per layer.
   optional int32 id = 1;
   // unique name per layer.
+  // Example: "Wallpaper".
   optional string name = 2;
   // list of children this layer may have. May be empty.
   repeated int32 children = 3 [packed = true];
   // list of layers that are z order relative to this layer.
   repeated int32 relatives = 4 [packed = true];
-  // The type of layer, ex Color, Layer
+  // The type of layer.
+  // Examples: "ContainerLayer", "BufferStateLayer".
   optional string type = 5;
   optional RegionProto transparent_region = 6;
   optional RegionProto visible_region = 7;
@@ -5183,7 +5849,14 @@ message LayerProto {
   optional RectProto final_crop = 15 [deprecated = true];
   optional bool is_opaque = 16;
   optional bool invalidate = 17;
+  // Composition states's dataspace.
+  // Examples: "STANDARD_BT709", "STANDARD_BT601_625".
+  // See full enum in
+  // frameworks/native/libs/nativewindow/include/android/data_space.h
   optional string dataspace = 18;
+  // Buffer's pixel format
+  // Examples: "PIXEL_FORMAT_TRANSLUCENT", "PIXEL_FORMAT_RGBA_8888".
+  // See full enum in frameworks/native/libs/ui/include/ui/PixelFormat.h
   optional string pixel_format = 19;
   // The layer's actual color.
   optional ColorProto color = 20;
@@ -5264,6 +5937,8 @@ message LayerProto {
   optional RectProto destination_frame = 57;
 
   optional uint32 original_id = 58;
+
+  optional TrustedOverlay trusted_overlay = 59;
 }
 
 message PositionProto {
@@ -5561,6 +6236,7 @@ message LayerState {
   optional uint32 fixed_transform_hint = 36;
   optional uint64 frame_number = 37;
   optional bool auto_refresh = 38;
+  // unused
   optional bool is_trusted_overlay = 39;
   optional RectProto buffer_crop = 40;
   optional RectProto destination_frame = 41;
@@ -5571,6 +6247,8 @@ message LayerState {
     OBSCURED = 2;
   };
   optional DropInputMode drop_input_mode = 42;
+
+  optional TrustedOverlay trusted_overlay = 43;
 }
 
 message DisplayState {
@@ -5594,6 +6272,14 @@ message DisplayState {
 }
 
 // End of protos/perfetto/trace/android/surfaceflinger_transactions.proto
+
+// Begin of protos/perfetto/trace/android/winscope_extensions.proto
+
+message WinscopeExtensions {
+  extensions 1 to 6;
+}
+
+// End of protos/perfetto/trace/android/winscope_extensions.proto
 
 // Begin of protos/perfetto/trace/chrome/chrome_benchmark_metadata.proto
 
@@ -5831,6 +6517,22 @@ message ChromeEventBundle {
 
 // End of protos/perfetto/trace/chrome/chrome_trace_event.proto
 
+// Begin of protos/perfetto/trace/chrome/chrome_trigger.proto
+
+// Information about a specific trigger during a background tracing scenario
+// Associated packet timestamps are useful to delimitate a scenario range in a
+// trace. Triggers are also useful for filtering traces.
+message ChromeTrigger {
+  // Name of the trigger which was received.
+  optional string trigger_name = 1;
+  // SHA1 hash of the trigger name.
+  optional fixed32 trigger_name_hash = 2;
+  // Flow id which should terminate on this trigger.
+  optional fixed64 flow_id = 3;
+}
+
+// End of protos/perfetto/trace/chrome/chrome_trigger.proto
+
 // Begin of protos/perfetto/trace/chrome/v8.proto
 
 // These are the protos for the V8 data source.
@@ -5960,6 +6662,8 @@ message InternedV8JsFunction {
   // Where in the script source this function is defined. This is counted in
   // bytes not characters.
   optional uint32 byte_offset = 6;
+  optional uint32 line = 7;
+  optional uint32 column = 8;
 }
 
 // A V8 Isolate instance. A V8 Isolate represents an isolated instance of the V8
@@ -6085,6 +6789,7 @@ message V8CodeMove {
 message V8CodeDefaults {
   optional uint32 tid = 1;
 }
+
 // End of protos/perfetto/trace/chrome/v8.proto
 
 // Begin of protos/perfetto/trace/clock_snapshot.proto
@@ -6620,6 +7325,22 @@ message AndroidFsFsyncStartFtraceEvent {
 
 // End of protos/perfetto/trace/ftrace/android_fs.proto
 
+// Begin of protos/perfetto/trace/ftrace/bcl_exynos.proto
+
+message BclIrqTriggerFtraceEvent {
+  optional int32 id = 1;
+  optional int32 throttle = 2;
+  optional int32 cpu0_limit = 3;
+  optional int32 cpu1_limit = 4;
+  optional int32 cpu2_limit = 5;
+  optional int32 tpu_limit = 6;
+  optional int32 gpu_limit = 7;
+  optional int32 voltage = 8;
+  optional int32 capacity = 9;
+}
+
+// End of protos/perfetto/trace/ftrace/bcl_exynos.proto
+
 // Begin of protos/perfetto/trace/ftrace/binder.proto
 
 message BinderTransactionFtraceEvent {
@@ -6799,6 +7520,26 @@ message BlockTouchBufferFtraceEvent {
 message BlockUnplugFtraceEvent {
   optional int32 nr_rq = 1;
   optional string comm = 2;
+}
+message BlockIoStartFtraceEvent {
+  optional uint64 dev = 1;
+  optional uint64 sector = 2;
+  optional uint32 nr_sector = 3;
+  optional uint32 bytes = 4;
+  optional uint32 ioprio = 5;
+  optional string rwbs = 6;
+  optional string comm = 7;
+  optional string cmd = 8;
+}
+message BlockIoDoneFtraceEvent {
+  optional uint64 dev = 1;
+  optional uint64 sector = 2;
+  optional uint32 nr_sector = 3;
+  optional uint32 bytes = 4;
+  optional uint32 ioprio = 5;
+  optional string rwbs = 6;
+  optional string comm = 7;
+  optional string cmd = 8;
 }
 
 // End of protos/perfetto/trace/ftrace/block.proto
@@ -6999,6 +7740,16 @@ message MmCompactionWakeupKcompactdFtraceEvent {
 
 // End of protos/perfetto/trace/ftrace/compaction.proto
 
+// Begin of protos/perfetto/trace/ftrace/cpm_trace.proto
+
+message ParamSetValueCpmFtraceEvent {
+  optional string body = 1;
+  optional uint32 value = 2;
+  optional int64 timestamp = 3;
+}
+
+// End of protos/perfetto/trace/ftrace/cpm_trace.proto
+
 // Begin of protos/perfetto/trace/ftrace/cpuhp.proto
 
 message CpuhpExitFtraceEvent {
@@ -7046,6 +7797,27 @@ message CrosEcSensorhubDataFtraceEvent {
 }
 
 // End of protos/perfetto/trace/ftrace/cros_ec.proto
+
+// Begin of protos/perfetto/trace/ftrace/dcvsh.proto
+
+message DcvshFreqFtraceEvent {
+  optional uint64 cpu = 1;
+  optional uint64 freq = 2;
+}
+
+// End of protos/perfetto/trace/ftrace/dcvsh.proto
+
+// Begin of protos/perfetto/trace/ftrace/devfreq.proto
+
+message DevfreqFrequencyFtraceEvent {
+  optional string dev_name = 1;
+  optional uint64 freq = 2;
+  optional uint64 prev_freq = 3;
+  optional uint64 busy_time = 4;
+  optional uint64 total_time = 5;
+}
+
+// End of protos/perfetto/trace/ftrace/devfreq.proto
 
 // Begin of protos/perfetto/trace/ftrace/dma_fence.proto
 
@@ -7101,6 +7873,20 @@ message DpuTracingMarkWriteFtraceEvent {
   optional string name = 4;
   optional uint32 type = 5;
   optional int32 value = 6;
+}
+message DpuDsiCmdFifoStatusFtraceEvent {
+  optional uint32 header = 1;
+  optional uint32 payload = 2;
+}
+message DpuDsiRxFtraceEvent {
+  optional uint32 cmd = 1;
+  optional uint32 rx_buf = 2;
+}
+message DpuDsiTxFtraceEvent {
+  optional uint32 type = 1;
+  optional uint32 tx_buf = 2;
+  optional uint32 last = 3;
+  optional uint32 delay_ms = 4;
 }
 
 // End of protos/perfetto/trace/ftrace/dpu.proto
@@ -8100,6 +8886,40 @@ message F2fsIostatLatencyFtraceEvent {
   optional uint32 n_wr_s_cnt = 27;
   optional uint32 n_wr_s_peak = 28;
 }
+message F2fsBackgroundGcFtraceEvent {
+  optional uint64 dev = 1;
+  optional uint32 wait_ms = 2;
+  optional uint32 prefree = 3;
+  optional uint32 free = 4;
+}
+message F2fsGcBeginFtraceEvent {
+  optional uint64 dev = 1;
+  optional uint32 sync = 2;
+  optional uint32 background = 3;
+  optional int64 dirty_nodes = 4;
+  optional int64 dirty_dents = 5;
+  optional int64 dirty_imeta = 6;
+  optional uint32 free_sec = 7;
+  optional uint32 free_seg = 8;
+  optional int32 reserved_seg = 9;
+  optional uint32 prefree_seg = 10;
+  optional int32 gc_type = 11;
+  optional uint32 no_bg_gc = 12;
+  optional uint32 nr_free_secs = 13;
+}
+message F2fsGcEndFtraceEvent {
+  optional uint64 dev = 1;
+  optional int32 ret = 2;
+  optional int32 seg_freed = 3;
+  optional int32 sec_freed = 4;
+  optional int64 dirty_nodes = 5;
+  optional int64 dirty_dents = 6;
+  optional int64 dirty_imeta = 7;
+  optional uint32 free_sec = 8;
+  optional uint32 free_seg = 9;
+  optional int32 reserved_seg = 10;
+  optional uint32 prefree_seg = 11;
+}
 
 // End of protos/perfetto/trace/ftrace/f2fs.proto
 
@@ -8109,6 +8929,32 @@ message FastrpcDmaStatFtraceEvent {
   optional int32 cid = 1;
   optional int64 len = 2;
   optional uint64 total_allocated = 3;
+}
+message FastrpcDmaFreeFtraceEvent {
+  optional int32 cid = 1;
+  optional uint64 phys = 2;
+  optional uint64 size = 3;
+}
+message FastrpcDmaAllocFtraceEvent {
+  optional int32 cid = 1;
+  optional uint64 phys = 2;
+  optional uint64 size = 3;
+  optional uint64 attr = 4;
+  optional int32 mflags = 5;
+}
+message FastrpcDmaUnmapFtraceEvent {
+  optional int32 cid = 1;
+  optional uint64 phys = 2;
+  optional uint64 size = 3;
+}
+message FastrpcDmaMapFtraceEvent {
+  optional int32 cid = 1;
+  optional int32 fd = 2;
+  optional uint64 phys = 3;
+  optional uint64 size = 4;
+  optional uint64 len = 5;
+  optional uint32 attr = 6;
+  optional int32 mflags = 7;
 }
 
 // End of protos/perfetto/trace/ftrace/fastrpc.proto
@@ -8161,6 +9007,19 @@ message MmFilemapDeleteFromPageCacheFtraceEvent {
 
 // End of protos/perfetto/trace/ftrace/filemap.proto
 
+// Begin of protos/perfetto/trace/ftrace/fs.proto
+
+message DoSysOpenFtraceEvent {
+  optional string filename = 1;
+  optional int32 flags = 2;
+  optional int32 mode = 3;
+}
+message OpenExecFtraceEvent {
+  optional string filename = 1;
+}
+
+// End of protos/perfetto/trace/ftrace/fs.proto
+
 // Begin of protos/perfetto/trace/ftrace/ftrace.proto
 
 message PrintFtraceEvent {
@@ -8210,7 +9069,36 @@ message GenericFtraceEvent {
   repeated Field field = 2;
 }
 
+message KprobeEvent {
+  enum KprobeType {
+    KPROBE_TYPE_UNKNOWN = 0;
+    KPROBE_TYPE_BEGIN = 1;
+    KPROBE_TYPE_END = 2;
+    KPROBE_TYPE_INSTANT = 3;
+  }
+  optional string name = 1;
+  optional KprobeType type = 2;
+}
+
 // End of protos/perfetto/trace/ftrace/generic.proto
+
+// Begin of protos/perfetto/trace/ftrace/google_icc_trace.proto
+
+message GoogleIccEventFtraceEvent {
+  optional string event = 1;
+  optional uint64 timestamp = 2;
+}
+
+// End of protos/perfetto/trace/ftrace/google_icc_trace.proto
+
+// Begin of protos/perfetto/trace/ftrace/google_irm_trace.proto
+
+message GoogleIrmEventFtraceEvent {
+  optional string event = 1;
+  optional uint64 timestamp = 2;
+}
+
+// End of protos/perfetto/trace/ftrace/google_irm_trace.proto
 
 // Begin of protos/perfetto/trace/ftrace/gpu_mem.proto
 
@@ -8377,6 +9265,62 @@ message IrqHandlerExitFtraceEvent {
 }
 
 // End of protos/perfetto/trace/ftrace/irq.proto
+
+// Begin of protos/perfetto/trace/ftrace/kgsl.proto
+
+message KgslGpuFrequencyFtraceEvent {
+  optional uint32 gpu_freq = 1;
+  optional uint32 gpu_id = 2;
+}
+message KgslAdrenoCmdbatchQueuedFtraceEvent {
+  optional uint32 id = 1;
+  optional uint32 timestamp = 2;
+  optional uint32 queued = 3;
+  optional uint32 flags = 4;
+  optional uint32 prio = 5;
+}
+message KgslAdrenoCmdbatchSubmittedFtraceEvent {
+  optional uint32 id = 1;
+  optional uint32 timestamp = 2;
+  optional int64 inflight = 3;
+  optional uint32 flags = 4;
+  optional uint64 ticks = 5;
+  optional uint64 secs = 6;
+  optional uint64 usecs = 7;
+  optional int32 prio = 8;
+  optional int32 rb_id = 9;
+  optional uint32 rptr = 10;
+  optional uint32 wptr = 11;
+  optional int32 q_inflight = 12;
+  optional int32 dispatch_queue = 13;
+}
+message KgslAdrenoCmdbatchSyncFtraceEvent {
+  optional uint32 id = 1;
+  optional uint32 timestamp = 2;
+  optional uint64 ticks = 3;
+  optional int32 prio = 4;
+}
+message KgslAdrenoCmdbatchRetiredFtraceEvent {
+  optional uint32 id = 1;
+  optional uint32 timestamp = 2;
+  optional int64 inflight = 3;
+  optional uint32 recovery = 4;
+  optional uint32 flags = 5;
+  optional uint64 start = 6;
+  optional uint64 retire = 7;
+  optional int32 prio = 8;
+  optional int32 rb_id = 9;
+  optional uint32 rptr = 10;
+  optional uint32 wptr = 11;
+  optional int32 q_inflight = 12;
+  optional uint64 fault_recovery = 13;
+  optional uint32 dispatch_queue = 14;
+  optional uint64 submitted_to_rb = 15;
+  optional uint64 retired_on_gmu = 16;
+  optional uint64 active = 17;
+}
+
+// End of protos/perfetto/trace/ftrace/kgsl.proto
 
 // Begin of protos/perfetto/trace/ftrace/kmem.proto
 
@@ -8869,6 +9813,121 @@ message MaliMaliCSFINTERRUPTENDFtraceEvent {
   optional uint32 kctx_id = 2;
   optional uint64 info_val = 3;
 }
+message MaliMaliPMMCUHCTLCORESDOWNSCALENOTIFYPENDFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUHCTLCORESNOTIFYPENDFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUHCTLCOREINACTIVEPENDFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUHCTLMCUONRECHECKFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUHCTLSHADERSCOREOFFPENDFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUHCTLSHADERSPENDOFFFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUHCTLSHADERSPENDONFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUHCTLSHADERSREADYOFFFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUINSLEEPFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUOFFFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUONFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUONCOREATTRUPDATEPENDFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUONGLBREINITPENDFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUONHALTFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUONHWCNTDISABLEFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUONHWCNTENABLEFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUONPENDHALTFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUONPENDSLEEPFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUONSLEEPINITIATEFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUPENDOFFFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUPENDONRELOADFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCUPOWERDOWNFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
+message MaliMaliPMMCURESETWAITFtraceEvent {
+  optional int32 kctx_tgid = 1;
+  optional uint32 kctx_id = 2;
+  optional uint64 info_val = 3;
+}
 
 // End of protos/perfetto/trace/ftrace/mali.proto
 
@@ -9103,6 +10162,14 @@ message DsiTxFtraceEvent {
   optional uint32 tx_buf = 2;
   optional uint32 type = 3;
 }
+message PanelWriteGenericFtraceEvent {
+  optional int32 pid = 1;
+  optional string trace_name = 2;
+  optional uint32 trace_begin = 3;
+  optional string name = 4;
+  optional uint32 type = 5;
+  optional int32 value = 6;
+}
 
 // End of protos/perfetto/trace/ftrace/panel.proto
 
@@ -9111,24 +10178,42 @@ message DsiTxFtraceEvent {
 message SchedSwitchWithCtrsFtraceEvent {
   optional int32 old_pid = 1;
   optional int32 new_pid = 2;
-  optional uint32 cctr = 3;
-  optional uint32 ctr0 = 4;
-  optional uint32 ctr1 = 5;
-  optional uint32 ctr2 = 6;
-  optional uint32 ctr3 = 7;
+  optional uint64 cctr = 3;
+  optional uint64 ctr0 = 4;
+  optional uint64 ctr1 = 5;
+  optional uint64 ctr2 = 6;
+  optional uint64 ctr3 = 7;
   optional uint32 lctr0 = 8;
   optional uint32 lctr1 = 9;
-  optional uint32 ctr4 = 10;
-  optional uint32 ctr5 = 11;
+  optional uint64 ctr4 = 10;
+  optional uint64 ctr5 = 11;
   optional string prev_comm = 12;
   optional int32 prev_pid = 13;
   optional uint32 cyc = 14;
   optional uint32 inst = 15;
   optional uint32 stallbm = 16;
   optional uint32 l3dm = 17;
+  optional int32 next_pid = 18;
+  optional string next_comm = 19;
+  optional int64 prev_state = 20;
+  optional uint64 amu0 = 21;
+  optional uint64 amu1 = 22;
+  optional uint64 amu2 = 23;
 }
 
 // End of protos/perfetto/trace/ftrace/perf_trace_counters.proto
+
+// Begin of protos/perfetto/trace/ftrace/pixel_mm.proto
+
+message PixelMmKswapdWakeFtraceEvent {
+  optional int32 whatever = 1;
+}
+message PixelMmKswapdDoneFtraceEvent {
+  optional uint64 delta_nr_scanned = 1;
+  optional uint64 delta_nr_reclaimed = 2;
+}
+
+// End of protos/perfetto/trace/ftrace/pixel_mm.proto
 
 // Begin of protos/perfetto/trace/ftrace/power.proto
 
@@ -9184,6 +10269,18 @@ message GpuWorkPeriodFtraceEvent {
   optional uint64 end_time_ns = 4;
   optional uint64 total_active_duration_ns = 5;
 }
+message DevicePmCallbackStartFtraceEvent {
+  optional string device = 1;
+  optional string driver = 2;
+  optional string parent = 3;
+  optional string pm_ops = 4;
+  optional int32 event = 5;
+}
+message DevicePmCallbackEndFtraceEvent {
+  optional string device = 1;
+  optional string driver = 2;
+  optional int32 error = 3;
+}
 
 // End of protos/perfetto/trace/ftrace/power.proto
 
@@ -9236,6 +10333,15 @@ message RegulatorSetVoltageCompleteFtraceEvent {
 }
 
 // End of protos/perfetto/trace/ftrace/regulator.proto
+
+// Begin of protos/perfetto/trace/ftrace/rpm.proto
+
+message RpmStatusFtraceEvent {
+  optional string name = 1;
+  optional int32 status = 2;
+}
+
+// End of protos/perfetto/trace/ftrace/rpm.proto
 
 // Begin of protos/perfetto/trace/ftrace/samsung.proto
 
@@ -9344,6 +10450,22 @@ message SchedCpuUtilCfsFtraceEvent {
   optional uint32 task_fits = 13;
   optional uint64 wake_group_util = 14;
   optional uint64 wake_util = 15;
+}
+message SchedMigrateTaskFtraceEvent {
+  optional string comm = 1;
+  optional int32 pid = 2;
+  optional int32 prio = 3;
+  optional int32 orig_cpu = 4;
+  optional int32 dest_cpu = 5;
+  optional int32 running = 6;
+  optional uint32 load = 7;
+}
+message SchedWakeupTaskAttrFtraceEvent {
+  optional int32 pid = 1;
+  optional uint64 cpu_affinity = 2;
+  optional uint64 task_util = 3;
+  optional uint64 uclamp_min = 4;
+  optional uint64 vruntime = 5;
 }
 
 // End of protos/perfetto/trace/ftrace/sched.proto
@@ -9546,6 +10668,33 @@ message CdevUpdateFtraceEvent {
 }
 
 // End of protos/perfetto/trace/ftrace/thermal.proto
+
+// Begin of protos/perfetto/trace/ftrace/thermal_exynos.proto
+
+message ThermalExynosAcpmBulkFtraceEvent {
+  optional uint32 tz_id = 1;
+  optional uint32 current_temp = 2;
+  optional uint32 ctrl_temp = 3;
+  optional uint32 cdev_state = 4;
+  optional int32 pid_et_p = 5;
+  optional int32 pid_power_range = 6;
+  optional int32 pid_p = 7;
+  optional int32 pid_i = 8;
+  optional int32 k_p = 9;
+  optional int32 k_i = 10;
+  optional uint64 timestamp = 11;
+}
+message ThermalExynosAcpmHighOverheadFtraceEvent {
+  optional int32 tz_id = 1;
+  optional uint32 current_temp = 2;
+  optional uint32 ctrl_temp = 3;
+  optional uint32 cdev_state = 4;
+  optional int32 pid_et_p = 5;
+  optional int32 k_p = 6;
+  optional int32 k_i = 7;
+}
+
+// End of protos/perfetto/trace/ftrace/thermal_exynos.proto
 
 // Begin of protos/perfetto/trace/ftrace/trusty.proto
 
@@ -10421,6 +11570,79 @@ message FtraceEvent {
     BinderReturnFtraceEvent binder_return = 486;
     SchedSwitchWithCtrsFtraceEvent sched_switch_with_ctrs = 487;
     GpuWorkPeriodFtraceEvent gpu_work_period = 488;
+    RpmStatusFtraceEvent rpm_status = 489;
+    PanelWriteGenericFtraceEvent panel_write_generic = 490;
+    SchedMigrateTaskFtraceEvent sched_migrate_task = 491;
+    DpuDsiCmdFifoStatusFtraceEvent dpu_dsi_cmd_fifo_status = 492;
+    DpuDsiRxFtraceEvent dpu_dsi_rx = 493;
+    DpuDsiTxFtraceEvent dpu_dsi_tx = 494;
+    F2fsBackgroundGcFtraceEvent f2fs_background_gc = 495;
+    F2fsGcBeginFtraceEvent f2fs_gc_begin = 496;
+    F2fsGcEndFtraceEvent f2fs_gc_end = 497;
+    FastrpcDmaFreeFtraceEvent fastrpc_dma_free = 498;
+    FastrpcDmaAllocFtraceEvent fastrpc_dma_alloc = 499;
+    FastrpcDmaUnmapFtraceEvent fastrpc_dma_unmap = 500;
+    FastrpcDmaMapFtraceEvent fastrpc_dma_map = 501;
+    GoogleIccEventFtraceEvent google_icc_event = 502;
+    GoogleIrmEventFtraceEvent google_irm_event = 503;
+    DevicePmCallbackStartFtraceEvent device_pm_callback_start = 504;
+    DevicePmCallbackEndFtraceEvent device_pm_callback_end = 505;
+    ThermalExynosAcpmBulkFtraceEvent thermal_exynos_acpm_bulk = 506;
+    ThermalExynosAcpmHighOverheadFtraceEvent thermal_exynos_acpm_high_overhead =
+        507;
+    DcvshFreqFtraceEvent dcvsh_freq = 508;
+    KgslGpuFrequencyFtraceEvent kgsl_gpu_frequency = 509;
+    MaliMaliPMMCUHCTLCORESDOWNSCALENOTIFYPENDFtraceEvent
+        mali_mali_PM_MCU_HCTL_CORES_DOWN_SCALE_NOTIFY_PEND = 510;
+    MaliMaliPMMCUHCTLCORESNOTIFYPENDFtraceEvent
+        mali_mali_PM_MCU_HCTL_CORES_NOTIFY_PEND = 511;
+    MaliMaliPMMCUHCTLCOREINACTIVEPENDFtraceEvent
+        mali_mali_PM_MCU_HCTL_CORE_INACTIVE_PEND = 512;
+    MaliMaliPMMCUHCTLMCUONRECHECKFtraceEvent
+        mali_mali_PM_MCU_HCTL_MCU_ON_RECHECK = 513;
+    MaliMaliPMMCUHCTLSHADERSCOREOFFPENDFtraceEvent
+        mali_mali_PM_MCU_HCTL_SHADERS_CORE_OFF_PEND = 514;
+    MaliMaliPMMCUHCTLSHADERSPENDOFFFtraceEvent
+        mali_mali_PM_MCU_HCTL_SHADERS_PEND_OFF = 515;
+    MaliMaliPMMCUHCTLSHADERSPENDONFtraceEvent
+        mali_mali_PM_MCU_HCTL_SHADERS_PEND_ON = 516;
+    MaliMaliPMMCUHCTLSHADERSREADYOFFFtraceEvent
+        mali_mali_PM_MCU_HCTL_SHADERS_READY_OFF = 517;
+    MaliMaliPMMCUINSLEEPFtraceEvent mali_mali_PM_MCU_IN_SLEEP = 518;
+    MaliMaliPMMCUOFFFtraceEvent mali_mali_PM_MCU_OFF = 519;
+    MaliMaliPMMCUONFtraceEvent mali_mali_PM_MCU_ON = 520;
+    MaliMaliPMMCUONCOREATTRUPDATEPENDFtraceEvent
+        mali_mali_PM_MCU_ON_CORE_ATTR_UPDATE_PEND = 521;
+    MaliMaliPMMCUONGLBREINITPENDFtraceEvent
+        mali_mali_PM_MCU_ON_GLB_REINIT_PEND = 522;
+    MaliMaliPMMCUONHALTFtraceEvent mali_mali_PM_MCU_ON_HALT = 523;
+    MaliMaliPMMCUONHWCNTDISABLEFtraceEvent mali_mali_PM_MCU_ON_HWCNT_DISABLE =
+        524;
+    MaliMaliPMMCUONHWCNTENABLEFtraceEvent mali_mali_PM_MCU_ON_HWCNT_ENABLE =
+        525;
+    MaliMaliPMMCUONPENDHALTFtraceEvent mali_mali_PM_MCU_ON_PEND_HALT = 526;
+    MaliMaliPMMCUONPENDSLEEPFtraceEvent mali_mali_PM_MCU_ON_PEND_SLEEP = 527;
+    MaliMaliPMMCUONSLEEPINITIATEFtraceEvent mali_mali_PM_MCU_ON_SLEEP_INITIATE =
+        528;
+    MaliMaliPMMCUPENDOFFFtraceEvent mali_mali_PM_MCU_PEND_OFF = 529;
+    MaliMaliPMMCUPENDONRELOADFtraceEvent mali_mali_PM_MCU_PEND_ON_RELOAD = 530;
+    MaliMaliPMMCUPOWERDOWNFtraceEvent mali_mali_PM_MCU_POWER_DOWN = 531;
+    MaliMaliPMMCURESETWAITFtraceEvent mali_mali_PM_MCU_RESET_WAIT = 532;
+    BclIrqTriggerFtraceEvent bcl_irq_trigger = 533;
+    KgslAdrenoCmdbatchQueuedFtraceEvent kgsl_adreno_cmdbatch_queued = 534;
+    KgslAdrenoCmdbatchSubmittedFtraceEvent kgsl_adreno_cmdbatch_submitted = 535;
+    KgslAdrenoCmdbatchSyncFtraceEvent kgsl_adreno_cmdbatch_sync = 536;
+    KgslAdrenoCmdbatchRetiredFtraceEvent kgsl_adreno_cmdbatch_retired = 537;
+    PixelMmKswapdWakeFtraceEvent pixel_mm_kswapd_wake = 538;
+    PixelMmKswapdDoneFtraceEvent pixel_mm_kswapd_done = 539;
+    SchedWakeupTaskAttrFtraceEvent sched_wakeup_task_attr = 540;
+    DevfreqFrequencyFtraceEvent devfreq_frequency = 541;
+    KprobeEvent kprobe_event = 542;
+    ParamSetValueCpmFtraceEvent param_set_value_cpm = 543;
+    DoSysOpenFtraceEvent do_sys_open = 544;
+    OpenExecFtraceEvent open_exec = 545;
+    BlockIoStartFtraceEvent block_io_start = 546;
+    BlockIoDoneFtraceEvent block_io_done = 547;
   }
 }
 
@@ -10469,6 +11691,17 @@ message FtraceCpuStats {
 
   // The number of events read (consumed) from the buffer by userspace.
   optional uint64 read_events = 9;
+}
+
+// Kprobe statistical data, gathered from /sys/kernel/tracing/kprobe_profile.
+message FtraceKprobeStats {
+  // Cumulative number of kprobe events generated for this function
+  optional int64 hits = 1;
+  // Cumulative number of kprobe events that could not be generated for this
+  // function and were missed.  This happens when too much nesting
+  // happens between a kprobe and its kretprobe, overflowing the
+  // maxactives buffer.
+  optional int64 misses = 2;
 }
 
 // Errors and kernel buffer stats for the ftrace data source.
@@ -10522,6 +11755,9 @@ message FtraceStats {
   // Any traces with entries in this field should be investigated, as they
   // indicate a bug in perfetto or the kernel.
   repeated FtraceParseStatus ftrace_parse_errors = 9;
+
+  // Kprobe profile stats for functions hits and misses
+  optional FtraceKprobeStats kprobe_stats = 10;
 }
 
 enum FtraceParseStatus {
@@ -10644,6 +11880,23 @@ message FtraceEventBundle {
     optional FtraceParseStatus status = 2;
   }
   repeated FtraceError error = 8;
+
+  // Superseded by |previous_bundle_end_timestamp| in perfetto v47+. The
+  // primary difference is that this field tracked the last timestamp read from
+  // the per-cpu buffer, while the newer field tracks events that get
+  // serialised into the trace.
+  // Added in: perfetto v44.
+  optional uint64 last_read_event_timestamp = 9;
+
+  // The timestamp (using ftrace clock) of the last event written into this
+  // data source on this cpu. In other words: the last event in the previous
+  // bundle.
+  // Lets the trace processing find an initial timestamp after which ftrace
+  // data is known to be valid across all cpus. Of particular importance when
+  // the perfetto trace buffer is a ring buffer as well, as the overwriting of
+  // oldest bundles can skew the first valid timestamp per cpu significantly.
+  // Added in: perfetto v47.
+  optional uint64 previous_bundle_end_timestamp = 10;
 }
 
 enum FtraceClock {
@@ -11647,9 +12900,10 @@ message ChromeFrameReporter {
     SCROLL_NONE = 0;
     SCROLL_MAIN_THREAD = 1;
     SCROLL_COMPOSITOR_THREAD = 2;
+    SCROLL_RASTER = 3;
 
     // Used when it can't be determined whether a scroll is in progress or not.
-    SCROLL_UNKNOWN = 3;
+    SCROLL_UNKNOWN = 4;
   }
 
   // The type of active scroll.
@@ -11663,7 +12917,10 @@ message ChromeFrameReporter {
   optional bool has_smooth_input_main = 9;
 
   // Whether the frame contained any missing content (i.e. whether there was
-  // checkerboarding in the frame).
+  // checkerboarding in the frame).  If has_missing_content,
+  // checkerboarded_needs_raster and checkerboarded_needs_record all have
+  // values, has_missing_content should equal checkerboarded_needs_raster ||
+  // checkerboarded_needs_record.
   optional bool has_missing_content = 10;
 
   // The id of layer_tree_host that the frame has been produced for.
@@ -11685,6 +12942,20 @@ message ChromeFrameReporter {
   // The breakdown stage of PipelineReporter that is most likely accountable for
   // high latency.
   repeated string high_latency_contribution_stage = 14;
+
+  // Whether the frame contained any content that is not fully rastered.
+  optional bool checkerboarded_needs_raster = 15;
+
+  // Whether the frame contained any content that is not fully recorded.
+  optional bool checkerboarded_needs_record = 16;
+
+  // viz::BeginFrameArgs.trace_id of the frame (before surface aggregation). See
+  // also ChromeTrackEvent.EventLatency.surface_frame_trace_id.
+  optional int64 surface_frame_trace_id = 17;
+
+  // gfx::PresentationFeedback.display_trace_id of the frame (after surface
+  // aggregation). See also ChromeTrackEvent.EventLatency.display_trace_id.
+  optional int64 display_trace_id = 18;
 }
 
 // End of protos/perfetto/trace/track_event/chrome_frame_reporter.proto
@@ -11769,6 +13040,19 @@ message ChromeLatencyInfo {
   optional bool is_coalesced = 5;
   optional int64 gesture_scroll_id = 6;
   optional int64 touch_id = 7;
+
+  enum InputType {
+    UNSPECIFIED_OR_OTHER = 0;
+    TOUCH_MOVED = 1;
+    GESTURE_SCROLL_BEGIN = 2;
+    GESTURE_SCROLL_UPDATE = 3;
+    GESTURE_SCROLL_END = 4;
+    GESTURE_TAP = 5;
+    GESTURE_TAP_CANCEL = 6;
+  }
+
+  // The type of input corresponding to this `ChromeLatencyInfo`.
+  optional InputType input_type = 8;
 }
 
 // End of protos/perfetto/trace/track_event/chrome_latency_info.proto
@@ -12019,7 +13303,7 @@ message TaskExecution {
 // their default track association) can be emitted as part of a
 // TrackEventDefaults message.
 //
-// Next reserved id: 13 (up to 15). Next id: 51.
+// Next reserved id: 13 (up to 15). Next id: 52.
 message TrackEvent {
   // Names of categories of the event. In the client library, categories are a
   // way to turn groups of individual events on or off.
@@ -12203,8 +13487,11 @@ message TrackEvent {
   extensions 1000 to 1999;
   // Extension range reserved for https://b.corp.google.com/issues/301227627.
   extensions 2000 to 2000;
+  // Extension range reserved for android:
+  // protos/perfetto/trace/android/android_track_event.proto
+  extensions 2001 to 2999;
   // Extension range for future use.
-  extensions 2001 to 9899;
+  extensions 3000 to 9899;
   // Reserved for Perfetto unit and integration tests.
   extensions 9900 to 10000;
 
@@ -12320,6 +13607,8 @@ message TrackEvent {
   }
 
   optional LegacyEvent legacy_event = 6;
+
+  reserved 51;
 }
 
 // Default values for fields of all TrackEvents on the same packet sequence.
@@ -12379,7 +13668,7 @@ message EventName {
 // emitted proactively in advance of referring to them in later packets.
 //
 // Next reserved id: 8 (up to 15).
-// Next id: 36.
+// Next id: 42.
 message InternedData {
   // TODO(eseckler): Replace iid fields inside interned messages with
   // map<iid, message> type fields in InternedData.
@@ -12461,6 +13750,12 @@ message InternedData {
   repeated InternedString protolog_string_args = 36;
   // Interned protolog stacktraces.
   repeated InternedString protolog_stacktrace = 37;
+
+  // viewcapture
+  repeated InternedString viewcapture_package_name = 38;
+  repeated InternedString viewcapture_window_name = 39;
+  repeated InternedString viewcapture_view_id = 40;
+  repeated InternedString viewcapture_class_name = 41;
 }
 
 // End of protos/perfetto/trace/interned_data/interned_data.proto
@@ -12629,7 +13924,15 @@ message PerfettoMetatrace {
 // Begin of protos/perfetto/trace/perfetto/tracing_service_event.proto
 
 // Events emitted by the tracing service.
+// Next id: 12.
 message TracingServiceEvent {
+  message DataSources {
+    message DataSource {
+      optional string producer_name = 1;
+      optional string data_source_name = 2;
+    }
+    repeated DataSource data_source = 1;
+  }
   oneof event_type {
     // When each of the following booleans are set to true, they report the
     // point in time (through TracePacket's timestamp) where the condition
@@ -12648,6 +13951,9 @@ message TracingServiceEvent {
     // This identifies the point in time when it's safe to assume that all data
     // sources have been recording events.
     bool all_data_sources_started = 1;
+
+    // Emitted when a flush is started.
+    bool flush_started = 9;
 
     // Emitted when all data sources have been flushed successfully or with an
     // error (including timeouts). This can generally happen many times over the
@@ -12673,6 +13979,22 @@ message TracingServiceEvent {
     // Deprecated since Android U, where --save-for-bugreport uses
     // non-destructive cloning.
     bool seized_for_bugreport = 6;
+
+    // Emitted when not all data sources in all producers reply to a start
+    // request after some time.
+    DataSources slow_starting_data_sources = 7;
+
+    // Emitted when the last flush request has failed. Lists data sources that
+    // did not reply on time.
+    DataSources last_flush_slow_data_sources = 8;
+
+    // If this was a cloned tracing session, emitted when the tracing serice
+    // started the clone operation.
+    bool clone_started = 10;
+
+    // If this was a cloned tracing session, emitted when the tracing service
+    // finished the clone operation (for a specific buffer).
+    uint32 buffer_cloned = 11;
   }
 }
 
@@ -12974,6 +14296,16 @@ message HeapGraphObject {
   //
   // N.B. This is not the native size of this object.
   optional int64 native_allocation_registry_size_field = 8;
+
+  enum HeapType {
+    HEAP_TYPE_UNKNOWN = 0;
+    HEAP_TYPE_APP = 1;
+    HEAP_TYPE_ZYGOTE = 2;
+    HEAP_TYPE_BOOT_IMAGE = 3;
+  }
+  // To reduce the space required we only emit the heap type if it has changed
+  // from the previous object we recorded.
+  optional HeapType heap_type_delta = 9;
 }
 
 message HeapGraph {
@@ -13293,6 +14625,9 @@ message PerfSample {
   // Value of the timebase counter (since the event was configured, no deltas).
   optional uint64 timebase_count = 6;
 
+  // Value of the followers counter (since the event was configured, no deltas).
+  repeated uint64 follower_counts = 7;
+
   // Unwound callstack. Might be partial, in which case a synthetic "error"
   // frame is appended, and |unwind_error| is set accordingly.
   optional uint64 callstack_iid = 4;
@@ -13346,6 +14681,9 @@ message PerfSampleDefaults {
   // the implementation decided to default/override some parameters.
   optional PerfEvents.Timebase timebase = 1;
 
+  // Description of followers event
+  repeated FollowerEvent followers = 4;
+
   // If the config requested process sharding, report back the count and which
   // of those bins was selected. Never changes for the duration of a trace.
   optional uint32 process_shard_count = 2;
@@ -13392,7 +14730,7 @@ message SmapsPacket {
 // dedicated message (as opposite to be fields in process_tree.proto) because
 // they are dumped at a different rate than cmdline and thread list.
 // Note: not all of these stats will be present in every ProcessStats message
-// and sometimes processes may be missing . This is because counters are
+// and sometimes processes may be missing. This is because counters are
 // cached to reduce emission of counters which do not change.
 message ProcessStats {
   // Per-thread periodically sampled stats.
@@ -13419,6 +14757,8 @@ message ProcessStats {
   message Process {
     optional int32 pid = 1;
 
+    repeated Thread threads = 11;
+
     // See /proc/[pid]/status in `man 5 proc` for a description of these fields.
     optional uint64 vm_size_kb = 2;
     optional uint64 vm_rss_kb = 3;
@@ -13432,8 +14772,6 @@ message ProcessStats {
     // the trace processor.
 
     optional int64 oom_score_adj = 10;
-
-    repeated Thread threads = 11;
 
     // The peak resident set size is resettable in newer Posix kernels.
     // This field specifies if reset is supported and if the writer had reset
@@ -13454,6 +14792,17 @@ message ProcessStats {
     optional uint64 smr_pss_anon_kb = 18;
     optional uint64 smr_pss_file_kb = 19;
     optional uint64 smr_pss_shmem_kb = 20;
+    optional uint64 smr_swap_pss_kb = 23;
+
+    // Time spent scheduled in user mode in nanoseconds. Parsed from utime in
+    // /proc/pid/stat. Recorded if record_process_runtime config option is set.
+    // Resolution of "clock ticks", usually 10ms.
+    optional uint64 runtime_user_mode = 21;
+
+    // Time spent scheduled in kernel mode in nanoseconds. Parsed from stime in
+    // /proc/pid/stat. Recorded if record_process_runtime config option is set.
+    // Resolution of "clock ticks", usually 10ms.
+    optional uint64 runtime_kernel_mode = 22;
   }
   repeated Process processes = 1;
 
@@ -13504,17 +14853,22 @@ message ProcessTree {
     // and it will contain /proc/pid/comm.
     repeated string cmdline = 3;
 
-    // No longer used as of Apr 2018, when the dedicated |threads| field was
-    // introduced in ProcessTree.
-    repeated Thread threads_deprecated = 4 [deprecated = true];
-
     // The uid for the process, as per /proc/pid/status.
     optional int32 uid = 5;
 
     // The non-root-level process IDs if the process runs in a PID namespace.
-    // Read from the NSpid entry of /proc/<pid>/status, with the first element (
-    // root-level process ID) omitted.
+    // Read from the NSpid entry of /proc/<pid>/status, with the first element
+    // (root-level process ID) omitted.
     repeated int32 nspid = 6;
+
+    // Timestamp of when the process was created, in nanoseconds
+    // from boot. Parsed from starttime in /proc/pid/stat.
+    // Recorded if record_process_age config option is set.
+    // Resolution of "clock ticks", usually 10ms.
+    optional uint64 process_start_from_boot = 7;
+
+    // threads_deprecated
+    reserved 4;
   }
 
   // List of processes and threads in the client. These lists are incremental
@@ -13535,6 +14889,24 @@ message ProcessTree {
 
 // End of protos/perfetto/trace/ps/process_tree.proto
 
+// Begin of protos/perfetto/trace/remote_clock_sync.proto
+
+// Records the parameters for aligning clock readings between machines.
+message RemoteClockSync {
+  // Synchronized clock snapshots taken on both sides of the relay port (the
+  // tracing service and the relay service). A round of clock synchronization
+  // IPC takes emits 2 SyncedClocks messages, i.e., client snapshot -> host
+  // snapshot -> client snapshot -> host snapshot.
+  message SyncedClocks {
+    optional ClockSnapshot client_clocks = 2;
+    optional ClockSnapshot host_clocks = 3;
+  }
+
+  repeated SyncedClocks synced_clocks = 1;
+}
+
+// End of protos/perfetto/trace/remote_clock_sync.proto
+
 // Begin of protos/perfetto/trace/statsd/statsd_atom.proto
 
 // Deliberate empty message. See comment on StatsdAtom#atom below.
@@ -13546,7 +14918,7 @@ message Atom {}
 // trace.
 message StatsdAtom {
   // Atom should be filled with an Atom proto from:
-  // https://cs.android.com/android/platform/superproject/+/master:frameworks/proto_logging/stats/atoms.proto?q=f:stats%2Fatoms.proto$%20message%5C%20Atom
+  // https://cs.android.com/android/platform/superproject/main/+/main:frameworks/proto_logging/stats/atoms.proto?q=f:stats%2Fatoms.proto$%20message%5C%20Atom
   // We don't reference Atom directly here since we don't want to import
   // Atom.proto and all its transitive dependencies into Perfetto.
   // atom and timestamp_nanos have the same cardinality
@@ -13698,6 +15070,29 @@ message SysStats {
   }
   // One entry per PsiResource type.
   repeated PsiSample psi = 14;
+
+  // Reading from /sys/class/thermal/*.
+  message ThermalZone {
+    optional string name = 1;
+    optional uint64 temp = 2;
+    optional string type = 3;
+  }
+  repeated ThermalZone thermal_zone = 15;
+
+  // Reading from /sys/devices/system/cpu/cpu*/cpuidle/state*.
+  message CpuIdleStateEntry {
+    // Name of the idle state, e.g. C1-C10
+    optional string state = 1;
+    optional uint64 duration_us = 2;
+  }
+  message CpuIdleState {
+    optional uint32 cpu_id = 1;
+    repeated CpuIdleStateEntry cpuidle_state_entry = 2;
+  }
+  repeated CpuIdleState cpuidle_state = 16;
+
+  // Read GPU frequency info on Intel/AMD devices.
+  repeated uint64 gpufreq_mhz = 17;
 }
 
 // End of protos/perfetto/trace/sys_stats/sys_stats.proto
@@ -13711,12 +15106,34 @@ message Utsname {
   optional string machine = 4;
 }
 
+// Next id: 15;
 message SystemInfo {
   optional Utsname utsname = 1;
   optional string android_build_fingerprint = 2;
 
-  // Ticks per second - sysconf(_SC_CLK_TCK).
-  optional int64 hz = 3;
+  // The manufacturer of the product/hardware.
+  // Source : "ro.product.manufacturer"
+  // Introduced after Android W in Nov 2024 and is not supported on older
+  // versions.
+  optional string android_device_manufacturer = 14;
+
+  // The SoC model from which trace is collected
+  optional string android_soc_model = 9;
+
+  // The guest SoC model from which trace is collected in case of VMs
+  optional string android_guest_soc_model = 13;
+
+  // The hardware reversion from android device
+  optional string android_hardware_revision = 10;
+
+  // The storage component from android_device. This field has been introduced
+  // after Android W in Aug 2024 and is not supported on older versions.
+  optional string android_storage_model = 11;
+
+  // The RAM component information from android device. This field has been
+  // introduced after Android W in Aug 2024 and is not supported on older
+  // versions.
+  optional string android_ram_model = 12;
 
   // The version of traced (the same returned by `traced --version`).
   // This is a human readable string with and its format varies depending on
@@ -13731,9 +15148,18 @@ message SystemInfo {
   // Kernel page size - sysconf(_SC_PAGESIZE).
   optional uint32 page_size = 6;
 
+  // Number of cpus - sysconf(_SC_NPROCESSORS_CONF).
+  // Might be different to the number of online cpus.
+  // Introduced in perfetto v44.
+  optional uint32 num_cpus = 8;
+
   // The timezone offset from UTC, as per strftime("%z"), in minutes.
   // Introduced in v38 / Android V.
   optional int32 timezone_off_mins = 7;
+
+  // Ticks per second - sysconf(_SC_CLK_TCK).
+  // Not serialised as of perfetto v44.
+  optional int64 hz = 3;
 }
 
 // End of protos/perfetto/trace/system_info.proto
@@ -13742,6 +15168,23 @@ message SystemInfo {
 
 // Information about CPUs from procfs and sysfs.
 message CpuInfo {
+  message ArmCpuIdentifier {
+    // Implementer code
+    optional uint32 implementer = 1;
+
+    // Architecture code
+    optional uint32 architecture = 2;
+
+    // CPU variant
+    optional uint32 variant = 3;
+
+    // CPU part
+    optional uint32 part = 4;
+
+    // CPU revision
+    optional uint32 revision = 5;
+  }
+
   // Information about a single CPU.
   message Cpu {
     // Value of "Processor" field from /proc/cpuinfo for this CPU.
@@ -13752,6 +15195,15 @@ message CpuInfo {
     // /sys/devices/system/cpu/cpuX/cpufreq/scaling_available_frequencies
     // where X is the index of this CPU.
     repeated uint32 frequencies = 2;
+
+    // Cpu capacity from /sys/devices/system/cpu/cpuX/cpu_capacity where X is
+    // the index of this CPU.
+    optional uint32 capacity = 3;
+
+    // Code to identify the CPU
+    oneof identifier {
+      ArmCpuIdentifier arm_identifier = 4;
+    }
   }
 
   // Describes available CPUs, one entry per CPU.
@@ -14090,6 +15542,8 @@ message ChromeThreadDescriptor {
 
     THREAD_MEMORY_INFRA = 50;
     THREAD_SAMPLING_PROFILER = 51;
+
+    THREAD_COMPOSITOR_GPU = 52;
   };
 
   optional ThreadType thread_type = 1;
@@ -14195,7 +15649,7 @@ message CounterDescriptor {
 // |TrackEvent::track_uuid|. It is possible but not necessary to emit a
 // TrackDescriptor for this implicit track.
 //
-// Next id: 10.
+// Next id: 14.
 message TrackDescriptor {
   // Unique ID that identifies this track. This ID is global to the whole trace.
   // Producers should ensure that it is unlikely to clash with IDs emitted by
@@ -14209,13 +15663,38 @@ message TrackDescriptor {
   // tracks. For example, to define an asynchronous track which is scoped to a
   // specific process, specify the uuid for that process's process track here.
   // Similarly, to associate a COUNTER_THREAD_TIME_NS counter track with a
-  // thread, specify the uuid for that thread's thread track here.
+  // thread, specify the uuid for that thread's thread track here. In general,
+  // setting a parent will *nest* that track under the parent in the UI and in
+  // the trace processor data model (with the important exception noted below).
+  //
+  // If not specified, the track will be a root track, i.e. not nested under any
+  // other track.
+  //
+  // Note: if the `thread` or `process` fields are set, this value will be
+  // *ignored* as priority is given to those fields.
+  //
+  // Note: if the parent is set to a track with `thread` or `process` fields
+  // set, the track will *not* be nested under the parent in the UI and in the
+  // trace processor data model. Instead, the track will inherit the parent'
+  // thread/process association and will appear as a *sibling* of the parent.
+  // This semantic exists for back-compat reasons as the UI used to work this
+  // way for years and changing this leads to a lot of traces subtly breaking.
+  // If you want to force nesting, create *another* intermediate track to act as
+  // the parent.
   optional uint64 parent_uuid = 5;
 
   // Name of the track. Optional - if unspecified, it may be derived from the
   // process/thread name (process/thread tracks), the first event's name (async
   // tracks), or counter name (counter tracks).
-  optional string name = 2;
+  oneof static_or_dynamic_name {
+    string name = 2;
+    // This field is only set by the SDK when perfetto::StaticString is
+    // provided.
+    string static_name = 10;
+    // Equivalent to name, used just to mark that the data is coming from
+    // android.os.Trace.
+    string atrace_name = 13;
+  }
 
   // Associate the track with a process, making it the process-global track.
   // There should only be one such track per process (usually for instant
@@ -14249,6 +15728,41 @@ message TrackDescriptor {
   // system events use nanoseconds. It results in broken event nesting when
   // track events and system events share a track.
   optional bool disallow_merging_with_system_tracks = 9;
+
+  // Specifies how the UI should display child tracks of this track (i.e. tracks
+  // where `parent_uuid` is specified to this track `uuid`). Note that this
+  // value is simply a *hint* to the UI: the UI is not guarnateed to respect
+  // this if it has a good reason not to do so.
+  //
+  // Note: for tracks where `thread` or `process` are set, this option is
+  // *ignored*. See `parent_uuid` for details.
+  enum ChildTracksOrdering {
+    // The default ordering, with no bearing on how the UI will visualise the
+    // tracks.
+    UNKNOWN = 0;
+
+    // Order tracks by `name` or `static_name` depending on which one has been
+    // specified.
+    LEXICOGRAPHIC = 1;
+
+    // Order tracks by the first `ts` event in a track.
+    CHRONOLOGICAL = 2;
+
+    // Order tracks by `sibling_order_rank` of child tracks. Child tracks with
+    // the lower values will be shown before tracks with higher values. Tracks
+    // with no value will be treated as having 0 rank.
+    EXPLICIT = 3;
+  }
+  optional ChildTracksOrdering child_ordering = 11;
+
+  // An opaque value which allows specifying how two sibling tracks should be
+  // ordered relative to each other: tracks with lower ranks will appear before
+  // tracks with higher ranks. An unspecified rank will be treated as a rank of
+  // 0.
+  //
+  // Note: for tracks where the parent has `thread` or `process` are set, this
+  // option is *ignored*. See `parent_uuid` for details.
+  optional int32 sibling_order_rank = 12;
 }
 
 // End of protos/perfetto/trace/track_event/track_descriptor.proto
@@ -14263,6 +15777,8 @@ message TranslationTable {
     ChromeUserEventTranslationTable chrome_user_event = 2;
     ChromePerformanceMarkTranslationTable chrome_performance_mark = 3;
     SliceNameTranslationTable slice_name = 4;
+    ProcessTrackNameTranslationTable process_track_name = 5;
+    ChromeStudyTranslationTable chrome_study = 6;
   }
 }
 
@@ -14285,6 +15801,16 @@ message ChromePerformanceMarkTranslationTable {
 // Raw -> deobfuscated slice name translation rules.
 message SliceNameTranslationTable {
   map<string, string> raw_to_deobfuscated_name = 1;
+};
+
+// Raw -> deobfuscated process track name translation rules.
+message ProcessTrackNameTranslationTable {
+  map<string, string> raw_to_deobfuscated_name = 1;
+};
+
+// Chrome study hash -> name translation rules.
+message ChromeStudyTranslationTable {
+  map<uint64, string> hash_to_name = 1;
 };
 
 // End of protos/perfetto/trace/translation/translation_table.proto
@@ -14367,7 +15893,7 @@ message UiState {
 // See the [Buffers and Dataflow](/docs/concepts/buffers.md) doc for details.
 //
 // Next reserved id: 14 (up to 15).
-// Next id: 107.
+// Next id: 116.
 message TracePacket {
   // The timestamp of the TracePacket.
   // By default this timestamps refers to the trace clock (CLOCK_BOOTTIME on
@@ -14408,6 +15934,7 @@ message TracePacket {
     AndroidLogPacket android_log = 39;
     SystemInfo system_info = 45;
     Trigger trigger = 46;
+    ChromeTrigger chrome_trigger = 109;
     PackagesList packages_list = 47;
     ChromeBenchmarkMetadata chrome_benchmark_metadata = 48;
     PerfettoMetatrace perfetto_metatrace = 49;
@@ -14490,6 +16017,7 @@ message TracePacket {
     ShellHandlerMappings shell_handler_mappings = 97;
     ProtoLogMessage protolog_message = 104;
     ProtoLogViewerConfig protolog_viewer_config = 105;
+    WinscopeExtensions winscope_extensions = 112;
 
     // Events from the Windows etw infrastructure.
     EtwTraceEventBundle etw_events = 95;
@@ -14499,9 +16027,17 @@ message TracePacket {
     V8WasmCode v8_wasm_code = 101;
     V8RegExpCode v8_reg_exp_code = 102;
     V8CodeMove v8_code_move = 103;
+    // Clock synchronization with remote machines.
+    RemoteClockSync remote_clock_sync = 107;
 
-    // InputFlinger traces
-    AndroidInputEvent android_input_event = 106;
+    PixelModemEvents pixel_modem_events = 110;
+    PixelModemTokenDatabase pixel_modem_token_database = 111;
+
+    Trigger clone_snapshot_trigger = 113;
+
+    BluetoothTraceEvent bluetooth_trace_event = 114;
+
+    KernelWakelockData kernel_wakelock_data = 115;
 
     // This field is only used for testing.
     // In previous versions of this proto this field had the id 268435455
@@ -14512,12 +16048,17 @@ message TracePacket {
     TestEvent for_testing = 900;
   }
 
+  // AndroidInputEvent android_input_event (moved to winscope_extensions)
+  reserved 106;
+
   // Trusted user id of the producer which generated this packet. Keep in sync
   // with TrustedPacket.trusted_uid.
   //
   // TODO(eseckler): Emit this field in a PacketSequenceDescriptor message
   // instead.
-  oneof optional_trusted_uid { int32 trusted_uid = 3; };
+  oneof optional_trusted_uid {
+    int32 trusted_uid = 3;
+  };
 
   // Service-assigned identifier of the packet sequence this packet belongs to.
   // Uniquely identifies a producer + writer pair within the tracing session. A

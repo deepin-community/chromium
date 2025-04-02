@@ -113,7 +113,7 @@ static base::LazyInstance<NetLogWithNetworkChangeEvents>::Leaky g_net_log =
 
 class BasicNetworkDelegate : public net::NetworkDelegateImpl {
  public:
-  BasicNetworkDelegate() {}
+  BasicNetworkDelegate() = default;
 
   BasicNetworkDelegate(const BasicNetworkDelegate&) = delete;
   BasicNetworkDelegate& operator=(const BasicNetworkDelegate&) = delete;
@@ -128,8 +128,9 @@ class BasicNetworkDelegate : public net::NetworkDelegateImpl {
       net::CookieAccessResultList& maybe_included_cookies,
       net::CookieAccessResultList& excluded_cookies) override {
     // Disallow sending cookies by default.
-    ExcludeAllCookies(net::CookieInclusionStatus::EXCLUDE_USER_PREFERENCES,
-                      maybe_included_cookies, excluded_cookies);
+    ExcludeAllCookies(
+        net::CookieInclusionStatus::ExclusionReason::EXCLUDE_USER_PREFERENCES,
+        maybe_included_cookies, excluded_cookies);
     return false;
   }
 
@@ -175,7 +176,8 @@ void SetQuicHint(net::URLRequestContext* context,
 
   url::SchemeHostPort quic_server("https", canon_host, quic_hint->port);
   net::AlternativeService alternative_service(
-      net::kProtoQUIC, "", static_cast<uint16_t>(quic_hint->alternate_port));
+      net::NextProto::kProtoQUIC, "",
+      static_cast<uint16_t>(quic_hint->alternate_port));
   context->http_server_properties()->SetQuicAlternativeService(
       quic_server, net::NetworkAnonymizationKey(), alternative_service,
       base::Time::Max(), quic::ParsedQuicVersionVector());
@@ -203,7 +205,9 @@ CronetContext::CronetContext(
       heartbeat_interval_(context_config->heartbeat_interval),
       default_load_flags_(
           net::LOAD_NORMAL |
-          (context_config->load_disable_cache ? net::LOAD_DISABLE_CACHE : 0)),
+          (context_config->load_disable_cache ? net::LOAD_DISABLE_CACHE : 0) |
+          (context_config->enable_brotli ? net::LOAD_CAN_USE_SHARED_DICTIONARY
+                                         : 0)),
       network_tasks_(
           new NetworkTasks(std::move(context_config), std::move(callback))),
       network_task_runner_(network_task_runner) {
@@ -456,6 +460,7 @@ void CronetContext::NetworkTasks::SetSharedURLRequestContextBuilderConfig(
 
   context_builder->set_check_cleartext_permitted(true);
   context_builder->set_enable_brotli(context_config_->enable_brotli);
+  context_builder->set_enable_shared_dictionary(context_config_->enable_brotli);
 }
 
 void CronetContext::NetworkTasks::SetSharedURLRequestContextConfig(

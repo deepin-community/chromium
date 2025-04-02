@@ -3,7 +3,9 @@
 // found in the LICENSE file.
 
 #include "components/media_router/common/providers/cast/channel/cast_message_handler.h"
+
 #include <string>
+#include <string_view>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -63,30 +65,34 @@ constexpr char kAppParams[] = R"(
 constexpr int kMaxProtocolMessageSize = 64 * 1024;
 
 data_decoder::DataDecoder::ValueOrError ParseJsonLikeDataDecoder(
-    base::StringPiece json) {
+    std::string_view json) {
   return ParseJson(json);
 }
 
 std::optional<base::Value::Dict> GetDictionaryFromCastMessage(
     const CastMessage& message) {
-  if (!message.has_payload_utf8())
+  if (!message.has_payload_utf8()) {
     return std::nullopt;
+  }
 
   std::optional<base::Value> value =
       base::JSONReader::Read(message.payload_utf8());
-  if (!value || !value->is_dict())
+  if (!value || !value->is_dict()) {
     return std::nullopt;
+  }
   return std::move(*value).TakeDict();
 }
 
 CastMessageType GetMessageType(const CastMessage& message) {
   std::optional<base::Value::Dict> dict = GetDictionaryFromCastMessage(message);
-  if (!dict)
+  if (!dict) {
     return CastMessageType::kOther;
+  }
 
   const std::string* message_type = dict->FindString("type");
-  if (!message_type)
+  if (!message_type) {
     return CastMessageType::kOther;
+  }
 
   return CastMessageTypeFromString(*message_type);
 }
@@ -129,8 +135,9 @@ class CastMessageHandlerTest : public testing::Test {
 
   void OnAppAvailability(const std::string& app_id,
                          GetAppAvailabilityResult result) {
-    if (run_loop_)
+    if (run_loop_) {
       run_loop_->Quit();
+    }
     DoOnAppAvailability(app_id, result);
   }
 
@@ -141,12 +148,14 @@ class CastMessageHandlerTest : public testing::Test {
   void ExpectSessionLaunchResult(LaunchSessionResponse::Result expected_result,
                                  LaunchSessionResponse response,
                                  LaunchSessionCallbackWrapper* out_callback) {
-    if (run_loop_)
+    if (run_loop_) {
       run_loop_->Quit();
+    }
     ++session_launch_response_count_;
     EXPECT_EQ(expected_result, response.result);
-    if (response.result == LaunchSessionResponse::Result::kOk)
+    if (response.result == LaunchSessionResponse::Result::kOk) {
       EXPECT_TRUE(response.receiver_status);
+    }
   }
 
   void ExpectEnsureConnection() {

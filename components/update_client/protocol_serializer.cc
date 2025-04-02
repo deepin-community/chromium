@@ -12,7 +12,6 @@
 
 #include "base/check.h"
 #include "base/containers/flat_map.h"
-#include "base/cpu.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -30,6 +29,10 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/windows_version.h"
+#endif
+
+#if defined(ARCH_CPU_X86_FAMILY)
+#include "base/cpu.h"
 #endif
 
 namespace update_client {
@@ -140,8 +143,9 @@ protocol_request::Request MakeProtocolRequest(
 #endif
 
   // HW platform information.
-  base::CPU cpu;
   request.hw.physmemory = GetPhysicalMemoryGB();
+#if defined(ARCH_CPU_X86_FAMILY)
+  base::CPU cpu;
   request.hw.sse = cpu.has_sse();
   request.hw.sse2 = cpu.has_sse2();
   request.hw.sse3 = cpu.has_sse3();
@@ -149,6 +153,7 @@ protocol_request::Request MakeProtocolRequest(
   request.hw.sse41 = cpu.has_sse41();
   request.hw.sse42 = cpu.has_sse42();
   request.hw.avx = cpu.has_avx();
+#endif
 
   // OS version and platform information.
   request.os.platform = os_long_name;
@@ -208,6 +213,7 @@ protocol_request::App MakeProtocolApp(
     const base::Version& version,
     const std::string& ap,
     const std::string& brand_code,
+    const std::string& install_id,
     const std::string& lang,
     const int install_date,
     const std::string& install_source,
@@ -231,6 +237,7 @@ protocol_request::App MakeProtocolApp(
   app.brand_code = FilterBrandCode(brand_code);
   app.lang = lang;
   app.install_date = install_date;
+  app.install_id = install_id;
   app.install_source = install_source;
   app.install_location = install_location;
   app.fingerprint = fingerprint;

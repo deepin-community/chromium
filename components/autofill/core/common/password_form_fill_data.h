@@ -34,6 +34,7 @@ struct PasswordAndMetadata {
   std::u16string password_value;
   std::string realm;
   bool uses_account_store = false;
+  bool is_grouped_affiliation = false;
 };
 
 // Structure used to trigger password suggestion generation.
@@ -123,6 +124,12 @@ struct PasswordFormFillData {
   // form. This can happen, for example, if action URI's of the observed form
   // and our saved representation don't match up.
   bool wait_for_username = false;
+
+  // Fields that are banned from Password Manager filling suggestion.
+  std::vector<FieldRendererId> suggestion_banned_fields;
+
+  // Instructs renderer to notify about successful filling on pageload.
+  bool notify_browser_of_successful_filling = false;
 };
 
 // If |data.wait_for_username| is set, the renderer does not need to receive
@@ -131,4 +138,4 @@ PasswordFormFillData MaybeClearPasswordValues(const PasswordFormFillData& data);
 
 }  // namespace autofill
 
-#endif  // COMPONENTS_AUTOFILL_CORE_COMMON_PASSWORD_FORM_FILL_DATA_H__
+#endif  // COMPONENTS_AUTOFILL_CORE_COMMON_PASSWORD_FORM_FILL_DATA_H_

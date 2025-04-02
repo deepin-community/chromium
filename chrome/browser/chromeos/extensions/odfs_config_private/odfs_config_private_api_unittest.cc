@@ -5,16 +5,14 @@
 #include "chrome/browser/chromeos/extensions/odfs_config_private/odfs_config_private_api.h"
 
 #include "chrome/browser/extensions/extension_api_unittest.h"
+#include "chrome/browser/notifications/notification_display_service_tester.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/odfs_config_private.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "components/prefs/pref_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/notifications/notification_display_service_tester.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 namespace extensions {
 
@@ -38,13 +36,11 @@ class OfdsConfigPrivateApiUnittest : public ExtensionApiUnittest {
       delete;
   ~OfdsConfigPrivateApiUnittest() override = default;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   void SetUp() override {
     ExtensionApiUnittest::SetUp();
     notification_tester_ = std::make_unique<NotificationDisplayServiceTester>(
         /*profile=*/profile());
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
  protected:
   void SetOneDriveMount(Profile* profile, const std::string& mount) {
@@ -60,9 +56,8 @@ class OfdsConfigPrivateApiUnittest : public ExtensionApiUnittest {
                                  ToList(restrictions));
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   std::unique_ptr<NotificationDisplayServiceTester> notification_tester_;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(OfdsConfigPrivateApiUnittest, GetMountSuccessful) {
@@ -124,7 +119,6 @@ TEST_F(OfdsConfigPrivateApiUnittest, GetAccountRestrictionsSuccessful) {
   }
 }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
 TEST_F(OfdsConfigPrivateApiUnittest,
        ShowAutomatedMountErrorNotificationIsShown) {
   auto function = base::MakeRefCounted<
@@ -139,6 +133,64 @@ TEST_F(OfdsConfigPrivateApiUnittest,
       u"Microsoft OneDrive automatically, but something went wrong.",
       notification->message());
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+TEST_F(OfdsConfigPrivateApiUnittest, IsCloudFileSystemEnabled_Enabled) {
+  scoped_feature_list_.InitAndEnableFeature(
+      chromeos::features::kFileSystemProviderCloudFileSystem);
+  auto function = base::MakeRefCounted<
+      extensions::OdfsConfigPrivateIsCloudFileSystemEnabledFunction>();
+  auto returned_is_file_system_provider_cloud_file_system_enabled_value =
+      RunFunctionAndReturnValue(function.get(), /*args=*/"[]");
+  ASSERT_TRUE(returned_is_file_system_provider_cloud_file_system_enabled_value
+                  .has_value());
+
+  ASSERT_TRUE(returned_is_file_system_provider_cloud_file_system_enabled_value
+                  ->GetBool());
+}
+
+TEST_F(OfdsConfigPrivateApiUnittest, IsCloudFileSystemEnabled_Disabled) {
+  scoped_feature_list_.InitAndDisableFeature(
+      chromeos::features::kFileSystemProviderCloudFileSystem);
+  auto function = base::MakeRefCounted<
+      extensions::OdfsConfigPrivateIsCloudFileSystemEnabledFunction>();
+  auto returned_is_file_system_provider_cloud_file_system_enabled_value =
+      RunFunctionAndReturnValue(function.get(), /*args=*/"[]");
+  ASSERT_TRUE(returned_is_file_system_provider_cloud_file_system_enabled_value
+                  .has_value());
+
+  ASSERT_FALSE(returned_is_file_system_provider_cloud_file_system_enabled_value
+                   ->GetBool());
+}
+
+TEST_F(OfdsConfigPrivateApiUnittest, IsContentCacheEnabled_Enabled) {
+  scoped_feature_list_.InitWithFeatures(
+      {chromeos::features::kFileSystemProviderCloudFileSystem,
+       chromeos::features::kFileSystemProviderContentCache},
+      {});
+  auto function = base::MakeRefCounted<
+      extensions::OdfsConfigPrivateIsCloudFileSystemEnabledFunction>();
+  auto returned_is_file_system_provider_cloud_file_system_enabled_value =
+      RunFunctionAndReturnValue(function.get(), /*args=*/"[]");
+  ASSERT_TRUE(returned_is_file_system_provider_cloud_file_system_enabled_value
+                  .has_value());
+
+  EXPECT_TRUE(returned_is_file_system_provider_cloud_file_system_enabled_value
+                  ->GetBool());
+}
+
+TEST_F(OfdsConfigPrivateApiUnittest, IsContentCacheEnabled_Disabled) {
+  scoped_feature_list_.InitWithFeatures(
+      {}, {chromeos::features::kFileSystemProviderCloudFileSystem,
+           chromeos::features::kFileSystemProviderContentCache});
+  auto function = base::MakeRefCounted<
+      extensions::OdfsConfigPrivateIsCloudFileSystemEnabledFunction>();
+  auto returned_is_file_system_provider_content_cache_enabled_value =
+      RunFunctionAndReturnValue(function.get(), /*args=*/"[]");
+  ASSERT_TRUE(
+      returned_is_file_system_provider_content_cache_enabled_value.has_value());
+
+  ASSERT_FALSE(
+      returned_is_file_system_provider_content_cache_enabled_value->GetBool());
+}
 
 }  // namespace extensions

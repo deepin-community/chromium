@@ -25,6 +25,8 @@
 // OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#include <vector>
+
 #include "dawn/common/Assert.h"
 #include "dawn/common/Constants.h"
 #include "dawn/common/Math.h"
@@ -78,8 +80,9 @@ wgpu::ExternalTexture CreateExternalTexture(wgpu::Device device, uint32_t width,
 
     externalDesc.plane0 = view;
 
-    externalDesc.visibleOrigin = {0, 0};
-    externalDesc.visibleSize = {width, height};
+    externalDesc.cropOrigin = {0, 0};
+    externalDesc.cropSize = {width, height};
+    externalDesc.apparentSize = {width, height};
 
     // Import the external texture
     return device.CreateExternalTexture(&externalDesc);
@@ -114,12 +117,8 @@ class CopyTextureForBrowserTest : public ValidationTest {
 
 class CopyTextureForBrowserInternalUsageTest : public CopyTextureForBrowserTest {
   protected:
-    WGPUDevice CreateTestDevice(native::Adapter dawnAdapter,
-                                wgpu::DeviceDescriptor descriptor) override {
-        wgpu::FeatureName feature = wgpu::FeatureName::DawnInternalUsages;
-        descriptor.requiredFeatures = &feature;
-        descriptor.requiredFeatureCount = 1;
-        return dawnAdapter.CreateDevice(&descriptor);
+    std::vector<wgpu::FeatureName> GetRequiredFeatures() override {
+        return {wgpu::FeatureName::DawnInternalUsages};
     }
 };
 
@@ -155,12 +154,8 @@ class CopyExternalTextureForBrowserTest : public ValidationTest {
 
 class CopyExternalTextureForBrowserInternalUsageTest : public CopyExternalTextureForBrowserTest {
   protected:
-    WGPUDevice CreateTestDevice(native::Adapter dawnAdapter,
-                                wgpu::DeviceDescriptor descriptor) override {
-        wgpu::FeatureName feature = wgpu::FeatureName::DawnInternalUsages;
-        descriptor.requiredFeatures = &feature;
-        descriptor.requiredFeatureCount = 1;
-        return dawnAdapter.CreateDevice(&descriptor);
+    std::vector<wgpu::FeatureName> GetRequiredFeatures() override {
+        return {wgpu::FeatureName::DawnInternalUsages};
     }
 };
 

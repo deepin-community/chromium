@@ -27,6 +27,7 @@
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/tabs/public/tab_interface.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/url_constants.h"
@@ -194,10 +195,11 @@ void TerminalSource::StartDataRequest(
       int tab_index;
       extensions::ExtensionTabUtil::GetTabStripModel(contents, &tab_strip,
                                                      &tab_index);
-      content::WebContents* opener =
-          tab_strip->GetOpenerOfWebContentsAt(tab_index);
-      if (opener) {
-        opener_background_color = opener->GetBackgroundColor();
+      tabs::TabInterface* opener_tab = tab_strip->GetOpenerOfTabAt(tab_index);
+      if (opener_tab) {
+        CHECK(opener_tab->GetContents());
+        opener_background_color =
+            opener_tab->GetContents()->GetBackgroundColor();
       }
     }
     replacements_["themeColor"] =
@@ -260,7 +262,7 @@ std::string TerminalSource::GetContentSecurityPolicy(
     case network::mojom::CSPDirectiveName::RequireTrustedTypesFor:
       [[fallthrough]];
     case network::mojom::CSPDirectiveName::TrustedTypes:
-      // TODO(crbug.com/1098685): Trusted Type remaining WebUI
+      // TODO(crbug.com/40137141): Trusted Type remaining WebUI
       // This removes require-trusted-types-for and trusted-types directives
       // from the CSP header.
       return std::string();

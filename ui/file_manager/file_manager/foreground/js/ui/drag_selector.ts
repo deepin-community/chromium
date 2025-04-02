@@ -4,7 +4,7 @@
 
 import {assert} from 'chrome://resources/js/assert.js';
 
-import {List} from './list.js';
+import type {List} from './list.js';
 
 interface DragState {
   /**
@@ -36,7 +36,7 @@ export class DragSelector {
   /**
    * Border element of drag handle.
    */
-  private border_: HTMLDivElement|null = null;
+  private border_: HTMLElement|null = null;
 
   /**
    * Indexes of selected items by dragging at the last update.

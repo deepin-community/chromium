@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <memory>
+#include <string_view>
 
 #include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
@@ -12,13 +13,11 @@
 #include "base/test/simple_test_tick_clock.h"
 #include "base/test/values_test_util.h"
 #include "base/time/time.h"
-#include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
+#include "chrome/browser/devtools/devtools_window_testing.h"
 #include "chrome/browser/extensions/api/runtime/chrome_runtime_api_delegate.h"
-#include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/extensions/extension_action_test_helper.h"
-#include "chrome/test/base/ui_test_utils.h"
+#include "chrome/common/url_constants.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -37,6 +36,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/offscreen_document_host.h"
 #include "extensions/browser/process_manager.h"
+#include "extensions/browser/script_executor.h"
 #include "extensions/browser/test_extension_registry_observer.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/test/extension_test_message_listener.h"
@@ -45,22 +45,44 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "url/url_constants.h"
 
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/extensions/extension_platform_apitest.h"
+#else
+#include "chrome/browser/apps/platform_apps/app_browsertest_util.h"
+#include "chrome/browser/extensions/extension_apitest.h"
+#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/test/base/ui_test_utils.h"
+#endif
+
 namespace extensions {
 
-using ContextType = ExtensionBrowserTest::ContextType;
+using ContextType = extensions::browser_test_util::ContextType;
 
-class RuntimeApiTest : public ExtensionApiTest,
+#if BUILDFLAG(IS_ANDROID)
+using ExtensionApiTestBase = ExtensionPlatformApiTest;
+#else
+using ExtensionApiTestBase = ExtensionApiTest;
+#endif
+
+class RuntimeApiTest : public ExtensionApiTestBase,
                        public testing::WithParamInterface<ContextType> {
  public:
-  RuntimeApiTest() : ExtensionApiTest(GetParam()) {}
+  RuntimeApiTest() : ExtensionApiTestBase(GetParam()) {}
   ~RuntimeApiTest() override = default;
   RuntimeApiTest(const RuntimeApiTest&) = delete;
   RuntimeApiTest& operator=(const RuntimeApiTest&) = delete;
 };
 
+// Android only supports MV3 and later, therefor don't need to test for
+// persistent background context.
+#if !BUILDFLAG(IS_ANDROID)
 INSTANTIATE_TEST_SUITE_P(PersistentBackground,
                          RuntimeApiTest,
                          ::testing::Values(ContextType::kPersistentBackground));
+#endif
 
 INSTANTIATE_TEST_SUITE_P(ServiceWorker,
                          RuntimeApiTest,
@@ -78,16 +100,17 @@ IN_PROC_BROWSER_TEST_P(RuntimeApiTest, ChromeRuntimeUnprivileged) {
       LoadExtension(test_data_dir_.AppendASCII("runtime/content_script")));
 
   // The content script runs on this page.
-  extensions::ResultCatcher catcher;
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(
-      browser(), embedded_test_server()->GetURL("/title1.html")));
+  ResultCatcher catcher;
+  ASSERT_TRUE(content::NavigateToURL(
+      GetActiveWebContents(), embedded_test_server()->GetURL("/title1.html")));
   EXPECT_TRUE(catcher.GetNextResult()) << message_;
 }
 
+// TODO (crbug.com/383366125): Enable more tests for desktop android.
+#if !BUILDFLAG(IS_ANDROID)
 IN_PROC_BROWSER_TEST_P(RuntimeApiTest, ChromeRuntimeUninstallURL) {
   // Auto-confirm the uninstall dialog.
-  extensions::ScopedTestDialogAutoConfirm auto_confirm(
-      extensions::ScopedTestDialogAutoConfirm::ACCEPT);
+  ScopedTestDialogAutoConfirm auto_confirm(ScopedTestDialogAutoConfirm::ACCEPT);
   ExtensionTestMessageListener ready_listener("ready");
   ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("runtime")
                                 .AppendASCII("uninstall_url")
@@ -102,7 +125,7 @@ IN_PROC_BROWSER_TEST_P(RuntimeApiTest, GetPlatformInfo) {
 
 namespace {
 
-const char kUninstallUrl[] = "http://www.google.com/";
+const char kUninstallUrl[] = "https://www.google.com/";
 
 std::string GetActiveUrl(Browser* browser) {
   return browser->tab_strip_model()
@@ -502,13 +525,56 @@ IN_PROC_BROWSER_TEST_F(RuntimeAPIUpdateTest,
   }
 }
 
+// Tests that when the last active tab in the window belongs to the extension
+// with an uninstall URL, uninstalling the extension does not close the current
+// browser. Regression test for crbug.com/362452856
+IN_PROC_BROWSER_TEST_P(RuntimeApiTest,
+                       OpenUninstallUrlWhenExtensionPageIsTheOnlyActiveTab) {
+  ExtensionTestMessageListener ready_listener("ready");
+  // Load an extension that has set an uninstall url.
+  scoped_refptr<const Extension> extension =
+      LoadExtension(test_data_dir_.AppendASCII("runtime")
+                        .AppendASCII("uninstall_url")
+                        .AppendASCII("sets_uninstall_url"));
+  EXPECT_TRUE(ready_listener.WaitUntilSatisfied());
+  ASSERT_TRUE(extension.get());
+  extension_service()->AddExtension(extension.get());
+  ASSERT_TRUE(extension_service()->IsExtensionEnabled(extension->id()));
+  TabStripModel* tabs = browser()->tab_strip_model();
+
+  ASSERT_EQ(1, tabs->count());
+  ASSERT_EQ("about:blank", GetActiveUrl(browser()));
+
+  // Navigate to an extension page.
+  const GURL extension_page_url = extension->GetResourceURL("page.html");
+  content::RenderFrameHost* new_host =
+      ui_test_utils::NavigateToURL(browser(), extension_page_url);
+  ASSERT_TRUE(new_host);
+
+  EXPECT_EQ(1, tabs->count());
+  EXPECT_EQ(extension_page_url.spec(), GetActiveUrl(browser()));
+
+  // Uninstall the extension and expect its uninstall url to open in a new tab.
+  extension_service()->UninstallExtension(
+      extension->id(), UNINSTALL_REASON_USER_INITIATED, nullptr);
+  content::WaitForLoadStop(tabs->GetActiveWebContents());
+  EXPECT_EQ(2, tabs->count());
+
+  // The current tab should be pointing to the uninstall url of the extension.
+  EXPECT_EQ(kUninstallUrl, GetActiveUrl(browser()));
+
+  // The tab at index 0 should now be overwritten with the default NTP.
+  EXPECT_EQ(chrome::kChromeUINewTabURL,
+            tabs->GetWebContentsAt(0)->GetLastCommittedURL().spec());
+}
+
 // Tests that when a blocklisted extension with a set uninstall url is
 // uninstalled, its uninstall url does not open.
 IN_PROC_BROWSER_TEST_P(RuntimeApiTest,
                        DoNotOpenUninstallUrlForBlocklistedExtensions) {
   ExtensionTestMessageListener ready_listener("ready");
   // Load an extension that has set an uninstall url.
-  scoped_refptr<const extensions::Extension> extension =
+  scoped_refptr<const Extension> extension =
       LoadExtension(test_data_dir_.AppendASCII("runtime")
                         .AppendASCII("uninstall_url")
                         .AppendASCII("sets_uninstall_url"));
@@ -519,7 +585,7 @@ IN_PROC_BROWSER_TEST_P(RuntimeApiTest,
 
   // Uninstall the extension and expect its uninstall url to open.
   extension_service()->UninstallExtension(
-      extension->id(), extensions::UNINSTALL_REASON_USER_INITIATED, nullptr);
+      extension->id(), UNINSTALL_REASON_USER_INITIATED, nullptr);
   TabStripModel* tabs = browser()->tab_strip_model();
 
   EXPECT_EQ(2, tabs->count());
@@ -542,15 +608,15 @@ IN_PROC_BROWSER_TEST_P(RuntimeApiTest,
   ASSERT_TRUE(extension_service()->IsExtensionEnabled(extension->id()));
 
   // Blocklist extension.
-  extensions::blocklist_prefs::SetSafeBrowsingExtensionBlocklistState(
-      extension->id(), extensions::BitMapBlocklistState::BLOCKLISTED_MALWARE,
-      extensions::ExtensionPrefs::Get(profile()));
+  blocklist_prefs::SetSafeBrowsingExtensionBlocklistState(
+      extension->id(), BitMapBlocklistState::BLOCKLISTED_MALWARE,
+      ExtensionPrefs::Get(profile()));
 
   // Uninstalling a blocklisted extension should not open its uninstall url.
   TestExtensionRegistryObserver observer(ExtensionRegistry::Get(profile()),
                                          extension->id());
   extension_service()->UninstallExtension(
-      extension->id(), extensions::UNINSTALL_REASON_USER_INITIATED, nullptr);
+      extension->id(), UNINSTALL_REASON_USER_INITIATED, nullptr);
   observer.WaitForExtensionUninstalled();
 
   EXPECT_EQ(1, tabs->count());
@@ -621,8 +687,9 @@ IN_PROC_BROWSER_TEST_P(BackgroundPageOnlyRuntimeApiTest,
     ASSERT_EQ(new_tab_url.spec(), url->GetString());
   }
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
-class RuntimeGetContextsApiTest : public ExtensionApiTest {
+class RuntimeGetContextsApiTest : public ExtensionApiTestBase {
  public:
   RuntimeGetContextsApiTest() = default;
   RuntimeGetContextsApiTest(const RuntimeGetContextsApiTest&) = delete;
@@ -631,7 +698,7 @@ class RuntimeGetContextsApiTest : public ExtensionApiTest {
   ~RuntimeGetContextsApiTest() override = default;
 
   void SetUpOnMainThread() override {
-    ExtensionApiTest::SetUpOnMainThread();
+    ExtensionApiTestBase::SetUpOnMainThread();
 
     static constexpr char kManifest[] =
         R"({
@@ -642,6 +709,7 @@ class RuntimeGetContextsApiTest : public ExtensionApiTest {
              "side_panel": {
                "default_path": "side_panel.html"
              },
+             "devtools_page": "devtools.html",
              "action": {},
              "background": {
                "service_worker": "background.js"
@@ -661,13 +729,20 @@ class RuntimeGetContextsApiTest : public ExtensionApiTest {
                            </html>)");
     test_dir_.WriteFile(FILE_PATH_LITERAL("side_panel.js"),
                         "chrome.test.sendMessage('panel opened');");
+    test_dir_.WriteFile(FILE_PATH_LITERAL("devtools.html"),
+                        R"(<html>
+                             Hello, developer tools!
+                             <script src="devtools.js"></script>
+                           </html>)");
+    test_dir_.WriteFile(FILE_PATH_LITERAL("devtools.js"),
+                        "chrome.test.sendMessage('devtools page opened');");
     extension_ = LoadExtension(test_dir_.UnpackedPath());
     ASSERT_TRUE(extension_);
   }
 
   // Runs `chrome.runtime.getContexts()` and returns the result as a
   // base::Value.
-  base::Value GetContexts(base::StringPiece filter) {
+  base::Value GetContexts(std::string_view filter) {
     static constexpr char kScriptTemplate[] =
         R"((async () => {
              chrome.test.sendScriptResult(
@@ -683,7 +758,7 @@ class RuntimeGetContextsApiTest : public ExtensionApiTest {
   // of strongly-typed `ExtensionContext`s. Expects the getContexts() call to
   // return a valid value (i.e., not throw an error).
   std::vector<api::runtime::ExtensionContext> GetContextStructs(
-      base::StringPiece filter) {
+      std::string_view filter) {
     base::Value value = GetContexts(filter);
     return ContextValueToContextStructs(value);
   }
@@ -748,10 +823,11 @@ class RuntimeGetContextsApiTest : public ExtensionApiTest {
   TestExtensionDir test_dir_;
 };
 
+#if !BUILDFLAG(IS_ANDROID)
 // Tests retrieving the background service worker context using
 // `chrome.runtime.getContexts()`.
 
-// TODO(https://crbug.com/1429463): failed on "chromium/ci/Mac12 Tests"
+// TODO(crbug.com/40901108): failed on "chromium/ci/Mac12 Tests"
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_GetServiceWorkerContext DISABLED_GetServiceWorkerContext
 #else
@@ -920,6 +996,7 @@ IN_PROC_BROWSER_TEST_F(RuntimeGetContextsApiTest, GetTabContext) {
       expected_frame_url.c_str(), expected_origin.c_str());
   EXPECT_THAT(background_contexts, base::test::IsJson(expected));
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 // Tests retrieving offscreen documents with `runtime.getContexts()`.
 IN_PROC_BROWSER_TEST_F(RuntimeGetContextsApiTest, GetOffscreenDocumentContext) {
@@ -982,6 +1059,7 @@ IN_PROC_BROWSER_TEST_F(RuntimeGetContextsApiTest, GetOffscreenDocumentContext) {
   EXPECT_THAT(background_contexts, base::test::IsJson(expected));
 }
 
+#if !BUILDFLAG(IS_ANDROID)
 // Tests retrieving a side panel context from the `runtime.getContexts()` API.
 IN_PROC_BROWSER_TEST_F(RuntimeGetContextsApiTest, GetSidePanelContext) {
   // Set the side panel to open on toolbar action click. This makes it easier
@@ -1234,5 +1312,132 @@ IN_PROC_BROWSER_TEST_F(RuntimeGetContextsApiTest,
                                               regular_url)));
   }
 }
+
+// This is a manifest V2 test meant to ensure test coverage for
+// chrome.extension.getURL, which is deprecated and unavailable
+// in MV3.
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, GetExtensionURL) {
+  static constexpr char kManifest[] = R"(
+      {
+        "name": "chrome.extension.getURL",
+        "version": "1.0",
+        "background": {
+          "scripts": ["background.js"]
+        },
+        "manifest_version": 2
+      })";
+
+  static constexpr char kScript[] = R"(
+    chrome.test.assertEq(
+        chrome.extension.getURL('foo.html'),
+        chrome.runtime.getURL('foo.html'));
+    chrome.test.notifyPass();
+  )";
+
+  ResultCatcher catcher;
+  TestExtensionDir dir;
+  dir.WriteManifest(kManifest);
+  dir.WriteFile(FILE_PATH_LITERAL("background.js"), kScript);
+
+  const Extension* extension = LoadExtension(dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+  EXPECT_TRUE(catcher.GetNextResult());
+}
+
+// Tests retrieving contexts when developer tools are opened.
+class GetContextsWithDeveloperToolsOpened
+    : public RuntimeGetContextsApiTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  GetContextsWithDeveloperToolsOpened() = default;
+  ~GetContextsWithDeveloperToolsOpened() override = default;
+
+  GetContextsWithDeveloperToolsOpened(
+      const GetContextsWithDeveloperToolsOpened&) = delete;
+  GetContextsWithDeveloperToolsOpened& operator=(
+      const GetContextsWithDeveloperToolsOpened&) = delete;
+};
+
+// TODO(crbug.com/357845909): flaky on ChromeOS and Linux MSAN.
+#if defined(MEMORY_SANITIZER) && (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+#define MAYBE_ReturnsDevToolsContext DISABLED_ReturnsDevToolsContext
+#else
+#define MAYBE_ReturnsDevToolsContext ReturnsDevToolsContext
+#endif
+IN_PROC_BROWSER_TEST_P(GetContextsWithDeveloperToolsOpened,
+                       MAYBE_ReturnsDevToolsContext) {
+  const bool open_docked = GetParam();
+
+  // Open the developer tools and wait for the extension page to be loaded.
+  ExtensionTestMessageListener listener("devtools page opened");
+  content::WebContents* inspected_web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  DevToolsWindow* devtools_window =
+      DevToolsWindowTesting::OpenDevToolsWindowSync(inspected_web_contents,
+                                                    open_docked);
+  ASSERT_TRUE(listener.WaitUntilSatisfied());
+
+  // Assert the docked state of developer tools.
+  content::WebContents* devtools_web_contents =
+      DevToolsWindowTesting::Get(devtools_window)->main_web_contents();
+  bool is_docked = devtools_web_contents->GetTopLevelNativeWindow() ==
+                   browser()->window()->GetNativeWindow();
+  ASSERT_EQ(open_docked, is_docked);
+
+  // Extract the extension host from the devtools web contents.
+  GURL expected_frame_url = extension().GetResourceURL("devtools.html");
+  auto is_extension_frame =
+      [expected_frame_url](content::RenderFrameHost* rfh) {
+        return rfh->GetLastCommittedURL() == expected_frame_url;
+      };
+  content::RenderFrameHost* extension_host = content::FrameMatchingPredicate(
+      devtools_web_contents->GetPrimaryPage(),
+      base::BindLambdaForTesting(is_extension_frame));
+
+  // Setup the expected values for the context. Only one tab-based context
+  // should be returned by chrome.runtime.getContexts().
+  int expected_tab_id = -1;
+  int expected_window_id = ExtensionTabUtil::GetWindowIdOfTab(
+      is_docked ? inspected_web_contents : devtools_web_contents);
+  int expected_frame_id = -1;
+  std::string expected_context_id =
+      ExtensionApiFrameIdMap::GetContextId(extension_host).AsLowercaseString();
+  std::string expected_document_id =
+      ExtensionApiFrameIdMap::GetDocumentId(extension_host).ToString();
+  std::string expected_origin = extension().origin().Serialize();
+  static constexpr char kExpectedTemplate[] =
+      R"([{
+            "contextType": "DEVELOPER_TOOLS",
+            "contextId": "%s",
+            "tabId": %d,
+            "windowId": %d,
+            "frameId": %d,
+            "documentId": "%s",
+            "documentUrl": "%s",
+            "documentOrigin": "%s",
+            "incognito": false
+         }])";
+  std::string expected_contexts = base::StringPrintf(
+      kExpectedTemplate, expected_context_id.c_str(), expected_tab_id,
+      expected_window_id, expected_frame_id, expected_document_id.c_str(),
+      expected_frame_url.spec().c_str(), expected_origin.c_str());
+
+  // Verify the result of chrome.runtime.getContexts().
+  base::Value contexts =
+      GetContexts(R"({"contextTypes": ["DEVELOPER_TOOLS"]})");
+  EXPECT_THAT(contexts, base::test::IsJson(expected_contexts));
+}
+
+// Test for undocked developer tools.
+INSTANTIATE_TEST_SUITE_P(UndockedDevTools,
+                         GetContextsWithDeveloperToolsOpened,
+                         ::testing::Values(false) /* open_docked */);
+
+// Test for docked developer tools. This is also a regression test for
+// crbug.com/355625882.
+INSTANTIATE_TEST_SUITE_P(DockedDevTools,
+                         GetContextsWithDeveloperToolsOpened,
+                         ::testing::Values(true) /* open_docked */);
+#endif  //! BUILDFLAG(IS_ANDROID)
 
 }  // namespace extensions

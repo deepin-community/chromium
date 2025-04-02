@@ -97,7 +97,6 @@ std::string GetHttpMethodString(TrustedVaultRequest::HttpMethod http_method) {
       return "PATCH";
   }
   NOTREACHED();
-  return std::string();
 }
 
 TrustedVaultRequest::HttpStatus AccessTokenFetchingErrorToRequestHttpStatus(
@@ -112,12 +111,12 @@ TrustedVaultRequest::HttpStatus AccessTokenFetchingErrorToRequestHttpStatus(
           kPrimaryAccountChangeAccessTokenFetchError;
   }
   NOTREACHED();
-  return TrustedVaultRequest::HttpStatus::kTransientAccessTokenFetchError;
 }
 
 }  // namespace
 
 TrustedVaultRequest::TrustedVaultRequest(
+    const SecurityDomainId& security_domain_id,
     const CoreAccountId& account_id,
     HttpMethod http_method,
     const GURL& request_url,
@@ -126,7 +125,8 @@ TrustedVaultRequest::TrustedVaultRequest(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     std::unique_ptr<TrustedVaultAccessTokenFetcher> access_token_fetcher,
     RecordFetchStatusCallback record_fetch_status_callback)
-    : account_id_(account_id),
+    : security_domain_id_(security_domain_id),
+      account_id_(account_id),
       http_method_(http_method),
       request_url_(request_url),
       serialized_request_proto_(serialized_request_proto),
@@ -155,8 +155,10 @@ void TrustedVaultRequest::FetchAccessTokenAndSendRequest(
 void TrustedVaultRequest::OnAccessTokenFetched(
     TrustedVaultAccessTokenFetcher::AccessTokenInfoOrError
         access_token_info_or_error) {
-  base::UmaHistogramBoolean("Sync.TrustedVaultAccessTokenFetchSuccess",
-                            access_token_info_or_error.has_value());
+  base::UmaHistogramBoolean(
+      "TrustedVault.AccessTokenFetchSuccess." +
+          GetSecurityDomainNameForUma(security_domain_id_),
+      access_token_info_or_error.has_value());
 
   if (!access_token_info_or_error.has_value()) {
     backoff_entry_.InformOfRequest(/*succeeded=*/false);

@@ -47,7 +47,6 @@ std::string TextDumpEventToString(mojom::TextDumpEvent event) {
       return "FinishedLoad";
   }
   NOTREACHED();
-  return std::string();
 }
 
 // PageTextChunkConsumer reads in chunks of page text and passes it all to

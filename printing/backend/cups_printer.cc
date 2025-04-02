@@ -11,14 +11,17 @@
 #include <string_view>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
 #include "printing/backend/cups_connection.h"
 #include "printing/backend/cups_ipp_constants.h"
 #include "printing/backend/cups_ipp_helper.h"
+#include "printing/backend/cups_weak_functions.h"
 #include "printing/backend/print_backend.h"
 #include "printing/backend/print_backend_consts.h"
+#include "printing/backend/print_backend_utils.h"
 #include "printing/print_job_constants.h"
 #include "url/gurl.h"
 
@@ -41,7 +44,7 @@ class CupsPrinterImpl : public CupsPrinter {
     // attribute, but make sure Chromium doesn't crash if one doesn't for
     // whatever reason. The printer in question won't actually work, but
     // that's a better outcome than crashing here.
-    // TODO(crbug.com/1418564): filter such printers out before reaching this
+    // TODO(crbug.com/40894807): filter such printers out before reaching this
     // point
     if (printer_uri) {
       printer_uri_ = printer_uri;
@@ -150,16 +153,9 @@ class CupsPrinterImpl : public CupsPrinter {
     const std::string info = GetInfo();
     const std::string make_and_model = GetMakeAndModel();
 
-#if BUILDFLAG(IS_MAC)
-    // On Mac, "printer-info" option specifies the human-readable printer name,
-    // while "printer-make-and-model" specifies the printer description.
-    printer_info->display_name = info;
-    printer_info->printer_description = make_and_model;
-#else
-    // On other platforms, "printer-info" specifies the printer description.
-    printer_info->display_name = printer->name;
-    printer_info->printer_description = info;
-#endif  // BUILDFLAG(IS_MAC)
+    printer_info->display_name = GetDisplayName(printer->name, info);
+    printer_info->printer_description =
+        GetPrinterDescription(make_and_model, info);
 
     const char* state = cupsGetOption(kCUPSOptPrinterState,
                                       printer->num_options, printer->options);
@@ -169,9 +165,13 @@ class CupsPrinterImpl : public CupsPrinter {
     printer_info->options[kDriverInfoTagName] = make_and_model;
 
     // Store printer options.
-    for (int opt_index = 0; opt_index < printer->num_options; ++opt_index) {
-      printer_info->options[printer->options[opt_index].name] =
-          printer->options[opt_index].value;
+    if (printer->num_options > 0) {
+      // SAFETY: Required from CUPS.
+      auto options = UNSAFE_BUFFERS(base::span<const cups_option_t>(
+          printer->options, static_cast<size_t>(printer->num_options)));
+      for (const auto& option : options) {
+        printer_info->options[option.name] = option.value;
+      }
     }
 
     return true;

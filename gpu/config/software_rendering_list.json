@@ -322,16 +322,12 @@
     },
     {
       "id": 68,
-      "description": "VMware Fusion 4 has corrupt rendering on Windows",
-      "cr_bugs": [169470],
+      "description": "Do not use GPU accelerated rendering with VMware on Windows",
+      "cr_bugs": [169470, 879098, 325159675],
       "os": {
         "type": "win"
       },
       "vendor_id": "0x15ad",
-      "driver_version": {
-        "op": "<=",
-        "value": "7.14.1.1134"
-      },
       "features": [
         "all"
       ]
@@ -580,7 +576,13 @@
           "os": {
             "type": "android"
           },
-          "gl_renderer": "ANGLE.*"
+          "gl_type": "angle_gles"
+        },
+        {
+          "os": {
+            "type": "android"
+          },
+          "gl_type": "angle_vulkan"
         }
       ],
       "features": [
@@ -1024,7 +1026,7 @@
         { "gl_vendor": "freedreno" },
         { "gl_renderer": "Mali-T8.*",
           "subpixel_font_rendering": "unsupported"},
-        { "gl_renderer": "Mali-G.*",
+        { "gl_renderer": ".*Mali-G.*",
           "subpixel_font_rendering": "unsupported"},
         { "gl_renderer": "PowerVR.*" },
         { "vendor_id": "0x1002" }
@@ -1137,7 +1139,8 @@
         "all",
         {"exceptions": [
           "accelerated_gl",
-          "accelerated_webgl"
+          "accelerated_webgl",
+          "skia_graphite"
         ]}
       ]
     },
@@ -1147,23 +1150,6 @@
       "test_group": 2,
       "features": [
         "accelerated_webgl"
-      ]
-    },
-    {
-      "id": 157,
-      "description": "VMware can crash with older drivers and WebGL content",
-      "cr_bugs": [879098],
-      "os": {
-        "type": "win"
-      },
-      "vendor_id": "0x15ad",
-      "driver_version": {
-        "op": "<=",
-        "value": "7.14.1.1210"
-      },
-      "features": [
-        "accelerated_webgl",
-        "accelerated_webgl2"
       ]
     },
     {
@@ -1433,6 +1419,31 @@
         "value": "145"
       },
       "gl_renderer": ".*Adreno \\(TM\\) 4.*",
+      "features": [
+        "accelerated_2d_canvas"
+      ]
+    },
+    {
+      "id": 181,
+      "cr_bugs": [329702368],
+      "description": "Corrupted browser/webpage rendering on Win10/Intel HD Graphics 4400",
+      "os": {
+        "type": "win"
+      },
+      "vendor_id": "0x8086",
+      "device_id": ["0x0a16"],
+      "features": [
+        "skia_graphite"
+      ]
+    },
+    {
+      "id": 183,
+      "cr_bugs": [1227033],
+      "description": "Don't use the OOPR Canvas feature on Macs with NVIDIA GPUs",
+      "os": {
+        "type" : "macosx"
+      },
+      "vendor_id": "0x10de",
       "features": [
         "accelerated_2d_canvas"
       ]

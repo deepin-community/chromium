@@ -97,7 +97,13 @@ void DesktopNativeCursorManager::SetMouseEventsEnabled(
 
 void DesktopNativeCursorManager::InitCursorSizeObserver(
     wm::NativeCursorManagerDelegate* delegate) {
-  NOTREACHED_NORETURN();
+  NOTREACHED();
+}
+
+void DesktopNativeCursorManager::SetCursorColor(
+    SkColor color,
+    wm::NativeCursorManagerDelegate* delegate) {
+  NOTIMPLEMENTED();
 }
 
 }  // namespace views

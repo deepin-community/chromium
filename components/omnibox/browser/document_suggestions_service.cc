@@ -16,10 +16,12 @@
 #include "base/values.h"
 #include "components/omnibox/browser/document_provider.h"
 #include "components/omnibox/common/omnibox_features.h"
+#include "components/signin/public/identity_manager/account_capabilities.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/primary_account_access_token_fetcher.h"
 #include "components/signin/public/identity_manager/scope_set.h"
 #include "components/variations/net/variations_http_headers.h"
+#include "google_apis/gaia/gaia_constants.h"
 #include "net/base/load_flags.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -76,11 +78,20 @@ DocumentSuggestionsService::DocumentSuggestionsService(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
     : url_loader_factory_(url_loader_factory),
       identity_manager_(identity_manager),
+      account_is_subject_to_enterprise_policies_(
+          IsAccountSubjectToEnterprisePolicies()),
       token_fetcher_(nullptr) {
-  DCHECK(url_loader_factory);
+  if (identity_manager_) {
+    identity_manager_observation_.Observe(identity_manager_);
+  }
 }
 
-DocumentSuggestionsService::~DocumentSuggestionsService() {}
+DocumentSuggestionsService::~DocumentSuggestionsService() = default;
+
+bool DocumentSuggestionsService::HasPrimaryAccount() {
+  return identity_manager_ &&
+         identity_manager_->HasPrimaryAccount(signin::ConsentLevel::kSignin);
+}
 
 void DocumentSuggestionsService::CreateDocumentSuggestionsRequest(
     const std::u16string& query,
@@ -138,9 +149,8 @@ void DocumentSuggestionsService::CreateDocumentSuggestionsRequest(
   std::move(creation_callback).Run(request.get());
 
   // Create and fetch an OAuth2 token.
-  std::string scope = "https://www.googleapis.com/auth/cloud_search.query";
   signin::ScopeSet scopes;
-  scopes.insert(scope);
+  scopes.insert(GaiaConstants::kCloudSearchQueryOAuth2Scope);
   token_fetcher_ = std::make_unique<signin::PrimaryAccountAccessTokenFetcher>(
       "document_suggestions_service", identity_manager_, scopes,
       base::BindOnce(&DocumentSuggestionsService::AccessTokenAvailable,
@@ -148,12 +158,24 @@ void DocumentSuggestionsService::CreateDocumentSuggestionsRequest(
                      std::move(request_body), traffic_annotation,
                      std::move(start_callback), std::move(completion_callback)),
       signin::PrimaryAccountAccessTokenFetcher::Mode::kWaitUntilAvailable,
-      signin::ConsentLevel::kSync);
+      signin::ConsentLevel::kSignin);
 }
 
 void DocumentSuggestionsService::StopCreatingDocumentSuggestionsRequest() {
   std::unique_ptr<signin::PrimaryAccountAccessTokenFetcher>
       token_fetcher_deleter(std::move(token_fetcher_));
+}
+
+signin::Tribool
+DocumentSuggestionsService::IsAccountSubjectToEnterprisePolicies() {
+  if (!HasPrimaryAccount()) {
+    return signin::Tribool::kFalse;
+  }
+  const auto& account_id =
+      identity_manager_->GetPrimaryAccountId(signin::ConsentLevel::kSignin);
+  const auto& account_info =
+      identity_manager_->FindExtendedAccountInfoByAccountId(account_id);
+  return account_info.capabilities.is_subject_to_enterprise_policies();
 }
 
 void DocumentSuggestionsService::AccessTokenAvailable(
@@ -187,6 +209,11 @@ void DocumentSuggestionsService::StartDownloadAndTransferLoader(
     net::NetworkTrafficAnnotationTag traffic_annotation,
     StartCallback start_callback,
     CompletionCallback completion_callback) {
+  // Loader factory may be null in tests.
+  if (!url_loader_factory_) {
+    return;
+  }
+
   std::unique_ptr<network::SimpleURLLoader> loader =
       network::SimpleURLLoader::Create(std::move(request), traffic_annotation);
   if (!request_body.empty()) {
@@ -197,4 +224,22 @@ void DocumentSuggestionsService::StartDownloadAndTransferLoader(
       base::BindOnce(std::move(completion_callback), loader.get()));
 
   std::move(start_callback).Run(std::move(loader), request_body);
+}
+
+void DocumentSuggestionsService::OnPrimaryAccountChanged(
+    const signin::PrimaryAccountChangeEvent& event_details) {
+  account_is_subject_to_enterprise_policies_ =
+      IsAccountSubjectToEnterprisePolicies();
+}
+
+void DocumentSuggestionsService::OnExtendedAccountInfoUpdated(
+    const AccountInfo& account_info) {
+  account_is_subject_to_enterprise_policies_ =
+      account_info.capabilities.is_subject_to_enterprise_policies();
+}
+
+void DocumentSuggestionsService::OnIdentityManagerShutdown(
+    signin::IdentityManager* identity_manager) {
+  identity_manager_observation_.Reset();
+  identity_manager_ = nullptr;
 }

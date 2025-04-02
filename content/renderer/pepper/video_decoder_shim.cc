@@ -12,8 +12,10 @@
 #include <utility>
 
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/containers/contains.h"
 #include "base/containers/queue.h"
+#include "base/containers/span.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -53,9 +55,7 @@ constexpr gfx::Size kDefaultSize(128, 128);
 
 bool IsSoftwareCodecSupported(media::VideoCodec codec) {
 #if BUILDFLAG(ENABLE_LIBVPX)
-  if (codec == media::VideoCodec::kVP9 ||
-      (codec == media::VideoCodec::kVP8 &&
-       !base::FeatureList::IsEnabled(media::kFFmpegDecodeOpaqueVP8))) {
+  if (codec == media::VideoCodec::kVP9 || codec == media::VideoCodec::kVP8) {
     return true;
   }
 #endif
@@ -189,8 +189,7 @@ void VideoDecoderShim::DecoderImpl::InitializeSoftwareDecoder(
 #if BUILDFLAG(ENABLE_LIBVPX) || BUILDFLAG(ENABLE_FFMPEG_VIDEO_DECODERS)
 #if BUILDFLAG(ENABLE_LIBVPX)
   if (config.codec() == media::VideoCodec::kVP9 ||
-      (config.codec() == media::VideoCodec::kVP8 &&
-       !base::FeatureList::IsEnabled(media::kFFmpegDecodeOpaqueVP8))) {
+      config.codec() == media::VideoCodec::kVP8) {
     decoder_ = std::make_unique<media::VpxVideoDecoder>();
   } else
 #endif  // BUILDFLAG(ENABLE_LIBVPX)
@@ -386,7 +385,6 @@ void VideoDecoderShim::DecoderImpl::OnOutputComplete(
     decode_id = it->second;
   } else {
     NOTREACHED();
-    return;
   }
 
   auto pending_frame =
@@ -531,7 +529,10 @@ void VideoDecoderShim::Decode(media::BitstreamBuffer bitstream_buffer) {
       base::BindOnce(
           &VideoDecoderShim::DecoderImpl::Decode,
           base::Unretained(decoder_impl_.get()), bitstream_buffer.id(),
-          media::DecoderBuffer::CopyFrom(buffer, bitstream_buffer.size())));
+          media::DecoderBuffer::CopyFrom(
+              // SAFETY: `buffer` is the address of `bitstream_buffer`'s shared
+              // memory and is assumed to have the same size.
+              UNSAFE_BUFFERS(base::span(buffer, bitstream_buffer.size())))));
   num_pending_decodes_++;
 }
 
@@ -676,17 +677,16 @@ void VideoDecoderShim::SendSharedImages() {
     // SharedImageInterface happens during Creation/Destruction, so we don't
     // need SyncToken here and ignore one returned from
     // CopyVideoFrameToSharedImage.
-    auto destination = gpu::MailboxHolder(*it, gpu::SyncToken(), GL_TEXTURE_2D);
+    auto mailbox = *it;
     std::ignore = video_renderer_->CopyVideoFrameToSharedImage(
-        shared_main_thread_context_provider_.get(), frame->video_frame,
-        destination, /*use_visible_rect=*/false);
-    available_shared_images_.erase(it);
+        shared_main_thread_context_provider_.get(), frame->video_frame, mailbox,
+        gpu::SyncToken(), /*use_visible_rect=*/false);
 
     DCHECK(frame->decode_id.has_value());
     host_->SharedImageReady(
-        base::checked_cast<int32_t>(frame->decode_id.value()),
-        destination.mailbox, frame->video_frame->coded_size(),
-        frame->video_frame->visible_rect());
+        base::checked_cast<int32_t>(frame->decode_id.value()), mailbox,
+        frame->video_frame->coded_size(), frame->video_frame->visible_rect());
+    available_shared_images_.erase(it);
     pending_frames_.pop();
   }
 

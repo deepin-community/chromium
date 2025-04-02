@@ -5,6 +5,13 @@ FT_GIT_REF="origin/master"
 FT_GIT_DIR="third_party/externals/freetype"
 FT_BUILD_DIR="$(dirname -- "$0")"
 
+notshallow() {
+  STEP="check ${FT_GIT_DIR} not shallow"
+  if $(git -C "${FT_GIT_DIR}" rev-parse --is-shallow-repository); then
+    return 1
+  fi
+}
+
 previousrev() {
   STEP="original revision" &&
   FT_PREVIOUS_REV=$(git grep "${FT_GIT_REPO}" HEAD~1 -- DEPS | sed 's!.*'${FT_GIT_REPO}'@\([[:xdigit:]]\{40\}\).*!\1!')
@@ -27,6 +34,12 @@ rollbazel() {
   STEP="roll-bazel" &&
   sed -i'' -e "s!commit = \"${FT_PREVIOUS_REV}\",!commit = \"${FT_NEXT_REV}\",!" bazel/deps.bzl &&
   git add bazel/deps.bzl
+}
+
+rolldepsgen() {
+  STEP="roll-depsgen" &&
+  sed -i'' -e "s!Version: \"${FT_PREVIOUS_REV}\",!Version: \"${FT_NEXT_REV}\",!" infra/bots/deps/deps_gen.go &&
+  git add infra/bots/deps/deps_gen.go
 }
 
 mergeinclude() {
@@ -52,10 +65,12 @@ ${FT_GIT_REPO}/+log/${FT_PREVIOUS_REV}..${FT_NEXT_REV}
 Disable: treat-URL-as-trailer"
 }
 
+notshallow &&
 previousrev &&
 nextrev &&
 rolldeps "$@" &&
 rollbazel &&
+rolldepsgen &&
 mergeinclude freetype-android freetype/config/ftoption.h &&
 mergeinclude freetype-android freetype/config/ftmodule.h &&
 mergeinclude freetype-no-type1 freetype/config/ftoption.h &&

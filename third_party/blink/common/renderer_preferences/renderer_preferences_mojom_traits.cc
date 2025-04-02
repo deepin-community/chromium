@@ -28,6 +28,11 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
     return false;
   out->use_subpixel_positioning = data.use_subpixel_positioning();
 
+#if BUILDFLAG(IS_WIN)
+  out->text_contrast = data.text_contrast();
+  out->text_gamma = data.text_gamma();
+#endif  // BUILDFLAG(IS_WIN)
+
   out->focus_ring_color = data.focus_ring_color();
   out->active_selection_bg_color = data.active_selection_bg_color();
   out->active_selection_fg_color = data.active_selection_fg_color();
@@ -41,6 +46,11 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
     return false;
 
   out->use_custom_colors = data.use_custom_colors();
+
+#if BUILDFLAG(IS_CHROMEOS)
+  out->use_overlay_scrollbar = data.use_overlay_scrollbar();
+#endif
+
   out->enable_referrers = data.enable_referrers();
   out->allow_cross_origin_auth_prompt = data.allow_cross_origin_auth_prompt();
   out->enable_do_not_track = data.enable_do_not_track();
@@ -48,6 +58,10 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
 
   if (!data.ReadWebrtcIpHandlingPolicy(&out->webrtc_ip_handling_policy))
     return false;
+
+  if (!data.ReadWebrtcIpHandlingUrls(&out->webrtc_ip_handling_urls)) {
+    return false;
+  }
 
   out->webrtc_udp_min_port = data.webrtc_udp_min_port();
   out->webrtc_udp_max_port = data.webrtc_udp_max_port();
@@ -104,6 +118,10 @@ bool StructTraits<blink::mojom::RendererPreferencesDataView,
 #endif
   out->plugin_fullscreen_allowed = data.plugin_fullscreen_allowed();
   out->caret_browsing_enabled = data.caret_browsing_enabled();
+
+#if BUILDFLAG(IS_ANDROID)
+  out->uses_platform_autofill = data.uses_platform_autofill();
+#endif  // BUILDFLAG(IS_ANDROID)
 
   if (!data.ReadExplicitlyAllowedNetworkPorts(
           &out->explicitly_allowed_network_ports)) {

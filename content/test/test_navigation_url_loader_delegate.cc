@@ -80,7 +80,6 @@ std::optional<NavigationEarlyHintsManagerParams>
 TestNavigationURLLoaderDelegate::CreateNavigationEarlyHintsManagerParams(
     const network::mojom::EarlyHints& early_hints) {
   NOTREACHED();
-  return std::nullopt;
 }
 
 }  // namespace content

@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/core/layout/length_utils.h"
 #include "third_party/blink/renderer/core/style/computed_style.h"
 #include "third_party/blink/renderer/core/testing/core_unit_test_helper.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 namespace {
@@ -105,35 +106,20 @@ class AbsoluteUtilsTest : public RenderingTest {
     GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kInStyleRecalc);
     GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kStyleClean);
     GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kInPerformLayout);
-    WritingModeConverter container_converter(
-        container_writing_direction,
-        ToPhysicalSize(space.AvailableSize(),
-                       container_writing_direction.GetWritingMode()));
-    LogicalAnchorQuery anchor_query;
-    AnchorEvaluatorImpl anchor_evaluator(
-        *node.GetLayoutBox(), anchor_query,
-        /* default_anchor_specifier */ nullptr,
-        /* implicit_anchor */ nullptr, container_converter,
-        /* self_writing_direction */
-        {WritingMode::kHorizontalTb, TextDirection::kLtr},
-        /* offset_to_padding_box */
-        PhysicalOffset(),
-        /* available_size */
-        PhysicalSize());
     WritingDirectionMode self_writing_direction =
         node.Style().GetWritingDirection();
-    const LogicalOofInsets insets = ComputeOutOfFlowInsets(
-        node.Style(), space.AvailableSize(), LogicalAlignment(),
-        container_writing_direction, self_writing_direction, &anchor_evaluator);
+    const LogicalOofInsets insets =
+        ComputeOutOfFlowInsets(node.Style(), space.AvailableSize(),
+                               LogicalAlignment(), self_writing_direction);
     const InsetModifiedContainingBlock imcb =
         ComputeInsetModifiedContainingBlock(
             node, space.AvailableSize(), LogicalAlignment(), insets,
-            static_position, LogicalAnchorCenterPosition(),
-            container_writing_direction, node.Style().GetWritingDirection());
-    ComputeOofInlineDimensions(node, node.Style(), space, imcb,
-                               LogicalAlignment(), border_padding, std::nullopt,
-                               container_writing_direction,
-                               /* anchor_evaluator */ nullptr, dimensions);
+            static_position, container_writing_direction,
+            node.Style().GetWritingDirection());
+    ComputeOofInlineDimensions(
+        node, node.Style(), space, imcb, LogicalAnchorCenterPosition(),
+        LogicalAlignment(), border_padding, std::nullopt, BoxStrut(),
+        container_writing_direction, dimensions);
     GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kAfterPerformLayout);
     GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kLayoutClean);
   }
@@ -148,35 +134,20 @@ class AbsoluteUtilsTest : public RenderingTest {
     GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kInStyleRecalc);
     GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kStyleClean);
     GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kInPerformLayout);
-    WritingModeConverter container_converter(
-        container_writing_direction,
-        ToPhysicalSize(space.AvailableSize(),
-                       container_writing_direction.GetWritingMode()));
-    LogicalAnchorQuery anchor_query;
-    AnchorEvaluatorImpl anchor_evaluator(
-        *node.GetLayoutBox(), anchor_query,
-        /* default_anchor_specifier */ nullptr,
-        /* implicit_anchor */ nullptr, container_converter,
-        /* self_writing_direction */
-        {WritingMode::kHorizontalTb, TextDirection::kLtr},
-        /* offset_to_padding_box */
-        PhysicalOffset(),
-        /* available_size */
-        PhysicalSize());
     WritingDirectionMode self_writing_direction =
         node.Style().GetWritingDirection();
-    const LogicalOofInsets insets = ComputeOutOfFlowInsets(
-        node.Style(), space.AvailableSize(), LogicalAlignment(),
-        container_writing_direction, self_writing_direction, &anchor_evaluator);
+    const LogicalOofInsets insets =
+        ComputeOutOfFlowInsets(node.Style(), space.AvailableSize(),
+                               LogicalAlignment(), self_writing_direction);
     const InsetModifiedContainingBlock imcb =
         ComputeInsetModifiedContainingBlock(
             node, space.AvailableSize(), LogicalAlignment(), insets,
-            static_position, LogicalAnchorCenterPosition(),
-            container_writing_direction, node.Style().GetWritingDirection());
+            static_position, container_writing_direction,
+            node.Style().GetWritingDirection());
     ComputeOofBlockDimensions(node, node.Style(), space, imcb,
-                              LogicalAlignment(), border_padding, std::nullopt,
-                              container_writing_direction,
-                              /* anchor_evaluator */ nullptr, dimensions);
+                              LogicalAnchorCenterPosition(), LogicalAlignment(),
+                              border_padding, std::nullopt, BoxStrut(),
+                              container_writing_direction, dimensions);
     GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kAfterPerformLayout);
     GetDocument().Lifecycle().AdvanceTo(DocumentLifecycle::kLayoutClean);
   }

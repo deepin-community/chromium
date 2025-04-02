@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/350788890): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #ifndef URL_URL_PARSE_INTERNAL_H_
 #define URL_URL_PARSE_INTERNAL_H_
 
@@ -54,14 +59,44 @@ inline void TrimURL(const CHAR* spec, int* begin, int* len,
   }
 }
 
-// Counts the number of consecutive slashes starting at the given offset
-// in the given string of the given length.
-template<typename CHAR>
-inline int CountConsecutiveSlashes(const CHAR *str,
-                                   int begin_offset, int str_len) {
+// Counts the number of consecutive slashes or backslashes starting at the given
+// offset in the given string of the given length. A slash and backslash can be
+// mixed.
+//
+// TODO(crbug.com/40063064): Rename this function to
+// `CountConsecutiveSlashesOrBackslashes`.
+template <typename CHAR>
+inline int CountConsecutiveSlashes(const CHAR* str,
+                                   int begin_offset,
+                                   int str_len) {
   int count = 0;
   while (begin_offset + count < str_len &&
          IsSlashOrBackslash(str[begin_offset + count])) {
+    ++count;
+  }
+  return count;
+}
+
+// Returns true if char is a slash.
+inline bool IsSlash(char16_t ch) {
+  return ch == '/';
+}
+inline bool IsSlash(char ch) {
+  return IsSlash(static_cast<char16_t>(ch));
+}
+
+// Counts the number of consecutive slashes starting at the given offset
+// in the given string of the given length.
+//
+// TODO(crbug.com/40063064): Rename this function to
+// `CountConsecutiveSlashes` after the current `CountConsecutiveSlashes` is
+// renamed to CountConsecutiveSlashesOrBackslashes`.
+template <typename CHAR>
+inline int CountConsecutiveSlashesButNotCountBackslashes(const CHAR* str,
+                                                         int begin_offset,
+                                                         int str_len) {
+  int count = 0;
+  while (begin_offset + count < str_len && IsSlash(str[begin_offset + count])) {
     ++count;
   }
   return count;
@@ -88,14 +123,8 @@ void ParsePathInternal(const char16_t* spec,
 // Internal functions in url_parse.cc that parse non-special URLs, which are
 // similar to `ParseNonSpecialURL` functions in url_parse.h, but with
 // `trim_path_end` parameter that controls whether to trim path end or not.
-void ParseNonSpecialURLInternal(const char* url,
-                                int url_len,
-                                bool trim_path_end,
-                                Parsed* parsed);
-void ParseNonSpecialURLInternal(const char16_t* url,
-                                int url_len,
-                                bool trim_path_end,
-                                Parsed* parsed);
+Parsed ParseNonSpecialURLInternal(std::string_view url, bool trim_path_end);
+Parsed ParseNonSpecialURLInternal(std::u16string_view url, bool trim_path_end);
 
 // Given a spec and a pointer to the character after the colon following the
 // special scheme, this parses it and fills in the structure, Every item in the
@@ -108,6 +137,18 @@ void ParseAfterSpecialScheme(const char16_t* spec,
                              int spec_len,
                              int after_scheme,
                              Parsed* parsed);
+
+// Given a spec and a pointer to the character after the colon following the
+// non-special scheme, this parses it and fills in the structure, Every item in
+// the parsed structure is filled EXCEPT for the scheme, which is untouched.
+void ParseAfterNonSpecialScheme(const char* spec,
+                                int spec_len,
+                                int after_scheme,
+                                Parsed* parsed);
+void ParseAfterNonSpecialScheme(const char16_t* spec,
+                                int spec_len,
+                                int after_scheme,
+                                Parsed* parsed);
 
 }  // namespace url
 

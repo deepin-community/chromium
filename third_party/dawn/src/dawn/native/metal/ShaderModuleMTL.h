@@ -53,6 +53,7 @@ class ShaderModule final : public ShaderModuleBase {
     static ResultOrError<Ref<ShaderModule>> Create(
         Device* device,
         const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+        const std::vector<tint::wgsl::Extension>& internalExtensions,
         ShaderModuleParseResult* parseResult,
         OwnedCompilationMessages* compilationMessages);
 
@@ -63,17 +64,17 @@ class ShaderModule final : public ShaderModuleBase {
         MTLSize localWorkgroupSize;
     };
 
-    MaybeError CreateFunction(
-        SingleShaderStage stage,
-        const ProgrammableStage& programmableStage,
-        const PipelineLayout* layout,
-        MetalFunctionData* out,
-        uint32_t sampleMask = 0xFFFFFFFF,
-        const RenderPipeline* renderPipeline = nullptr,
-        std::optional<uint32_t> maxSubgroupSizeForFullSubgroups = std::nullopt);
+    MaybeError CreateFunction(SingleShaderStage stage,
+                              const ProgrammableStage& programmableStage,
+                              const PipelineLayout* layout,
+                              MetalFunctionData* out,
+                              uint32_t sampleMask = 0xFFFFFFFF,
+                              const RenderPipeline* renderPipeline = nullptr);
 
   private:
-    ShaderModule(Device* device, const UnpackedPtr<ShaderModuleDescriptor>& descriptor);
+    ShaderModule(Device* device,
+                 const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+                 std::vector<tint::wgsl::Extension> internalExtensions);
     ~ShaderModule() override;
     MaybeError Initialize(ShaderModuleParseResult* parseResult,
                           OwnedCompilationMessages* compilationMessages);

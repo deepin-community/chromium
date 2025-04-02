@@ -79,7 +79,6 @@ file_manager_private::SyncStatus ConvertSyncStatus(drivefs::SyncStatus status) {
       return file_manager_private::SyncStatus::kError;
     default:
       NOTREACHED();
-      return file_manager_private::SyncStatus::kNotFound;
   }
 }
 
@@ -105,7 +104,7 @@ void DriveFsEventRouter::OnItemProgress(
     status = drivefs::SyncStatus::kInProgress;
   }
 
-  std::vector<const drivefs::SyncState> filtered_states;
+  std::vector<drivefs::SyncState> filtered_states;
 
   filtered_states.emplace_back(
       drivefs::SyncState{status, static_cast<float>(event.progress) / 100.0f,

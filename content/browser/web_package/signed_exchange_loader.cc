@@ -5,6 +5,7 @@
 #include "content/browser/web_package/signed_exchange_loader.h"
 
 #include <memory>
+#include <optional>
 
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -25,8 +26,8 @@
 #include "net/url_request/redirect_util.h"
 #include "services/network/public/cpp/constants.h"
 #include "services/network/public/cpp/data_pipe_to_source_stream.h"
-#include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
+#include "services/network/public/cpp/loading_params.h"
 #include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/source_stream_to_data_pipe.h"
@@ -35,6 +36,7 @@
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "third_party/blink/public/common/web_package/web_package_request_matcher.h"
+#include "url/origin.h"
 
 namespace content {
 
@@ -48,8 +50,9 @@ SignedExchangeHandlerFactory* g_signed_exchange_factory_for_testing_ = nullptr;
 net::IsolationInfo CreateIsolationInfoForCertFetch(
     const network::ResourceRequest& outer_request) {
   if (!outer_request.trusted_params ||
-      outer_request.trusted_params->isolation_info.IsEmpty())
+      outer_request.trusted_params->isolation_info.IsEmpty()) {
     return net::IsolationInfo();
+  }
   return net::IsolationInfo::Create(
       net::IsolationInfo::RequestType::kOther,
       *outer_request.trusted_params->isolation_info.top_frame_origin(),
@@ -71,8 +74,7 @@ SignedExchangeLoader::SignedExchangeLoader(
     std::unique_ptr<SignedExchangeReporter> reporter,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     URLLoaderThrottlesGetter url_loader_throttles_getter,
-    const net::NetworkAnonymizationKey& network_anonymization_key,
-    int frame_tree_node_id,
+    FrameTreeNodeId frame_tree_node_id,
     const std::string& accept_langs,
     bool keep_entry_for_prefetch_cache)
     : outer_request_(outer_request),
@@ -88,6 +90,10 @@ SignedExchangeLoader::SignedExchangeLoader(
     cache_entry_ = std::make_unique<PrefetchedSignedExchangeCacheEntry>();
     cache_entry_->SetOuterUrl(outer_request_.url);
     cache_entry_->SetOuterResponse(outer_response_head_->Clone());
+  } else {
+    // `outer_request` corresponds to a navigation, so we expect the
+    // TrustedParams and IsolationInfo to be set.
+    CHECK(outer_request.trusted_params.has_value());
   }
 
   url_loader_.Bind(std::move(endpoints->url_loader));
@@ -95,7 +101,8 @@ SignedExchangeLoader::SignedExchangeLoader(
   auto cert_fetcher_factory = SignedExchangeCertFetcherFactory::Create(
       std::move(url_loader_factory), std::move(url_loader_throttles_getter),
       outer_request_.throttling_profile_id,
-      CreateIsolationInfoForCertFetch(outer_request_));
+      CreateIsolationInfoForCertFetch(outer_request_),
+      outer_request_.request_initiator);
 
   if (g_signed_exchange_factory_for_testing_) {
     signed_exchange_handler_ = g_signed_exchange_factory_for_testing_->Create(
@@ -108,21 +115,21 @@ SignedExchangeLoader::SignedExchangeLoader(
   } else {
     // Can't use HttpResponseHeaders::GetMimeType() because
     // SignedExchangeHandler checks "v=" parameter.
-    std::string content_type;
-    outer_response_head_->headers->EnumerateHeader(nullptr, "content-type",
-                                                   &content_type);
+    std::optional<std::string_view> content_type =
+        outer_response_head_->headers->EnumerateHeader(nullptr, "content-type");
 
     signed_exchange_handler_ = std::make_unique<SignedExchangeHandler>(
         network::IsUrlPotentiallyTrustworthy(outer_request_.url),
-        web_package::HasNoSniffHeader(*outer_response_head_), content_type,
+        web_package::HasNoSniffHeader(*outer_response_head_),
+        content_type.value_or(std::string_view()),
         std::make_unique<network::DataPipeToSourceStream>(
             std::move(outer_response_body)),
         base::BindOnce(&SignedExchangeLoader::OnHTTPExchangeFound,
                        weak_factory_.GetWeakPtr()),
         std::move(cert_fetcher_factory),
-        outer_request_.trusted_params
-            ? std::make_optional(outer_request_.trusted_params->isolation_info)
-            : std::nullopt,
+        keep_entry_for_prefetch_cache
+            ? std::nullopt
+            : std::make_optional(outer_request_.trusted_params->isolation_info),
         outer_request_.load_flags, outer_response_head_->remote_endpoint,
         std::make_unique<blink::WebPackageRequestMatcher>(
             outer_request_.headers, accept_langs),
@@ -170,7 +177,7 @@ void SignedExchangeLoader::OnUploadProgress(
 }
 
 void SignedExchangeLoader::OnTransferSizeUpdated(int32_t transfer_size_diff) {
-  // TODO(https://crbug.com/803774): Implement this to progressively update the
+  // TODO(crbug.com/40558902): Implement this to progressively update the
   // encoded data length in DevTools.
   network::RecordOnTransferSizeUpdatedUMA(
       network::OnTransferSizeUpdatedFrom::kSignedExchangeLoader);
@@ -196,14 +203,6 @@ void SignedExchangeLoader::FollowRedirect(
 void SignedExchangeLoader::SetPriority(net::RequestPriority priority,
                                        int intra_priority_value) {
   url_loader_->SetPriority(priority, intra_priority_value);
-}
-
-void SignedExchangeLoader::PauseReadingBodyFromNet() {
-  url_loader_->PauseReadingBodyFromNet();
-}
-
-void SignedExchangeLoader::ResumeReadingBodyFromNet() {
-  url_loader_->ResumeReadingBodyFromNet();
 }
 
 void SignedExchangeLoader::ConnectToClient(
@@ -290,7 +289,7 @@ void SignedExchangeLoader::OnHTTPExchangeFound(
       outer_response_head_->was_fetched_via_cache;
 
   // Currently we always assume that we have body.
-  // TODO(https://crbug.com/80374): Add error handling and bail out
+  // TODO(crbug.com/40558879): Add error handling and bail out
   // earlier if there's an error.
   mojo::ScopedDataPipeProducerHandle producer_handle;
   mojo::ScopedDataPipeConsumerHandle consumer_handle;
@@ -298,8 +297,7 @@ void SignedExchangeLoader::OnHTTPExchangeFound(
   options.struct_size = sizeof(MojoCreateDataPipeOptions);
   options.flags = MOJO_CREATE_DATA_PIPE_FLAG_NONE;
   options.element_num_bytes = 1;
-  options.capacity_num_bytes =
-      network::features::GetDataPipeDefaultAllocationSize();
+  options.capacity_num_bytes = network::GetDataPipeDefaultAllocationSize();
   if (mojo::CreateDataPipe(&options, producer_handle, consumer_handle) !=
       MOJO_RESULT_OK) {
     forwarding_client_->OnComplete(

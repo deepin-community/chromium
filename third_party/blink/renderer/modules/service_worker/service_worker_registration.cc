@@ -16,6 +16,7 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_navigation_preload_state.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_service_worker_update_via_cache.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/dom/events/event.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
@@ -34,7 +35,7 @@ namespace blink {
 
 namespace {
 
-void DidUpdate(ScriptPromiseResolver* resolver,
+void DidUpdate(ScriptPromiseResolver<ServiceWorkerRegistration>* resolver,
                ServiceWorkerRegistration* registration,
                mojom::ServiceWorkerErrorType error,
                const String& error_msg) {
@@ -53,7 +54,7 @@ void DidUpdate(ScriptPromiseResolver* resolver,
   resolver->Resolve(registration);
 }
 
-void DidUnregister(ScriptPromiseResolver* resolver,
+void DidUnregister(ScriptPromiseResolver<IDLBoolean>* resolver,
                    mojom::ServiceWorkerErrorType error,
                    const String& error_msg) {
   if (!resolver->GetExecutionContext() ||
@@ -71,7 +72,7 @@ void DidUnregister(ScriptPromiseResolver* resolver,
   resolver->Resolve(error == mojom::ServiceWorkerErrorType::kNone);
 }
 
-void DidEnableNavigationPreload(ScriptPromiseResolver* resolver,
+void DidEnableNavigationPreload(ScriptPromiseResolver<IDLUndefined>* resolver,
                                 mojom::ServiceWorkerErrorType error,
                                 const String& error_msg) {
   if (!resolver->GetExecutionContext() ||
@@ -89,7 +90,7 @@ void DidEnableNavigationPreload(ScriptPromiseResolver* resolver,
 }
 
 void DidGetNavigationPreloadState(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolver<NavigationPreloadState>* resolver,
     mojom::ServiceWorkerErrorType error,
     const String& error_msg,
     mojom::blink::NavigationPreloadStatePtr state) {
@@ -110,9 +111,10 @@ void DidGetNavigationPreloadState(
   resolver->Resolve(dict);
 }
 
-void DidSetNavigationPreloadHeader(ScriptPromiseResolver* resolver,
-                                   mojom::ServiceWorkerErrorType error,
-                                   const String& error_msg) {
+void DidSetNavigationPreloadHeader(
+    ScriptPromiseResolver<IDLUndefined>* resolver,
+    mojom::ServiceWorkerErrorType error,
+    const String& error_msg) {
   if (!resolver->GetExecutionContext() ||
       resolver->GetExecutionContext()->IsContextDestroyed()) {
     return;
@@ -130,7 +132,7 @@ void DidSetNavigationPreloadHeader(ScriptPromiseResolver* resolver,
 }  // namespace
 
 ServiceWorkerRegistration* ServiceWorkerRegistration::Take(
-    ScriptPromiseResolver* resolver,
+    ScriptPromiseResolverBase* resolver,
     WebServiceWorkerRegistrationObjectInfo info) {
   return ServiceWorkerContainer::From(
              *To<LocalDOMWindow>(resolver->GetExecutionContext()))
@@ -227,22 +229,25 @@ String ServiceWorkerRegistration::scope() const {
   return scope_.GetString();
 }
 
-String ServiceWorkerRegistration::updateViaCache() const {
+V8ServiceWorkerUpdateViaCache ServiceWorkerRegistration::updateViaCache()
+    const {
   switch (update_via_cache_) {
     case mojom::ServiceWorkerUpdateViaCache::kImports:
-      return "imports";
+      return V8ServiceWorkerUpdateViaCache(
+          V8ServiceWorkerUpdateViaCache::Enum::kImports);
     case mojom::ServiceWorkerUpdateViaCache::kAll:
-      return "all";
+      return V8ServiceWorkerUpdateViaCache(
+          V8ServiceWorkerUpdateViaCache::Enum::kAll);
     case mojom::ServiceWorkerUpdateViaCache::kNone:
-      return "none";
+      return V8ServiceWorkerUpdateViaCache(
+          V8ServiceWorkerUpdateViaCache::Enum::kNone);
   }
   NOTREACHED();
-  return "";
 }
 
 void ServiceWorkerRegistration::EnableNavigationPreload(
     bool enable,
-    ScriptPromiseResolver* resolver) {
+    ScriptPromiseResolver<IDLUndefined>* resolver) {
   if (!host_.is_bound()) {
     return;
   }
@@ -252,7 +257,7 @@ void ServiceWorkerRegistration::EnableNavigationPreload(
 }
 
 void ServiceWorkerRegistration::GetNavigationPreloadState(
-    ScriptPromiseResolver* resolver) {
+    ScriptPromiseResolver<NavigationPreloadState>* resolver) {
   if (!host_.is_bound()) {
     return;
   }
@@ -262,7 +267,7 @@ void ServiceWorkerRegistration::GetNavigationPreloadState(
 
 void ServiceWorkerRegistration::SetNavigationPreloadHeader(
     const String& value,
-    ScriptPromiseResolver* resolver) {
+    ScriptPromiseResolver<IDLUndefined>* resolver) {
   if (!host_.is_bound()) {
     return;
   }
@@ -271,7 +276,7 @@ void ServiceWorkerRegistration::SetNavigationPreloadHeader(
       WTF::BindOnce(&DidSetNavigationPreloadHeader, WrapPersistent(resolver)));
 }
 
-ScriptPromise ServiceWorkerRegistration::update(
+ScriptPromise<ServiceWorkerRegistration> ServiceWorkerRegistration::update(
     ScriptState* script_state,
     ExceptionState& exception_state) {
   if (!GetExecutionContext()) {
@@ -279,7 +284,7 @@ ScriptPromise ServiceWorkerRegistration::update(
         DOMExceptionCode::kInvalidStateError,
         "Failed to update a ServiceWorkerRegistration: No associated provider "
         "is available.");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
   auto* execution_context = ExecutionContext::From(script_state);
@@ -297,7 +302,9 @@ ScriptPromise ServiceWorkerRegistration::update(
           ? blink::mojom::InsecureRequestsPolicy::kUpgrade
           : blink::mojom::InsecureRequestsPolicy::kDoNotUpgrade);
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<ServiceWorkerRegistration>>(
+          script_state);
 
   // Defer update() from a prerendered page until page activation.
   // https://wicg.github.io/nav-speculation/prerendering.html#patch-service-workers
@@ -315,7 +322,7 @@ ScriptPromise ServiceWorkerRegistration::update(
   return resolver->Promise();
 }
 
-ScriptPromise ServiceWorkerRegistration::unregister(
+ScriptPromise<IDLBoolean> ServiceWorkerRegistration::unregister(
     ScriptState* script_state,
     ExceptionState& exception_state) {
   if (!GetExecutionContext()) {
@@ -323,10 +330,11 @@ ScriptPromise ServiceWorkerRegistration::unregister(
                                       "Failed to unregister a "
                                       "ServiceWorkerRegistration: No "
                                       "associated provider is available.");
-    return ScriptPromise();
+    return EmptyPromise();
   }
 
-  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  auto* resolver =
+      MakeGarbageCollected<ScriptPromiseResolver<IDLBoolean>>(script_state);
 
   // Defer unregister() from a prerendered page until page activation.
   // https://wicg.github.io/nav-speculation/prerendering.html#patch-service-workers
@@ -403,7 +411,7 @@ void ServiceWorkerRegistration::UpdateFound() {
 
 void ServiceWorkerRegistration::UpdateInternal(
     mojom::blink::FetchClientSettingsObjectPtr mojom_settings_object,
-    ScriptPromiseResolver* resolver) {
+    ScriptPromiseResolver<ServiceWorkerRegistration>* resolver) {
   if (!host_.is_bound()) {
     return;
   }
@@ -413,7 +421,7 @@ void ServiceWorkerRegistration::UpdateInternal(
 }
 
 void ServiceWorkerRegistration::UnregisterInternal(
-    ScriptPromiseResolver* resolver) {
+    ScriptPromiseResolver<IDLBoolean>* resolver) {
   if (!host_.is_bound()) {
     return;
   }

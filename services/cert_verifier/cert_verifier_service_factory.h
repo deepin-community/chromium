@@ -26,6 +26,7 @@
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
 #include <optional>
 
+#include "mojo/public/cpp/base/proto_wrapper.h"
 #include "net/cert/internal/trust_store_chrome.h"
 #endif
 
@@ -69,10 +70,20 @@ class CertVerifierServiceFactoryImpl
                        UpdateCtLogListCallback callback) override;
 #endif
 #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
-  void UpdateChromeRootStore(mojom::ChromeRootStorePtr new_root_store,
+  void UpdateChromeRootStore(mojo_base::ProtoWrapper new_root_store,
                              UpdateChromeRootStoreCallback callback) override;
+  // Will not return anchors that are not trusted for the current running
+  // version of Chrome.
   void GetChromeRootStoreInfo(GetChromeRootStoreInfoCallback callback) override;
+
+#if !BUILDFLAG(IS_CHROMEOS)
+  void GetPlatformRootStoreInfo(
+      GetPlatformRootStoreInfoCallback callback) override;
 #endif
+#endif
+  void UpdateNetworkTime(base::Time system_time,
+                         base::TimeTicks system_ticks,
+                         base::Time current_time) override;
 #if BUILDFLAG(CHROME_ROOT_STORE_OPTIONAL)
   void SetUseChromeRootStore(bool use_crs,
                              SetUseChromeRootStoreCallback callback) override;
@@ -84,6 +95,8 @@ class CertVerifierServiceFactoryImpl
   const net::CertVerifyProc::ImplParams& get_impl_params() const {
     return proc_params_;
   }
+
+  base::WeakPtr<CertVerifierServiceFactoryImpl> GetWeakPtr();
 
  private:
   // Update all the `verifier_services_` with the current data.

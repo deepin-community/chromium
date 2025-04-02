@@ -47,6 +47,7 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/khronos/GLES2/gl2.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/compositor/compositor.h"
 #include "ui/compositor/compositor_observer.h"
 #include "ui/compositor/layer_animation_element.h"
@@ -54,6 +55,7 @@
 #include "ui/compositor/layer_animation_sequence.h"
 #include "ui/compositor/layer_animator.h"
 #include "ui/compositor/layer_delegate.h"
+#include "ui/compositor/layer_type.h"
 #include "ui/compositor/paint_context.h"
 #include "ui/compositor/paint_recorder.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
@@ -404,7 +406,9 @@ class TestCompositorObserver : public CompositorObserver {
     started_ = true;
   }
 
-  void OnCompositingEnded(Compositor* compositor) override { ended_ = true; }
+  void OnCompositingAckDeprecated(Compositor* compositor) override {
+    ended_ = true;
+  }
 
   bool committed_ = false;
   bool started_ = false;
@@ -589,9 +593,8 @@ TEST(LayerStandaloneTest, ReleaseMailboxOnDestruction) {
 
   constexpr gfx::Size size(64, 64);
   auto resource = viz::TransferableResource::MakeGpu(
-      gpu::Mailbox::GenerateForSharedImage(), GL_TEXTURE_2D, gpu::SyncToken(),
-      size, viz::SinglePlaneFormat::kRGBA_8888,
-      false /* is_overlay_candidate */);
+      gpu::Mailbox::Generate(), GL_TEXTURE_2D, gpu::SyncToken(), size,
+      viz::SinglePlaneFormat::kRGBA_8888, false /* is_overlay_candidate */);
   layer->SetTransferableResource(resource,
                                  base::BindOnce(ReturnMailbox, &callback_run),
                                  gfx::Size(10, 10));
@@ -862,7 +865,7 @@ TEST_F(LayerWithDelegateTest, Cloning) {
 
   constexpr SkColor kTransparent = SK_ColorTRANSPARENT;
   layer->SetColor(kTransparent);
-  layer->SetFillsBoundsOpaquely(false);
+
   // Color and opaqueness targets should be preserved during cloning, even after
   // switching away from solid color content.
   ASSERT_TRUE(layer->SwitchCCLayerForTest());
@@ -878,23 +881,6 @@ TEST_F(LayerWithDelegateTest, Cloning) {
   EXPECT_FLOAT_EQ(new_layer_hue_rotation, clone->layer_hue_rotation());
   EXPECT_FALSE(clone->LayerHasCustomColorMatrix());
   EXPECT_FALSE(clone->fills_bounds_opaquely());
-
-  // A solid color layer with transparent color can be marked as opaque. The
-  // clone should retain this state.
-  layer = CreateLayer(LAYER_SOLID_COLOR);
-  layer->SetColor(kTransparent);
-  layer->SetFillsBoundsOpaquely(true);
-
-  clone = layer->Clone();
-  EXPECT_TRUE(clone->GetTargetTransform().IsIdentity());
-  EXPECT_EQ(kTransparent, clone->background_color());
-  EXPECT_EQ(kTransparent, clone->GetTargetColor());
-  EXPECT_FALSE(clone->layer_inverted());
-  // Sepia and hue rotation should be off by default.
-  EXPECT_FLOAT_EQ(0, layer->layer_sepia());
-  EXPECT_FLOAT_EQ(0, clone->layer_hue_rotation());
-  EXPECT_FALSE(clone->LayerHasCustomColorMatrix());
-  EXPECT_TRUE(clone->fills_bounds_opaquely());
 
   layer = CreateLayer(LAYER_SOLID_COLOR);
   layer->SetVisible(true);
@@ -1089,15 +1075,64 @@ class LayerWithNullDelegateTest : public LayerWithDelegateTest {
   std::unique_ptr<NullLayerDelegate> default_layer_delegate_;
 };
 
+TEST_F(LayerWithNullDelegateTest, LayerContentOpaqueness) {
+  std::unique_ptr<Layer> layer = CreateLayer(LAYER_TEXTURED);
+
+  EXPECT_EQ(layer->cc_layer_for_testing()->background_color(),
+            SkColors::kTransparent);
+  EXPECT_EQ(layer->cc_layer_for_testing()->SafeOpaqueBackgroundColor(),
+            SkColors::kWhite);
+  EXPECT_TRUE(layer->fills_bounds_opaquely());
+  EXPECT_TRUE(layer->cc_layer_for_testing()->contents_opaque());
+
+  layer->SetFillsBoundsOpaquely(false);
+  EXPECT_EQ(layer->cc_layer_for_testing()->background_color(),
+            SkColors::kTransparent);
+  EXPECT_EQ(layer->cc_layer_for_testing()->SafeOpaqueBackgroundColor(),
+            SkColors::kTransparent);
+  EXPECT_FALSE(layer->fills_bounds_opaquely());
+  EXPECT_FALSE(layer->cc_layer_for_testing()->contents_opaque());
+
+  // For LAYER_SOLID_COLOR, the background color dictates content opaqueness.
+  layer = CreateLayer(LAYER_SOLID_COLOR);
+
+  // The default background color is transparent.
+  EXPECT_EQ(layer->cc_layer_for_testing()->background_color(),
+            SkColors::kTransparent);
+  EXPECT_EQ(layer->cc_layer_for_testing()->SafeOpaqueBackgroundColor(),
+            SkColors::kTransparent);
+  EXPECT_FALSE(layer->fills_bounds_opaquely());
+  EXPECT_FALSE(layer->cc_layer_for_testing()->contents_opaque());
+
+  // Set an opaque color.
+  layer->SetColor(SK_ColorRED);
+  EXPECT_EQ(layer->cc_layer_for_testing()->background_color(), SkColors::kRed);
+  EXPECT_EQ(layer->cc_layer_for_testing()->SafeOpaqueBackgroundColor(),
+            SkColors::kRed);
+  EXPECT_TRUE(layer->fills_bounds_opaquely());
+  EXPECT_TRUE(layer->cc_layer_for_testing()->contents_opaque());
+
+  // Set color with alpha.
+  const SkColor4f color_with_alpha =
+      SkColor4f::FromColor(SkColorSetARGB(100, 255, 0, 0));
+  layer->SetColor(color_with_alpha.toSkColor());
+  EXPECT_EQ(layer->cc_layer_for_testing()->background_color(),
+            color_with_alpha);
+  EXPECT_EQ(layer->cc_layer_for_testing()->SafeOpaqueBackgroundColor(),
+            color_with_alpha);
+  EXPECT_FALSE(layer->fills_bounds_opaquely());
+  EXPECT_FALSE(layer->cc_layer_for_testing()->contents_opaque());
+}
+
 TEST_F(LayerWithNullDelegateTest, SwitchLayerPreservesCCLayerState) {
   std::unique_ptr<Layer> l1 = CreateLayer(LAYER_SOLID_COLOR);
-  l1->SetFillsBoundsOpaquely(true);
   l1->SetVisible(false);
   l1->SetBounds(gfx::Rect(4, 5));
 
   constexpr gfx::RoundedCornersF kCornerRadii(1, 2, 3, 4);
   l1->SetRoundedCornerRadius(kCornerRadii);
   l1->SetIsFastRoundedCorner(true);
+  l1->SetColor(SK_ColorBLACK);
   constexpr viz::SubtreeCaptureId kSubtreeCaptureId(base::Token(0u, 22u));
   l1->SetSubtreeCaptureId(kSubtreeCaptureId);
   gfx::LinearGradient gradient_mask(45);
@@ -1107,6 +1142,7 @@ TEST_F(LayerWithNullDelegateTest, SwitchLayerPreservesCCLayerState) {
   EXPECT_EQ(gfx::Point3F(), l1->cc_layer_for_testing()->transform_origin());
   EXPECT_TRUE(l1->cc_layer_for_testing()->draws_content());
   EXPECT_TRUE(l1->cc_layer_for_testing()->contents_opaque());
+  EXPECT_EQ(l1->cc_layer_for_testing()->background_color(), SkColors::kBlack);
   EXPECT_TRUE(l1->cc_layer_for_testing()->hide_layer_and_subtree());
   EXPECT_EQ(gfx::Size(4, 5), l1->cc_layer_for_testing()->bounds());
   EXPECT_TRUE(l1->cc_layer_for_testing()->HasRoundedCorner());
@@ -1123,9 +1159,8 @@ TEST_F(LayerWithNullDelegateTest, SwitchLayerPreservesCCLayerState) {
   bool callback1_run = false;
   constexpr gfx::Size size(64, 64);
   auto resource = viz::TransferableResource::MakeGpu(
-      gpu::Mailbox::GenerateForSharedImage(), GL_TEXTURE_2D, gpu::SyncToken(),
-      size, viz::SinglePlaneFormat::kRGBA_8888,
-      false /* is_overlay_candidate */);
+      gpu::Mailbox::Generate(), GL_TEXTURE_2D, gpu::SyncToken(), size,
+      viz::SinglePlaneFormat::kRGBA_8888, false /* is_overlay_candidate */);
   l1->SetTransferableResource(resource,
                               base::BindOnce(ReturnMailbox, &callback1_run),
                               gfx::Size(10, 10));
@@ -1135,6 +1170,7 @@ TEST_F(LayerWithNullDelegateTest, SwitchLayerPreservesCCLayerState) {
   EXPECT_EQ(gfx::Point3F(), l1->cc_layer_for_testing()->transform_origin());
   EXPECT_TRUE(l1->cc_layer_for_testing()->draws_content());
   EXPECT_TRUE(l1->cc_layer_for_testing()->contents_opaque());
+  EXPECT_EQ(l1->cc_layer_for_testing()->background_color(), SkColors::kBlack);
   EXPECT_TRUE(l1->cc_layer_for_testing()->hide_layer_and_subtree());
   EXPECT_EQ(gfx::Size(4, 5), l1->cc_layer_for_testing()->bounds());
   EXPECT_TRUE(l1->cc_layer_for_testing()->HasRoundedCorner());
@@ -1149,9 +1185,8 @@ TEST_F(LayerWithNullDelegateTest, SwitchLayerPreservesCCLayerState) {
 
   bool callback2_run = false;
   resource = viz::TransferableResource::MakeGpu(
-      gpu::Mailbox::GenerateForSharedImage(), GL_TEXTURE_2D, gpu::SyncToken(),
-      size, viz::SinglePlaneFormat::kRGBA_8888,
-      false /* is_overlay_candidate */);
+      gpu::Mailbox::Generate(), GL_TEXTURE_2D, gpu::SyncToken(), size,
+      viz::SinglePlaneFormat::kRGBA_8888, false /* is_overlay_candidate */);
   l1->SetTransferableResource(resource,
                               base::BindOnce(ReturnMailbox, &callback2_run),
                               gfx::Size(10, 10));
@@ -1176,9 +1211,8 @@ TEST_F(LayerWithNullDelegateTest, SwitchLayerPreservesCCLayerState) {
   // Back to a texture, without changing the bounds of the layer or the texture.
   bool callback3_run = false;
   resource = viz::TransferableResource::MakeGpu(
-      gpu::Mailbox::GenerateForSharedImage(), GL_TEXTURE_2D, gpu::SyncToken(),
-      size, viz::SinglePlaneFormat::kRGBA_8888,
-      false /* is_overlay_candidate */);
+      gpu::Mailbox::Generate(), GL_TEXTURE_2D, gpu::SyncToken(), size,
+      viz::SinglePlaneFormat::kRGBA_8888, false /* is_overlay_candidate */);
   l1->SetTransferableResource(resource,
                               base::BindOnce(ReturnMailbox, &callback3_run),
                               gfx::Size(10, 10));
@@ -1524,9 +1558,8 @@ TEST_F(LayerWithNullDelegateTest, EmptyDamagedRect) {
   std::unique_ptr<Layer> root = CreateLayer(LAYER_SOLID_COLOR);
   constexpr gfx::Size size(64, 64);
   auto resource = viz::TransferableResource::MakeGpu(
-      gpu::Mailbox::GenerateForSharedImage(), GL_TEXTURE_2D, gpu::SyncToken(),
-      size, viz::SinglePlaneFormat::kRGBA_8888,
-      false /* is_overlay_candidate */);
+      gpu::Mailbox::Generate(), GL_TEXTURE_2D, gpu::SyncToken(), size,
+      viz::SinglePlaneFormat::kRGBA_8888, false /* is_overlay_candidate */);
   root->SetTransferableResource(resource, std::move(callback),
                                 gfx::Size(10, 10));
   compositor()->SetRootLayer(root.get());
@@ -1612,6 +1645,44 @@ TEST_F(LayerWithNullDelegateTest, AlwaysSendsMaskDamagedRects) {
   EXPECT_EQ(mask->damaged_region_for_testing().bounds(), invalid_rect);
   root->SendDamagedRects();
   EXPECT_EQ(mask->damaged_region_for_testing().bounds(), gfx::Rect());
+}
+
+// Tests that mask layer could be set to different layers and released
+// without leaving dangling references.
+TEST_F(LayerWithNullDelegateTest, ReusedMaskLayer) {
+  gfx::Rect bound(gfx::Rect(2, 2));
+  std::unique_ptr<Layer> root = CreateTextureRootLayer(bound);
+
+  std::unique_ptr<Layer> l1 = CreateTextureLayer(bound);
+  root->Add(l1.get());
+  std::unique_ptr<Layer> l2 = CreateTextureLayer(bound);
+  root->Add(l2.get());
+
+  {
+    std::unique_ptr<Layer> mask = CreateTextureLayer(bound);
+    // Set `mask` to `l1`, then `l2`.
+    l1->SetMaskLayer(mask.get());
+    EXPECT_EQ(mask.get(), l1->layer_mask_layer());
+    EXPECT_EQ(l1.get(), mask->layer_mask_back_link());
+
+    l2->SetMaskLayer(mask.get());
+    EXPECT_EQ(mask.get(), l2->layer_mask_layer());
+    EXPECT_EQ(l2.get(), mask->layer_mask_back_link());
+
+    // After setting `mask` to `l2`, `l1` should no longer reference it.
+    ASSERT_EQ(nullptr, l1->layer_mask_layer());
+
+    // Release `mask`.
+    mask.reset();
+  }
+
+  // `l2' should no longer references `mask` either.
+  ASSERT_EQ(nullptr, l2->layer_mask_layer());
+
+  // There should be no use-after-free crashes.
+  root->SendDamagedRects();
+  l1->SendDamagedRects();
+  l2->SendDamagedRects();
 }
 
 // Verifies that when a layer is reflecting other layers, mirror counts of
@@ -1999,7 +2070,7 @@ TEST_F(LayerWithRealCompositorTest, ModifyHierarchy) {
                              cc::AlphaDiscardingExactPixelComparator()));
 }
 
-// TODO(crbug.com/1476969): Flaky on fuchsia-arm64 builds. Re-enable this test.
+// TODO(crbug.com/40280155): Flaky on fuchsia-arm64 builds. Re-enable this test.
 #if BUILDFLAG(IS_FUCHSIA) && defined(ARCH_CPU_ARM64)
 #define MAYBE_BackgroundBlur DISABLED_BackgroundBlur
 #else
@@ -2055,7 +2126,7 @@ TEST_F(LayerWithRealCompositorTest, MAYBE_BackgroundBlur) {
   EXPECT_TRUE(MatchesPNGFile(bitmap, ref_img2, fuzzy_comparator));
 }
 
-// TODO(crbug.com/1476969): Flaky on fuchsia-arm64 builds. Re-enable this test.
+// TODO(crbug.com/40280155): Flaky on fuchsia-arm64 builds. Re-enable this test.
 #if BUILDFLAG(IS_FUCHSIA) && defined(ARCH_CPU_ARM64)
 #define MAYBE_BackgroundBlurChangeDeviceScale \
   DISABLED_BackgroundBlurChangeDeviceScale
@@ -2458,9 +2529,8 @@ TEST_F(LayerWithDelegateTest, TransferableResourceMirroring) {
 
   constexpr gfx::Size size(64, 64);
   auto resource = viz::TransferableResource::MakeGpu(
-      gpu::Mailbox::GenerateForSharedImage(), GL_TEXTURE_2D, gpu::SyncToken(),
-      size, viz::SinglePlaneFormat::kRGBA_8888,
-      false /* is_overlay_candidate */);
+      gpu::Mailbox::Generate(), GL_TEXTURE_2D, gpu::SyncToken(), size,
+      viz::SinglePlaneFormat::kRGBA_8888, false /* is_overlay_candidate */);
   bool release_callback_run = false;
 
   layer->SetTransferableResource(
@@ -2488,9 +2558,8 @@ TEST_F(LayerWithDelegateTest, TransferableResourceMirroring) {
   EXPECT_FALSE(mirror->has_external_content());
 
   resource = viz::TransferableResource::MakeGpu(
-      gpu::Mailbox::GenerateForSharedImage(), GL_TEXTURE_2D, gpu::SyncToken(),
-      size, viz::SinglePlaneFormat::kRGBA_8888,
-      false /* is_overlay_candidate */);
+      gpu::Mailbox::Generate(), GL_TEXTURE_2D, gpu::SyncToken(), size,
+      viz::SinglePlaneFormat::kRGBA_8888, false /* is_overlay_candidate */);
   release_callback_run = false;
 
   // Setting a transferable resource on the source layer should set it on the
@@ -2603,7 +2672,6 @@ TEST_F(LayerWithRealCompositorTest, SwitchCCLayerSolidColorNotAnimating) {
   SkColor transparent = SK_ColorTRANSPARENT;
   std::unique_ptr<Layer> root = CreateLayer(LAYER_SOLID_COLOR);
   GetCompositor()->SetRootLayer(root.get());
-  root->SetFillsBoundsOpaquely(false);
   root->SetColor(transparent);
 
   EXPECT_FALSE(root->fills_bounds_opaquely());
@@ -2640,7 +2708,6 @@ TEST_F(LayerWithRealCompositorTest, SwitchCCLayerSolidColorWhileAnimating) {
   {
     ui::ScopedLayerAnimationSettings animation(root->GetAnimator());
     animation.SetTransitionDuration(base::Milliseconds(1000));
-    root->SetFillsBoundsOpaquely(false);
     root->SetColor(transparent);
   }
 

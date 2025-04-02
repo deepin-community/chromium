@@ -11,6 +11,7 @@
 
 #include "build/build_config.h"
 #include "printing/buildflags/buildflags.h"
+#include "printing/page_range.h"
 #include "printing/printing_context.h"
 #include "printing/printing_context_factory_for_test.h"
 #include "printing/test_printing_context.h"
@@ -32,6 +33,8 @@ class BrowserPrintingContextFactoryForTest
   void SetPrinterLanguageTypeForSubsequentContexts(
       mojom::PrinterLanguageType printer_language_type);
 #endif
+  void SetUserSettingsPageRangesForSubsequentContext(
+      const PageRanges& page_ranges);
 
   void SetFailedErrorOnUpdatePrinterSettings();
   void SetCancelErrorOnNewDocument(bool cause_errors);
@@ -47,6 +50,7 @@ class BrowserPrintingContextFactoryForTest
   void SetFailErrorOnUseDefaultSettings();
 #if BUILDFLAG(ENABLE_BASIC_PRINT_DIALOG)
   void SetCancelErrorOnAskUserForSettings();
+  void SetFailErrorOnAskUserForSettings();
 #endif
   void SetOnNewDocumentCallback(
       TestPrintingContext::OnNewDocumentCallback callback);
@@ -61,6 +65,7 @@ class BrowserPrintingContextFactoryForTest
 #if BUILDFLAG(IS_WIN)
   std::optional<mojom::PrinterLanguageType> printer_language_type_;
 #endif
+  std::optional<PageRanges> page_ranges_;
 
   bool failed_error_for_update_printer_settings_ = false;
   bool cancels_in_new_document_ = false;
@@ -76,6 +81,7 @@ class BrowserPrintingContextFactoryForTest
   bool fail_on_use_default_settings_ = false;
 #if BUILDFLAG(ENABLE_BASIC_PRINT_DIALOG)
   bool cancel_on_ask_user_for_settings_ = false;
+  bool fail_on_ask_user_for_settings_ = false;
 #endif
   TestPrintingContext::OnNewDocumentCallback on_new_document_callback_;
 };

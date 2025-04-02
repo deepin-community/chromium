@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/credential_provider/gaiacp/gem_device_details_manager.h"
+
 #include <windows.h>
 
 #include "base/base_paths_win.h"
@@ -12,10 +14,10 @@
 #include "base/test/scoped_path_override.h"
 #include "chrome/credential_provider/extension/user_device_context.h"
 #include "chrome/credential_provider/gaiacp/gcpw_strings.h"
-#include "chrome/credential_provider/gaiacp/gem_device_details_manager.h"
 #include "chrome/credential_provider/gaiacp/mdm_utils.h"
 #include "chrome/credential_provider/gaiacp/reg_utils.h"
 #include "chrome/credential_provider/test/gls_runner_test_base.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace credential_provider {
@@ -57,10 +59,10 @@ TEST_P(GemDeviceDetailsExtensionTest, WithUserDeviceContext) {
   if (has_valid_sid) {
     // Create a fake user associated to a gaia id.
     CComBSTR sid_str;
-    ASSERT_EQ(S_OK, fake_os_user_manager()->CreateTestOSUser(
-                        kDefaultUsername, L"password", L"Full Name", L"comment",
-                        base::UTF8ToWide(kDefaultGaiaId), L"user@company.com",
-                        domain_name, &sid_str));
+    ASSERT_EQ(S_OK,
+              fake_os_user_manager()->CreateTestOSUser(
+                  kDefaultUsername, L"password", L"Full Name", L"comment",
+                  kDefaultGaiaId, L"user@company.com", domain_name, &sid_str));
     user_sid = OLE2W(sid_str);
   }
 

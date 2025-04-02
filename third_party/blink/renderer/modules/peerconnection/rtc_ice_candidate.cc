@@ -35,6 +35,11 @@
 #include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_object_builder.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_candidate_init.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_candidate_type.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_component.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_protocol.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_server_transport_protocol.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_ice_tcp_candidate_type.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
@@ -67,7 +72,8 @@ RTCIceCandidate* RTCIceCandidate::Create(
   return MakeGarbageCollected<RTCIceCandidate>(
       MakeGarbageCollected<RTCIceCandidatePlatform>(
           candidate_init->candidate(), sdp_mid, std::move(sdp_m_line_index),
-          candidate_init->usernameFragment()));
+          candidate_init->usernameFragment(),
+          /*url can not be reconstruncted*/ std::nullopt));
 }
 
 RTCIceCandidate* RTCIceCandidate::Create(
@@ -103,8 +109,8 @@ String RTCIceCandidate::foundation() const {
   return platform_candidate_->Foundation();
 }
 
-String RTCIceCandidate::component() const {
-  return platform_candidate_->Component();
+std::optional<V8RTCIceComponent> RTCIceCandidate::component() const {
+  return V8RTCIceComponent::Create(platform_candidate_->Component());
 }
 
 std::optional<uint32_t> RTCIceCandidate::priority() const {
@@ -115,20 +121,24 @@ String RTCIceCandidate::address() const {
   return platform_candidate_->Address();
 }
 
-String RTCIceCandidate::protocol() const {
-  return platform_candidate_->Protocol();
+std::optional<V8RTCIceProtocol> RTCIceCandidate::protocol() const {
+  return V8RTCIceProtocol::Create(platform_candidate_->Protocol());
 }
 
 std::optional<uint16_t> RTCIceCandidate::port() const {
   return platform_candidate_->Port();
 }
 
-String RTCIceCandidate::type() const {
-  return platform_candidate_->Type();
+std::optional<V8RTCIceCandidateType> RTCIceCandidate::type() const {
+  return V8RTCIceCandidateType::Create(platform_candidate_->Type());
 }
 
-std::optional<String> RTCIceCandidate::tcpType() const {
-  return platform_candidate_->TcpType();
+std::optional<V8RTCIceTcpCandidateType> RTCIceCandidate::tcpType() const {
+  std::optional<String> tcp_type = platform_candidate_->TcpType();
+  if (!tcp_type.has_value()) {
+    return std::nullopt;
+  }
+  return V8RTCIceTcpCandidateType::Create(tcp_type.value());
 }
 
 String RTCIceCandidate::relatedAddress() const {
@@ -143,14 +153,31 @@ String RTCIceCandidate::usernameFragment() const {
   return platform_candidate_->UsernameFragment();
 }
 
-ScriptValue RTCIceCandidate::toJSONForBinding(ScriptState* script_state) {
+String RTCIceCandidate::url() const {
+  const std::optional<String> url = platform_candidate_->Url();
+  if (!url) {
+    return g_null_atom;
+  }
+  return *url;
+}
+
+std::optional<V8RTCIceServerTransportProtocol> RTCIceCandidate::relayProtocol()
+    const {
+  std::optional<String> relay_protocol = platform_candidate_->RelayProtocol();
+  if (!relay_protocol.has_value()) {
+    return std::nullopt;
+  }
+  return V8RTCIceServerTransportProtocol::Create(relay_protocol.value());
+}
+
+ScriptObject RTCIceCandidate::toJSONForBinding(ScriptState* script_state) {
   V8ObjectBuilder result(script_state);
   result.AddString("candidate", platform_candidate_->Candidate());
   result.AddString("sdpMid", platform_candidate_->SdpMid());
   if (platform_candidate_->SdpMLineIndex())
     result.AddNumber("sdpMLineIndex", *platform_candidate_->SdpMLineIndex());
   result.AddString("usernameFragment", platform_candidate_->UsernameFragment());
-  return result.GetScriptValue();
+  return result.ToScriptObject();
 }
 
 }  // namespace blink

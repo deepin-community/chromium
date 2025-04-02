@@ -5,6 +5,7 @@
 #include "chrome/browser/support_tool/support_tool_util.h"
 
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -26,19 +27,15 @@
 #include "third_party/icu/source/i18n/unicode/timezone.h"
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/crosapi/browser_manager.h"
-#include "chrome/browser/ash/crosapi/browser_util.h"
 #include "chrome/browser/ash/system_logs/app_service_log_source.h"
 #include "chrome/browser/ash/system_logs/bluetooth_log_source.h"
 #include "chrome/browser/ash/system_logs/command_line_log_source.h"
 #include "chrome/browser/ash/system_logs/connected_input_devices_log_source.h"
-#include "chrome/browser/ash/system_logs/crosapi_system_log_source.h"
 #include "chrome/browser/ash/system_logs/dbus_log_source.h"
 #include "chrome/browser/ash/system_logs/iwlwifi_dump_log_source.h"
 #include "chrome/browser/ash/system_logs/touch_log_source.h"
 #include "chrome/browser/ash/system_logs/traffic_counters_log_source.h"
 #include "chrome/browser/ash/system_logs/virtual_keyboard_log_source.h"
-#include "chrome/browser/feedback/system_logs/log_sources/lacros_log_files_log_source.h"
 #include "chrome/browser/support_tool/ash/chrome_user_logs_data_collector.h"
 #include "chrome/browser/support_tool/ash/network_health_data_collector.h"
 #include "chrome/browser/support_tool/ash/network_routes_data_collector.h"
@@ -88,23 +85,18 @@ constexpr support_tool::DataCollectorType kDataCollectorsChromeosAsh[] = {
 constexpr support_tool::DataCollectorType kDataCollectorsChromeosHwDetails[] = {
     support_tool::CHROMEOS_REVEN};
 
-// Data collector types that may be available on the device depending on other
-// components or flags. Currently consists of data collactors that collect
-// logs for Lacros.
-constexpr support_tool::DataCollectorType kOptionalDataCollectors[] = {
-    support_tool::CHROMEOS_CROS_API, support_tool::CHROMEOS_LACROS};
-
 }  // namespace
 
 std::unique_ptr<SupportToolHandler> GetSupportToolHandler(
     std::string case_id,
     std::string email_address,
     std::string issue_description,
+    std::optional<std::string> upload_id,
     Profile* profile,
     std::set<support_tool::DataCollectorType> included_data_collectors) {
   std::unique_ptr<SupportToolHandler> handler =
       std::make_unique<SupportToolHandler>(case_id, email_address,
-                                           issue_description);
+                                           issue_description, upload_id);
   for (const auto& data_collector_type : included_data_collectors) {
     switch (data_collector_type) {
       case support_tool::CHROME_INTERNAL:
@@ -197,31 +189,6 @@ std::unique_ptr<SupportToolHandler> GetSupportToolHandler(
                 "these files: dbus_details, dbus_summary.",
                 std::make_unique<system_logs::DBusLogSource>()));
         break;
-      case support_tool::CHROMEOS_CROS_API:
-        if (crosapi::BrowserManager::Get()->IsRunning() &&
-            crosapi::BrowserManager::Get()->GetFeedbackDataSupported()) {
-          handler->AddDataCollector(std::make_unique<
-                                    SystemLogSourceDataCollectorAdaptor>(
-              "Gets Lacros system information log data if Lacros is running "
-              "and the crosapi version supports the Lacros remote data source.",
-              std::make_unique<system_logs::CrosapiSystemLogSource>()));
-        }
-        break;
-      case support_tool::CHROMEOS_LACROS:
-        if (crosapi::browser_util::IsLacrosEnabled()) {
-          // Lacros logs are saved in the user data directory, so we provide
-          // that path to the LacrosLogFilesLogSource.
-          base::FilePath log_base_path =
-              crosapi::browser_util::GetUserDataDir();
-          std::string lacrosUserLogKey = "lacros_user_log";
-          handler->AddDataCollector(std::make_unique<
-                                    SystemLogSourceDataCollectorAdaptor>(
-              "Gets Lacros system information log data if Lacros is running "
-              "and the crosapi version supports the Lacros remote data source.",
-              std::make_unique<system_logs::LacrosLogFilesLogSource>(
-                  log_base_path, lacrosUserLogKey)));
-        }
-        break;
       case support_tool::CHROMEOS_SHILL:
         handler->AddDataCollector(std::make_unique<ShillDataCollector>());
         break;
@@ -233,6 +200,28 @@ std::unique_ptr<SupportToolHandler> GetSupportToolHandler(
         handler->AddDataCollector(std::make_unique<SystemLogsDataCollector>(
             /*requested_logs=*/std::set<base::FilePath>()));
         break;
+      case support_tool::CHROMEOS_PERIODIC_LOG_UPLOAD_SYSTEM_LOGS: {
+        // For periodic log upload only a certain subset of system logs is
+        // necessary.
+        const std::set<base::FilePath> periodicLogUploadSystemLogs = {
+            base::FilePath("bios_info"),
+            base::FilePath("chrome_system_log"),
+            base::FilePath("chrome_system_log.PREVIOUS"),
+            base::FilePath("eventlog"),
+            base::FilePath("extensions.log"),
+            base::FilePath("netlog"),
+            base::FilePath("syslog"),
+            base::FilePath("ui_log"),
+            base::FilePath("update_engine.log"),
+            // TODO(b/352028256): the following log is not currently read by
+            // debugd. Don't forget to add them during the periodic log
+            // upload migration.
+            base::FilePath("extensions.1.log"),
+        };
+        handler->AddDataCollector(std::make_unique<SystemLogsDataCollector>(
+            periodicLogUploadSystemLogs));
+        break;
+      }
       case support_tool::CHROMEOS_CHROME_USER_LOGS:
         // User session must be active to read user data from Cryptohome.
         if (ash::IsUserBrowserContext(profile)) {
@@ -304,9 +293,6 @@ std::vector<support_tool::DataCollectorType> GetAllDataCollectors() {
   for (const auto& type : kDataCollectorsChromeosHwDetails) {
     data_collectors.push_back(type);
   }
-  for (const auto& type : kOptionalDataCollectors) {
-    data_collectors.push_back(type);
-  }
   return data_collectors;
 }
 
@@ -319,13 +305,6 @@ GetAllAvailableDataCollectorsOnDevice() {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   for (const auto& type : kDataCollectorsChromeosAsh) {
     data_collectors.push_back(type);
-  }
-  if (crosapi::browser_util::IsLacrosEnabled()) {
-    data_collectors.push_back(support_tool::CHROMEOS_LACROS);
-  }
-  if (crosapi::BrowserManager::Get()->IsRunning() &&
-      crosapi::BrowserManager::Get()->GetFeedbackDataSupported()) {
-    data_collectors.push_back(support_tool::CHROMEOS_CROS_API);
   }
 #if BUILDFLAG(IS_CHROMEOS_WITH_HW_DETAILS)
   for (const auto& type : kDataCollectorsChromeosHwDetails) {
@@ -347,4 +326,14 @@ base::FilePath GetFilepathToExport(base::FilePath target_directory,
   return target_directory.AppendASCII(
       filename + base::UnlocalizedTimeFormatWithPattern(
                      timestamp, "'UTC'yyyyMMdd_HHmm", icu::TimeZone::getGMT()));
+}
+
+std::string SupportToolErrorsToString(
+    const std::set<SupportToolError>& errors) {
+  std::vector<std::string_view> error_messages;
+  error_messages.reserve(errors.size());
+  for (const auto& error : errors) {
+    error_messages.push_back(error.error_message);
+  }
+  return base::JoinString(error_messages, ", ");
 }

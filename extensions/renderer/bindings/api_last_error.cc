@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <tuple>
+
 #include "gin/converter.h"
 #include "gin/data_object_builder.h"
 #include "gin/handle.h"
@@ -64,7 +65,7 @@ void LastErrorGetter(v8::Local<v8::Name> property,
   v8::Isolate* isolate = info.GetIsolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Object> holder = info.Holder();
-  v8::Local<v8::Context> context = holder->GetCreationContextChecked();
+  v8::Local<v8::Context> context = holder->GetCreationContextChecked(isolate);
 
   v8::Local<v8::Value> last_error;
   v8::Local<v8::Private> last_error_key = v8::Private::ForApi(
@@ -73,7 +74,6 @@ void LastErrorGetter(v8::Local<v8::Name> property,
       last_error != info.Data()) {
     // Something funny happened - our private properties aren't set right.
     NOTREACHED();
-    return;
   }
 
   v8::Local<v8::Value> return_value;
@@ -104,7 +104,7 @@ void LastErrorSetter(v8::Local<v8::Name> property,
   v8::Isolate* isolate = info.GetIsolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Object> holder = info.Holder();
-  v8::Local<v8::Context> context = holder->GetCreationContextChecked();
+  v8::Local<v8::Context> context = holder->GetCreationContextChecked(isolate);
 
   v8::Local<v8::Private> script_value_key = v8::Private::ForApi(
       isolate, gin::StringToSymbol(isolate, kScriptSuppliedValueKey));
@@ -184,7 +184,6 @@ void APILastError::ClearError(v8::Local<v8::Context> context,
   v8::Maybe<bool> delete_private = parent->DeletePrivate(context, private_key);
   if (!delete_private.IsJust() || !delete_private.FromJust()) {
     NOTREACHED();
-    return;
   }
   // These Delete()s can fail, but there's nothing to do if it does (the
   // exception will be caught by the TryCatch above).
@@ -287,13 +286,12 @@ void APILastError::SetErrorOnPrimaryParent(v8::Local<v8::Context> context,
         context, v8::Private::ForApi(isolate, key), last_error);
     if (!set_private.IsJust() || !set_private.FromJust()) {
       NOTREACHED();
-      return;
     }
     DCHECK(!last_error.IsEmpty());
-    // This SetAccessor() can fail, but there's nothing to do if it does (the
-    // exception will be caught by the TryCatch in SetError()).
-    std::ignore = parent->SetAccessor(context, key, &LastErrorGetter,
-                                      &LastErrorSetter, last_error);
+    // This SetNativeDataProperty() can fail, but there's nothing to do if it
+    // does (the exception will be caught by the TryCatch in SetError()).
+    std::ignore = parent->SetNativeDataProperty(context, key, &LastErrorGetter,
+                                                &LastErrorSetter, last_error);
   }
 }
 

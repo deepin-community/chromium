@@ -28,6 +28,9 @@
 #ifndef SRC_DAWN_NATIVE_SURFACE_H_
 #define SRC_DAWN_NATIVE_SURFACE_H_
 
+#include <memory>
+#include <string>
+
 #include "dawn/native/Error.h"
 #include "dawn/native/Forward.h"
 #include "dawn/native/ObjectBase.h"
@@ -37,9 +40,9 @@
 
 #include "dawn/common/Platform.h"
 
-#if DAWN_PLATFORM_IS(WINDOWS)
+#if defined(DAWN_USE_WINDOWS_UI)
 #include "dawn/native/d3d/d3d_platform.h"
-#endif  // DAWN_PLATFORM_IS(WINDOWS)
+#endif  // defined(DAWN_USE_WINDOWS_UI)
 
 // Forward declare IUnknown
 // GetCoreWindow needs to return an IUnknown pointer
@@ -48,9 +51,19 @@ struct IUnknown;
 
 namespace dawn::native {
 
+struct PhysicalDeviceSurfaceCapabilities;
+
+// Adapter surface capabilities are cached by the surface
+class AdapterSurfaceCapCache;
+
 ResultOrError<UnpackedPtr<SurfaceDescriptor>> ValidateSurfaceDescriptor(
     InstanceBase* instance,
     const SurfaceDescriptor* rawDescriptor);
+
+MaybeError ValidateSurfaceConfiguration(DeviceBase* device,
+                                        const PhysicalDeviceSurfaceCapabilities& capabilities,
+                                        const SurfaceConfiguration* config,
+                                        const Surface* surface);
 
 // A surface is a sum types of all the kind of windows Dawn supports. The OS-specific types
 // aren't used because they would cause compilation errors on other OSes (or require
@@ -62,9 +75,6 @@ class Surface final : public ErrorMonad {
     static Ref<Surface> MakeError(InstanceBase* instance);
 
     Surface(InstanceBase* instance, const UnpackedPtr<SurfaceDescriptor>& descriptor);
-
-    void SetAttachedSwapChain(SwapChainBase* swapChain);
-    SwapChainBase* GetAttachedSwapChain();
 
     // These are valid to call on all Surfaces.
     enum class Type {
@@ -78,6 +88,7 @@ class Surface final : public ErrorMonad {
     };
     Type GetType() const;
     InstanceBase* GetInstance() const;
+    DeviceBase* GetCurrentDevice() const;
 
     // Valid to call if the type is MetalLayer
     void* GetMetalLayer() const;
@@ -103,18 +114,42 @@ class Surface final : public ErrorMonad {
     void* GetXDisplay() const;
     uint32_t GetXWindow() const;
 
+    const std::string& GetLabel() const;
+
     // Dawn API
-    wgpu::TextureFormat APIGetPreferredFormat(AdapterBase* adapter) const;
+    void APIConfigure(const SurfaceConfiguration* config);
+    wgpu::Status APIGetCapabilities(AdapterBase* adapter, SurfaceCapabilities* capabilities) const;
+    void APIGetCurrentTexture(SurfaceTexture* surfaceTexture) const;
+    void APIPresent();
+    void APIUnconfigure();
+    void APISetLabel(StringView label);
 
   private:
     Surface(InstanceBase* instance, ErrorMonad::ErrorTag tag);
     ~Surface() override;
 
+    MaybeError Configure(const SurfaceConfiguration* config);
+    MaybeError Unconfigure();
+
+    MaybeError GetCapabilities(AdapterBase* adapter, SurfaceCapabilities* capabilities) const;
+    MaybeError GetCurrentTexture(SurfaceTexture* surfaceTexture) const;
+    MaybeError Present();
+
     Ref<InstanceBase> mInstance;
     Type mType;
+    std::string mLabel;
 
-    // The swapchain will set this to null when it is destroyed.
+    // The surface has an associated device only when it is configured
+    Ref<DeviceBase> mCurrentDevice;
+
+    // The swapchain is created when configuring the surface.
     Ref<SwapChainBase> mSwapChain;
+
+    // We keep on storing the previous swap chain after Unconfigure in case we could reuse it
+    Ref<SwapChainBase> mRecycledSwapChain;
+
+    // A cache is mutable because potentially modified in const-qualified getters
+    std::unique_ptr<AdapterSurfaceCapCache> mCapabilityCache;
 
     // MetalLayer
     raw_ptr<void> mMetalLayer = nullptr;

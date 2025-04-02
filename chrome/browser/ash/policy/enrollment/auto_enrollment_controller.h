@@ -109,6 +109,9 @@ class AutoEnrollmentController : public ash::NetworkStateHandlerObserver {
   // Retry checking.
   void Retry();
 
+  // Returns true if auto-enrollment check is running.
+  bool IsInProgress() const;
+
   // Registers a callback to invoke on state changes.
   base::CallbackListSubscription RegisterProgressCallback(
       const ProgressCallbackList::CallbackType& callback);
@@ -147,6 +150,14 @@ class AutoEnrollmentController : public ash::NetworkStateHandlerObserver {
 
   // Returns safeguard timer. Used for testing
   base::OneShotTimer& SafeguardTimerForTesting() { return safeguard_timer_; }
+
+  // The OOBE network error screen can provide a link to sign in as guest.
+  // This should only be allowed if
+  //   * enrollment state determination has completed,
+  //   * forced enrollment is not strictly required (using guest mode would be
+  //     considered an enrollment escape).
+  // Use `IsGuestSigninAllowed` to determine if guest mode should be allowed.
+  bool IsGuestSigninAllowed() const;
 
  protected:
   // Complete constructor which can be used to inject testing modules.
@@ -230,8 +241,6 @@ class AutoEnrollmentController : public ash::NetworkStateHandlerObserver {
   // Handles timeout of the safeguard timer and stops waiting for a result.
   void Timeout();
 
-  bool IsInProgress() const;
-
   // Used for checking ownership.
   raw_ptr<ash::DeviceSettingsService> device_settings_service_;
 
@@ -284,8 +293,8 @@ class AutoEnrollmentController : public ash::NetworkStateHandlerObserver {
   // Which type of auto-enrollment check is being performed by this
   // `AutoEnrollmentClient`.
   AutoEnrollmentTypeChecker::CheckType auto_enrollment_check_type_ =
-      AutoEnrollmentTypeChecker::CheckType::kNone;
-  bool auto_enrollment_check_type_init_started_ = false;
+      AutoEnrollmentTypeChecker::CheckType::
+          kForcedReEnrollmentExplicitlyRequired;
 
   // Shared factory for outgoing network requests.
   scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory_;

@@ -10,6 +10,7 @@
 
 #include "include/core/SkImageInfo.h"
 #include "src/gpu/graphite/ResourceTypes.h"
+#include "src/gpu/graphite/dawn/DawnGraphiteTypesPriv.h"
 #include "src/sksl/SkSLProgramKind.h"
 #include "src/sksl/ir/SkSLProgram.h"
 
@@ -34,9 +35,23 @@ bool DawnFormatIsStencil(wgpu::TextureFormat);
 wgpu::TextureFormat DawnDepthStencilFlagsToFormat(SkEnumBitMask<DepthStencilFlags>);
 
 bool DawnCompileWGSLShaderModule(const DawnSharedContext* sharedContext,
+                                 const char* label,
                                  const std::string& wgsl,
                                  wgpu::ShaderModule* module,
                                  ShaderErrorHandler*);
+
+#if !defined(__EMSCRIPTEN__)
+
+bool DawnDescriptorIsValid(const wgpu::YCbCrVkDescriptor&);
+
+bool DawnDescriptorUsesExternalFormat(const wgpu::YCbCrVkDescriptor&);
+
+bool DawnDescriptorsAreEquivalent(const wgpu::YCbCrVkDescriptor&, const wgpu::YCbCrVkDescriptor&);
+
+ImmutableSamplerInfo DawnDescriptorToImmutableSamplerInfo(const wgpu::YCbCrVkDescriptor&);
+wgpu::YCbCrVkDescriptor DawnDescriptorFromImmutableSamplerInfo(ImmutableSamplerInfo);
+
+#endif // !defined(__EMSCRIPTEN__)
 
 } // namespace skgpu::graphite
 

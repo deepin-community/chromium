@@ -16,10 +16,7 @@ component("features") {
     "native_theme_features.h",
   ]
 
-  deps = [
-    "//base",
-    "//build:chromeos_buildflags",
-  ]
+  deps = [ "//base" ]
 }
 
 component("native_theme") {
@@ -50,8 +47,9 @@ component("native_theme") {
 
   if (is_mac) {
     frameworks = [
-      "CoreGraphics.framework",
+      "Accessibility.framework",
       "AppKit.framework",
+      "CoreGraphics.framework",
       "MediaAccessibility.framework",
     ]
     sources += [
@@ -91,8 +89,6 @@ component("native_theme") {
 
   deps = [
     "//base",
-    "//base/third_party/dynamic_annotations",
-    "//build:chromeos_buildflags",
     "//cc/paint",
     "//ui/base",
     "//ui/color",
@@ -152,6 +148,7 @@ test("native_theme_unittests") {
   use_xvfb = use_xvfb_in_this_config
 
   sources = [
+    "native_theme_base_unittest.cc",
     "native_theme_fluent_unittest.cc",
     "native_theme_unittest.cc",
   ]
@@ -176,6 +173,7 @@ test("native_theme_unittests") {
     "//skia",
     "//testing/gtest",
     "//ui/base",
+    "//ui/color",
     "//ui/gfx:test_support",
     "//ui/gfx/geometry:geometry",
   ]
@@ -185,9 +183,6 @@ test("native_theme_unittests") {
       "native_theme_mac_unittest.mm",
       "scrollbar_animator_mac_unittest.cc",
     ]
-    deps += [
-      "//ui/color",
-      "//ui/gfx:test_support",
-    ]
+    deps += [ "//ui/gfx:test_support" ]
   }
 }

@@ -17,7 +17,6 @@ String ModuleScriptCreationParams::ModuleTypeToString(
       return "CSS";
     case ModuleType::kInvalid:
       NOTREACHED();
-      return "";
   }
 }
 

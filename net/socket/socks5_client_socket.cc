@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "net/socket/socks5_client_socket.h"
 
 #include <utility>
@@ -100,14 +105,12 @@ NextProto SOCKS5ClientSocket::GetNegotiatedProtocol() const {
   if (transport_socket_)
     return transport_socket_->GetNegotiatedProtocol();
   NOTREACHED();
-  return kProtoUnknown;
 }
 
 bool SOCKS5ClientSocket::GetSSLInfo(SSLInfo* ssl_info) {
   if (transport_socket_)
     return transport_socket_->GetSSLInfo(ssl_info);
   NOTREACHED();
-  return false;
 }
 
 int64_t SOCKS5ClientSocket::GetTotalReceivedBytes() const {
@@ -244,8 +247,6 @@ int SOCKS5ClientSocket::DoLoop(int last_io_result) {
         break;
       default:
         NOTREACHED() << "bad state";
-        rv = ERR_UNEXPECTED;
-        break;
     }
   } while (rv != ERR_IO_PENDING && next_state_ != STATE_NONE);
   return rv;

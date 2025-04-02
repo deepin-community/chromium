@@ -18,6 +18,7 @@
 #include "third_party/blink/renderer/core/layout/layout_text.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread_scheduler.h"
+#include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
 
@@ -53,6 +54,17 @@ ContentCaptureTask::ContentCaptureTask(LocalFrame& local_frame_root,
   task_delay_ = std::make_unique<TaskDelay>(local_frame_root.Client()
                                                 ->GetWebContentCaptureClient()
                                                 ->GetTaskInitialDelay());
+
+  // The histogram is all about time, just disable it if high resolution isn't
+  // supported.
+  if (base::TimeTicks::IsHighResolution()) {
+    histogram_reporter_ =
+        base::MakeRefCounted<ContentCaptureTaskHistogramReporter>();
+    task_session_->SetSentNodeCountCallback(
+        WTF::BindRepeating(&ContentCaptureTaskHistogramReporter::
+                               RecordsSentContentCountPerDocument,
+                           histogram_reporter_));
+  }
 }
 
 ContentCaptureTask::~ContentCaptureTask() = default;
@@ -89,9 +101,15 @@ bool ContentCaptureTask::CaptureContent(Vector<cc::NodeInfo>& data) {
 bool ContentCaptureTask::CaptureContent() {
   DCHECK(task_session_);
   Vector<cc::NodeInfo> buffer;
+  if (histogram_reporter_) {
+    histogram_reporter_->OnCaptureContentStarted();
+  }
   bool result = CaptureContent(buffer);
   if (!buffer.empty())
     task_session_->SetCapturedContent(buffer);
+  if (histogram_reporter_) {
+    histogram_reporter_->OnCaptureContentEnded(buffer.size());
+  }
   return result;
 }
 
@@ -102,7 +120,7 @@ void ContentCaptureTask::SendContent(
   auto* client = GetWebContentCaptureClient(*document);
   DCHECK(client);
 
-  WebVector<WebContentHolder> content_batch;
+  std::vector<WebContentHolder> content_batch;
   content_batch.reserve(kBatchSize);
   // Only send changed content after the new content was sent.
   bool sending_changed_content = !doc_session.HasUnsentCapturedContent();
@@ -260,6 +278,9 @@ bool ContentCaptureTask::ShouldPause() {
 void ContentCaptureTask::CancelTask() {
   if (delay_task_.IsActive())
     delay_task_.Stop();
+}
+void ContentCaptureTask::ClearDocumentSessionsForTesting() {
+  task_session_->ClearDocumentSessionsForTesting();
 }
 
 base::TimeDelta ContentCaptureTask::GetTaskNextFireIntervalForTesting() const {

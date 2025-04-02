@@ -2,9 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "third_party/blink/renderer/modules/mediarecorder/video_track_recorder.h"
 
+#include <array>
 #include <sstream>
+#include <string_view>
 
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
@@ -13,6 +20,9 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/test/bind.h"
 #include "base/test/gmock_callback_support.h"
+#include "base/time/time.h"
+#include "gpu/command_buffer/client/test_shared_image_interface.h"
+#include "media/base/decoder_buffer.h"
 #include "media/base/limits.h"
 #include "media/base/mock_filters.h"
 #include "media/base/video_codecs.h"
@@ -50,11 +60,13 @@ using video_track_recorder::kVEAEncoderMinResolutionWidth;
 using ::testing::_;
 using ::testing::DoAll;
 using ::testing::InSequence;
+using ::testing::Invoke;
 using ::testing::Mock;
 using ::testing::Return;
 using ::testing::SaveArg;
 using ::testing::TestWithParam;
 using ::testing::ValuesIn;
+using ::testing::WithArg;
 
 namespace blink {
 namespace {
@@ -80,10 +92,10 @@ const VideoTrackRecorder::CodecId kTrackRecorderTestCodec[] = {
     VideoTrackRecorder::CodecId::kAv1,
 #endif
 };
-const gfx::Size kTrackRecorderTestSize[] = {
-    gfx::Size(kVEAEncoderMinResolutionWidth / 2,
-              kVEAEncoderMinResolutionHeight / 2),
-    gfx::Size(kVEAEncoderMinResolutionWidth, kVEAEncoderMinResolutionHeight)};
+const auto kTrackRecorderTestSize = std::to_array<gfx::Size>(
+    {gfx::Size(kVEAEncoderMinResolutionWidth / 2,
+               kVEAEncoderMinResolutionHeight / 2),
+     gfx::Size(kVEAEncoderMinResolutionWidth, kVEAEncoderMinResolutionHeight)});
 static const int kTrackRecorderTestSizeDiff = 20;
 
 constexpr media::VideoCodec MediaVideoCodecFromCodecId(
@@ -106,8 +118,6 @@ constexpr media::VideoCodec MediaVideoCodecFromCodecId(
     default:
       return media::VideoCodec::kUnknown;
   }
-  NOTREACHED() << "Unsupported video codec";
-  return media::VideoCodec::kUnknown;
 }
 
 media::VideoCodecProfile MediaVideoCodecProfileFromCodecId(
@@ -131,7 +141,6 @@ media::VideoCodecProfile MediaVideoCodecProfileFromCodecId(
       break;
   }
   NOTREACHED() << "Unsupported video codec";
-  return media::VideoCodecProfile::VIDEO_CODEC_PROFILE_UNKNOWN;
 }
 
 }  // namespace
@@ -159,29 +168,34 @@ class MockVideoTrackRecorderCallbackInterface
   MOCK_METHOD(void,
               OnPassthroughVideo,
               (const media::Muxer::VideoParameters& params,
-               std::string encoded_data,
-               std::string encoded_alpha,
-               base::TimeTicks timestamp,
-               bool is_key_frame),
+               scoped_refptr<media::DecoderBuffer> encoded_data,
+               base::TimeTicks timestamp),
               (override));
   MOCK_METHOD(
       void,
       OnEncodedVideo,
       (const media::Muxer::VideoParameters& params,
-       std::string encoded_data,
-       std::string encoded_alpha,
+       scoped_refptr<media::DecoderBuffer> encoded_data,
        std::optional<media::VideoEncoder::CodecDescription> codec_description,
-       base::TimeTicks timestamp,
-       bool is_key_frame),
+       base::TimeTicks timestamp),
       (override));
   MOCK_METHOD(std::unique_ptr<media::VideoEncoderMetricsProvider>,
               CreateVideoEncoderMetricsProvider,
               (),
               (override));
 
-  MOCK_METHOD(void, OnVideoEncodingError, (), (override));
+  MOCK_METHOD(void,
+              OnVideoEncodingError,
+              (const media::EncoderStatus& status),
+              (override));
   MOCK_METHOD(void, OnSourceReadyStateChanged, (), (override));
-  void Trace(Visitor*) const override {}
+  void Trace(Visitor* v) const override { v->Trace(weak_factory_); }
+  WeakCell<VideoTrackRecorder::CallbackInterface>* GetWeakCell() {
+    return weak_factory_.GetWeakCell();
+  }
+
+ private:
+  WeakCellFactory<VideoTrackRecorder::CallbackInterface> weak_factory_{this};
 };
 
 class VideoTrackRecorderTestBase {
@@ -268,8 +282,10 @@ class VideoTrackRecorderTest : public VideoTrackRecorderTestBase {
           KeyFrameRequestProcessor::Configuration()) {
     video_track_recorder_ = std::make_unique<VideoTrackRecorderImpl>(
         scheduler::GetSingleThreadTaskRunnerForTesting(), codec_profile,
-        WebMediaStreamTrack(component_.Get()), mock_callback_interface_,
-        /*bits_per_second=*/1000000, keyframe_config);
+        WebMediaStreamTrack(component_.Get()),
+        mock_callback_interface_->GetWeakCell(),
+        /*bits_per_second=*/1000000, keyframe_config,
+        /*frame_buffer_pool_limit=*/10);
   }
 
   void Encode(scoped_refptr<media::VideoFrame> frame,
@@ -282,7 +298,10 @@ class VideoTrackRecorderTest : public VideoTrackRecorderTestBase {
   }
 
   void OnFailed() { FAIL(); }
-  void OnError() { video_track_recorder_->OnHardwareEncoderError(); }
+  void OnError() {
+    video_track_recorder_->OnHardwareEncoderError(
+        media::EncoderStatus::Codes::kEncoderFailedEncode);
+  }
 
   bool CanEncodeAlphaChannel() {
     bool result;
@@ -320,9 +339,9 @@ class VideoTrackRecorderTest : public VideoTrackRecorderTestBase {
 
   // All members are non-const due to the series of initialize() calls needed.
   // |mock_source_| is owned by |source_|, |track_| by |component_|.
-  raw_ptr<MockMediaStreamVideoSource, ExperimentalRenderer> mock_source_;
+  raw_ptr<MockMediaStreamVideoSource> mock_source_;
   Persistent<MediaStreamSource> source_;
-  raw_ptr<MediaStreamVideoTrack, ExperimentalRenderer> track_;
+  raw_ptr<MediaStreamVideoTrack> track_;
   Persistent<MediaStreamComponent> component_;
 
   std::unique_ptr<VideoTrackRecorderImpl> video_track_recorder_;
@@ -349,8 +368,9 @@ class VideoTrackRecorderTest : public VideoTrackRecorderTestBase {
             : media::VideoFrame::STORAGE_GPU_MEMORY_BUFFER,
         media::VideoPixelFormat::PIXEL_FORMAT_NV12, base::TimeDelta());
     scoped_refptr<media::VideoFrame> video_frame2 = video_frame;
-    if (frame_type == TestFrameType::kNv12GpuMemoryBuffer)
+    if (frame_type == TestFrameType::kNv12GpuMemoryBuffer) {
       video_frame2 = media::ConvertToMemoryMappedFrame(video_frame);
+    }
 
     // Fade to black.
     const uint8_t kBlackY = 0x00;
@@ -359,11 +379,65 @@ class VideoTrackRecorderTest : public VideoTrackRecorderTestBase {
            video_frame2->stride(0) * frame_size.height());
     memset(video_frame2->writable_data(1), kBlackUV,
            video_frame2->stride(1) * (frame_size.height() / 2));
-    if (frame_type == TestFrameType::kNv12GpuMemoryBuffer)
+    if (frame_type == TestFrameType::kNv12GpuMemoryBuffer) {
       return video_frame;
+    }
     return video_frame2;
   }
 };
+
+class VideoTrackRecorderTestWithAllCodecs : public ::testing::Test,
+                                            public VideoTrackRecorderTest {
+ public:
+  VideoTrackRecorderTestWithAllCodecs() = default;
+  ~VideoTrackRecorderTestWithAllCodecs() override = default;
+};
+
+TEST_F(VideoTrackRecorderTestWithAllCodecs, NoCrashInConfigureEncoder) {
+  constexpr std::pair<VideoTrackRecorder::CodecId, bool> kCodecIds[] = {
+      {VideoTrackRecorder::CodecId::kVp8, true},
+      {VideoTrackRecorder::CodecId::kVp9, true},
+#if BUILDFLAG(USE_PROPRIETARY_CODECS)
+      {VideoTrackRecorder::CodecId::kH264,
+#if BUILDFLAG(ENABLE_OPENH264)
+       true
+#else
+       false
+#endif  // BUILDFLAG(ENABLE_OPENH264)
+      },
+#endif  // BUILDFLAG(USE_PROPRIETARY_CODECS)
+      {VideoTrackRecorder::CodecId::kAv1,
+#if BUILDFLAG(ENABLE_LIBAOM)
+       true
+#else
+       false
+#endif  // BUILDFLAG(ENABLE_LIBAOM)
+      },
+  };
+  for (auto [codec_id, can_sw_encode] : kCodecIds) {
+    InitializeRecorder(codec_id);
+    const scoped_refptr<media::VideoFrame> video_frame =
+        CreateFrameForTest(TestFrameType::kI420,
+                           gfx::Size(kVEAEncoderMinResolutionWidth,
+                                     kVEAEncoderMinResolutionHeight),
+                           /*encode_alpha_channel=*/false, /*padding=*/0);
+    if (!video_frame) {
+      ASSERT_TRUE(!!video_frame);
+    }
+    base::RunLoop run_loop;
+    InSequence s;
+    if (can_sw_encode) {
+      EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo)
+          .WillOnce(RunClosure(run_loop.QuitClosure()));
+    } else {
+      EXPECT_CALL(*mock_callback_interface_, OnVideoEncodingError)
+          .WillOnce(RunClosure(run_loop.QuitClosure()));
+    }
+    Encode(video_frame, base::TimeTicks::Now());
+    run_loop.Run();
+    EXPECT_EQ(HasEncoderInstance(), can_sw_encode);
+  }
+}
 
 class VideoTrackRecorderTestWithCodec
     : public TestWithParam<testing::tuple<VideoTrackRecorder::CodecId, bool>>,
@@ -433,6 +507,11 @@ class VideoTrackRecorderTestParam
   ~VideoTrackRecorderTestParam() override = default;
 };
 
+// Matches whether a scoped_refptr<DecoderBuffer> is a key frame or not.
+MATCHER_P(IsKeyFrame, is_key_frame, "decoder buffer key frame matcher") {
+  return arg->is_key_frame() == is_key_frame;
+}
+
 // Creates the encoder and encodes 2 frames of the same size; the encoder
 // should be initialised and produce a keyframe, then a non-keyframe. Finally
 // a frame of larger size is sent and is expected to be encoded as a keyframe.
@@ -453,30 +532,27 @@ TEST_P(VideoTrackRecorderTestParam, VideoEncoding) {
 
   const scoped_refptr<media::VideoFrame> video_frame = CreateFrameForTest(
       test_frame_type, frame_size, encode_alpha_channel, /*padding=*/0);
-  if (!video_frame)
+  if (!video_frame) {
     ASSERT_TRUE(!!video_frame);
+  }
 
   const double kFrameRate = 60.0f;
   video_frame->metadata().frame_rate = kFrameRate;
 
   InSequence s;
   const base::TimeTicks timeticks_now = base::TimeTicks::Now();
-  base::StringPiece first_frame_encoded_data;
-  base::StringPiece first_frame_encoded_alpha;
+  scoped_refptr<media::DecoderBuffer> first_frame_encoded_data;
   EXPECT_CALL(*mock_callback_interface_,
-              OnEncodedVideo(_, _, _, _, timeticks_now, true))
+              OnEncodedVideo(_, IsKeyFrame(true), _, timeticks_now))
       .Times(1)
-      .WillOnce(DoAll(SaveArg<1>(&first_frame_encoded_data),
-                      SaveArg<2>(&first_frame_encoded_alpha)));
+      .WillOnce(SaveArg<1>(&first_frame_encoded_data));
 
   const base::TimeTicks timeticks_later = base::TimeTicks::Now();
-  base::StringPiece second_frame_encoded_data;
-  base::StringPiece second_frame_encoded_alpha;
+  scoped_refptr<media::DecoderBuffer> second_frame_encoded_data;
   EXPECT_CALL(*mock_callback_interface_,
-              OnEncodedVideo(_, _, _, _, timeticks_later, false))
+              OnEncodedVideo(_, IsKeyFrame(false), _, timeticks_later))
       .Times(1)
-      .WillOnce(DoAll(SaveArg<1>(&second_frame_encoded_data),
-                      SaveArg<2>(&second_frame_encoded_alpha)));
+      .WillOnce(SaveArg<1>(&second_frame_encoded_data));
 
   const gfx::Size frame_size2(frame_size.width() + kTrackRecorderTestSizeDiff,
                               frame_size.height());
@@ -485,12 +561,11 @@ TEST_P(VideoTrackRecorderTestParam, VideoEncoding) {
 
   base::RunLoop run_loop;
 
-  base::StringPiece third_frame_encoded_data;
-  base::StringPiece third_frame_encoded_alpha;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true))
+  scoped_refptr<media::DecoderBuffer> third_frame_encoded_data;
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _))
       .Times(1)
       .WillOnce(DoAll(SaveArg<1>(&third_frame_encoded_data),
-                      SaveArg<2>(&third_frame_encoded_alpha),
                       RunClosure(run_loop.QuitClosure())));
   // A test-only TSAN problem is fixed by placing the encodes down here and not
   // close to the expectation setups.
@@ -500,22 +575,24 @@ TEST_P(VideoTrackRecorderTestParam, VideoEncoding) {
 
   run_loop.Run();
 
-  const size_t kEncodedSizeThreshold = 14;
-  EXPECT_GE(first_frame_encoded_data.size(), kEncodedSizeThreshold);
-  EXPECT_GE(second_frame_encoded_data.size(), kEncodedSizeThreshold);
-  EXPECT_GE(third_frame_encoded_data.size(), kEncodedSizeThreshold);
+  const size_t kEncodedSizeThreshold = 12;
+  EXPECT_GE(first_frame_encoded_data->size(), kEncodedSizeThreshold);
+  EXPECT_GE(second_frame_encoded_data->size(), kEncodedSizeThreshold);
+  EXPECT_GE(third_frame_encoded_data->size(), kEncodedSizeThreshold);
 
   // We only support NV12 with GpuMemoryBuffer video frame.
   if (test_frame_type == TestFrameType::kI420 && encode_alpha_channel &&
       CanEncodeAlphaChannel()) {
-    EXPECT_GE(first_frame_encoded_alpha.size(), kEncodedSizeThreshold);
-    EXPECT_GE(second_frame_encoded_alpha.size(), kEncodedSizeThreshold);
-    EXPECT_GE(third_frame_encoded_alpha.size(), kEncodedSizeThreshold);
+    EXPECT_GE(first_frame_encoded_data->side_data()->alpha_data.size(),
+              kEncodedSizeThreshold);
+    EXPECT_GE(second_frame_encoded_data->side_data()->alpha_data.size(),
+              kEncodedSizeThreshold);
+    EXPECT_GE(third_frame_encoded_data->side_data()->alpha_data.size(),
+              kEncodedSizeThreshold);
   } else {
-    const size_t kEmptySize = 0;
-    EXPECT_EQ(first_frame_encoded_alpha.size(), kEmptySize);
-    EXPECT_EQ(second_frame_encoded_alpha.size(), kEmptySize);
-    EXPECT_EQ(third_frame_encoded_alpha.size(), kEmptySize);
+    EXPECT_FALSE(first_frame_encoded_data->side_data());
+    EXPECT_FALSE(second_frame_encoded_data->side_data());
+    EXPECT_FALSE(third_frame_encoded_data->side_data());
   }
 
   // The encoder is configured non screen content by default.
@@ -664,7 +741,8 @@ TEST_P(VideoTrackRecorderTestParam, EncodeFrameWithPaddedCodedSize) {
                          /*encode_alpha_channel=*/false, kCodedSizePadding);
 
   base::RunLoop run_loop;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _))
       .Times(1)
       .WillOnce(RunClosure(run_loop.QuitClosure()));
   Encode(video_frame, base::TimeTicks::Now());
@@ -683,8 +761,9 @@ TEST_P(VideoTrackRecorderTestParam, EncodeFrameRGB) {
   // Let kI420 indicate owned memory, and kNv12GpuMemoryBuffer to indicate GMB
   // storage. Don't test for kNv12Software.
   const TestFrameType test_frame_type = testing::get<3>(GetParam());
-  if (test_frame_type == TestFrameType::kNv12Software)
+  if (test_frame_type == TestFrameType::kNv12Software) {
     return;
+  }
 
   const bool encode_alpha_channel = testing::get<2>(GetParam());
   media::VideoPixelFormat pixel_format = encode_alpha_channel
@@ -701,7 +780,8 @@ TEST_P(VideoTrackRecorderTestParam, EncodeFrameRGB) {
                                    pixel_format, base::TimeDelta());
 
   base::RunLoop run_loop;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _))
       .Times(1)
       .WillOnce(RunClosure(run_loop.QuitClosure()));
   Encode(video_frame, base::TimeTicks::Now());
@@ -725,8 +805,10 @@ TEST_P(VideoTrackRecorderTestParam, EncoderHonorsKeyFrameRequests) {
   // frame.
   video_track_recorder_->ForceKeyFrameForNextFrameForTesting();
   base::RunLoop run_loop2;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true));
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, false))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _));
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(false), _, _))
       .WillOnce(RunClosure(run_loop2.QuitClosure()));
   Encode(frame, base::TimeTicks::Now());
   Encode(frame, base::TimeTicks::Now());
@@ -738,16 +820,19 @@ TEST_P(VideoTrackRecorderTestParam, EncoderHonorsKeyFrameRequests) {
 TEST_P(VideoTrackRecorderTestParam,
        NoSubsequenceKeyFramesWithDefaultKeyFrameConfig) {
   InitializeRecorder(testing::get<0>(GetParam()));
-  auto frame = media::VideoFrame::CreateBlackFrame(kTrackRecorderTestSize[0]);
 
   auto origin = base::TimeTicks::Now();
   InSequence s;
   base::RunLoop run_loop;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true));
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, false))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _));
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(false), _, _))
       .Times(8);
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, false))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(false), _, _))
       .WillOnce(RunClosure(run_loop.QuitClosure()));
+  auto frame = media::VideoFrame::CreateBlackFrame(kTrackRecorderTestSize[0]);
   for (int i = 0; i != 10; ++i) {
     Encode(frame, origin + i * base::Minutes(1));
   }
@@ -757,19 +842,24 @@ TEST_P(VideoTrackRecorderTestParam,
 TEST_P(VideoTrackRecorderTestParam, KeyFramesGeneratedWithIntervalCount) {
   // Configure 3 delta frames for every key frame.
   InitializeRecorder(testing::get<0>(GetParam()), /*keyframe_config=*/3u);
-  auto frame = media::VideoFrame::CreateBlackFrame(kTrackRecorderTestSize[0]);
 
   auto origin = base::TimeTicks::Now();
   InSequence s;
   base::RunLoop run_loop;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true));
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, false))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _));
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(false), _, _))
       .Times(3);
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true));
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, false))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _));
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(false), _, _))
       .Times(2);
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, false))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(false), _, _))
       .WillOnce(RunClosure(run_loop.QuitClosure()));
+  auto frame = media::VideoFrame::CreateBlackFrame(kTrackRecorderTestSize[0]);
   for (int i = 0; i != 8; ++i) {
     Encode(frame, origin);
   }
@@ -780,22 +870,55 @@ TEST_P(VideoTrackRecorderTestParam, KeyFramesGeneratedWithIntervalDuration) {
   // Configure 1 key frame every 2 secs.
   InitializeRecorder(testing::get<0>(GetParam()),
                      /*keyframe_config=*/base::Seconds(2));
-  auto frame = media::VideoFrame::CreateBlackFrame(kTrackRecorderTestSize[0]);
-
   InSequence s;
   base::RunLoop run_loop;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true));
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, false));
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true));
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, false));
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _));
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(false), _, _));
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _));
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(false), _, _));
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _))
       .WillOnce(RunClosure(run_loop.QuitClosure()));
   auto origin = base::TimeTicks();
+  auto frame = media::VideoFrame::CreateBlackFrame(kTrackRecorderTestSize[0]);
   Encode(frame, origin);                             // Key frame emitted.
   Encode(frame, origin + base::Milliseconds(1000));  //
   Encode(frame, origin + base::Milliseconds(2100));  // Key frame emitted.
   Encode(frame, origin + base::Milliseconds(4099));  //
   Encode(frame, origin + base::Milliseconds(4100));  // Key frame emitted.
+  run_loop.Run();
+}
+
+TEST_P(VideoTrackRecorderTestParam, UsesFrameTimestampsIfProvided) {
+  // Configure 1 key frame every 2 secs.
+  InitializeRecorder(testing::get<0>(GetParam()),
+                     /*keyframe_config=*/base::Seconds(2));
+  base::TimeTicks estimated_capture_time = base::TimeTicks() + base::Seconds(3);
+  base::TimeTicks reference_time = base::TimeTicks() + base::Seconds(2);
+  base::TimeTicks capture_begin_time = base::TimeTicks() + base::Seconds(1);
+  auto frame1 = media::VideoFrame::CreateBlackFrame(kTrackRecorderTestSize[0]);
+  frame1->metadata().capture_begin_time = capture_begin_time;
+  auto frame2 = media::VideoFrame::CreateBlackFrame(kTrackRecorderTestSize[0]);
+  frame2->metadata().reference_time = reference_time;
+  // No metadata timestamp is set up here.
+  auto frame3 = media::VideoFrame::CreateBlackFrame(kTrackRecorderTestSize[0]);
+
+  InSequence s;
+  base::RunLoop run_loop;
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, _, _, capture_begin_time));
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, _, _, reference_time));
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, _, _, estimated_capture_time))
+      .WillOnce(RunClosure(run_loop.QuitClosure()));
+  Encode(frame1, estimated_capture_time);
+  Encode(frame2, estimated_capture_time);
+  Encode(frame3, estimated_capture_time);
   run_loop.Run();
 }
 
@@ -890,33 +1013,46 @@ TEST_P(VideoTrackRecorderTestMediaVideoEncoderParam,
       media::VideoFrame::CreateBlackFrame(frame_size);
 
   InSequence s;
-  base::StringPiece first_frame_encoded_alpha;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true))
+  auto first_frame_encoded_alpha =
+      media::DecoderBuffer::CopyFrom(base::as_byte_span("test"));
+  first_frame_encoded_alpha->set_is_key_frame(true);
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _))
       .Times(1)
-      .WillOnce(SaveArg<2>(&first_frame_encoded_alpha));
+      .WillOnce(SaveArg<1>(&first_frame_encoded_alpha));
   Encode(opaque_frame, base::TimeTicks::Now());
 
   const scoped_refptr<media::VideoFrame> alpha_frame =
       media::VideoFrame::CreateTransparentFrame(frame_size);
-  base::StringPiece second_frame_encoded_alpha;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true))
+  auto second_frame_encoded_alpha =
+      media::DecoderBuffer::CopyFrom(base::as_byte_span("test"));
+  second_frame_encoded_alpha->set_is_key_frame(true);
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _))
       .Times(1)
-      .WillOnce(SaveArg<2>(&second_frame_encoded_alpha));
+      .WillOnce(SaveArg<1>(&second_frame_encoded_alpha));
   Encode(alpha_frame, base::TimeTicks::Now());
 
   base::RunLoop run_loop;
-  base::StringPiece third_frame_encoded_alpha;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, false))
+  auto third_frame_encoded_alpha =
+      media::DecoderBuffer::CopyFrom(base::as_byte_span("test"));
+  third_frame_encoded_alpha->set_is_key_frame(false);
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(false), _, _))
       .Times(1)
-      .WillOnce(DoAll(SaveArg<2>(&third_frame_encoded_alpha),
+      .WillOnce(DoAll(SaveArg<1>(&third_frame_encoded_alpha),
                       RunClosure(run_loop.QuitClosure())));
   Encode(alpha_frame, base::TimeTicks::Now());
   run_loop.Run();
 
   const size_t kEmptySize = 0;
-  EXPECT_EQ(first_frame_encoded_alpha.size(), kEmptySize);
-  EXPECT_GT(second_frame_encoded_alpha.size(), kEmptySize);
-  EXPECT_GT(third_frame_encoded_alpha.size(), kEmptySize);
+  EXPECT_FALSE(first_frame_encoded_alpha->side_data());
+  EXPECT_TRUE(second_frame_encoded_alpha->side_data());
+  EXPECT_GT(second_frame_encoded_alpha->side_data()->alpha_data.size(),
+            kEmptySize);
+  EXPECT_TRUE(third_frame_encoded_alpha->side_data());
+  EXPECT_GT(third_frame_encoded_alpha->side_data()->alpha_data.size(),
+            kEmptySize);
 
   Mock::VerifyAndClearExpectations(this);
 }
@@ -931,7 +1067,8 @@ TEST_P(VideoTrackRecorderTestMediaVideoEncoderParam, HandlesOnError) {
 
   InSequence s;
   base::RunLoop run_loop1;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _))
       .WillOnce(RunClosure(run_loop1.QuitClosure()));
   Encode(video_frame, base::TimeTicks::Now());
   run_loop1.Run();
@@ -941,7 +1078,8 @@ TEST_P(VideoTrackRecorderTestMediaVideoEncoderParam, HandlesOnError) {
   EXPECT_FALSE(HasEncoderInstance());
 
   base::RunLoop run_loop2;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _))
       .WillOnce(RunClosure(run_loop2.QuitClosure()));
   Encode(video_frame, base::TimeTicks::Now());
   run_loop2.Run();
@@ -958,7 +1096,9 @@ TEST_P(VideoTrackRecorderTestMediaVideoEncoderParam,
   if (!GetParam()) {
     GTEST_SKIP();
   }
-  media::MockGpuVideoAcceleratorFactories mock_gpu_factories(nullptr);
+  auto sii = base::MakeRefCounted<gpu::TestSharedImageInterface>();
+  sii->UseTestGMBInSharedImageCreationWithBufferUsage();
+  media::MockGpuVideoAcceleratorFactories mock_gpu_factories(sii.get());
   EXPECT_CALL(*platform_, GetGpuFactories())
       .WillRepeatedly(Return(&mock_gpu_factories));
   EXPECT_CALL(mock_gpu_factories, NotifyEncoderSupportKnown)
@@ -1036,7 +1176,8 @@ TEST_P(VideoTrackRecorderTestMediaVideoEncoderParam, WaitForEncoderSupport) {
       media::VideoFrame::CreateBlackFrame(frame_size);
 
   base::RunLoop run_loop;
-  EXPECT_CALL(*mock_callback_interface_, OnEncodedVideo(_, _, _, _, _, true))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnEncodedVideo(_, IsKeyFrame(true), _, _))
       .WillOnce(RunClosure(run_loop.QuitWhenIdleClosure()));
   Encode(video_frame, base::TimeTicks::Now());
   run_loop.Run();
@@ -1058,6 +1199,7 @@ TEST_P(VideoTrackRecorderTestMediaVideoEncoderParam, RequiredRefreshRate) {
 INSTANTIATE_TEST_SUITE_P(All,
                          VideoTrackRecorderTestMediaVideoEncoderParam,
                          ::testing::Bool());
+
 class VideoTrackRecorderPassthroughTest
     : public TestWithParam<VideoTrackRecorder::CodecId>,
       public VideoTrackRecorderTestBase {
@@ -1094,7 +1236,8 @@ class VideoTrackRecorderPassthroughTest
   void InitializeRecorder() {
     video_track_recorder_ = std::make_unique<VideoTrackRecorderPassthrough>(
         scheduler::GetSingleThreadTaskRunnerForTesting(),
-        WebMediaStreamTrack(component_.Get()), mock_callback_interface_,
+        WebMediaStreamTrack(component_.Get()),
+        mock_callback_interface_->GetWeakCell(),
         KeyFrameRequestProcessor::Configuration());
   }
 
@@ -1139,18 +1282,20 @@ TEST_P(VideoTrackRecorderPassthroughTest, HandlesFrames) {
 
   // Frame 1 (keyframe)
   auto frame = CreateFrame(/*is_key_frame=*/true, GetParam());
-  std::string encoded_data;
+  scoped_refptr<media::DecoderBuffer> encoded_data;
   EXPECT_CALL(*mock_callback_interface_,
-              OnPassthroughVideo(IsSameCodec(GetParam()), _, _, _, true))
+              OnPassthroughVideo(IsSameCodec(GetParam()), IsKeyFrame(true), _))
       .WillOnce(DoAll(SaveArg<1>(&encoded_data)));
   auto now = base::TimeTicks::Now();
   video_track_recorder_->OnEncodedVideoFrameForTesting(now, frame, now);
-  EXPECT_EQ(encoded_data, "abc");
+  std::string str = "abc";
+  EXPECT_EQ(encoded_data->AsSpan(), base::as_byte_span(str));
 
   // Frame 2 (deltaframe)
   frame = CreateFrame(/*is_key_frame=*/false, GetParam());
-  EXPECT_CALL(*mock_callback_interface_,
-              OnPassthroughVideo(IsSameCodec(GetParam()), _, _, _, false));
+  EXPECT_CALL(
+      *mock_callback_interface_,
+      OnPassthroughVideo(IsSameCodec(GetParam()), IsKeyFrame(false), _));
   now = base::TimeTicks::Now();
   video_track_recorder_->OnEncodedVideoFrameForTesting(now, frame, now);
 }
@@ -1162,7 +1307,8 @@ TEST_F(VideoTrackRecorderPassthroughTest, DoesntForwardDeltaFrameFirst) {
 
   // Frame 1 (deltaframe) - not forwarded
   auto frame = CreateFrame(/*is_key_frame=*/false, CodecId::kVp9);
-  EXPECT_CALL(*mock_callback_interface_, OnPassthroughVideo(_, _, _, _, false))
+  EXPECT_CALL(*mock_callback_interface_,
+              OnPassthroughVideo(_, IsKeyFrame(false), _))
       .Times(0);
   // We already requested a keyframe when starting the recorder, so expect
   // no keyframe request now
@@ -1175,7 +1321,8 @@ TEST_F(VideoTrackRecorderPassthroughTest, DoesntForwardDeltaFrameFirst) {
 
   // Frame 2 (keyframe)
   frame = CreateFrame(/*is_key_frame=*/true, CodecId::kVp9);
-  EXPECT_CALL(*mock_callback_interface_, OnPassthroughVideo(_, _, _, _, true));
+  EXPECT_CALL(*mock_callback_interface_,
+              OnPassthroughVideo(_, IsKeyFrame(true), _));
   now = base::TimeTicks::Now();
   video_track_recorder_->OnEncodedVideoFrameForTesting(now, frame, now);
   Mock::VerifyAndClearExpectations(this);
@@ -1260,10 +1407,33 @@ class CodecEnumeratorTest : public ::testing::Test {
           kVariableMode;
     }
 
+    profiles.emplace_back(media::VP9PROFILE_PROFILE0, gfx::Size(1920, 1080), 60,
+                          1, rc_mode);
     profiles.emplace_back(media::VP9PROFILE_PROFILE1, gfx::Size(1920, 1080), 60,
                           1, rc_mode);
     profiles.emplace_back(media::VP9PROFILE_PROFILE2, gfx::Size(1920, 1080), 30,
                           1, rc_mode);
+    profiles.emplace_back(media::VP9PROFILE_PROFILE3, gfx::Size(1920, 1080), 30,
+                          1, rc_mode);
+    return profiles;
+  }
+
+  media::VideoEncodeAccelerator::SupportedProfiles MakeAv1Profiles(
+      bool vbr_support = false) {
+    media::VideoEncodeAccelerator::SupportedProfiles profiles;
+    auto rc_mode =
+        media::VideoEncodeAccelerator::SupportedRateControlMode::kConstantMode;
+    if (vbr_support) {
+      rc_mode |= media::VideoEncodeAccelerator::SupportedRateControlMode::
+          kVariableMode;
+    }
+
+    profiles.emplace_back(media::AV1PROFILE_PROFILE_MAIN, gfx::Size(1920, 1080),
+                          60, 1, rc_mode);
+    profiles.emplace_back(media::AV1PROFILE_PROFILE_HIGH, gfx::Size(1920, 1080),
+                          60, 1, rc_mode);
+    profiles.emplace_back(media::AV1PROFILE_PROFILE_PRO, gfx::Size(1920, 1080),
+                          30, 1, rc_mode);
     return profiles;
   }
 
@@ -1290,10 +1460,40 @@ class CodecEnumeratorTest : public ::testing::Test {
                           24, 1, rc_mode);
     profiles.emplace_back(media::H264PROFILE_MAIN, gfx::Size(1920, 1080), 30, 1,
                           rc_mode);
+    profiles.emplace_back(media::H264PROFILE_EXTENDED, gfx::Size(1920, 1080),
+                          30, 1, rc_mode);
     profiles.emplace_back(media::H264PROFILE_HIGH, gfx::Size(1920, 1080), 60, 1,
+                          rc_mode);
+    profiles.emplace_back(media::H264PROFILE_HIGH10PROFILE,
+                          gfx::Size(1920, 1080), 60, 1, rc_mode);
+    profiles.emplace_back(media::H264PROFILE_MULTIVIEWHIGH,
+                          gfx::Size(1920, 1080), 60, 1, rc_mode);
+    return profiles;
+  }
+
+#if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+  media::VideoEncodeAccelerator::SupportedProfiles MakeHEVCProfiles(
+      bool vbr_support = false) {
+    media::VideoEncodeAccelerator::SupportedProfiles profiles;
+    auto rc_mode =
+        media::VideoEncodeAccelerator::SupportedRateControlMode::kConstantMode;
+    if (vbr_support) {
+      rc_mode |= media::VideoEncodeAccelerator::SupportedRateControlMode::
+          kVariableMode;
+    }
+
+    profiles.emplace_back(media::HEVCPROFILE_MAIN, gfx::Size(1920, 1080), 24, 1,
+                          rc_mode);
+    profiles.emplace_back(media::HEVCPROFILE_MAIN10, gfx::Size(1920, 1080), 24,
+                          1, rc_mode);
+    profiles.emplace_back(media::HEVCPROFILE_MAIN_STILL_PICTURE,
+                          gfx::Size(1920, 1080), 24, 1, rc_mode);
+    profiles.emplace_back(media::HEVCPROFILE_REXT, gfx::Size(1920, 1080), 24, 1,
                           rc_mode);
     return profiles;
   }
+#endif
+
   test::TaskEnvironment task_environment_;
 };
 
@@ -1327,9 +1527,8 @@ TEST_F(CodecEnumeratorTest, MakeSupportedProfilesVp9) {
   const CodecEnumerator emulator(MakeVp9Profiles());
   media::VideoEncodeAccelerator::SupportedProfiles profiles =
       emulator.GetSupportedProfiles(CodecId::kVp9);
-  EXPECT_EQ(2u, profiles.size());
-  EXPECT_EQ(media::VP9PROFILE_PROFILE1, profiles[0].profile);
-  EXPECT_EQ(media::VP9PROFILE_PROFILE2, profiles[1].profile);
+  EXPECT_EQ(1u, profiles.size());
+  EXPECT_EQ(media::VP9PROFILE_PROFILE0, profiles[0].profile);
 }
 
 TEST_F(CodecEnumeratorTest, MakeSupportedProfilesNoVp8) {
@@ -1341,7 +1540,7 @@ TEST_F(CodecEnumeratorTest, MakeSupportedProfilesNoVp8) {
 
 TEST_F(CodecEnumeratorTest, GetFirstSupportedVideoCodecProfileVp9) {
   const CodecEnumerator emulator(MakeVp9Profiles());
-  EXPECT_EQ(std::make_pair(media::VP9PROFILE_PROFILE1, /*vbr_support=*/false),
+  EXPECT_EQ(std::make_pair(media::VP9PROFILE_PROFILE0, /*vbr_support=*/false),
             emulator.GetFirstSupportedVideoCodecProfile(CodecId::kVp9));
 }
 
@@ -1354,7 +1553,7 @@ TEST_F(CodecEnumeratorTest, GetFirstSupportedVideoCodecProfileNoVp8) {
 
 TEST_F(CodecEnumeratorTest, GetFirstSupportedVideoCodecProfileVp9VBR) {
   const CodecEnumerator emulator(MakeVp9Profiles(/*vbr_support=*/true));
-  EXPECT_EQ(std::make_pair(media::VP9PROFILE_PROFILE1, /*vbr_support=*/true),
+  EXPECT_EQ(std::make_pair(media::VP9PROFILE_PROFILE0, /*vbr_support=*/true),
             emulator.GetFirstSupportedVideoCodecProfile(CodecId::kVp9));
 }
 
@@ -1365,7 +1564,28 @@ TEST_F(CodecEnumeratorTest, GetFirstSupportedVideoCodecProfileNoVp8VBR) {
       emulator.GetFirstSupportedVideoCodecProfile(CodecId::kVp8));
 }
 
-#if BUILDFLAG(ENABLE_OPENH264)
+TEST_F(CodecEnumeratorTest, GetPreferredCodecIdAv1) {
+  MediaTrackContainerType type = GetMediaContainerTypeFromString("");
+  const CodecEnumerator emulator(MakeAv1Profiles());
+  EXPECT_EQ(CodecId::kAv1, emulator.GetPreferredCodecId(type));
+}
+
+TEST_F(CodecEnumeratorTest, MakeSupportedProfilesAv1) {
+  const CodecEnumerator emulator(MakeAv1Profiles());
+  media::VideoEncodeAccelerator::SupportedProfiles profiles =
+      emulator.GetSupportedProfiles(CodecId::kAv1);
+  EXPECT_EQ(1u, profiles.size());
+  EXPECT_EQ(media::AV1PROFILE_PROFILE_MAIN, profiles[0].profile);
+}
+
+TEST_F(CodecEnumeratorTest, GetFirstSupportedVideoCodecProfileVAv1) {
+  const CodecEnumerator emulator(MakeAv1Profiles());
+  EXPECT_EQ(
+      std::make_pair(media::AV1PROFILE_PROFILE_MAIN, /*vbr_support=*/false),
+      emulator.GetFirstSupportedVideoCodecProfile(CodecId::kAv1));
+}
+
+#if BUILDFLAG(USE_PROPRIETARY_CODECS)
 TEST_F(CodecEnumeratorTest, FindSupportedVideoCodecProfileH264) {
   const CodecEnumerator emulator(MakeH264Profiles());
   EXPECT_EQ(std::make_pair(media::H264PROFILE_HIGH, /*vbr_support=*/false),
@@ -1395,7 +1615,38 @@ TEST_F(CodecEnumeratorTest, FindSupportedVideoCodecProfileNoProfileH264VBR) {
       emulator.FindSupportedVideoCodecProfile(
           CodecId::kH264, media::H264PROFILE_HIGH422PROFILE));
 }
+#endif
 
+#if BUILDFLAG(ENABLE_HEVC_PARSER_AND_HW_DECODER)
+TEST_F(CodecEnumeratorTest, MakeSupportedProfilesHevc) {
+  const CodecEnumerator emulator(MakeHEVCProfiles());
+  media::VideoEncodeAccelerator::SupportedProfiles profiles =
+      emulator.GetSupportedProfiles(CodecId::kHevc);
+  EXPECT_EQ(1u, profiles.size());
+  EXPECT_EQ(media::HEVCPROFILE_MAIN, profiles[0].profile);
+}
+
+TEST_F(CodecEnumeratorTest, FindSupportedVideoCodecProfileHevc) {
+  const CodecEnumerator emulator(MakeHEVCProfiles());
+  EXPECT_EQ(std::make_pair(media::HEVCPROFILE_MAIN, /*vbr_support=*/false),
+            emulator.FindSupportedVideoCodecProfile(CodecId::kHevc,
+                                                    media::HEVCPROFILE_MAIN));
+}
+
+TEST_F(CodecEnumeratorTest, FindSupportedVideoCodecProfileHevcVBR) {
+  const CodecEnumerator emulator(MakeHEVCProfiles(/*vbr_support=*/true));
+  EXPECT_EQ(std::make_pair(media::HEVCPROFILE_MAIN, /*vbr_support=*/true),
+            emulator.FindSupportedVideoCodecProfile(CodecId::kHevc,
+                                                    media::HEVCPROFILE_MAIN));
+}
+
+TEST_F(CodecEnumeratorTest, FindSupportedVideoCodecProfileNoProfileHevc) {
+  const CodecEnumerator emulator(MakeHEVCProfiles());
+  EXPECT_EQ(
+      std::make_pair(media::VIDEO_CODEC_PROFILE_UNKNOWN, /*vbr_support=*/false),
+      emulator.FindSupportedVideoCodecProfile(CodecId::kHevc,
+                                              media::HEVCPROFILE_MAIN10));
+}
 #endif
 
 }  // namespace blink

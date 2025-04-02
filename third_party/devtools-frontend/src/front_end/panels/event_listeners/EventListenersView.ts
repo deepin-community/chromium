@@ -5,27 +5,23 @@
 import * as Common from '../../core/common/common.js';
 import * as i18n from '../../core/i18n/i18n.js';
 import * as SDK from '../../core/sdk/sdk.js';
+import type * as Protocol from '../../generated/protocol.js';
+import * as Buttons from '../../ui/components/buttons/buttons.js';
 import * as ObjectUI from '../../ui/legacy/components/object_ui/object_ui.js';
-/* eslint-disable rulesdir/es_modules_import */
+/* eslint-disable rulesdir/es-modules-import */
 import objectValueStyles from '../../ui/legacy/components/object_ui/objectValue.css.js';
 import * as Components from '../../ui/legacy/components/utils/utils.js';
 import * as UI from '../../ui/legacy/legacy.js';
-
-import eventListenersViewStyles from './eventListenersView.css.js';
-
-import type * as Protocol from '../../generated/protocol.js';
+import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
 import {frameworkEventListeners, type FrameworkEventListenersObject} from './EventListenersUtils.js';
+import eventListenersViewStyles from './eventListenersView.css.js';
 
 const UIStrings = {
   /**
    *@description Empty holder text content in Event Listeners View of the Event Listener Debugging pane in the Sources panel
    */
   noEventListeners: 'No event listeners',
-  /**
-   *@description Label for an item to remove something
-   */
-  remove: 'Remove',
   /**
    *@description Delete button title in Event Listeners View of the Event Listener Debugging pane in the Sources panel
    */
@@ -41,7 +37,7 @@ const UIStrings = {
   /**
    *@description A context menu item to reveal a node in the DOM tree of the Elements Panel
    */
-  revealInElementsPanel: 'Reveal in Elements panel',
+  openInElementsPanel: 'Open in Elements panel',
   /**
    *@description Text in Event Listeners Widget of the Elements panel
    */
@@ -65,6 +61,7 @@ export class EventListenersView extends UI.Widget.VBox {
     this.treeOutline.element.classList.add('monospace');
     this.treeOutline.setShowSelectionOnKeyboardFocus(true);
     this.treeOutline.setFocusable(true);
+    this.treeOutline.registerRequiredCSS(eventListenersViewStyles, objectValueStyles);
     this.element.appendChild(this.treeOutline.element);
     this.emptyHolder = document.createElement('div');
     this.emptyHolder.classList.add('gray-info-message');
@@ -174,10 +171,10 @@ export class EventListenersView extends UI.Widget.VBox {
         const objectListenerElement = listenerElement as ObjectEventListenerBar;
         const listenerOrigin = objectListenerElement.eventListener().origin();
         let hidden = false;
-        if (listenerOrigin === SDK.DOMDebuggerModel.EventListener.Origin.FrameworkUser && !showFramework) {
+        if (listenerOrigin === SDK.DOMDebuggerModel.EventListener.Origin.FRAMEWORK_USER && !showFramework) {
           hidden = true;
         }
-        if (listenerOrigin === SDK.DOMDebuggerModel.EventListener.Origin.Framework && showFramework) {
+        if (listenerOrigin === SDK.DOMDebuggerModel.EventListener.Origin.FRAMEWORK && showFramework) {
           hidden = true;
         }
         if (!showPassive && objectListenerElement.eventListener().passive()) {
@@ -234,10 +231,6 @@ export class EventListenersView extends UI.Widget.VBox {
   }
 
   private eventListenersArrivedForTest(): void {
-  }
-  override wasShown(): void {
-    super.wasShown();
-    this.treeOutline.registerCSSFiles([eventListenersViewStyles, objectValueStyles]);
   }
 }
 
@@ -305,8 +298,13 @@ export class ObjectEventListenerBar extends UI.TreeOutline.TreeElement {
     title.appendChild(this.valueTitle);
 
     if (this.eventListenerInternal.canRemove()) {
-      const deleteButton = title.createChild('span', 'event-listener-button');
-      deleteButton.textContent = i18nString(UIStrings.remove);
+      const deleteButton = new Buttons.Button.Button();
+      deleteButton.data = {
+        variant: Buttons.Button.Variant.ICON,
+        size: Buttons.Button.Size.MICRO,
+        iconName: 'bin',
+        jslogContext: 'delete-event-listener',
+      };
       UI.Tooltip.Tooltip.install(deleteButton, i18nString(UIStrings.deleteEventListener));
       deleteButton.addEventListener('click', event => {
         this.removeListener();
@@ -316,8 +314,9 @@ export class ObjectEventListenerBar extends UI.TreeOutline.TreeElement {
     }
 
     if (this.eventListenerInternal.isScrollBlockingType() && this.eventListenerInternal.canTogglePassive()) {
-      const passiveButton = title.createChild('span', 'event-listener-button');
+      const passiveButton = title.createChild('button', 'event-listener-button');
       passiveButton.textContent = i18nString(UIStrings.togglePassive);
+      passiveButton.setAttribute('jslog', `${VisualLogging.action('passive').track({click: true})}`);
       UI.Tooltip.Tooltip.install(passiveButton, i18nString(UIStrings.toggleWhetherEventListenerIs));
       passiveButton.addEventListener('click', event => {
         this.togglePassiveListener();
@@ -338,14 +337,17 @@ export class ObjectEventListenerBar extends UI.TreeOutline.TreeElement {
       }
       if (object.subtype === 'node') {
         menu.defaultSection().appendItem(
-            i18nString(UIStrings.revealInElementsPanel), () => Common.Revealer.reveal(object));
+            i18nString(UIStrings.openInElementsPanel), () => Common.Revealer.reveal(object),
+            {jslogContext: 'reveal-in-elements'});
       }
       menu.defaultSection().appendItem(
           i18nString(UIStrings.deleteEventListener), this.removeListener.bind(this),
-          {disabled: !this.eventListenerInternal.canRemove()});
-      menu.defaultSection().appendCheckboxItem(
-          i18nString(UIStrings.passive), this.togglePassiveListener.bind(this), this.eventListenerInternal.passive(),
-          !this.eventListenerInternal.canTogglePassive());
+          {disabled: !this.eventListenerInternal.canRemove(), jslogContext: 'delete-event-listener'});
+      menu.defaultSection().appendCheckboxItem(i18nString(UIStrings.passive), this.togglePassiveListener.bind(this), {
+        checked: this.eventListenerInternal.passive(),
+        disabled: !this.eventListenerInternal.canTogglePassive(),
+        jslogContext: 'passive',
+      });
       void menu.show();
     });
   }

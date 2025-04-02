@@ -19,7 +19,6 @@ per-file *_android.*=file://chrome/browser/android/OWNERS
 per-file *.java=file://chrome/browser/android/OWNERS
 
 per-file *_ash*=file://chrome/browser/ash/OWNERS
-per-file *_lacros*=file://chrome/browser/lacros/OWNERS
 
 per-file browser_resources.grd=file://ui/webui/PLATFORM_OWNERS
 per-file dev_ui_browser_resources.grd=file://ui/webui/PLATFORM_OWNERS
@@ -60,15 +59,8 @@ per-file flag-never-expire-list.json=ellyjones@chromium.org
 
 per-file load_library_perf_test.*=xhwang@chromium.org
 
-per-file *.mm=avi@chromium.org
-per-file *.mm=mark@chromium.org
-per-file *.mm=rsesek@chromium.org
-per-file *.mm=thakis@chromium.org
-
-per-file *_mac.h=avi@chromium.org
-per-file *_mac.h=mark@chromium.org
-per-file *_mac.h=rsesek@chromium.org
-per-file *_mac.h=thakis@chromium.org
+per-file *.mm=file://ui/base/cocoa/OWNERS
+per-file *_mac.h=file://ui/base/cocoa/OWNERS
 
 per-file shell_integration_win*=gab@chromium.org
 per-file shell_integration_win*=grt@chromium.org

@@ -5,7 +5,6 @@
 #ifndef CHROME_BROWSER_ASH_ARC_INPUT_OVERLAY_ARC_INPUT_OVERLAY_MANAGER_H_
 #define CHROME_BROWSER_ASH_ARC_INPUT_OVERLAY_ARC_INPUT_OVERLAY_MANAGER_H_
 
-#include "ash/components/arc/mojom/app.mojom.h"
 #include "ash/constants/ash_features.h"
 #include "base/containers/flat_map.h"
 #include "base/memory/raw_ptr.h"
@@ -16,6 +15,7 @@
 #include "chrome/browser/ash/arc/input_overlay/db/proto/app_data.pb.h"
 #include "chrome/browser/ash/arc/input_overlay/key_event_source_rewriter.h"
 #include "chrome/browser/ash/arc/input_overlay/touch_injector.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "ui/aura/client/focus_change_observer.h"
 #include "ui/aura/client/focus_client.h"
@@ -168,7 +168,7 @@ class ArcInputOverlayManager : public KeyedService,
   // prepare or start loading the GIO default key mapping data. Once window is
   // destroying or the GIO data reading is finished, window is removed from this
   // set.
-  base::flat_set<aura::Window*> loading_data_windows_;
+  base::flat_set<raw_ptr<aura::Window, CtnExperimental>> loading_data_windows_;
   bool is_text_input_active_ = false;
   raw_ptr<ui::InputMethod> input_method_ = nullptr;
   std::unique_ptr<InputMethodObserver> input_method_observer_;

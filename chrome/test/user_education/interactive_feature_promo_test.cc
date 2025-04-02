@@ -4,13 +4,19 @@
 
 #include "chrome/test/user_education/interactive_feature_promo_test.h"
 
-#include <sstream>
+#include <string>
 #include <utility>
 #include <variant>
 
+#include "base/containers/extend.h"
 #include "base/feature_list.h"
 #include "base/memory/ref_counted.h"
+#include "base/strings/strcat.h"
+#include "base/strings/stringprintf.h"
+#include "base/strings/to_string.h"
+#include "base/test/bind.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/user_education/user_education_service.h"
@@ -19,11 +25,16 @@
 #include "chrome/test/interaction/interaction_test_util_browser.h"
 #include "chrome/test/interaction/interactive_browser_test.h"
 #include "chrome/test/user_education/interactive_feature_promo_test_internal.h"
-#include "components/user_education/common/feature_promo_controller.h"
-#include "components/user_education/common/feature_promo_registry.h"
-#include "components/user_education/common/feature_promo_result.h"
-#include "components/user_education/common/feature_promo_specification.h"
+#include "components/user_education/common/feature_promo/feature_promo_controller.h"
+#include "components/user_education/common/feature_promo/feature_promo_registry.h"
+#include "components/user_education/common/feature_promo/feature_promo_result.h"
+#include "components/user_education/common/feature_promo/feature_promo_specification.h"
 #include "components/user_education/views/help_bubble_view.h"
+#include "ui/base/interaction/element_tracker.h"
+#include "ui/base/interaction/interaction_sequence.h"
+#include "ui/views/interaction/element_tracker_views.h"
+
+DEFINE_LOCAL_CUSTOM_ELEMENT_EVENT_TYPE(kShowPromoResultReceived);
 
 InteractiveFeaturePromoTestApi::InteractiveFeaturePromoTestApi(
     TrackerMode tracker_mode,
@@ -65,9 +76,9 @@ InteractiveFeaturePromoTestApi::WaitForFeatureEngagementReady() {
                }),
       ObserveState(kFeatureEngagementInitializedState,
                    [browser]() { return browser->data; }),
-      WaitForState(kFeatureEngagementInitializedState, true), FlushEvents(),
+      WaitForState(kFeatureEngagementInitializedState, true),
       StopObservingState(kFeatureEngagementInitializedState));
-  AddDescription(steps, "WaitForFeatureEngagementReady() - %s");
+  AddDescriptionPrefix(steps, "WaitForFeatureEngagementReady()");
   return steps;
 }
 
@@ -79,90 +90,146 @@ InteractiveFeaturePromoTestApi::AdvanceTime(NewTime time) {
 }
 
 InteractiveFeaturePromoTestApi::StepBuilder
-InteractiveFeaturePromoTestApi::UpdateIdleState(NewTime time,
-                                                bool screen_locked) {
-  return std::move(Do([this, time, screen_locked]() {
-                     test_impl().UpdateIdleState(time, screen_locked);
-                   }).SetDescription("UpdateIdleState()"));
+InteractiveFeaturePromoTestApi::SetLastActive(NewTime time) {
+  return std::move(Do([this, time]() {
+                     test_impl().SetLastActive(time);
+                   }).SetDescription("SetLastActive()"));
 }
 
 InteractiveFeaturePromoTestApi::MultiStep
 InteractiveFeaturePromoTestApi::MaybeShowPromo(
-    const base::Feature& iph_feature,
-    user_education::FeaturePromoResult expected_result,
-    base::OnceClosure close_callback) {
+    user_education::FeaturePromoParams params,
+    ShowPromoResult show_promo_result) {
   // Always attempt to show the promo.
-  auto steps = Steps(std::move(
-      CheckView(
-          kBrowserViewElementId,
-          [this, &iph_feature, expected_result,
-           close_callback =
-               std::move(close_callback)](BrowserView* browser_view) mutable {
-            // If using a mock tracker, ensure that it returns the correct
-            // status.
-            auto* const tracker =
-                test_impl().GetMockTrackerFor(browser_view->browser());
-            if (tracker) {
-              if (expected_result) {
-                EXPECT_CALL(*tracker,
-                            ShouldTriggerHelpUI(testing::Ref(iph_feature)))
-                    .WillOnce(testing::Return(true));
-              } else if (user_education::FeaturePromoResult::kBlockedByConfig ==
-                         expected_result) {
-                EXPECT_CALL(*tracker,
-                            ShouldTriggerHelpUI(testing::Ref(iph_feature)))
-                    .WillOnce(testing::Return(false));
-              } else {
-                EXPECT_CALL(*tracker,
-                            ShouldTriggerHelpUI(testing::Ref(iph_feature)))
-                    .Times(0);
-              }
-            }
+  bool is_web_bubble;
+  user_education::FeaturePromoResult expected_result;
+  if (std::holds_alternative<WebUiHelpBubbleShown>(show_promo_result)) {
+    is_web_bubble = true;
+    expected_result = user_education::FeaturePromoResult::Success();
+  } else {
+    is_web_bubble = false;
+    expected_result =
+        std::get<user_education::FeaturePromoResult>(show_promo_result);
+  }
+  const base::Feature& iph_feature = *params.feature;
+  using Result = base::RefCountedData<user_education::FeaturePromoResult>;
+  auto start_result = base::MakeRefCounted<Result>();
+  auto steps = Steps(
+      std::move(
+          WithView(
+              kBrowserViewElementId,
+              [this, start_result, params = std::move(params),
+               expected_result](BrowserView* browser_view) mutable {
+                const base::Feature& iph_feature = *params.feature;
 
-            // Attempt to show the promo.
-            user_education::FeaturePromoParams params(iph_feature);
-            params.close_callback = std::move(close_callback);
-            const auto result =
+                // If using a mock tracker, ensure that it returns the correct
+                // status.
+                auto* const tracker =
+                    test_impl().GetMockTrackerFor(browser_view->browser());
+                if (tracker) {
+                  if (expected_result) {
+                    EXPECT_CALL(*tracker,
+                                ShouldTriggerHelpUI(testing::Ref(iph_feature)))
+                        .WillOnce(testing::Return(true));
+                  } else if (user_education::FeaturePromoResult::
+                                 kBlockedByConfig == expected_result) {
+                    EXPECT_CALL(*tracker,
+                                ShouldTriggerHelpUI(testing::Ref(iph_feature)))
+                        .WillOnce(testing::Return(false));
+                  } else {
+                    EXPECT_CALL(*tracker,
+                                ShouldTriggerHelpUI(testing::Ref(iph_feature)))
+                        .Times(0);
+                  }
+                }
+
+                // Set up the callback to tell us the result.
+                ui::SafeElementReference browser_el(
+                    views::ElementTrackerViews::GetInstance()
+                        ->GetElementForView(browser_view));
+                params.show_promo_result_callback = base::BindLambdaForTesting(
+                    [el = std::move(browser_el),
+                     old_cb = std::move(params.show_promo_result_callback),
+                     start_result](user_education::FeaturePromoResult
+                                       promo_result) mutable {
+                      CHECK(el);
+                      start_result->data = promo_result;
+                      if (old_cb) {
+                        std::move(old_cb).Run(promo_result);
+                      }
+                      ui::ElementTracker::GetFrameworkDelegate()
+                          ->NotifyCustomEvent(el.get(),
+                                              kShowPromoResultReceived);
+                    });
+
+                // Attempt to show the promo.
                 browser_view->MaybeShowFeaturePromo(std::move(params));
 
-            // If the promo showed, expect it to be dismissed at some point.
-            if (result && tracker) {
-              EXPECT_CALL(*tracker, Dismissed(testing::Ref(iph_feature)));
-            }
-            return result;
-          },
-          expected_result)
-          .SetDescription("Try to show promo")));
+                // If the promo showed, expect it to be dismissed at some point.
+                if (expected_result && tracker) {
+                  EXPECT_CALL(*tracker, Dismissed(testing::Ref(iph_feature)));
+                }
+              })
+              .SetDescription("Try to show promo")),
+      WaitForEvent(kBrowserViewElementId, kShowPromoResultReceived),
+      CheckResult([start_result]() { return start_result->data; },
+                  expected_result));
 
   // If success is expected, add steps to wait for the bubble to be shown and
   // verify that the correct promo is showing.
-  if (expected_result) {
-    steps = Steps(std::move(steps), WaitForPromo(iph_feature));
+  if (is_web_bubble) {
+    steps.push_back(CheckPromoIsActive(iph_feature));
+  } else if (expected_result) {
+    base::Extend(steps, WaitForPromo(iph_feature));
   }
 
-  std::ostringstream desc;
-  desc << "MaybeShowPromo(" << iph_feature.name << ", " << expected_result
-       << ") - %s";
-  AddDescription(steps, desc.str());
+  AddDescriptionPrefix(
+      steps, base::StrCat({"MaybeShowPromo( ", iph_feature.name, ", ",
+                           is_web_bubble ? std::string("WebUI Help Bubble")
+                                         : base::ToString(expected_result),
+                           " )"}));
   return steps;
 }
 
 InteractiveFeaturePromoTestApi::MultiStep
 InteractiveFeaturePromoTestApi::WaitForPromo(const base::Feature& iph_feature) {
-  auto steps = Steps(
-      WaitForShow(
-          user_education::HelpBubbleView::kHelpBubbleElementIdForTesting),
-      FlushEvents(),
-      CheckView(
-          kBrowserViewElementId, [&iph_feature](BrowserView* browser_view) {
-            return browser_view->GetFeaturePromoController()->IsPromoActive(
-                iph_feature);
-          }));
+  auto steps =
+      Steps(WaitForShow(
+                user_education::HelpBubbleView::kHelpBubbleElementIdForTesting),
+            CheckPromoIsActive(iph_feature));
 
-  std::ostringstream desc;
-  desc << "WaitForPromo(" << iph_feature.name << ") - %s";
-  AddDescription(steps, desc.str());
+  AddDescriptionPrefix(
+      steps, base::StrCat({"WaitForPromo( ", iph_feature.name, " )"}));
   return steps;
+}
+
+InteractiveFeaturePromoTestApi::StepBuilder
+InteractiveFeaturePromoTestApi::CheckPromoIsActive(
+    const base::Feature& iph_feature,
+    bool active) {
+  return std::move(
+      WithElement(
+          kBrowserViewElementId,
+          [&iph_feature, active](ui::InteractionSequence* seq,
+                                 ui::TrackedElement* browser_el) {
+            bool actual = false;
+            if (seq->IsCurrentStepInAnyContextForTesting()) {
+              for (const auto browser : *BrowserList::GetInstance()) {
+                if (browser->window()->IsFeaturePromoActive(iph_feature)) {
+                  actual = true;
+                }
+              }
+            } else {
+              actual = AsView<BrowserView>(browser_el)
+                           ->IsFeaturePromoActive(iph_feature);
+            }
+            if (actual != active) {
+              seq->FailForTesting();
+            }
+          })
+          .SetDescription(base::StringPrintf("CheckPromoIsActive(%s, %s)",
+                                             iph_feature.name,
+                                             base::ToString(active))));
 }
 
 InteractiveFeaturePromoTestApi::MultiStep
@@ -171,22 +238,17 @@ InteractiveFeaturePromoTestApi::AbortPromo(const base::Feature& iph_feature,
   auto steps = Steps(CheckView(
       kBrowserViewElementId,
       [&iph_feature](BrowserView* browser_view) {
-        return browser_view->CloseFeaturePromo(
-            iph_feature, user_education::EndFeaturePromoReason::kAbortPromo);
+        return browser_view->AbortFeaturePromo(iph_feature);
       },
       expected_result));
   if (expected_result) {
-    steps = Steps(
-        std::move(steps),
-        WaitForHide(
-            user_education::HelpBubbleView::kHelpBubbleElementIdForTesting),
-        FlushEvents());
+    steps.push_back(WaitForHide(
+        user_education::HelpBubbleView::kHelpBubbleElementIdForTesting));
   }
 
-  std::ostringstream desc;
-  desc << "AbortPromo(" << iph_feature.name << ", " << expected_result
-       << ") - %s";
-  AddDescription(steps, desc.str());
+  AddDescriptionPrefix(steps,
+                       base::StrCat({"AbortPromo( ", iph_feature.name, ", ",
+                                     base::ToString(expected_result), " )"}));
   return steps;
 }
 
@@ -195,9 +257,8 @@ InteractiveFeaturePromoTestApi::PressClosePromoButton() {
   auto steps = Steps(
       PressButton(user_education::HelpBubbleView::kCloseButtonIdForTesting),
       WaitForHide(
-          user_education::HelpBubbleView::kHelpBubbleElementIdForTesting),
-      FlushEvents());
-  AddDescription(steps, "PressClosePromoButton() - %s");
+          user_education::HelpBubbleView::kHelpBubbleElementIdForTesting));
+  AddDescriptionPrefix(steps, "PressClosePromoButton()");
   return steps;
 }
 
@@ -206,9 +267,8 @@ InteractiveFeaturePromoTestApi::PressDefaultPromoButton() {
   auto steps = Steps(
       PressButton(user_education::HelpBubbleView::kDefaultButtonIdForTesting),
       WaitForHide(
-          user_education::HelpBubbleView::kHelpBubbleElementIdForTesting),
-      FlushEvents());
-  AddDescription(steps, "PressDefaultPromoButton() - %s");
+          user_education::HelpBubbleView::kHelpBubbleElementIdForTesting));
+  AddDescriptionPrefix(steps, "PressDefaultPromoButton()");
   return steps;
 }
 
@@ -218,8 +278,7 @@ InteractiveFeaturePromoTestApi::PressNonDefaultPromoButton() {
       PressButton(
           user_education::HelpBubbleView::kFirstNonDefaultButtonIdForTesting),
       WaitForHide(
-          user_education::HelpBubbleView::kHelpBubbleElementIdForTesting),
-      FlushEvents());
-  AddDescription(steps, "PressNonDefaultPromoButton() - %s");
+          user_education::HelpBubbleView::kHelpBubbleElementIdForTesting));
+  AddDescriptionPrefix(steps, "PressNonDefaultPromoButton()");
   return steps;
 }

@@ -72,6 +72,8 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
   WebContents* GetWebContents() override;
   WebContents* GetChildWebContents() override;
   bool TogglePlayPause() override;
+  void Play() override;
+  void Pause() override;
   void SkipAd() override;
   void NextTrack() override;
   void PreviousTrack() override;
@@ -80,8 +82,16 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
   void HangUp() override;
   void PreviousSlide() override;
   void NextSlide() override;
+  void SeekTo(base::TimeDelta time) override;
+  void SetOnWindowCreatedNotifyObserversCallback(
+      base::OnceClosure on_window_created_notify_observers_callback) override;
 
   const gfx::Rect& GetSourceBounds() const override;
+  void GetMediaImage(
+      const media_session::MediaImage& image,
+      int minimum_size_px,
+      int desired_size_px,
+      MediaSession::GetMediaImageBitmapCallback callback) override;
   std::optional<gfx::Rect> GetWindowBounds() override;
 
   std::optional<url::Origin> GetOrigin() override;
@@ -96,6 +106,13 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
 
   void MediaSessionPositionChanged(
       const std::optional<media_session::MediaPosition>& media_position);
+
+  void MediaSessionImagesChanged(
+      const base::flat_map<media_session::mojom::MediaSessionImageType,
+                           std::vector<media_session::MediaImage>>& images);
+
+  void MediaSessionMetadataChanged(
+      const std::optional<media_session::MediaMetadata>& metadata);
 
   gfx::Size GetSize();
 
@@ -140,12 +157,13 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
     return active_session_.get();
   }
 
- private:
-  friend class WebContentsUserData<VideoPictureInPictureWindowControllerImpl>;
-
+ protected:
   // Use VideoPictureInPictureWindowControllerImpl::GetOrCreateForWebContents()
   // to create an instance.
   explicit VideoPictureInPictureWindowControllerImpl(WebContents* web_contents);
+
+ private:
+  friend class WebContentsUserData<VideoPictureInPictureWindowControllerImpl>;
 
   // Recompute the playback state and update the window accordingly.
   void UpdatePlaybackState();
@@ -165,6 +183,12 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
   // Returns the web_contents() as a WebContentsImpl*.
   WebContentsImpl* GetWebContentsImpl();
 
+  // Returns true if the player is active after this call.
+  bool PlayInternal();
+
+  // Returns true if the player is active after this call.
+  bool PauseInternal();
+
   std::unique_ptr<VideoOverlayWindow> window_;
 
   viz::SurfaceId surface_id_;
@@ -181,6 +205,7 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
   bool media_session_action_hang_up_handled_ = false;
   bool media_session_action_previous_slide_handled_ = false;
   bool media_session_action_next_slide_handled_ = false;
+  bool media_session_action_seek_to_handled_ = false;
 
   // Tracks the current microphone state.
   bool microphone_muted_ = false;
@@ -202,11 +227,25 @@ class CONTENT_EXPORT VideoPictureInPictureWindowControllerImpl
   // The media position info as last reported to us by MediaSessionImpl.
   std::optional<media_session::MediaPosition> media_position_;
 
+  // The media metadata's source title as last reported to us by
+  // MediaSessionImpl.
+  std::u16string source_title_;
+
+  // True if the last media_session::MediaPosition we received in
+  // |MediaSessionPositionChanged()| was sent to |window_|. Used to track
+  // whether we should send it again.
+  bool window_received_media_position_ = false;
+
+  std::vector<media_session::MediaImage> favicon_images_;
+
   // Coordinates of the video element in WebContents coordinates.
   gfx::Rect source_bounds_;
 
   // The origin of the initiator.
   std::optional<url::Origin> origin_;
+
+  // Callback to notify the observers about the video PiP window creation event.
+  base::OnceClosure on_window_created_notify_observers_callback_;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };

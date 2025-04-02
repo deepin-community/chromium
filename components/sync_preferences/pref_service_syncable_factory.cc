@@ -66,7 +66,7 @@ std::unique_ptr<PrefServiceSyncable> PrefServiceSyncableFactory::CreateSyncable(
     // hooked up directly to the underlying account store.
 
     // In some tests, `account_pref_store_` may not have been set.
-    // TODO(crbug.com/1486805): Fix all the usages.
+    // TODO(crbug.com/40283049): Fix all the usages.
     if (!account_pref_store_) {
       CHECK_IS_TEST();
       account_pref_store_ = base::MakeRefCounted<InMemoryPrefStore>();
@@ -76,27 +76,25 @@ std::unique_ptr<PrefServiceSyncable> PrefServiceSyncableFactory::CreateSyncable(
             user_prefs_, account_pref_store_, pref_model_associator_client_);
     auto pref_value_store = std::make_unique<PrefValueStore>(
         managed_prefs_.get(), supervised_user_prefs_.get(),
-        extension_prefs_.get(), standalone_browser_prefs_.get(),
-        command_line_prefs_.get(), dual_layer_user_pref_store.get(),
-        recommended_prefs_.get(), pref_registry->defaults().get(),
-        pref_notifier.get());
+        extension_prefs_.get(), command_line_prefs_.get(),
+        dual_layer_user_pref_store.get(), recommended_prefs_.get(),
+        pref_registry->defaults().get(), pref_notifier.get());
     return std::make_unique<PrefServiceSyncable>(
         std::move(pref_notifier), std::move(pref_value_store),
-        std::move(dual_layer_user_pref_store), standalone_browser_prefs_,
-        std::move(pref_registry), pref_model_associator_client_,
-        read_error_callback_, async_);
+        std::move(dual_layer_user_pref_store), std::move(pref_registry),
+        pref_model_associator_client_, read_error_callback_, async_);
   }
 
   auto pref_value_store = std::make_unique<PrefValueStore>(
       managed_prefs_.get(), supervised_user_prefs_.get(),
-      extension_prefs_.get(), standalone_browser_prefs_.get(),
-      command_line_prefs_.get(), user_prefs_.get(), recommended_prefs_.get(),
-      pref_registry->defaults().get(), pref_notifier.get());
+      extension_prefs_.get(), command_line_prefs_.get(), user_prefs_.get(),
+      recommended_prefs_.get(), pref_registry->defaults().get(),
+      pref_notifier.get());
 
   return std::make_unique<PrefServiceSyncable>(
       std::move(pref_notifier), std::move(pref_value_store), user_prefs_,
-      standalone_browser_prefs_, std::move(pref_registry),
-      pref_model_associator_client_, read_error_callback_, async_);
+      std::move(pref_registry), pref_model_associator_client_,
+      read_error_callback_, async_);
 }
 
 }  // namespace sync_preferences

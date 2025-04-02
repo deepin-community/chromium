@@ -5,8 +5,6 @@
 #ifndef COMPONENTS_VIZ_SERVICE_DISPLAY_CA_LAYER_OVERLAY_H_
 #define COMPONENTS_VIZ_SERVICE_DISPLAY_CA_LAYER_OVERLAY_H_
 
-#include <optional>
-
 #include "base/containers/flat_map.h"
 #include "base/memory/ref_counted.h"
 #include "components/viz/common/quads/aggregated_render_pass.h"
@@ -39,13 +37,15 @@ class VIZ_SERVICE_EXPORT CALayerOverlayProcessor {
   bool AreClipSettingsValid(const OverlayCandidate& ca_layer_overlay,
                             OverlayCandidateList* ca_layer_overlay_list) const;
   void PutForcedOverlayContentIntoUnderlays(
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       AggregatedRenderPass* render_pass,
       const gfx::RectF& display_rect,
       QuadList* quad_list,
-      const base::flat_map<AggregatedRenderPassId, cc::FilterOperations*>&
+      const base::flat_map<AggregatedRenderPassId,
+                           raw_ptr<cc::FilterOperations, CtnExperimental>>&
           render_pass_filters,
-      const base::flat_map<AggregatedRenderPassId, cc::FilterOperations*>&
+      const base::flat_map<AggregatedRenderPassId,
+                           raw_ptr<cc::FilterOperations, CtnExperimental>>&
           render_pass_backdrop_filters,
       OverlayCandidateList* ca_layer_overlays) const;
 
@@ -53,11 +53,13 @@ class VIZ_SERVICE_EXPORT CALayerOverlayProcessor {
   // CALayerOverlays. Virtual for testing.
   virtual bool ProcessForCALayerOverlays(
       AggregatedRenderPass* render_passes,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       const gfx::RectF& display_rect,
-      const base::flat_map<AggregatedRenderPassId, cc::FilterOperations*>&
+      const base::flat_map<AggregatedRenderPassId,
+                           raw_ptr<cc::FilterOperations, CtnExperimental>>&
           render_pass_filters,
-      const base::flat_map<AggregatedRenderPassId, cc::FilterOperations*>&
+      const base::flat_map<AggregatedRenderPassId,
+                           raw_ptr<cc::FilterOperations, CtnExperimental>>&
           render_pass_backdrop_filters,
       OverlayCandidateList* ca_layer_overlays);
 
@@ -67,13 +69,15 @@ class VIZ_SERVICE_EXPORT CALayerOverlayProcessor {
   // Returns whether future candidate quads should be considered
   bool PutQuadInSeparateOverlay(
       QuadList::Iterator at,
-      DisplayResourceProvider* resource_provider,
+      const DisplayResourceProvider* resource_provider,
       AggregatedRenderPass* render_pass,
       const gfx::RectF& display_rect,
       const DrawQuad* quad,
-      const base::flat_map<AggregatedRenderPassId, cc::FilterOperations*>&
+      const base::flat_map<AggregatedRenderPassId,
+                           raw_ptr<cc::FilterOperations, CtnExperimental>>&
           render_pass_filters,
-      const base::flat_map<AggregatedRenderPassId, cc::FilterOperations*>&
+      const base::flat_map<AggregatedRenderPassId,
+                           raw_ptr<cc::FilterOperations, CtnExperimental>>&
           render_pass_backdrop_filters,
       gfx::ProtectedVideoType protected_video_type,
       OverlayCandidateList* ca_layer_overlays) const;

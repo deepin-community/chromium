@@ -249,11 +249,6 @@ class NetworkChangeNotifier::ObserverList {
   const scoped_refptr<
       base::ObserverListThreadSafe<DefaultNetworkActiveObserver>>
       default_network_active_observer_list_;
-
-  // Indicates if connection cost observer was added before
-  // network_change_notifier was initialized, if so ConnectionCostObserverAdded
-  // is invoked from constructor.
-  std::atomic_bool connection_cost_observers_added_ = false;
 };
 
 class NetworkChangeNotifier::SystemDnsConfigObserver
@@ -446,7 +441,6 @@ double NetworkChangeNotifier::GetMaxBandwidthMbpsForConnectionSubtype(
       return std::numeric_limits<double>::infinity();
   }
   NOTREACHED();
-  return std::numeric_limits<double>::infinity();
 }
 
 // static
@@ -503,19 +497,25 @@ bool NetworkChangeNotifier::IsDefaultNetworkActive() {
 }
 
 // static
-const char* NetworkChangeNotifier::ConnectionTypeToString(
+base::cstring_view NetworkChangeNotifier::ConnectionTypeToString(
     ConnectionType type) {
-  static const char* const kConnectionTypeNames[] = {
-      "CONNECTION_UNKNOWN", "CONNECTION_ETHERNET",  "CONNECTION_WIFI",
-      "CONNECTION_2G",      "CONNECTION_3G",        "CONNECTION_4G",
-      "CONNECTION_NONE",    "CONNECTION_BLUETOOTH", "CONNECTION_5G",
-  };
+  static constexpr auto kConnectionTypeNames =
+      std::to_array<base::cstring_view>({
+          "CONNECTION_UNKNOWN",
+          "CONNECTION_ETHERNET",
+          "CONNECTION_WIFI",
+          "CONNECTION_2G",
+          "CONNECTION_3G",
+          "CONNECTION_4G",
+          "CONNECTION_NONE",
+          "CONNECTION_BLUETOOTH",
+          "CONNECTION_5G",
+      });
   static_assert(std::size(kConnectionTypeNames) ==
                     NetworkChangeNotifier::CONNECTION_LAST + 1,
                 "ConnectionType name count should match");
   if (type < CONNECTION_UNKNOWN || type > CONNECTION_LAST) {
     NOTREACHED();
-    return "CONNECTION_INVALID";
   }
   return kConnectionTypeNames[type];
 }
@@ -699,13 +699,8 @@ void NetworkChangeNotifier::AddNetworkObserver(NetworkObserver* observer) {
 void NetworkChangeNotifier::AddConnectionCostObserver(
     ConnectionCostObserver* observer) {
   DCHECK(!observer->observer_list_);
-  GetObserverList().connection_cost_observers_added_ = true;
   observer->observer_list_ = GetObserverList().connection_cost_observer_list_;
   observer->observer_list_->AddObserver(observer);
-  base::AutoLock auto_lock(NetworkChangeNotifierCreationLock());
-  if (g_network_change_notifier) {
-    g_network_change_notifier->ConnectionCostObserverAdded();
-  }
 }
 
 void NetworkChangeNotifier::AddDefaultNetworkActiveObserver(
@@ -864,9 +859,6 @@ NetworkChangeNotifier::NetworkChangeNotifier(
     g_network_change_notifier = this;
 
     system_dns_config_notifier_->AddObserver(system_dns_config_observer_.get());
-    if (GetObserverList().connection_cost_observers_added_) {
-      g_network_change_notifier->ConnectionCostObserverAdded();
-    }
   }
   if (!omit_observers_in_constructor_for_testing) {
     network_change_calculator_ =
@@ -1093,12 +1085,10 @@ void NetworkChangeNotifier::NotifyObserversOfDefaultNetworkActiveImpl() {
 
 NetworkChangeNotifier::DisableForTest::DisableForTest()
     : network_change_notifier_(g_network_change_notifier) {
-  DCHECK(g_network_change_notifier);
   g_network_change_notifier = nullptr;
 }
 
 NetworkChangeNotifier::DisableForTest::~DisableForTest() {
-  DCHECK(!g_network_change_notifier);
   g_network_change_notifier = network_change_notifier_;
 }
 

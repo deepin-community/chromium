@@ -69,25 +69,21 @@ base::WeakPtr<TwentyEightDayImpl> TwentyEightDayImpl::GetWeakPtr() {
 
 void TwentyEightDayImpl::CheckMembershipOprf() {
   NOTREACHED();
-  return;
 }
 
 void TwentyEightDayImpl::OnCheckMembershipOprfComplete(
     std::unique_ptr<std::string> response_body) {
   NOTREACHED();
-  return;
 }
 
 void TwentyEightDayImpl::CheckMembershipQuery(
     const psm_rlwe::PrivateMembershipRlweOprfResponse& oprf_response) {
   NOTREACHED();
-  return;
 }
 
 void TwentyEightDayImpl::OnCheckMembershipQueryComplete(
     std::unique_ptr<std::string> response_body) {
   NOTREACHED();
-  return;
 }
 
 void TwentyEightDayImpl::CheckIn() {
@@ -119,7 +115,6 @@ void TwentyEightDayImpl::CheckIn() {
 void TwentyEightDayImpl::OnCheckInComplete(
     std::unique_ptr<std::string> response_body) {
   NOTREACHED();
-  return;
 }
 
 void TwentyEightDayImpl::OnCheckInCompleteCustom(
@@ -179,7 +174,7 @@ TwentyEightDayImpl::GenerateImportRequestBody() {
       GetParams()->GetChromeDeviceParams().market_segment;
 
   DeviceMetadata* device_metadata = import_request.mutable_device_metadata();
-  device_metadata->set_chromeos_version(utils::GetChromeMilestone());
+  device_metadata->set_chrome_milestone(utils::GetChromeMilestone());
   device_metadata->set_hardware_id(utils::GetFullHardwareClass());
   device_metadata->set_chromeos_channel(
       utils::GetChromeChannel(version_channel));
@@ -689,7 +684,6 @@ TwentyEightDayImpl::GetPsmIdentifiersToQueryPhaseTwo() {
     NOTREACHED() << "Unexpectedly the Window ID is contained in the actives "
                     "cache already = "
                  << window_id_query_day;
-    return {};
   }
 
   std::optional<psm_rlwe::RlwePlaintextId> psm_id_query_day =
@@ -715,8 +709,6 @@ void TwentyEightDayImpl::CheckMembershipOprfSecondPhase() {
 
   if (!IsFirstPhaseComplete()) {
     NOTREACHED();
-    std::move(callback_).Run();
-    return;
   }
   PsmClientManager* psm_client_manager = GetParams()->GetPsmClientManager();
   psm_client_manager->SetPsmRlweClient(kPsmUseCase,

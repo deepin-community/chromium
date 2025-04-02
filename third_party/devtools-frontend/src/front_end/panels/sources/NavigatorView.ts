@@ -37,10 +37,12 @@ import * as SDK from '../../core/sdk/sdk.js';
 import * as Bindings from '../../models/bindings/bindings.js';
 import * as Persistence from '../../models/persistence/persistence.js';
 import * as Workspace from '../../models/workspace/workspace.js';
+import * as FloatingButton from '../../ui/components/floating_button/floating_button.js';
 import * as IconButton from '../../ui/components/icon_button/icon_button.js';
 import * as UI from '../../ui/legacy/legacy.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 import * as Snippets from '../snippets/snippets.js';
+import {PanelUtils} from '../utils/utils.js';
 
 import navigatorTreeStyles from './navigatorTree.css.js';
 import navigatorViewStyles from './navigatorView.css.js';
@@ -191,13 +193,16 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
   private groupByFolder?: boolean;
   constructor(jslogContext: string, enableAuthoredGrouping?: boolean) {
     super(true);
+    this.registerRequiredCSS(navigatorViewStyles);
 
     this.placeholder = null;
-    this.scriptsTree = new UI.TreeOutline.TreeOutlineInShadow();
+    this.scriptsTree = new UI.TreeOutline.TreeOutlineInShadow(UI.TreeOutline.TreeVariant.NAVIGATION_TREE);
+    this.scriptsTree.registerRequiredCSS(navigatorTreeStyles);
 
+    this.scriptsTree.hideOverflow();
     this.scriptsTree.setComparator(NavigatorView.treeElementsCompare);
     this.scriptsTree.setFocusable(false);
-    this.contentElement.setAttribute('jslog', `${VisualLogging.pane().context(jslogContext)}`);
+    this.contentElement.setAttribute('jslog', `${VisualLogging.pane(jslogContext).track({resize: true})}`);
     this.contentElement.appendChild(this.scriptsTree.element);
     this.setDefaultFocusedElement(this.scriptsTree.element);
 
@@ -228,18 +233,18 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
     Persistence.Persistence.PersistenceImpl.instance().addEventListener(
         Persistence.Persistence.Events.BindingRemoved, this.onBindingChanged, this);
     Persistence.NetworkPersistenceManager.NetworkPersistenceManager.instance().addEventListener(
-        Persistence.NetworkPersistenceManager.Events.RequestsForHeaderOverridesFileChanged,
+        Persistence.NetworkPersistenceManager.Events.REQUEST_FOR_HEADER_OVERRIDES_FILE_CHANGED,
         this.#onRequestsForHeaderOverridesFileChanged, this);
     SDK.TargetManager.TargetManager.instance().addEventListener(
-        SDK.TargetManager.Events.NameChanged, this.targetNameChanged, this);
+        SDK.TargetManager.Events.NAME_CHANGED, this.targetNameChanged, this);
 
     SDK.TargetManager.TargetManager.instance().observeTargets(this);
     this.resetWorkspace(Workspace.Workspace.WorkspaceImpl.instance());
     this.workspaceInternal.uiSourceCodes().forEach(this.addUISourceCode.bind(this));
     Bindings.NetworkProject.NetworkProjectManager.instance().addEventListener(
-        Bindings.NetworkProject.Events.FrameAttributionAdded, this.frameAttributionAdded, this);
+        Bindings.NetworkProject.Events.FRAME_ATTRIBUTION_ADDED, this.frameAttributionAdded, this);
     Bindings.NetworkProject.NetworkProjectManager.instance().addEventListener(
-        Bindings.NetworkProject.Events.FrameAttributionRemoved, this.frameAttributionRemoved, this);
+        Bindings.NetworkProject.Events.FRAME_ATTRIBUTION_REMOVED, this.frameAttributionRemoved, this);
   }
 
   private static treeElementOrder(treeElement: UI.TreeOutline.TreeElement): number {
@@ -269,7 +274,9 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
   static appendSearchItem(contextMenu: UI.ContextMenu.ContextMenu, path: string): void {
     const searchLabel = path ? i18nString(UIStrings.searchInFolder) : i18nString(UIStrings.searchInAllFiles);
     const searchSources = new SearchSources(path && `file:${path}`);
-    contextMenu.viewSection().appendItem(searchLabel, () => Common.Revealer.reveal(searchSources));
+    contextMenu.viewSection().appendItem(
+        searchLabel, () => Common.Revealer.reveal(searchSources),
+        {jslogContext: path ? 'search-in-folder' : 'search-in-all-files'});
   }
 
   private static treeElementsCompare(
@@ -741,7 +748,7 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
     let targetNode = rootOrDeployed.child('target:' + target.id());
     if (!targetNode) {
       targetNode = new NavigatorGroupTreeNode(
-          this, project, 'target:' + target.id(), target.type() === SDK.Target.Type.Frame ? Types.Frame : Types.Worker,
+          this, project, 'target:' + target.id(), target.type() === SDK.Target.Type.FRAME ? Types.Frame : Types.Worker,
           target.name());
       rootOrDeployed.appendChild(targetNode);
     }
@@ -764,10 +771,30 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
   private computeProjectDisplayName(target: SDK.Target.Target, projectOrigin: string): string {
     const runtimeModel = target.model(SDK.RuntimeModel.RuntimeModel);
     const executionContexts = runtimeModel ? runtimeModel.executionContexts() : [];
+
+    let matchingContextName: string|null = null;
+
     for (const context of executionContexts) {
-      if (context.name && context.origin && projectOrigin.startsWith(context.origin)) {
-        return context.name;
+      if (!context.origin || !projectOrigin.startsWith(context.origin)) {
+        continue;
       }
+
+      // If the project origin matches the default context origin then we should break out and use the
+      // project origin for the display name.
+      if (context.isDefault) {
+        matchingContextName = null;
+        break;
+      }
+
+      if (!context.name) {
+        continue;
+      }
+
+      matchingContextName = context.name;
+    }
+
+    if (matchingContextName) {
+      return matchingContextName;
     }
 
     if (!projectOrigin) {
@@ -946,7 +973,8 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
 
   private async handleContextMenuExclude(
       project: Workspace.Workspace.Project, path: Platform.DevToolsPath.EncodedPathString): Promise<void> {
-    const shouldExclude = await UI.UIUtils.ConfirmDialog.show(i18nString(UIStrings.areYouSureYouWantToExcludeThis));
+    const shouldExclude = await UI.UIUtils.ConfirmDialog.show(
+        i18nString(UIStrings.areYouSureYouWantToExcludeThis), undefined, {jslogContext: 'exclude-folder-confirmation'});
     if (shouldExclude) {
       UI.UIUtils.startBatchUpdate();
       project.excludeFolder(
@@ -956,7 +984,8 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
   }
 
   private async handleContextMenuDelete(uiSourceCode: Workspace.UISourceCode.UISourceCode): Promise<void> {
-    const shouldDelete = await UI.UIUtils.ConfirmDialog.show(i18nString(UIStrings.areYouSureYouWantToDeleteThis));
+    const shouldDelete = await UI.UIUtils.ConfirmDialog.show(
+        i18nString(UIStrings.areYouSureYouWantToDeleteThis), undefined, {jslogContext: 'delete-file-confirmation'});
     if (shouldDelete) {
       uiSourceCode.project().deleteFile(uiSourceCode);
     }
@@ -969,12 +998,15 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
 
     const project = uiSourceCode.project();
     if (project.type() === Workspace.Workspace.projectTypes.FileSystem) {
-      contextMenu.editSection().appendItem(i18nString(UIStrings.rename), this.handleContextMenuRename.bind(this, node));
+      contextMenu.editSection().appendItem(
+          i18nString(UIStrings.rename), this.handleContextMenuRename.bind(this, node), {jslogContext: 'rename'});
       contextMenu.editSection().appendItem(
           i18nString(UIStrings.makeACopy),
-          this.handleContextMenuCreate.bind(this, project, Platform.DevToolsPath.EmptyEncodedPathString, uiSourceCode));
+          this.handleContextMenuCreate.bind(this, project, Platform.DevToolsPath.EmptyEncodedPathString, uiSourceCode),
+          {jslogContext: 'make-a-copy'});
       contextMenu.editSection().appendItem(
-          i18nString(UIStrings.delete), this.handleContextMenuDelete.bind(this, uiSourceCode));
+          i18nString(UIStrings.delete), this.handleContextMenuDelete.bind(this, uiSourceCode),
+          {jslogContext: 'delete'});
     }
 
     void contextMenu.show();
@@ -983,7 +1015,8 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
   private async handleDeleteFolder(node: NavigatorTreeNode): Promise<void> {
     const warningMsg =
         `${i18nString(UIStrings.areYouSureYouWantToDeleteFolder)}\n${i18nString(UIStrings.actionCannotBeUndone)}`;
-    const shouldRemove = await UI.UIUtils.ConfirmDialog.show(warningMsg);
+    const shouldRemove =
+        await UI.UIUtils.ConfirmDialog.show(warningMsg, undefined, {jslogContext: 'delete-folder-confirmation'});
     if (shouldRemove) {
       Host.userMetrics.actionTaken(Host.UserMetrics.Action.OverrideTabDeleteFolderContextMenu);
       const topNode = this.findTopNonMergedNode(node);
@@ -993,7 +1026,7 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
   }
 
   private async removeUISourceCodeFromProject(node: NavigatorTreeNode): Promise<void> {
-    node.children().forEach(async child => {
+    node.children().slice(0).forEach(async child => {
       await this.removeUISourceCodeFromProject(child);
     });
 
@@ -1045,11 +1078,12 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
           Host.Platform.isWin());
       contextMenu.revealSection().appendItem(
           i18nString(UIStrings.openFolder),
-          () => Host.InspectorFrontendHost.InspectorFrontendHostInstance.showItemInFolder(folderPath));
+          () => Host.InspectorFrontendHost.InspectorFrontendHostInstance.showItemInFolder(folderPath),
+          {jslogContext: 'open-folder'});
       if (project.canCreateFile()) {
         contextMenu.defaultSection().appendItem(i18nString(UIStrings.newFile), () => {
           this.handleContextMenuCreate(project, path, undefined);
-        });
+        }, {jslogContext: 'new-file'});
       }
     } else if (node.origin && node.folderPath) {
       const url = Common.ParsedURL.ParsedURL.concatenate(node.origin, '/', node.folderPath);
@@ -1058,15 +1092,16 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
         isKnownThirdParty: node.recursiveProperties.exclusivelyThirdParty || false,
         isCurrentlyIgnoreListed: node.recursiveProperties.exclusivelyIgnored || false,
       };
-      for (const {text, callback} of Bindings.IgnoreListManager.IgnoreListManager.instance()
+      for (const {text, callback, jslogContext} of Bindings.IgnoreListManager.IgnoreListManager.instance()
                .getIgnoreListFolderContextMenuItems(url, options)) {
-        contextMenu.defaultSection().appendItem(text, callback);
+        contextMenu.defaultSection().appendItem(text, callback, {jslogContext});
       }
     }
 
     if (project.canExcludeFolder(path)) {
       contextMenu.defaultSection().appendItem(
-          i18nString(UIStrings.excludeFolder), this.handleContextMenuExclude.bind(this, project, path));
+          i18nString(UIStrings.excludeFolder), this.handleContextMenuExclude.bind(this, project, path),
+          {jslogContext: 'exclude-folder'});
     }
 
     if (project.type() === Workspace.Workspace.projectTypes.FileSystem) {
@@ -1081,16 +1116,24 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
             })}\n${i18nString(UIStrings.workspaceStopSyncing)}`;
             const shouldRemove = await UI.UIUtils.ConfirmDialog.show(warningMessage, undefined, {
               okButtonLabel: i18nString(UIStrings.remove),
+              jslogContext: 'remove-folder-from-workspace-confirmation',
             });
             if (shouldRemove) {
               project.remove();
             }
-          });
+          }, {jslogContext: 'remove-folder-from-workspace'});
+
+          if (UI.ActionRegistry.ActionRegistry.instance().hasAction('ai-assistance.filesystem')) {
+            contextMenu.headerSection().appendAction(
+                'ai-assistance.filesystem',
+            );
+            UI.Context.Context.instance().setFlavor(Persistence.FileSystemWorkspaceBinding.FileSystem, project);
+          }
         }
       } else {
         if (!(node instanceof NavigatorGroupTreeNode)) {
           contextMenu.defaultSection().appendItem(
-              i18nString(UIStrings.delete), this.handleDeleteFolder.bind(this, node));
+              i18nString(UIStrings.delete), this.handleDeleteFolder.bind(this, node), {jslogContext: 'delete'});
         }
       }
     }
@@ -1199,11 +1242,6 @@ export class NavigatorView extends UI.Widget.VBox implements SDK.TargetManager.O
     if (targetNode) {
       targetNode.setTitle(target.name());
     }
-  }
-  override wasShown(): void {
-    super.wasShown();
-    this.scriptsTree.registerCSSFiles([navigatorTreeStyles]);
-    this.registerCSSFiles([navigatorViewStyles]);
   }
 }
 
@@ -1343,6 +1381,7 @@ export class NavigatorSourceTreeElement extends UI.TreeOutline.TreeElement {
   readonly node: NavigatorUISourceCodeTreeNode;
   private readonly navigatorView: NavigatorView;
   uiSourceCodeInternal: Workspace.UISourceCode.UISourceCode;
+  private aiButtonContainer?: HTMLElement;
 
   constructor(
       navigatorView: NavigatorView, uiSourceCode: Workspace.UISourceCode.UISourceCode, title: string,
@@ -1359,37 +1398,43 @@ export class NavigatorSourceTreeElement extends UI.TreeOutline.TreeElement {
     this.navigatorView = navigatorView;
     this.uiSourceCodeInternal = uiSourceCode;
     this.updateIcon();
+    (this.titleElement as HTMLElement).setAttribute('jslog', `${VisualLogging.value('title').track({change: true})}`);
   }
 
   updateIcon(): void {
-    const binding = Persistence.Persistence.PersistenceImpl.instance().binding(this.uiSourceCodeInternal);
-    const networkPersistenceManager = Persistence.NetworkPersistenceManager.NetworkPersistenceManager.instance();
-    let iconType = 'document';
-    let iconStyles: string[] = [];
-    if (binding) {
-      if (Snippets.ScriptSnippetFileSystem.isSnippetsUISourceCode(binding.fileSystem)) {
-        iconType = 'snippet';
-      }
-      const badgeIsPurple = networkPersistenceManager.project() === binding.fileSystem.project();
-      iconStyles = badgeIsPurple ? ['dot', 'purple'] : ['dot', 'green'];
-    } else if (networkPersistenceManager.isActiveHeaderOverrides(this.uiSourceCode)) {
-      iconStyles = ['dot', 'purple'];
-    } else {
-      if (Snippets.ScriptSnippetFileSystem.isSnippetsUISourceCode(this.uiSourceCodeInternal)) {
-        iconType = 'snippet';
-      }
-    }
-
-    const icon = IconButton.Icon.create(iconType, iconStyles.join(' '));
-    if (binding) {
-      UI.Tooltip.Tooltip.install(
-          icon, Persistence.PersistenceUtils.PersistenceUtils.tooltipForUISourceCode(this.uiSourceCodeInternal));
-    }
+    const icon = PanelUtils.getIconForSourceFile(this.uiSourceCodeInternal);
     this.setLeadingIcons([icon]);
   }
 
   updateAccessibleName(): void {
     UI.ARIAUtils.setLabel(this.listItemElement, `${this.uiSourceCodeInternal.name()}, ${this.nodeType}`);
+  }
+
+  private createAiButton(): void {
+    if (!UI.ActionRegistry.ActionRegistry.instance().hasAction('drjones.sources-floating-button')) {
+      return;
+    }
+    if (!this.uiSourceCode.contentType().isTextType() ||
+        Snippets.ScriptSnippetFileSystem.isSnippetsUISourceCode(this.uiSourceCode)) {
+      return;
+    }
+    const action = UI.ActionRegistry.ActionRegistry.instance().getAction('drjones.sources-floating-button');
+    if (!this.aiButtonContainer) {
+      this.aiButtonContainer = this.listItemElement.createChild('span', 'ai-button-container');
+      const floatingButton = new FloatingButton.FloatingButton.FloatingButton({
+        title: action.title(),
+        iconName: 'smart-assistant',
+      });
+      floatingButton.addEventListener('click', ev => {
+        ev.stopPropagation();
+        this.navigatorView.sourceSelected(this.uiSourceCode, false);
+        void action.execute();
+      }, {capture: true});
+      floatingButton.addEventListener('mousedown', ev => {
+        ev.stopPropagation();
+      }, {capture: true});
+      this.aiButtonContainer.appendChild(floatingButton);
+    }
   }
 
   get uiSourceCode(): Workspace.UISourceCode.UISourceCode {
@@ -1401,6 +1446,7 @@ export class NavigatorSourceTreeElement extends UI.TreeOutline.TreeElement {
     this.listItemElement.addEventListener('click', this.onclick.bind(this), false);
     this.listItemElement.addEventListener('contextmenu', this.handleContextMenuEvent.bind(this), false);
     this.listItemElement.addEventListener('dragstart', this.ondragstart.bind(this), false);
+    this.createAiButton();
   }
 
   private shouldRenameOnMouseDown(): boolean {
@@ -1466,18 +1512,17 @@ export class NavigatorSourceTreeElement extends UI.TreeOutline.TreeElement {
   }
 }
 
-export type NavigatorRecursiveTreeNodeProperties = {
-  exclusivelySourceMapped: boolean|null,
-  exclusivelyIgnored: boolean|null,
-  exclusivelyThirdParty: boolean|null,
-  exclusivelyContentScripts: boolean|null,
-};
+export interface NavigatorRecursiveTreeNodeProperties {
+  exclusivelySourceMapped: boolean|null;
+  exclusivelyIgnored: boolean|null;
+  exclusivelyThirdParty: boolean|null;
+  exclusivelyContentScripts: boolean|null;
+}
 
 export class NavigatorTreeNode {
   id: string;
   protected navigatorView: NavigatorView;
   type: string;
-  childrenInternal: Map<string, NavigatorTreeNode>;
   private populated: boolean;
   isMerged: boolean;
   parent!: NavigatorTreeNode|null;
@@ -1485,11 +1530,13 @@ export class NavigatorTreeNode {
   tooltip?: string;
   recursiveProperties: NavigatorRecursiveTreeNodeProperties;
 
+  #children: NavigatorTreeNode[] = [];
+  readonly #childById = new Map<string, NavigatorTreeNode>();
+
   constructor(navigatorView: NavigatorView, id: string, type: string, tooltip?: string) {
     this.id = id;
     this.navigatorView = navigatorView;
     this.type = type;
-    this.childrenInternal = new Map();
     this.tooltip = tooltip;
 
     this.populated = false;
@@ -1576,32 +1623,46 @@ export class NavigatorTreeNode {
   }
 
   isEmpty(): boolean {
-    return !this.childrenInternal.size;
+    return !this.#children.length;
   }
 
-  children(): NavigatorTreeNode[] {
-    return [...this.childrenInternal.values()];
+  children(): readonly NavigatorTreeNode[] {
+    return this.#children;
   }
 
   child(id: string): NavigatorTreeNode|null {
-    return this.childrenInternal.get(id) || null;
+    return this.#childById.get(id) ?? null;
   }
 
   appendChild(node: NavigatorTreeNode): void {
-    this.childrenInternal.set(node.id, node);
+    this.#children.push(node);
+    this.#childById.set(node.id, node);
     node.parent = this;
     this.didAddChild(node);
   }
 
   removeChild(node: NavigatorTreeNode): void {
     this.willRemoveChild(node);
-    this.childrenInternal.delete(node.id);
+    const idx = this.#children.findIndex(n => n.id === node.id);
+    if (idx >= 0) {
+      this.#children.splice(idx, 1);
+    }
+    this.#childById.delete(node.id);
     node.parent = null;
     node.dispose();
   }
 
   reset(): void {
-    this.childrenInternal.clear();
+    this.#children = [];
+    this.#childById.clear();
+  }
+
+  updateId(newId: string): void {
+    if (this.parent) {
+      this.parent.#childById.delete(this.id);
+      this.parent.#childById.set(newId, this);
+    }
+    this.id = newId;
   }
 }
 
@@ -1699,9 +1760,7 @@ export class NavigatorUISourceCodeTreeNode extends NavigatorTreeNode {
     this.treeElement.tooltip = tooltip;
     this.treeElement.updateAccessibleName();
 
-    this.parent?.childrenInternal.delete(this.id);
-    this.id = 'UISourceCode:' + this.uiSourceCodeInternal.canononicalScriptId();
-    this.parent?.childrenInternal.set(this.id, this);
+    this.updateId('UISourceCode:' + this.uiSourceCodeInternal.canononicalScriptId());
   }
 
   override hasChildren(): boolean {
@@ -1725,7 +1784,7 @@ export class NavigatorUISourceCodeTreeNode extends NavigatorTreeNode {
     }
   }
 
-  rename(callback?: ((arg0: boolean) => void)): void {
+  rename(callback?: ((committed: boolean) => void)): void {
     if (!this.treeElement) {
       return;
     }
@@ -1740,21 +1799,19 @@ export class NavigatorUISourceCodeTreeNode extends NavigatorTreeNode {
     const treeOutlineElement = this.treeElement.treeOutline.element;
     UI.UIUtils.markBeingEdited(treeOutlineElement, true);
 
-    function commitHandler(
-        this: NavigatorUISourceCodeTreeNode, element: Element, newTitle: string, oldTitle: string): void {
+    const commitHandler = (_element: Element, newTitle: string, oldTitle: string|null): void => {
       if (newTitle !== oldTitle) {
         if (this.treeElement) {
           this.treeElement.title = newTitle;
         }
         // necessary cast to RawPathString as alternative would be altering type of Config<T>
-        void this.uiSourceCodeInternal.rename(newTitle as Platform.DevToolsPath.RawPathString)
-            .then(renameCallback.bind(this));
+        void this.uiSourceCodeInternal.rename(newTitle as Platform.DevToolsPath.RawPathString).then(renameCallback);
         return;
       }
-      afterEditing.call(this, true);
-    }
+      afterEditing(true);
+    };
 
-    function renameCallback(this: NavigatorUISourceCodeTreeNode, success: boolean): void {
+    const renameCallback = (success: boolean): void => {
       if (!success) {
         UI.UIUtils.markBeingEdited(treeOutlineElement, false);
         this.updateTitle();
@@ -1769,20 +1826,20 @@ export class NavigatorUISourceCodeTreeNode extends NavigatorTreeNode {
           this.treeElement.select();
         }
       }
-      afterEditing.call(this, true);
-    }
+      afterEditing(true);
+    };
 
-    function afterEditing(this: NavigatorUISourceCodeTreeNode, committed: boolean): void {
+    const afterEditing = (committed: boolean): void => {
       UI.UIUtils.markBeingEdited(treeOutlineElement, false);
       this.updateTitle();
       if (callback) {
         callback(committed);
       }
-    }
+    };
 
     this.updateTitle(true);
     this.treeElement.startEditingTitle(
-        new UI.InplaceEditor.Config(commitHandler.bind(this), afterEditing.bind(this, false)));
+        new UI.InplaceEditor.Config(commitHandler, () => afterEditing(false), undefined));
   }
 }
 

@@ -15,7 +15,6 @@ import {
   waitFor,
   waitForFunction,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {openSoftContextMenuAndClickOnItem} from '../helpers/context-menu-helpers.js';
 import {
   getTextFromHeadersRow,
@@ -87,7 +86,7 @@ async function editHeaderItem(newValue: string, previousValue: string): Promise<
   await pressKey('Tab');
 }
 
-describe('The Overrides Panel', async function() {
+describe('The Overrides Panel', function() {
   this.timeout(10000);
 
   afterEach(async () => {
@@ -97,8 +96,7 @@ describe('The Overrides Panel', async function() {
     await waitFor(ENABLE_OVERRIDES_SELECTOR);
   });
 
-  // Skip until flake is fixed
-  it.skip('[crbug.com/1432925]: can create header overrides', async () => {
+  it('can create header overrides', async () => {
     await goToResource('empty.html');
     await openSourcesPanel();
     await enableLocalOverrides();
@@ -114,7 +112,7 @@ describe('The Overrides Panel', async function() {
 
     const responseHeaderSection = await waitFor(RESPONSE_HEADERS_SELECTOR);
     const row = await waitFor(HEADER_ROW_SELECTOR, responseHeaderSection);
-    assert.deepStrictEqual(await getTextFromHeadersRow(row), ['aaa:', 'bbb']);
+    assert.deepEqual(await getTextFromHeadersRow(row), ['aaa:', 'bbb']);
   });
 
   // Skip until flake is fixed
@@ -144,7 +142,7 @@ describe('The Overrides Panel', async function() {
 
     const responseHeaderSection = await waitFor(RESPONSE_HEADERS_SELECTOR);
     const row = await waitFor('.row.header-overridden.header-editable', responseHeaderSection);
-    assert.deepStrictEqual(await getTextFromHeadersRow(row), ['foo:', 'bar']);
+    assert.deepEqual(await getTextFromHeadersRow(row), ['foo:', 'bar']);
     await click('[title="Reveal header override definitions"]');
     assert.isTrue(await editorTabHasPurpleDot());
     assert.isTrue(await fileTreeEntryIsSelectedAndHasPurpleDot());

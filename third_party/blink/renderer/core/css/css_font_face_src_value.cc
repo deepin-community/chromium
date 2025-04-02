@@ -73,7 +73,6 @@ String TechnologyToString(CSSFontFaceSrcValue::FontTechnology font_technology) {
       return "color-sbix";
     case CSSFontFaceSrcValue::FontTechnology::kTechnologyUnknown:
       NOTREACHED();
-      return String();
   }
 }
 
@@ -191,8 +190,7 @@ void CSSFontFaceSrcValue::RestoreCachedResourceIfNeeded(
   DCHECK(context);
   DCHECK(context->Fetcher());
   context->Fetcher()->EmulateLoadStartedForInspector(
-      fetched_, KURL(src_value_->UrlData().ResolvedUrl()),
-      mojom::blink::RequestContextType::FONT,
+      fetched_, mojom::blink::RequestContextType::FONT,
       network::mojom::RequestDestination::kFont,
       fetch_initiator_type_names::kCSS);
 }
@@ -206,6 +204,7 @@ bool CSSFontFaceSrcValue::Equals(const CSSFontFaceSrcValue& other) const {
 void CSSFontFaceSrcValue::TraceAfterDispatch(Visitor* visitor) const {
   visitor->Trace(src_value_);
   visitor->Trace(fetched_);
+  visitor->Trace(world_);
   CSSValue::TraceAfterDispatch(visitor);
 }
 

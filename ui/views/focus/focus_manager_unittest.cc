@@ -21,6 +21,7 @@
 #include "ui/base/accelerators/test_accelerator_target.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/accessible_pane_view.h"
@@ -38,7 +39,6 @@
 #include "ui/views/test/views_test_utils.h"
 #include "ui/views/test/widget_test.h"
 #include "ui/views/view_class_properties.h"
-#include "ui/views/widget/unique_widget_ptr.h"
 #include "ui/views/widget/widget.h"
 
 #if defined(USE_AURA)
@@ -181,17 +181,19 @@ TEST_F(FocusManagerTest, WidgetFocusChangeListener) {
   TestWidgetFocusChangeListener widget_listener;
   AddWidgetFocusChangeListener(&widget_listener);
 
-  Widget::InitParams params1 = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  Widget::InitParams params1 = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
   params1.bounds = gfx::Rect(10, 10, 100, 100);
   params1.parent = GetWidget()->GetNativeView();
-  UniqueWidgetPtr widget1 = std::make_unique<Widget>();
+  auto widget1 = std::make_unique<Widget>();
   widget1->Init(std::move(params1));
   widget1->Show();
 
-  Widget::InitParams params2 = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  Widget::InitParams params2 = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
   params2.bounds = gfx::Rect(10, 10, 100, 100);
   params2.parent = GetWidget()->GetNativeView();
-  UniqueWidgetPtr widget2 = std::make_unique<Widget>();
+  auto widget2 = std::make_unique<Widget>();
   widget2->Init(std::move(params2));
   widget2->Show();
 
@@ -445,7 +447,8 @@ TEST_F(FocusManagerTest, CallsSelfDeletingAcceleratorTarget) {
 }
 
 TEST_F(FocusManagerTest, SuspendAccelerators) {
-  const ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_RETURN, ui::EF_NONE);
+  const ui::KeyEvent event(ui::EventType::kKeyPressed, ui::VKEY_RETURN,
+                           ui::EF_NONE);
   ui::Accelerator accelerator(event.key_code(), event.flags());
   ui::TestAcceleratorTarget target(true);
   FocusManager* focus_manager = GetFocusManager();
@@ -604,19 +607,12 @@ class FocusManagerArrowKeyTraversalTest
   void SetUp() override {
     if (testing::UnitTest::GetInstance()->current_test_info()->value_param()) {
       is_rtl_ = GetParam();
-      if (is_rtl_)
+      if (is_rtl_) {
         base::i18n::SetICUDefaultLocale("he");
+      }
     }
 
     FocusManagerTest::SetUp();
-    previous_arrow_key_traversal_enabled_ =
-        FocusManager::arrow_key_traversal_enabled();
-  }
-
-  void TearDown() override {
-    FocusManager::set_arrow_key_traversal_enabled(
-        previous_arrow_key_traversal_enabled_);
-    FocusManagerTest::TearDown();
   }
 
   bool is_rtl_ = false;
@@ -624,8 +620,6 @@ class FocusManagerArrowKeyTraversalTest
  private:
   // Restores the locale to default when the destructor is called.
   base::test::ScopedRestoreICUDefaultLocale restore_locale_;
-
-  bool previous_arrow_key_traversal_enabled_ = false;
 };
 
 // Instantiate the Boolean which is used to toggle RTL in
@@ -638,10 +632,14 @@ INSTANTIATE_TEST_SUITE_P(All,
 
 TEST_P(FocusManagerArrowKeyTraversalTest, ArrowKeyTraversal) {
   FocusManager* focus_manager = GetFocusManager();
-  const ui::KeyEvent left_key(ui::ET_KEY_PRESSED, ui::VKEY_LEFT, ui::EF_NONE);
-  const ui::KeyEvent right_key(ui::ET_KEY_PRESSED, ui::VKEY_RIGHT, ui::EF_NONE);
-  const ui::KeyEvent up_key(ui::ET_KEY_PRESSED, ui::VKEY_UP, ui::EF_NONE);
-  const ui::KeyEvent down_key(ui::ET_KEY_PRESSED, ui::VKEY_DOWN, ui::EF_NONE);
+  const ui::KeyEvent left_key(ui::EventType::kKeyPressed, ui::VKEY_LEFT,
+                              ui::EF_NONE);
+  const ui::KeyEvent right_key(ui::EventType::kKeyPressed, ui::VKEY_RIGHT,
+                               ui::EF_NONE);
+  const ui::KeyEvent up_key(ui::EventType::kKeyPressed, ui::VKEY_UP,
+                            ui::EF_NONE);
+  const ui::KeyEvent down_key(ui::EventType::kKeyPressed, ui::VKEY_DOWN,
+                              ui::EF_NONE);
 
   std::vector<views::View*> v;
   for (size_t i = 0; i < 2; ++i) {
@@ -651,8 +649,8 @@ TEST_P(FocusManagerArrowKeyTraversalTest, ArrowKeyTraversal) {
     v.push_back(view);
   }
 
-  // Arrow key traversal is off and arrow key does not change focus.
-  FocusManager::set_arrow_key_traversal_enabled(false);
+  GetWidget()->widget_delegate()->SetEnableArrowKeyTraversal(false);
+
   v[0]->RequestFocus();
   focus_manager->OnKeyEvent(right_key);
   EXPECT_EQ(v[0], focus_manager->GetFocusedView());
@@ -664,7 +662,7 @@ TEST_P(FocusManagerArrowKeyTraversalTest, ArrowKeyTraversal) {
   EXPECT_EQ(v[0], focus_manager->GetFocusedView());
 
   // Turn on arrow key traversal.
-  FocusManager::set_arrow_key_traversal_enabled(true);
+  GetWidget()->widget_delegate()->SetEnableArrowKeyTraversal(true);
   v[0]->RequestFocus();
   focus_manager->OnKeyEvent(is_rtl_ ? left_key : right_key);
   EXPECT_EQ(v[1], focus_manager->GetFocusedView());
@@ -702,14 +700,16 @@ TEST_F(FocusManagerTest, SkipViewsInArrowKeyTraversal) {
   EXPECT_EQ(v[0], focus_manager->GetFocusedView());
 
   // Check that focus does not go to a disabled/hidden view.
-  const ui::KeyEvent right_key(ui::ET_KEY_PRESSED, ui::VKEY_RIGHT, ui::EF_NONE);
+  const ui::KeyEvent right_key(ui::EventType::kKeyPressed, ui::VKEY_RIGHT,
+                               ui::EF_NONE);
   focus_manager->OnKeyEvent(right_key);
   EXPECT_EQ(v[2], focus_manager->GetFocusedView());
 
   focus_manager->OnKeyEvent(right_key);
   EXPECT_EQ(v[4], focus_manager->GetFocusedView());
 
-  const ui::KeyEvent left_key(ui::ET_KEY_PRESSED, ui::VKEY_LEFT, ui::EF_NONE);
+  const ui::KeyEvent left_key(ui::EventType::kKeyPressed, ui::VKEY_LEFT,
+                              ui::EF_NONE);
   focus_manager->OnKeyEvent(left_key);
   EXPECT_EQ(v[2], focus_manager->GetFocusedView());
 
@@ -876,7 +876,8 @@ class TestBubbleDialogDelegateView : public BubbleDialogDelegateView {
  public:
   explicit TestBubbleDialogDelegateView(View* anchor)
       : BubbleDialogDelegateView(anchor, BubbleBorder::NONE) {
-    DialogDelegate::SetButtons(ui::DIALOG_BUTTON_NONE);
+    DialogDelegate::SetButtons(
+        static_cast<int>(ui::mojom::DialogButton::kNone));
   }
   TestBubbleDialogDelegateView(const TestBubbleDialogDelegateView&) = delete;
   TestBubbleDialogDelegateView& operator=(const TestBubbleDialogDelegateView&) =
@@ -926,11 +927,12 @@ TEST_F(FocusManagerTest, AdvanceFocusStaysInWidget) {
   GetContentsView()->AddChildView(widget_view);
 
   // Create a widget with two views, focus the second.
-  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  Widget::InitParams params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
   params.child = true;
   params.bounds = gfx::Rect(10, 10, 100, 100);
   params.parent = GetWidget()->GetNativeView();
-  UniqueWidgetPtr child_widget = std::make_unique<Widget>();
+  auto child_widget = std::make_unique<Widget>();
   std::unique_ptr<AdvanceFocusWidgetDelegate> delegate_owned =
       std::make_unique<AdvanceFocusWidgetDelegate>(child_widget.get());
   params.delegate = delegate_owned.get();
@@ -1158,8 +1160,9 @@ class DesktopWidgetFocusManagerTest : public FocusManagerTest {
 };
 
 TEST_F(DesktopWidgetFocusManagerTest, AnchoredDialogInDesktopNativeWidgetAura) {
-  UniqueWidgetPtr widget = std::make_unique<Widget>();
-  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  auto widget = std::make_unique<Widget>();
+  Widget::InitParams params = CreateParams(
+      Widget::InitParams::CLIENT_OWNS_WIDGET, Widget::InitParams::TYPE_WINDOW);
   params.bounds = gfx::Rect(0, 0, 1024, 768);
   widget->Init(std::move(params));
   widget->Show();
@@ -1185,16 +1188,18 @@ TEST_F(DesktopWidgetFocusManagerTest, AnchoredDialogInDesktopNativeWidgetAura) {
 
   // In order to pass the accessibility paint checks, focusable views must have
   // a valid role.
-  parent1->GetViewAccessibility().OverrideRole(ax::mojom::Role::kGroup);
-  parent2->GetViewAccessibility().OverrideRole(ax::mojom::Role::kGroup);
-  child->GetViewAccessibility().OverrideRole(ax::mojom::Role::kButton);
+  parent1->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
+  parent2->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
+  child->GetViewAccessibility().SetRole(ax::mojom::Role::kButton);
 
   // In order to pass the accessibility paint checks, focusable views must have
   // a non-empty accessible name, or have their name set to explicitly empty.
-  parent1->GetViewAccessibility().OverrideName(u"Parent 1");
-  parent2->GetViewAccessibility().OverrideName(
+  parent1->GetViewAccessibility().SetName(u"Parent 1",
+                                          ax::mojom::NameFrom::kAttribute);
+  parent2->GetViewAccessibility().SetName(
       u"", ax::mojom::NameFrom::kAttributeExplicitlyEmpty);
-  child->GetViewAccessibility().OverrideName("uChild");
+  child->GetViewAccessibility().SetName("uChild",
+                                        ax::mojom::NameFrom::kAttribute);
 
   widget->Activate();
   parent1->RequestFocus();

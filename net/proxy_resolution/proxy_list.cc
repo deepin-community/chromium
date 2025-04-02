@@ -165,7 +165,7 @@ std::string ProxyList::ToPacString() const {
                       ? "DIRECT"
                       : ProxyServerToPacResultElement(proxy_chain.First());
   }
-  return proxy_list.empty() ? std::string() : proxy_list;
+  return proxy_list;
 }
 
 std::string ProxyList::ToDebugString() const {
@@ -203,7 +203,6 @@ bool ProxyList::Fallback(ProxyRetryInfoMap* proxy_retry_info,
                          const NetLogWithSource& net_log) {
   if (proxy_chains_.empty()) {
     NOTREACHED();
-    return false;
   }
   // By default, proxy chains are not retried for 5 minutes.
   UpdateRetryInfoOnFallback(proxy_retry_info, base::Minutes(5), true,
@@ -248,7 +247,6 @@ void ProxyList::UpdateRetryInfoOnFallback(
 
   if (proxy_chains_.empty()) {
     NOTREACHED();
-    return;
   }
 
   auto& first_chain = proxy_chains_[0];

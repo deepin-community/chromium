@@ -14,20 +14,20 @@ import '../os_settings_page/settings_card.js';
 import '../settings_shared.css.js';
 import 'chrome://resources/ash/common/cr_elements/localized_link/localized_link.js';
 
+import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
 import {WebUiListenerMixin} from 'chrome://resources/ash/common/cr_elements/web_ui_listener_mixin.js';
-import {PrefsMixin} from 'chrome://resources/cr_components/settings_prefs/prefs_mixin.js';
 import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
 import {DeepLinkingMixin} from '../common/deep_linking_mixin.js';
-import {isCrostiniAllowed, isCrostiniSupported, isRevampWayfindingEnabled} from '../common/load_time_booleans.js';
+import {isCrostiniAllowed, isCrostiniSupported} from '../common/load_time_booleans.js';
 import {RouteOriginMixin} from '../common/route_origin_mixin.js';
 import {recordSettingChange} from '../metrics_recorder.js';
 import {Setting} from '../mojom-webui/setting.mojom-webui.js';
-import {Route, Router, routes} from '../router.js';
+import {type Route, Router, routes} from '../router.js';
 
-import {CrostiniBrowserProxy, CrostiniBrowserProxyImpl} from './crostini_browser_proxy.js';
+import {type CrostiniBrowserProxy, CrostiniBrowserProxyImpl} from './crostini_browser_proxy.js';
 import {getTemplate} from './crostini_settings_card.html.js';
 
 const CrostiniSettingsCardElementBase = DeepLinkingMixin(PrefsMixin(
@@ -80,13 +80,6 @@ export class CrostiniSettingsCardElement extends
           return loadTimeData.getBoolean('showBruschetta');
         },
       },
-
-      isRevampWayfindingEnabled_: {
-        type: Boolean,
-        value: () => {
-          return isRevampWayfindingEnabled();
-        },
-      },
     };
   }
 
@@ -94,15 +87,13 @@ export class CrostiniSettingsCardElement extends
   private disableCrostiniInstall_: boolean;
   private isCrostiniAllowed_: boolean;
   private isCrostiniSupported_: boolean;
-  private readonly isRevampWayfindingEnabled_: boolean;
   private readonly showBruschetta_: boolean;
 
   constructor() {
     super();
 
     /** RouteOriginMixin override */
-    this.route =
-        this.isRevampWayfindingEnabled_ ? routes.ABOUT : routes.CROSTINI;
+    this.route = routes.ABOUT;
 
     this.browserProxy_ = CrostiniBrowserProxyImpl.getInstance();
   }

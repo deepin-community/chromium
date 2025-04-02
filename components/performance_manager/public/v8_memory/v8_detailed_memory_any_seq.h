@@ -56,7 +56,7 @@ namespace v8_memory {
 //         // Process was deleted after measurement arrived on the PM sequence.
 //         return;
 //       }
-//       LOG(INFO) << "Process " << process->GetID() <<
+//       LOG(INFO) << "Process " << process->GetID().GetUnsafeValue() <<
 //           " reported " << process_data.detached_v8_bytes_used() <<
 //           " bytes of V8 memory that wasn't associated with a frame.";
 //       LOG(INFO) << "Process " << process_node->GetProcessId() <<
@@ -121,9 +121,9 @@ namespace v8_memory {
 // observer.
 class V8DetailedMemoryObserverAnySeq : public base::CheckedObserver {
  public:
-  // TODO(crbug.com/1096617): Should use ExecutionContext tokens here. We should
-  // potentially also split "main" content from "isolated world" content, and
-  // have a detailed V8ContextToken map for those who care about all the
+  // TODO(crbug.com/40136290): Should use ExecutionContext tokens here. We
+  // should potentially also split "main" content from "isolated world" content,
+  // and have a detailed V8ContextToken map for those who care about all the
   // details.
   using FrameDataMap = base::flat_map<content::GlobalRenderFrameHostId,
                                       V8DetailedMemoryExecutionContextData>;

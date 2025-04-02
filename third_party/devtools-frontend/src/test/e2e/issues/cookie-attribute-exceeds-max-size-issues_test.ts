@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import {assertNotNullOrUndefined, getBrowserAndPages, goToResource} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   ensureResourceSectionIsExpanded,
   expandIssue,
@@ -13,7 +12,7 @@ import {
   waitForTableFromResourceSectionContents,
 } from '../helpers/issues-helpers.js';
 
-describe('Cookie attribute exceeds max size issues test', async () => {
+describe('Cookie attribute exceeds max size issues test', () => {
   afterEach(async () => {
     const {target} = getBrowserAndPages();
     const cookies = await target.cookies();

@@ -21,9 +21,9 @@
 #include "extensions/browser/install/sandboxed_unpacker_failure_reason.h"
 #include "extensions/browser/updater/extension_downloader.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace extensions {
 
@@ -34,15 +34,16 @@ namespace {
 // Timeout to report UMA if not all force-installed extension were loaded.
 constexpr base::TimeDelta kInstallationTimeout = base::Minutes(5);
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 // Converts user_manager::UserType to InstallStageTracker::UserType for
 // histogram purposes.
 ForceInstalledMetrics::UserType ConvertUserType(
     InstallStageTracker::UserInfo user_info) {
   switch (user_info.user_type) {
     case user_manager::UserType::kRegular: {
-      if (user_info.is_new_user)
+      if (user_info.is_new_user) {
         return ForceInstalledMetrics::UserType::USER_TYPE_REGULAR_NEW;
+      }
       return ForceInstalledMetrics::UserType::USER_TYPE_REGULAR_EXISTING;
     }
     case user_manager::UserType::kGuest:
@@ -53,14 +54,13 @@ ForceInstalledMetrics::UserType ConvertUserType(
       return ForceInstalledMetrics::UserType::USER_TYPE_KIOSK_APP;
     case user_manager::UserType::kChild:
       return ForceInstalledMetrics::UserType::USER_TYPE_CHILD;
-    case user_manager::UserType::kArcKioskApp:
-      return ForceInstalledMetrics::UserType::USER_TYPE_ARC_KIOSK_APP;
     case user_manager::UserType::kWebKioskApp:
       return ForceInstalledMetrics::UserType::USER_TYPE_WEB_KIOSK_APP;
+    case user_manager::UserType::kKioskIWA:
+      return ForceInstalledMetrics::UserType::USER_TYPE_KIOSK_IWA;
     default:
       NOTREACHED();
   }
-  return ForceInstalledMetrics::UserType::kMaxValue;
 }
 
 // Reports type of user in case Force Installed Extensions fail to
@@ -83,7 +83,7 @@ void ReportUserType(Profile* profile, bool is_stuck_in_initial_creation_stage) {
         user_type);
   }
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 // Reports time taken for force installed extension during different
 // installation stages.
@@ -414,12 +414,15 @@ ForceInstalledMetrics::~ForceInstalledMetrics() = default;
 
 void ForceInstalledMetrics::ReportDisableReason(
     const ExtensionId& extension_id) {
-  int disable_reasons =
+  DisableReasonSet all_disable_reasons =
       ExtensionPrefs::Get(profile_)->GetDisableReasons(extension_id);
-  // Choose any disable reason among the disable reasons for this extension.
-  disable_reasons = disable_reasons & ~(disable_reasons - 1);
+  // Choose the disable reason with the lowest value.
+  int smallest_disable_reason =
+      all_disable_reasons.empty()
+          ? 0
+          : *std::ranges::min_element(all_disable_reasons);
   base::UmaHistogramSparse("Extensions.ForceInstalledNotLoadedDisableReason",
-                           disable_reasons);
+                           smallest_disable_reason);
 }
 
 void ForceInstalledMetrics::ReportMetricsOnExtensionsReady() {
@@ -455,8 +458,8 @@ void ForceInstalledMetrics::ReportMetrics() {
   size_t enabled_missing_count = missing_forced_extensions.size();
   size_t blocklisted_count = 0;
   auto installed_extensions = registry_->GenerateInstalledExtensionsSet();
-  auto blocklisted_extensions = registry_->GenerateInstalledExtensionsSet(
-      ExtensionRegistry::IncludeFlag::BLOCKLISTED);
+  const ExtensionSet& blocklisted_extensions =
+      registry_->blocklisted_extensions();
   for (const auto& entry : installed_extensions) {
     if (missing_forced_extensions.count(entry->id())) {
       missing_forced_extensions.erase(entry->id());
@@ -504,7 +507,7 @@ void ForceInstalledMetrics::ReportMetrics() {
           "Extensions.OffStore_ForceInstalledFailureReason3", failure_reason);
     }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     bool is_stuck_in_initial_creation_stage =
         failure_reason == FailureReason::IN_PROGRESS &&
         installation.install_stage == InstallStageTracker::Stage::CREATED &&
@@ -512,7 +515,7 @@ void ForceInstalledMetrics::ReportMetrics() {
             InstallStageTracker::InstallCreationStage::
                 NOTIFIED_FROM_MANAGEMENT_INITIAL_CREATION_FORCED;
     ReportUserType(profile_, is_stuck_in_initial_creation_stage);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
     LOG(WARNING) << "Forced extension " << extension_id
                  << " failed to install with data="
                  << InstallStageTracker::GetFormattedInstallationData(

@@ -35,8 +35,7 @@ import * as TextUtils from '../text_utils/text_utils.js';
 import * as Workspace from '../workspace/workspace.js';
 
 import {ContentProviderBasedProject} from './ContentProviderBasedProject.js';
-
-import {type DebuggerSourceMapping, type DebuggerWorkspaceBinding} from './DebuggerWorkspaceBinding.js';
+import type {DebuggerSourceMapping, DebuggerWorkspaceBinding} from './DebuggerWorkspaceBinding.js';
 import {IgnoreListManager} from './IgnoreListManager.js';
 import {NetworkProject} from './NetworkProject.js';
 
@@ -207,7 +206,7 @@ export class CompilerScriptMapping implements DebuggerSourceMapping {
       return null;
     }
 
-    const entry = sourceMap.findEntry(lineNumber, columnNumber);
+    const entry = sourceMap.findEntry(lineNumber, columnNumber, rawLocation.inlineFrameIndex);
     if (!entry || !entry.sourceURL) {
       return null;
     }

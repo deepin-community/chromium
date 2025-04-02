@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "chrome/updater/ipc/update_service_dialer.h"
 
 #include <sys/socket.h>
@@ -59,8 +64,6 @@ bool DialUpdateInternalService(UpdaterScope scope) {
     if (scope == UpdaterScope::kSystem) {
       command.AppendSwitch(kSystemSwitch);
     }
-    command.AppendSwitch(kEnableLoggingSwitch);
-    command.AppendSwitchASCII(kLoggingModuleSwitch, kLoggingModuleSwitchValue);
     base::LaunchProcess(command, {});
   }
   return true;

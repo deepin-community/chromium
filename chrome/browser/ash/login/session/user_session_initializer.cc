@@ -7,6 +7,7 @@
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/system/media/media_notification_provider.h"
+#include "base/debug/crash_logging.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
 #include "base/system/sys_info.h"
@@ -16,6 +17,8 @@
 #include "base/task/thread_pool.h"
 #include "chrome/browser/ash/accessibility/live_caption/system_live_caption_service_factory.h"
 #include "chrome/browser/ash/arc/session/arc_service_launcher.h"
+#include "chrome/browser/ash/boca/boca_manager_factory.h"
+#include "chrome/browser/ash/calendar/calendar_keyed_service_factory.h"
 #include "chrome/browser/ash/camera_mic/vm_camera_mic_manager.h"
 #include "chrome/browser/ash/child_accounts/child_status_reporting_service_factory.h"
 #include "chrome/browser/ash/child_accounts/child_user_service_factory.h"
@@ -24,37 +27,46 @@
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/eche_app/eche_app_manager_factory.h"
 #include "chrome/browser/ash/guest_os/guest_os_session_tracker.h"
-#include "chrome/browser/ash/lock_screen_apps/state_controller.h"
+#include "chrome/browser/ash/guest_os/guest_os_session_tracker_factory.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/phonehub/phone_hub_manager_factory.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager.h"
 #include "chrome/browser/ash/plugin_vm/plugin_vm_manager_factory.h"
 #include "chrome/browser/ash/policy/reporting/app_install_event_log_manager_wrapper.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part_ash.h"
 #include "chrome/browser/component_updater/crl_set_component_installer.h"
 #include "chrome/browser/google/google_brand_chromeos.h"
+#include "chrome/browser/manta/manta_service_factory.h"
 #include "chrome/browser/net/nss_service.h"
 #include "chrome/browser/net/nss_service_factory.h"
+#include "chrome/browser/net/server_certificate_database_service_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/scalable_iph/scalable_iph_factory.h"
 #include "chrome/browser/screen_ai/screen_ai_dlc_installer.h"
 #include "chrome/browser/ui/ash/birch/birch_keyed_service_factory.h"
-#include "chrome/browser/ui/ash/calendar/calendar_keyed_service_factory.h"
 #include "chrome/browser/ui/ash/glanceables/glanceables_keyed_service_factory.h"
 #include "chrome/browser/ui/ash/holding_space/holding_space_keyed_service_factory.h"
-#include "chrome/browser/ui/ash/media_client_impl.h"
+#include "chrome/browser/ui/ash/media_client/media_client_impl.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/privacy/peripheral_data_access_handler.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
+#include "chromeos/ash/components/boca/boca_role_util.h"
+#include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
+#include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
 #include "chromeos/ash/components/dbus/pciguard/pciguard_client.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/install_attributes/install_attributes.h"
 #include "chromeos/ash/components/network/network_cert_loader.h"
 #include "chromeos/ash/components/peripheral_notification/peripheral_notification_manager.h"
+#include "chromeos/ash/components/scalable_iph/scalable_iph_factory.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "chromeos/ash/services/cros_safety/cros_safety_service.h"
+#include "chromeos/constants/chromeos_features.h"
 #include "components/live_caption/caption_util.h"
 #include "components/prefs/pref_service.h"
+#include "components/server_certificate_database/server_certificate_database_service.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
@@ -108,7 +120,7 @@ void GetCertDBOnIOThread(
 // Note: This unsafely grabs a persistent pointer to the `NssService`'s
 // `NSSCertDatabase` outside of the IO thread, and the `NSSCertDatabase`
 // will be invalidated once the associated profile is shut down.
-// TODO(https://crbug.com/1186373): Provide better lifetime guarantees and
+// TODO(crbug.com/40753707): Provide better lifetime guarantees and
 // pass the Getter to the NetworkCertLoader.
 void OnGotNSSCertDatabaseForUser(net::NSSCertDatabase* database) {
   if (!NetworkCertLoader::IsInitialized())
@@ -135,18 +147,42 @@ UserSessionInitializer* UserSessionInitializer::Get() {
 }
 
 void UserSessionInitializer::OnUserProfileLoaded(const AccountId& account_id) {
+  // TODO(b/371636008): Remove after fixing the crash.
+  using user_manager::UserManager;
+  SCOPED_CRASH_KEY_NUMBER("UserSessionInitializer", "LoggedInUsers",
+                          UserManager::Get()->GetLoggedInUsers().size());
+  SCOPED_CRASH_KEY_NUMBER(
+      "UserSessionInitializer", "LoadedProfiles",
+      g_browser_process->profile_manager()->GetLoadedProfiles().size());
+  SCOPED_CRASH_KEY_BOOL("UserSessionInitializer", "FindUser",
+                        UserManager::Get()->FindUser(account_id) != nullptr);
+  if (auto* found_user = UserManager::Get()->FindUser(account_id);
+      found_user != nullptr) {
+    SCOPED_CRASH_KEY_NUMBER("UserSessionInitializer", "UserType",
+                            static_cast<int>(found_user->GetType()));
+    SCOPED_CRASH_KEY_BOOL("UserSessionInitializer", "ProfileCreated",
+                          found_user->is_profile_created());
+    SCOPED_CRASH_KEY_BOOL("UserSessionInitializer", "IsPrimary",
+                          UserManager::Get()->GetPrimaryUser() == found_user);
+    SCOPED_CRASH_KEY_BOOL("UserSessionInitializer", "IsActive",
+                          UserManager::Get()->GetActiveUser() == found_user);
+    SCOPED_CRASH_KEY_NUMBER("UserSessionInitializer", "NameHashSize",
+                            found_user->username_hash().size());
+  }
+
   Profile* profile = ProfileHelper::Get()->GetProfileByAccountId(account_id);
+  CHECK(profile);
   user_manager::User* user = ProfileHelper::Get()->GetUserByProfile(profile);
+  CHECK(user);
 
   if (user_manager::UserManager::Get()->GetPrimaryUser() == user) {
     // TODO(https://crbug.com/1208416): Investigate why OnUserProfileLoaded
     // is called more than once.
     if (primary_profile_ != nullptr) {
       NOTREACHED();
-      CHECK_EQ(primary_profile_, profile);
-      return;
     }
     primary_profile_ = profile;
+    primary_profile_observer_.Observe(profile);
 
     InitRlz(profile);
     InitializeCerts(profile);
@@ -154,6 +190,10 @@ void UserSessionInitializer::OnUserProfileLoaded(const AccountId& account_id) {
     InitializePrimaryProfileServices(profile, user);
 
     FamilyUserMetricsServiceFactory::GetForBrowserContext(profile);
+    if (features::IsCrosSafetyServiceEnabled()) {
+      cros_safety_service_ = std::make_unique<CrosSafetyService>(
+          manta::MantaServiceFactory::GetForProfile(profile));
+    }
   }
 
   if (user->GetType() == user_manager::UserType::kChild) {
@@ -200,7 +240,7 @@ void UserSessionInitializer::InitializeCerts(Profile* profile) {
       base::SysInfo::IsRunningOnChromeOS()) {
     // Note: This unsafely grabs a persistent reference to the `NssService`'s
     // `NSSCertDatabase`, which may be invalidated once `profile` is shut down.
-    // TODO(https://crbug.com/1186373): Provide better lifetime guarantees and
+    // TODO(crbug.com/40753707): Provide better lifetime guarantees and
     // pass the `NssCertDatabaseGetter` to the `NetworkCertLoader`.
     content::GetIOThreadTaskRunner({})->PostTask(
         FROM_HERE,
@@ -209,6 +249,15 @@ void UserSessionInitializer::InitializeCerts(Profile* profile) {
                            ->CreateNSSCertDatabaseGetterForIOThread(),
                        base::BindPostTaskToCurrentDefault(
                            base::BindOnce(&OnGotNSSCertDatabaseForUser))));
+
+    if (base::FeatureList::IsEnabled(
+            ::features::kEnableCertManagementUIV2Write)) {
+      net::ServerCertificateDatabaseService* user_cert_db =
+          net::ServerCertificateDatabaseServiceFactory::GetForBrowserContext(
+              profile);
+      CHECK(user_cert_db);
+      NetworkCertLoader::Get()->SetUserServerCertDatabaseService(user_cert_db);
+    }
   }
 }
 
@@ -228,8 +277,6 @@ void UserSessionInitializer::InitializePrimaryProfileServices(
   ++call_count;
   CHECK_EQ(call_count, 1);
 
-  lock_screen_apps::StateController::Get()->SetPrimaryProfile(profile);
-
   if (user->GetType() == user_manager::UserType::kRegular) {
     // App install logs for extensions and ARC++ are uploaded via the user's
     // communication channel with the management server. This channel exists for
@@ -240,15 +287,14 @@ void UserSessionInitializer::InitializePrimaryProfileServices(
   }
 
   arc::ArcServiceLauncher::Get()->OnPrimaryUserProfilePrepared(profile);
-  guest_os::GuestOsSessionTracker::GetForProfile(profile);
+  guest_os::GuestOsSessionTrackerFactory::GetForProfile(profile);
 
   crostini::CrostiniManager* crostini_manager =
       crostini::CrostiniManager::GetForProfile(profile);
   if (crostini_manager)
     crostini_manager->MaybeUpdateCrostini();
 
-  if (captions::IsLiveCaptionFeatureSupported() &&
-      features::IsSystemLiveCaptionEnabled()) {
+  if (::captions::IsLiveCaptionFeatureSupported()) {
     SystemLiveCaptionServiceFactory::GetInstance()->GetForProfile(profile);
   }
 
@@ -258,7 +304,7 @@ void UserSessionInitializer::InitializePrimaryProfileServices(
 void UserSessionInitializer::InitializeScalableIph(Profile* profile) {
   ScalableIphFactory* scalable_iph_factory = ScalableIphFactory::GetInstance();
   CHECK(scalable_iph_factory);
-  scalable_iph_factory->InitializeServiceForProfile(profile);
+  scalable_iph_factory->InitializeServiceForBrowserContext(profile);
 }
 
 void UserSessionInitializer::OnUserSessionStarted(bool is_primary_user) {
@@ -268,10 +314,6 @@ void UserSessionInitializer::OnUserSessionStarted(bool is_primary_user) {
   // Ensure that the `HoldingSpaceKeyedService` for `profile` is created.
   HoldingSpaceKeyedServiceFactory::GetInstance()->GetService(profile);
 
-  // Ensure that the `BirchKeyedService` for `profile` is created. It is created
-  // one per user in a multiprofile session.
-  BirchKeyedServiceFactory::GetInstance()->GetService(profile);
-
   // Ensure that the `CalendarKeyedService` for `profile` is created. It is
   // created one per user in a multiprofile session.
   CalendarKeyedServiceFactory::GetInstance()->GetService(profile);
@@ -280,11 +322,21 @@ void UserSessionInitializer::OnUserSessionStarted(bool is_primary_user) {
   // created one per user in a multiprofile session.
   GlanceablesKeyedServiceFactory::GetInstance()->GetService(profile);
 
+  if (ash::boca_util::IsEnabled(
+          ash::BrowserContextHelper::Get()->GetUserByBrowserContext(profile))) {
+    // Ensure that the `BocaManager` for `profile` is created. It is created one
+    // per user in a multiprofile session.
+    BocaManagerFactory::GetInstance()->GetForProfile(profile);
+  }
+
   screen_ai::dlc_installer::ManageInstallation(
       g_browser_process->local_state());
 
   if (is_primary_user) {
     DCHECK_EQ(primary_profile_, profile);
+
+    // Ensure that one `BirchKeyedService` is created for the primary profile.
+    BirchKeyedServiceFactory::GetInstance()->GetService(profile);
 
     // Ensure that PhoneHubManager and EcheAppManager are created for the
     // primary profile.
@@ -313,18 +365,51 @@ void UserSessionInitializer::OnUserSessionStarted(bool is_primary_user) {
     TypecdClient::Get()->SetPeripheralDataAccessPermissionState(
         settings::PeripheralDataAccessHandler::GetPrefState());
 
-    CrasAudioHandler::Get()->RefreshNoiseCancellationState();
+    CrasAudioHandler::Get()->RefreshVoiceIsolationState();
+    CrasAudioHandler::Get()->RefreshVoiceIsolationPreferredEffect();
 
     MediaNotificationProvider::Get()->OnPrimaryUserSessionStarted();
     if (base::FeatureList::IsEnabled(media::kShowForceRespectUiGainsToggle)) {
       CrasAudioHandler::Get()->RefreshForceRespectUiGainsState();
     }
+
+    CrasAudioHandler::Get()->RefreshHfpMicSrState();
+
+    if (base::FeatureList::IsEnabled(ash::features::kShowSpatialAudioToggle)) {
+      CrasAudioHandler::Get()->RefreshSpatialAudioState();
+    }
+  }
+}
+
+void UserSessionInitializer::OnUserSessionStartUpTaskCompleted() {
+  const AccountId& account_id =
+      user_manager::UserManager::Get()->GetPrimaryUser()->GetAccountId();
+  SessionManagerClient::Get()->EmitStartedUserSession(
+      cryptohome::CreateAccountIdentifierFromAccountId(account_id));
+}
+
+void UserSessionInitializer::OnProfileWillBeDestroyed(Profile* profile) {
+  // `primary_profile_` is the only Profile that an observer is added for.
+  CHECK_EQ(profile, primary_profile_);
+
+  primary_profile_observer_.Reset();
+  primary_profile_ = nullptr;
+
+  if (NetworkCertLoader::IsInitialized() &&
+      base::SysInfo::IsRunningOnChromeOS() &&
+      base::FeatureList::IsEnabled(
+          ::features::kEnableCertManagementUIV2Write)) {
+    NetworkCertLoader::Get()->SetUserServerCertDatabaseService(nullptr);
   }
 }
 
 void UserSessionInitializer::PreStartSession(bool is_primary_session) {
   if (is_primary_session) {
     NetworkCertLoader::Get()->MarkUserNSSDBWillBeInitialized();
+    if (base::FeatureList::IsEnabled(
+            ::features::kEnableCertManagementUIV2Write)) {
+      NetworkCertLoader::Get()->MarkUserServerCertDatabaseWillBeInitialized();
+    }
   }
 }
 

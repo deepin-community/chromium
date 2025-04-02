@@ -150,7 +150,6 @@ void CSSPaintDefinition::ApplyAnimatedPropertyOverrides(
       }
       default:
         NOTREACHED();
-        break;
     }
   }
 }

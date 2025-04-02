@@ -20,6 +20,7 @@
 #include "components/feed/core/v2/test/stream_builder.h"
 #include "components/feed/core/v2/web_feed_subscription_coordinator.h"
 #include "components/feed/feed_feature_list.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -30,7 +31,7 @@ using feedwire::webfeed::WebFeedChangeReason;
 using testing::PrintToString;
 
 AccountInfo TestAccountInfo() {
-  return {"examplegaia", "example@foo.com"};
+  return {GaiaId("examplegaia"), "example@foo.com"};
 }
 
 FeedNetwork::RawResponse MakeFailedResponse() {
@@ -950,8 +951,8 @@ TEST_F(FeedApiSubscriptionsTest, GetAllSubscriptionsWithSomeSubscriptions) {
 
 TEST_F(FeedApiSubscriptionsTest,
        RecommendedWebFeedsAreNotFetchedAfterStartupWhenFeatureIsDisabled) {
-  base::test::ScopedFeatureList features;
-  features.InitAndDisableFeature(kWebFeed);
+  // Set to a non-launched country to disable web feed feature.
+  SetCountry("FR");
 
   SetUpWithDefaultConfig();
 
@@ -960,6 +961,9 @@ TEST_F(FeedApiSubscriptionsTest,
                                   base::Seconds(1));
   WaitForIdleTaskQueue();
   ASSERT_EQ(0, network_.GetListRecommendedWebFeedsRequestCount());
+
+  // Restore the country.
+  SetCountry("US");
 }
 
 TEST_F(
@@ -1106,8 +1110,8 @@ TEST_F(FeedApiSubscriptionsTest,
 
 TEST_F(FeedApiSubscriptionsTest,
        SubscribedWebFeedsAreNotFetchedAfterStartupWhenFeatureIsDisabled) {
-  base::test::ScopedFeatureList features;
-  features.InitAndDisableFeature(kWebFeed);
+  // Set to a non-launched country to disable web feed feature.
+  SetCountry("FR");
 
   SetUpWithDefaultConfig();
 
@@ -1116,6 +1120,9 @@ TEST_F(FeedApiSubscriptionsTest,
                                   base::Seconds(1));
   WaitForIdleTaskQueue();
   ASSERT_EQ(0, network_.GetListFollowedWebFeedsRequestCount());
+
+  // Restore the country.
+  SetCountry("US");
 }
 
 TEST_F(FeedApiSubscriptionsTest, SubscribedWebFeedsAreFetchedAfterStartup) {

@@ -75,15 +75,18 @@ class IntentPickerDialogTest : public DialogBrowserTest {
 #define MAYBE_InvokeUi_default InvokeUi_default
 #endif
 IN_PROC_BROWSER_TEST_F(IntentPickerDialogTest, MAYBE_InvokeUi_default) {
-  set_baseline("3742640");
+  set_baseline("5428271");
   ShowAndVerifyUi();
 }
 
-class IntentPickerDialogGridViewTest : public IntentPickerDialogTest {
+class IntentPickerDialogGridViewTest
+    : public IntentPickerDialogTest,
+      public testing::WithParamInterface<
+          apps::test::LinkCapturingFeatureVersion> {
  public:
   IntentPickerDialogGridViewTest() {
     feature_list_.InitWithFeaturesAndParameters(
-        apps::test::GetFeaturesToEnableLinkCapturingUX(), {});
+        apps::test::GetFeaturesToEnableLinkCapturingUX(GetParam()), {});
   }
 
   void ShowUi(const std::string& name) override {
@@ -111,7 +114,21 @@ class IntentPickerDialogGridViewTest : public IntentPickerDialogTest {
   base::test::ScopedFeatureList feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(IntentPickerDialogGridViewTest, InvokeUi_default) {
-  set_baseline("3742640");
+IN_PROC_BROWSER_TEST_P(IntentPickerDialogGridViewTest, InvokeUi_default) {
+  set_baseline("5428271");
   ShowAndVerifyUi();
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    ,
+    IntentPickerDialogGridViewTest,
+#if BUILDFLAG(IS_CHROMEOS)
+    testing::Values(apps::test::LinkCapturingFeatureVersion::kV1DefaultOff,
+                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOff)
+#else
+    testing::Values(apps::test::LinkCapturingFeatureVersion::kV2DefaultOn,
+                    apps::test::LinkCapturingFeatureVersion::kV2DefaultOff)
+#endif  // BUILDFLAG(IS_CHROMEOS)
+        ,
+    [](const testing::TestParamInfo<apps::test::LinkCapturingFeatureVersion>&
+           info) { return apps::test::ToString(info.param); });

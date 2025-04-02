@@ -2,38 +2,24 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import * as Crypto from 'crypto';
 import * as fs from 'fs';
-import {createCoverageMap, createFileCoverage} from 'istanbul-lib-coverage';
-import * as report from 'istanbul-lib-report';
-import {createSourceMapStore} from 'istanbul-lib-source-maps';
-import * as reports from 'istanbul-reports';
 import * as path from 'path';
-import * as rimraf from 'rimraf';
 
 import {
-  collectCoverageFromPage,
   postFileTeardown,
   preFileSetup,
   resetPages,
+  setupPages,
   unregisterAllServiceWorkers,
-  watchForHang,
 } from './hooks.js';
-import {getTestRunnerConfigSetting} from './test_runner_config.js';
+import {makeInstrumentedTestFunction} from './mocha-interface-helpers.js';
+import {SOURCE_ROOT} from './paths.js';
+import {TestConfig} from './test_config.js';
 import {startServer, stopServer} from './test_server.js';
 
 /* eslint-disable no-console */
 
 process.on('SIGINT', postFileTeardown);
-
-const TEST_SERVER_TYPE = getTestRunnerConfigSetting<string>('test-server-type', 'hosted-mode');
-
-if (TEST_SERVER_TYPE !== 'hosted-mode' && TEST_SERVER_TYPE !== 'component-docs' && TEST_SERVER_TYPE !== 'none') {
-  throw new Error(`Invalid test server type: ${TEST_SERVER_TYPE}`);
-}
-
-// Required to reassign to allow for TypeScript to correctly deduce its type
-const DERIVED_SERVER_TYPE = TEST_SERVER_TYPE;
 
 // We can run Mocha in two modes: serial and parallel. In parallel mode, Mocha
 // starts multiple node processes which don't know about each other. It provides
@@ -49,39 +35,14 @@ const DERIVED_SERVER_TYPE = TEST_SERVER_TYPE;
 // https://mochajs.org/#global-setup-fixtures. These let us start one hosted
 // mode server and share it between all the parallel test runners.
 export async function mochaGlobalSetup(this: Mocha.Suite) {
-  // Start the test server in the 'main' process. In parallel mode, we
-  // share one server between all parallel runners. The parallel runners are all
-  // in different processes, so we pass the port number as an environment var.
-  if (DERIVED_SERVER_TYPE === 'none') {
-    return;
-  }
-  process.env.testServerPort = String(await startServer(DERIVED_SERVER_TYPE));
-  console.log(`Started ${DERIVED_SERVER_TYPE} server on port ${process.env.testServerPort}`);
+  process.env.testServerPort = String(await startServer(TestConfig.serverType, []));
+  console.log(`Started ${TestConfig.serverType} server on port ${process.env.testServerPort}`);
 }
 
 export function mochaGlobalTeardown() {
   console.log('Stopping server');
   stopServer();
 }
-
-function logScreenshotFileUrl() {
-  const screenshotFile = process.env.HTML_OUTPUT_FILE;
-  if (screenshotFile) {
-    const hash = Crypto.createHash('sha256');
-    const contents = fs.readFileSync(screenshotFile);
-    hash.update(contents);
-    console.error(
-        `If running on bots, screenshots can be downloaded from: https://cas-viewer.appspot.com/projects/chromium-swarm/instances/default_instance/blobs/${
-            hash.digest('hex')}/${contents.byteLength}?filename=screenshots.html`);
-  }
-}
-
-const testSuiteCoverageMap = createCoverageMap();
-
-const testsRunWithCoverageEnvSet = Boolean(process.env.COVERAGE || process.env.COVERAGE_FOLDERS);
-
-const SHOULD_GATHER_COVERAGE_INFORMATION = testsRunWithCoverageEnvSet && DERIVED_SERVER_TYPE === 'component-docs';
-const INTERACTIONS_COVERAGE_LOCATION = path.join(process.cwd(), 'interactions-coverage/');
 
 let didPauseAtBeginning = false;
 
@@ -101,80 +62,58 @@ export const mochaHooks = {
   // In serial mode, run after all tests end, once only.
   // In parallel mode, run after all tests end, for each file.
   afterAll: async function(this: Mocha.Suite) {
+    // Closing the browser can take some time.
+    this.timeout(20000);
     await postFileTeardown();
-    logScreenshotFileUrl();
-
-    if (!SHOULD_GATHER_COVERAGE_INFORMATION) {
-      return;
-    }
-
-    // Writing the coverage files to disk can take a lot longer on CQ than the
-    // default timeout. Since all of this work is synchronous (and would
-    // immediately fail if it went wrong), we can set the timeout to infinite
-    // here.
-    this.timeout(0);
-
-    // Make sure that any previously existing coverage reports are purged.
-    if (fs.existsSync(INTERACTIONS_COVERAGE_LOCATION)) {
-      rimraf.sync(INTERACTIONS_COVERAGE_LOCATION);
-    }
-
-    const remappedCoverageMap = await createSourceMapStore().transformCoverage(testSuiteCoverageMap);
-    const context = report.createContext({
-      dir: INTERACTIONS_COVERAGE_LOCATION,
-      coverageMap: remappedCoverageMap,
-      defaultSummarizer: 'nested',
-    });
-    reports.create('html').execute(context);
-    reports.create('json').execute(context);
-    reports.create('text', {file: 'coverage.txt'}).execute(context);
-    reports.create('json-summary').execute(context);
+    copyGoldens();
   },
   // In both modes, run before each test.
-  beforeEach: async function(this: Mocha.Context) {
-    // Sets the timeout higher for this hook only.
-    this.timeout(20000);
-    const currentTest = this.currentTest?.fullTitle();
-    await watchForHang(currentTest, resetPages);
-    await watchForHang(currentTest, unregisterAllServiceWorkers);
+  beforeEach: makeInstrumentedTestFunction(
+      async function(this: Mocha.Context) {
+        const paused = TestConfig.debug && !didPauseAtBeginning;
+        // Sets the timeout higher for this hook only and if not waiting for user input..
+        this.timeout(paused ? 0 : 20000);
+        await setupPages();
 
-    // Pause when running interactively in debug mode. This is mututally
-    // exclusive with parallel mode.
-    // We need to pause after `resetPagesBetweenTests`, otherwise the DevTools
-    // and target tab are not available to us to set breakpoints in.
-    // We still only want to pause once, so we remember that we did pause.
-    if (process.env['DEBUG_TEST'] && !didPauseAtBeginning) {
-      this.timeout(0);
-      didPauseAtBeginning = true;
+        // Pause when running interactively in debug mode. This is mututally
+        // exclusive with parallel mode.
+        // We need to pause after `resetPagesBetweenTests`, otherwise the DevTools
+        // and target tab are not available to us to set breakpoints in.
+        // We still only want to pause once, so we remember that we did pause.
+        if (TestConfig.debug && !didPauseAtBeginning) {
+          didPauseAtBeginning = true;
 
-      console.log('Running in debug mode.');
-      console.log(' - Press enter to run the test.');
-      console.log(' - Press ctrl + c to quit.');
+          console.log('Running in debug mode.');
+          console.log(' - Press enter to run the test.');
+          console.log(' - Press ctrl + c to quit.');
 
-      await new Promise<void>(resolve => {
-        const {stdin} = process;
+          await new Promise<void>(resolve => {
+            const {stdin} = process;
 
-        stdin.on('data', () => {
-          stdin.pause();
-          resolve();
-        });
-      });
-    }
-  },
-  afterEach: async function(this: Mocha.Suite) {
-    if (!SHOULD_GATHER_COVERAGE_INFORMATION) {
-      return;
-    }
-
-    const coverageData = await collectCoverageFromPage();
-    const testCoverageMap = createCoverageMap();
-
-    if (coverageData) {
-      for (const file of Object.values(coverageData)) {
-        testCoverageMap.addFileCoverage(createFileCoverage(file));
-      }
-    }
-
-    testSuiteCoverageMap.merge(testCoverageMap);
-  },
+            stdin.on('data', () => {
+              stdin.pause();
+              resolve();
+            });
+          });
+        }
+      },
+      'beforeEach in global hooks'),
+  afterEach: makeInstrumentedTestFunction(
+      async function(this: Mocha.Context) {
+        this.timeout(20000);
+        await resetPages();
+        await unregisterAllServiceWorkers();
+      },
+      'afterEach in global hooks'),
 };
+
+function copyGoldens() {
+  if (TestConfig.artifactsDir === SOURCE_ROOT || !TestConfig.copyScreenshotGoldens) {
+    return;
+  }
+  fs.cpSync(
+      path.join(SOURCE_ROOT, 'test', 'interactions', 'goldens'),
+      path.join(TestConfig.artifactsDir, 'goldens'),
+      {recursive: true},
+  );
+}

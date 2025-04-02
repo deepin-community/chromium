@@ -4,7 +4,6 @@
 
 #include "ui/ozone/platform/wayland/host/xdg_popup_wrapper_impl.h"
 
-#include <aura-shell-client-protocol.h>
 #include <xdg-shell-client-protocol.h>
 
 #include <memory>
@@ -20,6 +19,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/ozone/common/features.h"
 #include "ui/ozone/platform/wayland/common/wayland_util.h"
+#include "ui/ozone/platform/wayland/host/wayland_bubble.h"
 #include "ui/ozone/platform/wayland/host/wayland_connection.h"
 #include "ui/ozone/platform/wayland/host/wayland_event_source.h"
 #include "ui/ozone/platform/wayland/host/wayland_pointer.h"
@@ -27,7 +27,7 @@
 #include "ui/ozone/platform/wayland/host/wayland_seat.h"
 #include "ui/ozone/platform/wayland/host/wayland_serial_tracker.h"
 #include "ui/ozone/platform/wayland/host/wayland_toplevel_window.h"
-#include "ui/ozone/platform/wayland/host/wayland_zaura_shell.h"
+#include "ui/ozone/platform/wayland/host/wayland_window.h"
 #include "ui/ozone/platform/wayland/host/xdg_surface_wrapper_impl.h"
 #include "ui/ozone/platform/wayland/host/xdg_toplevel_wrapper_impl.h"
 
@@ -111,18 +111,6 @@ uint32_t TranslateConstraintAdjustment(
   return res;
 }
 
-zaura_popup_decoration_type TranslateDecorationType(
-    ui::PlatformWindowShadowType platformWindowShadowType) {
-  switch (platformWindowShadowType) {
-    case ui::PlatformWindowShadowType::kNone:
-      return ZAURA_POPUP_DECORATION_TYPE_NONE;
-    case ui::PlatformWindowShadowType::kDefault:
-      return ZAURA_POPUP_DECORATION_TYPE_NORMAL;
-    case ui::PlatformWindowShadowType::kDrop:
-      return ZAURA_POPUP_DECORATION_TYPE_SHADOW;
-  }
-}
-
 }  // namespace
 
 XDGPopupWrapperImpl::XDGPopupWrapperImpl(
@@ -141,23 +129,27 @@ XDGPopupWrapperImpl::~XDGPopupWrapperImpl() = default;
 bool XDGPopupWrapperImpl::Initialize(const ShellPopupParams& params) {
   if (!connection_->shell()) {
     NOTREACHED() << "Wrong shell protocol";
-    return false;
+  }
+
+  auto* xdg_parent = wayland_window_->AsWaylandPopup()->GetXdgParentWindow();
+  if (!xdg_parent) {
+    NOTREACHED() << "xdg_popup does not have a valid parent xdg_surface";
   }
 
   XDGSurfaceWrapperImpl* parent_xdg_surface = nullptr;
-  // If the parent window is a popup, the surface of that popup must be used as
-  // a parent.
-  if (auto* parent_popup = wayland_window_->parent_window()->AsWaylandPopup()) {
-    XDGPopupWrapperImpl* popup =
-        static_cast<XDGPopupWrapperImpl*>(parent_popup->shell_popup());
-    parent_xdg_surface = popup->xdg_surface_wrapper();
-  } else {
-    WaylandToplevelWindow* wayland_surface =
-        static_cast<WaylandToplevelWindow*>(wayland_window_->parent_window());
+  // If the xdg_parent window is a popup, the surface of that popup must be used
+  // as a parent to create this xdg_popup.
+  if (auto* parent_popup = xdg_parent->AsWaylandPopup()) {
     parent_xdg_surface =
-        static_cast<XDGToplevelWrapperImpl*>(wayland_surface->shell_toplevel())
+        static_cast<XDGPopupWrapperImpl*>(parent_popup->shell_popup())
+            ->xdg_surface_wrapper();
+  } else if (auto* parent_toplevel = xdg_parent->AsWaylandToplevelWindow()) {
+    parent_xdg_surface =
+        static_cast<XDGToplevelWrapperImpl*>(parent_toplevel->shell_toplevel())
             ->xdg_surface_wrapper();
   }
+
+  CHECK(xdg_surface_wrapper_ && parent_xdg_surface);
 
   if (!xdg_surface_wrapper_ || !parent_xdg_surface)
     return false;
@@ -180,25 +172,12 @@ bool XDGPopupWrapperImpl::Initialize(const ShellPopupParams& params) {
     return false;
   connection_->window_manager()->NotifyWindowRoleAssigned(wayland_window_);
 
-  if (connection_->zaura_shell()) {
-    uint32_t version =
-        zaura_shell_get_version(connection_->zaura_shell()->wl_object());
-    if (version >= ZAURA_SHELL_GET_AURA_POPUP_FOR_XDG_POPUP_SINCE_VERSION) {
-      aura_popup_.reset(zaura_shell_get_aura_popup_for_xdg_popup(
-          connection_->zaura_shell()->wl_object(), xdg_popup_.get()));
-      if (IsWaylandSurfaceSubmissionInPixelCoordinatesEnabled() &&
-          version >=
-              ZAURA_POPUP_SURFACE_SUBMISSION_IN_PIXEL_COORDINATES_SINCE_VERSION) {
-        zaura_popup_surface_submission_in_pixel_coordinates(aura_popup_.get());
-      }
-      if (version >= ZAURA_POPUP_SET_MENU_SINCE_VERSION &&
-          wayland_window_->type() == PlatformWindowType::kMenu) {
-        zaura_popup_set_menu(aura_popup_.get());
-      }
-    }
+  std::optional<bool> parent_shell_popup_has_grab;
+  if (auto* parent_popup = xdg_parent->AsWaylandPopup()) {
+    parent_shell_popup_has_grab.emplace(
+        parent_popup->shell_popup()->has_grab());
   }
-
-  GrabIfPossible(connection_, wayland_window_->parent_window());
+  GrabIfPossible(connection_, parent_shell_popup_has_grab);
 
   static constexpr xdg_popup_listener kXdgPopupListener = {
       .configure = &OnConfigure,
@@ -252,26 +231,6 @@ void XDGPopupWrapperImpl::SetWindowGeometry(const gfx::Rect& bounds) {
 
 void XDGPopupWrapperImpl::Grab(uint32_t serial) {
   xdg_popup_grab(xdg_popup_.get(), connection_->seat()->wl_object(), serial);
-}
-
-bool XDGPopupWrapperImpl::SupportsDecoration() {
-  if (!aura_popup_)
-    return false;
-  uint32_t version = zaura_popup_get_version(aura_popup_.get());
-  return version >= ZAURA_POPUP_SET_DECORATION_SINCE_VERSION;
-}
-
-void XDGPopupWrapperImpl::Decorate(ui::PlatformWindowShadowType shadow_type) {
-  zaura_popup_set_decoration(aura_popup_.get(),
-                             TranslateDecorationType(shadow_type));
-}
-
-void XDGPopupWrapperImpl::SetScaleFactor(float scale_factor) {
-  if (aura_popup_ && zaura_popup_get_version(aura_popup_.get()) >=
-                         ZAURA_POPUP_SET_SCALE_FACTOR_SINCE_VERSION) {
-    uint32_t value = base::bit_cast<uint32_t>(scale_factor);
-    zaura_popup_set_scale_factor(aura_popup_.get(), value);
-  }
 }
 
 XDGPopupWrapperImpl* XDGPopupWrapperImpl::AsXDGPopupWrapper() {

@@ -15,8 +15,13 @@ limitations under the License.
 
 #include <memory>
 
+#include "xla/hlo/ir/hlo_computation.h"
+#include "xla/hlo/ir/hlo_instruction.h"
+#include "xla/hlo/ir/hlo_opcode.h"
+#include "xla/hlo/testlib/verified_hlo_module.h"
 #include "xla/service/gpu/tests/gpu_codegen_test.h"
-#include "xla/tests/verified_hlo_module.h"
+#include "xla/shape.h"
+#include "xla/shape_util.h"
 
 // Check that the ftz (flush denormals to zero) flag is reflected in PTX as
 // expected.

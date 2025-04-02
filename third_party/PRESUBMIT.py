@@ -6,40 +6,6 @@ import os
 
 PRESUBMIT_VERSION = '2.0.0'
 
-ANDROID_ALLOWED_LICENSES = [
-  'A(pple )?PSL 2(\.0)?',
-  'Android Software Development Kit License',
-  'Apache( License)?,?( Version)? 2(\.0)?',
-  '(New )?([23]-Clause )?BSD( [23]-Clause)?( with advertising clause)?',
-  'GNU Lesser Public License',
-  'L?GPL ?v?2(\.[01])?( or later)?( with the classpath exception)?',
-  '(The )?MIT(/X11)?(-like)?( License)?',
-  'MPL 1\.1 ?/ ?GPL 2(\.0)? ?/ ?LGPL 2\.1',
-  'MPL 2(\.0)?',
-  'Microsoft Limited Public License',
-  'Microsoft Permissive License',
-  'Public Domain',
-  'Python',
-  'SIL Open Font License, Version 1.1',
-  'SGI Free Software License B',
-  'Unicode, Inc. License',
-  'University of Illinois\/NCSA Open Source',
-  'X11',
-  'Zlib',
-]
-
-
-def LicenseIsCompatibleWithAndroid(input_api, license):
-  regex = '^(%s)$' % '|'.join(ANDROID_ALLOWED_LICENSES)
-  tokens = \
-    [x.strip() for x in input_api.re.split(' and |,', license) if len(x) > 0]
-  has_compatible_license = False
-  for token in tokens:
-    if input_api.re.match(regex, token, input_api.re.IGNORECASE):
-      has_compatible_license = True
-      break
-  return has_compatible_license
-
 
 def CheckThirdPartyMetadataFiles(input_api, output_api):
   """Checks that third party metadata files are correctly formatted
@@ -90,29 +56,26 @@ def CheckThirdPartyReadmesUpdated(input_api, output_api):
     local_path = f.LocalPath()
     if input_api.os_path.dirname(local_path) == 'third_party':
       continue
+    # TODO: Autorolled DEPS should be automatically excluded
+    exclusions = [
+      'third_party/android_deps/',
+      'third_party/androidx/',
+      'third_party/android_build_tools/',
+      'third_party/blink/',
+      'third_party/boringssl/',
+      'third_party/closure_compiler/externs/',
+      'third_party/closure_compiler/interfaces/',
+      'third_party/feed_library/',
+      'third_party/ipcz/',
+      'third_party/jni_zero/',
+      # TODO(danakj): We should look for the README.chromium file in
+      # third_party/rust/CRATE_NAME/vVERSION/.
+      'third_party/rust/',
+      'third_party/webxr_test_pages/',
+    ]
+    exclusions = [e.replace('/', input_api.os_path.sep) for e in exclusions]
     if (local_path.startswith('third_party' + input_api.os_path.sep) and
-        not local_path.startswith('third_party' + input_api.os_path.sep +
-                                  'blink' + input_api.os_path.sep) and
-        not local_path.startswith('third_party' + input_api.os_path.sep +
-                                  'boringssl' + input_api.os_path.sep) and
-        not local_path.startswith('third_party' + input_api.os_path.sep +
-                                  'closure_compiler' + input_api.os_path.sep +
-                                  'externs' + input_api.os_path.sep) and
-        not local_path.startswith('third_party' + input_api.os_path.sep +
-                                  'closure_compiler' + input_api.os_path.sep +
-                                  'interfaces' + input_api.os_path.sep) and
-        not local_path.startswith('third_party' + input_api.os_path.sep +
-                                  'feed_library' + input_api.os_path.sep) and
-        not local_path.startswith('third_party' + input_api.os_path.sep +
-                                  'ipcz' + input_api.os_path.sep) and
-        not local_path.startswith('third_party' + input_api.os_path.sep +
-                                  'jni_zero' + input_api.os_path.sep) and
-        # TODO(danakj): We should look for the README.chromium file in
-        # third_party/rust/CRATE_NAME/vVERSION/.
-        not local_path.startswith('third_party' + input_api.os_path.sep +
-                                  'rust' + input_api.os_path.sep) and
-        not local_path.startswith('third_party' + input_api.os_path.sep +
-                                  'webxr_test_pages' + input_api.os_path.sep)):
+        not any(local_path.startswith(prefix) for prefix in exclusions)):
       files.append(f)
       if local_path.endswith("README.chromium"):
         readmes.append(f)

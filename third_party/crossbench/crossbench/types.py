@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
-from typing import Union, Dict, List, Tuple
+from typing import Dict, List, Mapping, MutableMapping, Sequence, Tuple, Union
 
-JSON = Union["JsonDict", "JsonList", "JsonTuple", str, int, float, bool, None]
-JsonDict = Dict[str, "JSON"]
-JsonList = List["JSON"]
-JsonTuple = Tuple["JSON"]
+Json = Union["JsonMapping", "JsonSequence", str, int, float, bool, None]
+JsonMapping = Mapping[str, Json]
+JsonMutableMapping = MutableMapping[str, Json]
+JsonDict = Dict[str, Json]
+JsonSequence = Sequence[Json]
+JsonList = List[Json]
+JsonTuple = Tuple[Json, ...]

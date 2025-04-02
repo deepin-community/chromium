@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/feature_list.h"
 #include "base/functional/callback.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -20,7 +19,6 @@
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_search_api/safe_search_util.h"
-#include "components/supervised_user/core/common/features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -33,14 +31,18 @@ class SupervisedUserServiceBrowserTest
       public ::testing::WithParamInterface<
           supervised_user::SupervisionMixin::SignInMode> {
  protected:
-  supervised_user::SupervisionMixin::SignInMode GetSignInMode() const {
+  static supervised_user::SupervisionMixin::SignInMode GetSignInMode() {
     return GetParam();
   }
 
   supervised_user::SupervisionMixin supervision_mixin_{
       mixin_host_,
       this,
+      embedded_test_server(),
       {.sign_in_mode = GetSignInMode()}};
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list;
 };
 
 IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBrowserTest, LocalPolicies) {
@@ -49,24 +51,15 @@ IN_PROC_BROWSER_TEST_P(SupervisedUserServiceBrowserTest, LocalPolicies) {
 
   if (GetSignInMode() ==
       supervised_user::SupervisionMixin::SignInMode::kSupervised) {
-    EXPECT_EQ(prefs->GetBoolean(policy::policy_prefs::kForceGoogleSafeSearch),
-              base::FeatureList::IsEnabled(
-                  supervised_user::kForceGoogleSafeSearchForSupervisedUsers));
-    EXPECT_EQ(prefs->IsUserModifiablePreference(
-                  policy::policy_prefs::kForceGoogleSafeSearch),
-              !base::FeatureList::IsEnabled(
-                  supervised_user::kForceGoogleSafeSearchForSupervisedUsers));
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
-    EXPECT_EQ(prefs->GetInteger(policy::policy_prefs::kForceYouTubeRestrict),
-              safe_search_api::YOUTUBE_RESTRICT_MODERATE);
-    EXPECT_FALSE(prefs->IsUserModifiablePreference(
-        policy::policy_prefs::kForceYouTubeRestrict));
-#else
+    EXPECT_FALSE(
+        prefs->GetBoolean(policy::policy_prefs::kForceGoogleSafeSearch));
+    EXPECT_TRUE(prefs->IsUserModifiablePreference(
+        policy::policy_prefs::kForceGoogleSafeSearch));
+
     EXPECT_EQ(prefs->GetInteger(policy::policy_prefs::kForceYouTubeRestrict),
               safe_search_api::YOUTUBE_RESTRICT_OFF);
     EXPECT_TRUE(prefs->IsUserModifiablePreference(
         policy::policy_prefs::kForceYouTubeRestrict));
-#endif
   } else {
     EXPECT_FALSE(
         prefs->GetBoolean(policy::policy_prefs::kForceGoogleSafeSearch));

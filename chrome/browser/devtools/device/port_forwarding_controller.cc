@@ -12,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -429,8 +430,8 @@ class PortForwardingController::Connection
   void OnFrameRead(const std::string& message) override;
   void OnSocketClosed() override;
 
-  Profile* profile_;
-  PortForwardingController::Registry* registry_;
+  raw_ptr<Profile> profile_;
+  raw_ptr<PortForwardingController::Registry> registry_;
   scoped_refptr<AndroidDeviceManager::Device> device_;
   scoped_refptr<DevToolsAndroidBridge::RemoteBrowser> browser_;
   std::unique_ptr<AndroidDeviceManager::AndroidWebSocket> web_socket_;
@@ -616,7 +617,7 @@ PortForwardingController::PortForwardingController(Profile* profile)
   OnPrefsChange();
 }
 
-PortForwardingController::~PortForwardingController() {}
+PortForwardingController::~PortForwardingController() = default;
 
 PortForwardingController::ForwardingStatus
 PortForwardingController::DeviceListChanged(

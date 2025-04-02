@@ -28,6 +28,7 @@
 #include "net/base/load_flags.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_status_code.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
@@ -127,16 +128,8 @@ void PPAPIDownloadRequest::Start() {
                      weakptr_factory_.GetWeakPtr()),
       service_->GetDownloadRequestTimeout());
 
-  if (base::FeatureList::IsEnabled(safe_browsing::kSafeBrowsingOnUIThread)) {
-    CheckAllowlistsOnSBThread(requestor_url_, database_manager_,
-                              weakptr_factory_.GetWeakPtr());
-  } else {
-    content::GetIOThreadTaskRunner({})->PostTask(
-        FROM_HERE,
-        base::BindOnce(&PPAPIDownloadRequest::CheckAllowlistsOnSBThread,
-                       requestor_url_, database_manager_,
-                       weakptr_factory_.GetWeakPtr()));
-  }
+  CheckAllowlistsOnUIThread(requestor_url_, database_manager_,
+                            weakptr_factory_.GetWeakPtr());
 }
 
 // static
@@ -153,15 +146,11 @@ void PPAPIDownloadRequest::WebContentsDestroyed() {
   Finish(RequestOutcome::REQUEST_DESTROYED, DownloadCheckResult::UNKNOWN);
 }
 
-// Allowlist checking needs to the done on the SB thread.
-void PPAPIDownloadRequest::CheckAllowlistsOnSBThread(
+void PPAPIDownloadRequest::CheckAllowlistsOnUIThread(
     const GURL& requestor_url,
     scoped_refptr<SafeBrowsingDatabaseManager> database_manager,
     base::WeakPtr<PPAPIDownloadRequest> download_request) {
-  DCHECK_CURRENTLY_ON(
-      base::FeatureList::IsEnabled(safe_browsing::kSafeBrowsingOnUIThread)
-          ? content::BrowserThread::UI
-          : content::BrowserThread::IO);
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   DVLOG(2) << " checking allowlists for requestor URL:" << requestor_url;
 
   auto callback = base::BindPostTask(
@@ -289,6 +278,8 @@ void PPAPIDownloadRequest::SendRequest() {
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = GetDownloadRequestUrl();
   resource_request->method = "POST";
+  resource_request->site_for_cookies =
+      net::SiteForCookies::FromUrl(resource_request->url);
   resource_request->load_flags = net::LOAD_DISABLE_CACHE;
   loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
                                              traffic_annotation);
@@ -315,6 +306,9 @@ void PPAPIDownloadRequest::OnURLLoaderComplete(
   int response_code = 0;
   if (loader_->ResponseInfo() && loader_->ResponseInfo()->headers)
     response_code = loader_->ResponseInfo()->headers->response_code();
+  RecordHttpResponseOrErrorCode(
+      "SBClientDownload.PPAPIDownloadRequest.NetworkResult",
+      loader_->NetError(), response_code);
   if (loader_->NetError() != net::OK || net::HTTP_OK != response_code) {
     Finish(RequestOutcome::FETCH_FAILED, DownloadCheckResult::UNKNOWN);
     return;

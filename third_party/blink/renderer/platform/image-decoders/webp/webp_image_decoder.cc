@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/platform/image-decoders/webp/webp_image_decoder.h"
 
 #include <string.h>
@@ -162,6 +167,7 @@ WEBPImageDecoder::WEBPImageDecoder(AlphaOption alpha_option,
     : ImageDecoder(alpha_option,
                    ImageDecoder::kDefaultBitDepth,
                    color_behavior,
+                   cc::AuxImage::kDefault,
                    max_decoded_bytes) {
   blend_function_ = (alpha_option == kAlphaPremultiplied)
                         ? alphaBlendPremultiplied
@@ -299,10 +305,7 @@ bool WEBPImageDecoder::UpdateDemuxer() {
   } else {
     buffer_.reserve(base::checked_cast<wtf_size_t>(data_->size()));
     while (buffer_.size() < data_->size()) {
-      const char* segment;
-      const size_t bytes = data_->GetSomeData(segment, buffer_.size());
-      DCHECK(bytes);
-      buffer_.Append(segment, base::checked_cast<wtf_size_t>(bytes));
+      buffer_.AppendSpan(data_->GetSomeData(buffer_.size()));
     }
     DCHECK_EQ(buffer_.size(), data_->size());
     consolidated_data_ =
@@ -448,7 +451,6 @@ gfx::Size WEBPImageDecoder::DecodedYUVSize(cc::YUVIndex index) const {
       return gfx::Size((Size().width() + 1) / 2, (Size().height() + 1) / 2);
   }
   NOTREACHED();
-  return gfx::Size(0, 0);
 }
 
 wtf_size_t WEBPImageDecoder::DecodedYUVWidthBytes(cc::YUVIndex index) const {
@@ -460,7 +462,6 @@ wtf_size_t WEBPImageDecoder::DecodedYUVWidthBytes(cc::YUVIndex index) const {
       return base::checked_cast<wtf_size_t>((Size().width() + 1) / 2);
   }
   NOTREACHED();
-  return 0;
 }
 
 SkYUVColorSpace WEBPImageDecoder::GetYUVColorSpace() const {
@@ -504,12 +505,11 @@ void WEBPImageDecoder::ReadColorProfile() {
     return;
   }
 
-  const char* profile_data =
-      reinterpret_cast<const char*>(chunk_iterator.chunk.bytes);
   wtf_size_t profile_size =
       base::checked_cast<wtf_size_t>(chunk_iterator.chunk.size);
 
-  if (auto profile = ColorProfile::Create(profile_data, profile_size)) {
+  if (auto profile = ColorProfile::Create(
+          base::span(chunk_iterator.chunk.bytes, profile_size))) {
     if (profile->GetProfile()->data_color_space == skcms_Signature_RGB) {
       SetEmbeddedColorProfile(std::move(profile));
     }
@@ -630,7 +630,10 @@ void WEBPImageDecoder::InitializeNewFrame(wtf_size_t index) {
     return;
   }
   WebPIterator animated_frame;
-  WebPDemuxGetFrame(demux_, index + 1, &animated_frame);
+  if (!WebPDemuxGetFrame(demux_, index + 1, &animated_frame)) {
+    SetFailed();
+    return;
+  }
   DCHECK_EQ(animated_frame.complete, 1);
   ImageFrame* buffer = &frame_buffer_cache_[index];
   gfx::Rect frame_rect(animated_frame.x_offset, animated_frame.y_offset,
@@ -704,7 +707,9 @@ bool WEBPImageDecoder::DecodeSingleFrameToYUV(const uint8_t* data_bytes,
 
   // Set up decoder_buffer_ with output mode
   if (!decoder_) {
-    WebPInitDecBuffer(&decoder_buffer_);
+    if (!WebPInitDecBuffer(&decoder_buffer_)) {
+      return SetFailed();
+    }
     decoder_buffer_.colorspace = MODE_YUV;  // TODO(crbug.com/910276): Change
                                             // after alpha YUV support is added.
   }
@@ -784,7 +789,9 @@ bool WEBPImageDecoder::DecodeSingleFrame(const uint8_t* data_bytes,
   const gfx::Rect& frame_rect = buffer.OriginalFrameRect();
   if (!decoder_) {
     // Set up decoder_buffer_ with output mode
-    WebPInitDecBuffer(&decoder_buffer_);
+    if (!WebPInitDecBuffer(&decoder_buffer_)) {
+      return SetFailed();
+    }
     decoder_buffer_.colorspace = RGBOutputMode();
     decoder_buffer_.u.RGBA.stride =
         Size().width() * sizeof(ImageFrame::PixelData);

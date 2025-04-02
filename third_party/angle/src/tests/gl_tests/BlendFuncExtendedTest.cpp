@@ -315,7 +315,7 @@ class EXTBlendFuncExtendedDrawTestES31 : public EXTBlendFuncExtendedDrawTestES3
     GLuint createShaderProgram(GLenum type, const GLchar *shaderString)
     {
         GLShader shader(type);
-        if (!shader.get())
+        if (!shader)
         {
             return 0;
         }
@@ -1254,7 +1254,10 @@ ANGLE_INSTANTIATE_TEST_ES2(EXTBlendFuncExtendedTest);
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(EXTBlendFuncExtendedTestES3);
 ANGLE_INSTANTIATE_TEST_ES3_AND_ES31(EXTBlendFuncExtendedTestES3);
 
-ANGLE_INSTANTIATE_TEST_ES2(EXTBlendFuncExtendedDrawTest);
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(EXTBlendFuncExtendedDrawTest);
+ANGLE_INSTANTIATE_TEST_ES2_AND(
+    EXTBlendFuncExtendedDrawTest,
+    ES2_VULKAN().enable(Feature::VaryingsRequireMatchingPrecisionInSpirv));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(EXTBlendFuncExtendedDrawTestES3);
 ANGLE_INSTANTIATE_TEST_ES3_AND_ES31(EXTBlendFuncExtendedDrawTestES3);

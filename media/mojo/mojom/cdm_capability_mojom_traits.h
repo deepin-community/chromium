@@ -7,10 +7,10 @@
 
 #include "base/containers/flat_set.h"
 #include "media/base/audio_codecs.h"
+#include "media/base/cdm_capability.h"
 #include "media/base/content_decryption_module.h"
 #include "media/base/encryption_scheme.h"
 #include "media/base/video_codecs.h"
-#include "media/cdm/cdm_capability.h"
 #include "media/mojo/mojom/key_system_support.mojom.h"
 
 namespace mojo {
@@ -57,6 +57,18 @@ struct StructTraits<media::mojom::CdmCapabilityDataView, media::CdmCapability> {
 
   static bool Read(media::mojom::CdmCapabilityDataView input,
                    media::CdmCapability* output);
+};
+
+template <>
+struct EnumTraits<media::mojom::CdmCapabilityQueryStatus,
+                  media::CdmCapabilityQueryStatus> {
+  static media::mojom::CdmCapabilityQueryStatus ToMojom(
+      media::CdmCapabilityQueryStatus input);
+
+  // Returning false results in deserialization failure and causes the
+  // message pipe receiving it to be disconnected.
+  static bool FromMojom(media::mojom::CdmCapabilityQueryStatus input,
+                        media::CdmCapabilityQueryStatus* output);
 };
 
 }  // namespace mojo

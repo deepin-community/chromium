@@ -1,8 +1,8 @@
 {%- import "struct_macros.tmpl" as struct_macros %}
 
-{%- macro declare_params(prefix, parameters) %}
+{%- macro declare_params(prefix, parameters, allow_non_const_ref=False) %}
 {%-   for param in parameters -%}
-{{param.kind|cpp_wrapper_param_type}} {{prefix}}{{param.name}}
+{{param.kind|cpp_wrapper_param_type(allow_non_const_ref=allow_non_const_ref)}} {{prefix}}{{param.name}}
 {%- if not loop.last %}, {% endif %}
 {%-   endfor %}
 {%- endmacro %}
@@ -16,8 +16,8 @@ base::OnceCallback<void(
 )>
 {%- endmacro -%}
 
-{%- macro declare_request_params(prefix, method) -%}
-{{declare_params(prefix, method.parameters)}}
+{%- macro declare_request_params(prefix, method, allow_non_const_ref=False) -%}
+{{declare_params(prefix, method.parameters, allow_non_const_ref=allow_non_const_ref)}}
 {%-   if method.response_parameters != None -%}
 {%-     if method.parameters %}, {% endif -%}
 {{method.name}}Callback callback
@@ -83,14 +83,23 @@ base::OnceCallback<void(
 
 {%- macro build_serialized_message(message_name, method, param_name_prefix,
                                    params_struct, params_description,
-                                   flags_text, message_object_name) %}
+                                   flags_text, message_object_name,
+                                   has_size_estimator = False) %}
+  const size_t estimated_payload_size =
+{%-   if has_size_estimator and method.estimate_message_size  %}
+    size_estimator_.EstimatePayloadSize({{message_name}});
+{%-   else %}
+    0;
+{%-   endif %}
+
 {%-   if method.unlimited_message_size %}
   mojo::Message {{message_object_name}}(
-      {{message_name}}, {{flags_text}}, 0, 0,
-      MOJO_CREATE_MESSAGE_FLAG_UNLIMITED_SIZE, nullptr);
+      {{message_name}}, {{flags_text}},
+      MOJO_CREATE_MESSAGE_FLAG_UNLIMITED_SIZE,
+      estimated_payload_size);
 {%-   else %}
   mojo::Message {{message_object_name}}(
-      {{message_name}}, {{flags_text}}, 0, 0, nullptr);
+      {{message_name}}, {{flags_text}}, estimated_payload_size);
 {%-   endif %}
   mojo::internal::MessageFragment<
       {{params_struct|get_qualified_name_for_kind(internal=True)}}> params(

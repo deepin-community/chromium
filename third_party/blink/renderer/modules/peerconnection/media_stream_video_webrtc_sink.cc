@@ -41,7 +41,6 @@ webrtc::VideoTrackInterface::ContentHint ContentHintTypeToWebRtcContentHint(
     case WebMediaStreamTrack::ContentHintType::kAudioSpeech:
     case WebMediaStreamTrack::ContentHintType::kAudioMusic:
       NOTREACHED();
-      break;
     case WebMediaStreamTrack::ContentHintType::kVideoMotion:
       return webrtc::VideoTrackInterface::ContentHint::kFluid;
     case WebMediaStreamTrack::ContentHintType::kVideoDetail:
@@ -50,7 +49,6 @@ webrtc::VideoTrackInterface::ContentHint ContentHintTypeToWebRtcContentHint(
       return webrtc::VideoTrackInterface::ContentHint::kText;
   }
   NOTREACHED();
-  return webrtc::VideoTrackInterface::ContentHint::kNone;
 }
 
 void RequestRefreshFrameOnRenderTaskRunner(MediaStreamComponent* component) {
@@ -161,6 +159,7 @@ void MediaStreamVideoWebRtcSink::WebRtcVideoSourceAdapter::
   // on that thread. However, since |video_source_| was created on the render
   // thread, it should be released on the render thread.
   base::AutoLock auto_lock(video_source_stop_lock_);
+  video_source_->Dispose();
   video_source_ = nullptr;
 }
 

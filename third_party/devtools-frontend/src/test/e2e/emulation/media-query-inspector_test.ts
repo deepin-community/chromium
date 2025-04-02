@@ -5,12 +5,11 @@
 import {assert} from 'chai';
 
 import {$$, goToResource, waitFor, waitForFunction} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {openDeviceToolbar, reloadDockableFrontEnd, showMediaQueryInspector} from '../helpers/emulation-helpers.js';
 
 const MEDIA_INSPECTOR_MARKER_SELECTOR = '.media-inspector-marker';
 
-describe('Media query inspector', async () => {
+describe('Media query inspector', () => {
   beforeEach(async function() {
     await reloadDockableFrontEnd();
 

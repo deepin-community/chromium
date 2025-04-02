@@ -77,6 +77,8 @@ const base::FilePath::CharType kChromeOSTPMFirmwareUpdateLocation[] =
     FILE_PATH_LITERAL("/run/tpm_firmware_update_location");
 const base::FilePath::CharType kChromeOSTPMFirmwareUpdateSRKVulnerableROCA[] =
     FILE_PATH_LITERAL("/run/tpm_firmware_update_srk_vulnerable_roca");
+const base::FilePath::CharType kDeviceRefreshTokenFilePath[] =
+    FILE_PATH_LITERAL("/home/chronos/device_refresh_token");
 #if BUILDFLAG(IS_CHROMEOS_DEVICE)
 const base::FilePath::CharType kChromeOSCryptohomeMountRoot[] =
     FILE_PATH_LITERAL("/home/user");
@@ -174,7 +176,7 @@ bool PathProvider(int key, base::FilePath* result) {
       return base::PathService::Get(chrome::DIR_USER_DATA, result);
 #else
       // Debug builds write next to the binary (in the build tree)
-      // TODO(crbug.com/1262330): implement workable solution for Fuchsia.
+      // TODO(crbug.com/40202595): implement workable solution for Fuchsia.
 #if BUILDFLAG(IS_MAC)
       // Apps may not write into their own bundle.
       if (base::apple::AmIBundled()) {
@@ -192,12 +194,6 @@ bool PathProvider(int key, base::FilePath* result) {
   base::FilePath cur;
   switch (key) {
     case chrome::DIR_USER_DATA:
-#if BUILDFLAG(IS_CHROMEOS_LACROS) && DCHECK_IS_ON()
-      // Check that the user data directory is not accessed before
-      // initialization when prelaunching at login screen.
-      DCHECK(chromeos::lacros_paths::IsInitializedUserDataDir() ||
-             !chromeos::IsLaunchedWithPostLoginParams());
-#endif
       if (!GetDefaultUserDataDirectory(&cur)) {
         return false;
       }
@@ -337,7 +333,7 @@ bool PathProvider(int key, base::FilePath* result) {
         return false;
       }
 #else
-      // TODO(crbug.com/1325862): Migrate Windows to use `DIR_USER_DATA` like
+      // TODO(crbug.com/40840089): Migrate Windows to use `DIR_USER_DATA` like
       // other platforms.
       if (!base::PathService::Get(base::DIR_EXE, &cur)) {
         return false;
@@ -419,10 +415,7 @@ bool PathProvider(int key, base::FilePath* result) {
     case chrome::DIR_COMPONENT_UPDATED_WIDEVINE_CDM: {
       int components_dir =
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
-          base::CommandLine::ForCurrentProcess()->HasSwitch(
-              switches::kEnableLacrosSharedComponentsDir)
-              ? static_cast<int>(chromeos::lacros_paths::LACROS_SHARED_DIR)
-              : static_cast<int>(chrome::DIR_USER_DATA);
+          static_cast<int>(chromeos::lacros_paths::LACROS_SHARED_DIR);
 #else
           chrome::DIR_USER_DATA;
 #endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
@@ -467,22 +460,6 @@ bool PathProvider(int key, base::FilePath* result) {
       cur = cur.Append(FILE_PATH_LITERAL("resources.pak"));
 #endif
       break;
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-    case chrome::FILE_RESOURCES_FOR_SHARING_PACK:
-      if (!GetDefaultUserDataDirectory(&cur)) {
-        return false;
-      }
-      cur = cur.Append(FILE_PATH_LITERAL(crosapi::kSharedResourcesPackName));
-      break;
-    case chrome::FILE_ASH_RESOURCES_PACK:
-      if (!base::PathService::Get(chromeos::lacros_paths::ASH_RESOURCES_DIR,
-                                  &cur)) {
-        return false;
-      }
-      cur = cur.Append("resources.pak");
-      break;
-#endif
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
     case chrome::DIR_CHROMEOS_WALLPAPERS:
@@ -544,13 +521,19 @@ bool PathProvider(int key, base::FilePath* result) {
         return false;
       }
       break;
+#if BUILDFLAG(IS_MAC)
+    case chrome::DIR_OUTER_BUNDLE: {
+      cur = base::apple::OuterBundlePath();
+      break;
+    }
+#endif
 #if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_OPENBSD)
     case chrome::DIR_POLICY_FILES: {
       cur = base::FilePath(policy::kPolicyPath);
       break;
     }
 #endif
-// TODO(crbug.com/1052397): Revisit once build flag switch of lacros-chrome is
+// TODO(crbug.com/40118868): Revisit once build flag switch of lacros-chrome is
 // complete.
 #if BUILDFLAG(IS_CHROMEOS_ASH) ||                              \
     ((BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS)) && \
@@ -571,10 +554,6 @@ bool PathProvider(int key, base::FilePath* result) {
     }
 #endif
     case chrome::DIR_EXTERNAL_EXTENSIONS:
-#if BUILDFLAG(IS_FUCHSIA)
-      // TODO(crbug.com/1241872): Support external extensions.
-      return false;
-#else
 #if BUILDFLAG(IS_MAC)
       if (!chrome::GetGlobalApplicationSupportDirectory(&cur)) {
         return false;
@@ -592,13 +571,8 @@ bool PathProvider(int key, base::FilePath* result) {
       create_dir = true;
 #endif
       break;
-#endif
 
     case chrome::DIR_DEFAULT_APPS:
-#if BUILDFLAG(IS_FUCHSIA)
-      // TODO(crbug.com/1241872): Support default-installed apps.
-      return false;
-#else
 #if BUILDFLAG(IS_MAC)
       cur = base::apple::FrameworkBundlePath();
       cur = cur.Append(FILE_PATH_LITERAL("Default Apps"));
@@ -609,7 +583,6 @@ bool PathProvider(int key, base::FilePath* result) {
       cur = cur.Append(FILE_PATH_LITERAL("default_apps"));
 #endif
       break;
-#endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS) && \
     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC))
@@ -654,6 +627,9 @@ bool PathProvider(int key, base::FilePath* result) {
       break;
     case chrome::FILE_CHROME_OS_TPM_FIRMWARE_UPDATE_SRK_VULNERABLE_ROCA:
       cur = base::FilePath(kChromeOSTPMFirmwareUpdateSRKVulnerableROCA);
+      break;
+    case chrome::FILE_CHROME_OS_DEVICE_REFRESH_TOKEN:
+      cur = base::FilePath(kDeviceRefreshTokenFilePath);
       break;
     case chrome::DIR_CHROMEOS_HOMEDIR_MOUNT:
 #if BUILDFLAG(IS_CHROMEOS_DEVICE)

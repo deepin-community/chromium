@@ -28,10 +28,10 @@
 #include "include/core/SkTypes.h"
 #include "include/effects/SkPerlinNoiseShader.h"
 #include "include/gpu/GpuTypes.h"
-#include "include/gpu/GrDirectContext.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
 #include "include/gpu/ganesh/SkSurfaceGanesh.h"
-#include "include/private/base/SkFloatBits.h"
 #include "include/private/base/SkTPin.h"
+#include "src/base/SkFloatBits.h"
 #include "src/base/SkMathPriv.h"
 #include "src/core/SkBlurMask.h"
 #include "src/core/SkMask.h"
@@ -392,7 +392,8 @@ DEF_TEST(BlurAsABlur, reporter) {
                     }
 
                     const SkRect src = {0, 0, 100, 100};
-                    const auto dst = mf->approximateFilteredBounds(src);
+                    SkRect dst;
+                    as_MFB(mf)->computeFastBounds(src, &dst);
 
                     // This is a very conservative test. With more knowledge, we could
                     // consider more stringent tests.

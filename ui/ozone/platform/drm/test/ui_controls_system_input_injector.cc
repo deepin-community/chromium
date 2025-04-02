@@ -176,7 +176,6 @@ bool UIControlsSystemInputInjector::SendMouseEventsNotifyWhenDone(
       break;
     default:
       NOTREACHED();
-      break;
   }
 
   const bool has_press = button_state & ui_controls::DOWN;

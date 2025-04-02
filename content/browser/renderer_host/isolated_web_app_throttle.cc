@@ -82,7 +82,7 @@ IsolatedWebAppThrottle::MaybeCreateThrottleFor(NavigationHandle* handle) {
                                         .controller()
                                         .GetBrowserContext();
 
-  if (IsolatedWebAppsPolicy::AreIsolatedWebAppsEnabled(browser_context)) {
+  if (AreIsolatedWebAppsEnabled(browser_context)) {
     return std::make_unique<IsolatedWebAppThrottle>(handle);
   }
   return nullptr;
@@ -157,7 +157,7 @@ bool IsolatedWebAppThrottle::OpenUrlExternal(const GURL& url) {
 #if BUILDFLAG(IS_CHROMEOS)
   // The default browser can't be changed in ChromeOS, so just open the URL
   // directly.
-  // TODO(crbug.com/1310207): Should we set the referrer?
+  // TODO(crbug.com/40830234): Should we set the referrer?
   OpenURLParams params(url, Referrer(),
                        WindowOpenDisposition::NEW_FOREGROUND_TAB, transition,
                        /*is_renderer_initiated=*/false);
@@ -174,7 +174,7 @@ bool IsolatedWebAppThrottle::OpenUrlExternal(const GURL& url) {
   return GetContentClient()->browser()->HandleExternalProtocol(
       url,
       base::BindRepeating(
-          [](const int frame_tree_node_id) {
+          [](const FrameTreeNodeId frame_tree_node_id) {
             return WebContents::FromFrameTreeNodeId(frame_tree_node_id);
           },
           frame_tree_node->frame_tree_node_id()),
@@ -184,7 +184,8 @@ bool IsolatedWebAppThrottle::OpenUrlExternal(const GURL& url) {
       network::mojom::WebSandboxFlags::kNone, transition,
       navigation_request->HasUserGesture(),
       /*initiating_origin=*/std::nullopt,
-      /*initiator_document=*/nullptr, &loader_factory);
+      /*initiator_document=*/nullptr, navigation_request->GetIsolationInfo(),
+      &loader_factory);
 #endif
 }
 

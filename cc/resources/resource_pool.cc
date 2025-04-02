@@ -17,7 +17,8 @@
 #include "base/containers/contains.h"
 #include "base/format_macros.h"
 #include "base/functional/bind.h"
-#include "base/ranges/algorithm.h"
+#include "base/not_fatal_until.h"
+#include "base/notreached.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/default_tick_clock.h"
@@ -30,7 +31,6 @@
 #include "gpu/command_buffer/client/client_shared_image.h"
 #include "gpu/command_buffer/client/context_support.h"
 #include "gpu/command_buffer/common/capabilities.h"
-#include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
 #include "gpu/command_buffer/common/mailbox.h"
 
 using base::trace_event::MemoryAllocatorDump;
@@ -39,10 +39,30 @@ using base::trace_event::MemoryDumpLevelOfDetail;
 namespace cc {
 
 ResourcePool::GpuBacking::GpuBacking() = default;
-ResourcePool::GpuBacking::~GpuBacking() = default;
+ResourcePool::GpuBacking::~GpuBacking() {
+  if (!shared_image) {
+    return;
+  }
+  if (returned_sync_token.HasData()) {
+    shared_image->UpdateDestructionSyncToken(returned_sync_token);
+  } else if (mailbox_sync_token.HasData()) {
+    shared_image->UpdateDestructionSyncToken(mailbox_sync_token);
+  }
+}
 
 ResourcePool::SoftwareBacking::SoftwareBacking() = default;
-ResourcePool::SoftwareBacking::~SoftwareBacking() = default;
+ResourcePool::SoftwareBacking::~SoftwareBacking() {
+  DCHECK(shared_image);
+
+  shared_image->UpdateDestructionSyncToken(mailbox_sync_token);
+  shared_image.reset();
+  // DestroySharedImage is a DeferredRequest, so it doesn't trigger IPC
+  // itself. We need a flush here to trigger IPC. Without the flush, there
+  // will be memory regressions in tiles.
+  if (shared_image_interface) {
+    shared_image_interface->Flush();
+  }
+}
 
 namespace {
 
@@ -215,10 +235,12 @@ ResourcePool::TryAcquireResourceForPartialRaster(
   for (auto it = unused_resources_.begin(); it != unused_resources_.end();
        ++it) {
     PoolResource* resource = it->get();
-    if (resource->color_space() != raster_color_space)
-      continue;
 
     if (resource->content_id() == previous_content_id) {
+      // Skip the old resource if color space changed.
+      if (resource->color_space() != raster_color_space)
+        continue;
+
       UpdateResourceContentIdAndInvalidation(resource, new_content_id,
                                              new_invalidated_rect);
 
@@ -293,11 +315,11 @@ void ResourcePool::OnResourceReleased(size_t unique_id,
 
   // TODO(danakj): Should busy_resources be a map?
   auto busy_it =
-      base::ranges::find(busy_resources_, unique_id, &PoolResource::unique_id);
+      std::ranges::find(busy_resources_, unique_id, &PoolResource::unique_id);
   // If the resource isn't busy then we made it available for reuse already
   // somehow, even though it was exported to the ResourceProvider, or we evicted
   // a resource that was still in use by the display compositor.
-  DCHECK(busy_it != busy_resources_.end());
+  CHECK(busy_it != busy_resources_.end(), base::NotFatalUntil::M130);
 
   PoolResource* resource = busy_it->get();
   resource->set_state(PoolResource::kUnused);
@@ -332,8 +354,9 @@ bool ResourcePool::PrepareForExport(
       resource->mark_avoid_reuse();
       return false;
     }
+    uint32_t texture_target = gpu_backing->shared_image->GetTextureTarget();
     transferable = viz::TransferableResource::MakeGpu(
-        gpu_backing->shared_image->mailbox(), gpu_backing->texture_target,
+        gpu_backing->shared_image->mailbox(), texture_target,
         gpu_backing->mailbox_sync_token, resource->size(), resource->format(),
         gpu_backing->overlay_candidate, resource_source);
     if (gpu_backing->wait_on_fence_required)
@@ -341,13 +364,10 @@ bool ResourcePool::PrepareForExport(
           viz::TransferableResource::SynchronizationType::kGpuCommandsCompleted;
   } else {
     SoftwareBacking* software_backing = resource->software_backing();
-    const gpu::Mailbox& mailbox =
-        software_backing->shared_image
-            ? software_backing->shared_image->mailbox()
-            : software_backing->shared_bitmap_id;
-    transferable = viz::TransferableResource::MakeSoftware(
-        mailbox, software_backing->mailbox_sync_token, resource->size(),
-        resource->format(), resource_source);
+    DCHECK(software_backing->shared_image);
+    transferable = viz::TransferableResource::MakeSoftwareSharedImage(
+        software_backing->shared_image, software_backing->mailbox_sync_token,
+        resource->size(), resource->format(), resource_source);
   }
   transferable.color_space = resource->color_space();
   resource->set_resource_id(resource_provider_->ImportResource(
@@ -397,8 +417,8 @@ void ResourcePool::ReleaseResource(InUsePoolResource in_use_resource) {
     CHECK(!base::Contains(unused_resources_, pool_resource->unique_id(),
                           &PoolResource::unique_id));
 
-    // Resource doesn't exist in any of our lists. CHECK.
-    CHECK(false);
+    // Resource doesn't exist in any of our lists. NOTREACHED().
+    NOTREACHED();
   }
 
   // Also ensure that the resource wasn't null in our list.
@@ -654,14 +674,11 @@ void ResourcePool::PoolResource::OnMemoryDump(
   // the root ownership.
   const int kImportance =
       static_cast<int>(gpu::TracingImportance::kClientOwner);
-  auto* dump_manager = base::trace_event::MemoryDumpManager::GetInstance();
-  uint64_t tracing_process_id = dump_manager->GetTracingProcessId();
-  if (software_backing_) {
-    software_backing_->OnMemoryDump(pmd, dump->guid(), tracing_process_id,
-                                    kImportance);
-  } else if (gpu_backing_) {
-    gpu_backing_->OnMemoryDump(pmd, dump->guid(), tracing_process_id,
-                               kImportance);
+  if (software_backing_ && software_backing_->shared_image) {
+    software_backing_->shared_image->OnMemoryDump(pmd, dump->guid(),
+                                                  kImportance);
+  } else if (gpu_backing_ && gpu_backing_->shared_image) {
+    gpu_backing_->shared_image->OnMemoryDump(pmd, dump->guid(), kImportance);
   }
 
   uint64_t total_bytes = memory_usage();

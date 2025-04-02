@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "sandbox/linux/seccomp-bpf-helpers/baseline_policy.h"
 
 #include <errno.h>
@@ -83,7 +88,7 @@ void TestPipeOrSocketPair(base::ScopedFD read_end, base::ScopedFD write_end) {
   transfered =
       HANDLE_EINTR(write(write_end.get(), kTestString, kTestTransferSize));
   BPF_ASSERT_EQ(kTestTransferSize, transfered);
-  char read_buf[kTestTransferSize + 1] = {0};
+  char read_buf[kTestTransferSize + 1] = {};
   transfered = HANDLE_EINTR(read(read_end.get(), read_buf, sizeof(read_buf)));
   BPF_ASSERT_EQ(kTestTransferSize, transfered);
   BPF_ASSERT_EQ(0, memcmp(kTestString, read_buf, kTestTransferSize));

@@ -173,7 +173,6 @@ class VizSerializationPerfTest : public testing::Test {
     float arbitrary_float1 = 0.7f;
     float arbitrary_float2 = 0.3f;
     float arbitrary_float3 = 0.9f;
-    float arbitrary_float_array[4] = {3.5f, 6.2f, 9.3f, 12.3f};
     bool arbitrary_bool1 = true;
     bool arbitrary_bool2 = false;
     bool arbitrary_bool3 = true;
@@ -233,36 +232,32 @@ class VizSerializationPerfTest : public testing::Test {
                          arbitrary_rect1_inside_rect2, arbitrary_bool1,
                          arbitrary_resourceid1, arbitrary_size1,
                          arbitrary_bool1, arbitrary_pointf1, arbitrary_pointf2,
-                         arbitrary_color, arbitrary_bool4, arbitrary_bool5,
-                         arbitrary_bool6, arbitrary_protected_video_type);
-      texture_in->set_vertex_opacity(arbitrary_float_array);
+                         arbitrary_color, arbitrary_bool5, arbitrary_bool6,
+                         arbitrary_protected_video_type);
 
       auto* texture_in2 = pass_in->CreateAndAppendDrawQuad<TextureDrawQuad>();
       texture_in2->SetAll(shared_state1_in, arbitrary_rect2,
                           arbitrary_rect1_inside_rect2, arbitrary_bool1,
                           arbitrary_resourceid2, arbitrary_size1,
                           arbitrary_bool3, arbitrary_pointf1, arbitrary_pointf2,
-                          arbitrary_color, arbitrary_bool4, arbitrary_bool5,
-                          arbitrary_bool6, arbitrary_protected_video_type);
-      texture_in2->set_vertex_opacity(arbitrary_float_array);
+                          arbitrary_color, arbitrary_bool5, arbitrary_bool6,
+                          arbitrary_protected_video_type);
 
       auto* texture_in3 = pass_in->CreateAndAppendDrawQuad<TextureDrawQuad>();
       texture_in3->SetAll(shared_state1_in, arbitrary_rect2,
                           arbitrary_rect1_inside_rect2, arbitrary_bool1,
                           arbitrary_resourceid3, arbitrary_size1,
                           arbitrary_bool2, arbitrary_pointf1, arbitrary_pointf2,
-                          arbitrary_color, arbitrary_bool4, arbitrary_bool6,
-                          arbitrary_bool6, arbitrary_protected_video_type);
-      texture_in3->set_vertex_opacity(arbitrary_float_array);
+                          arbitrary_color, arbitrary_bool6, arbitrary_bool6,
+                          arbitrary_protected_video_type);
 
       auto* texture_in4 = pass_in->CreateAndAppendDrawQuad<TextureDrawQuad>();
       texture_in4->SetAll(shared_state1_in, arbitrary_rect2,
                           arbitrary_rect1_inside_rect2, arbitrary_bool1,
                           arbitrary_resourceid4, arbitrary_size2,
                           arbitrary_bool4, arbitrary_pointf1, arbitrary_pointf2,
-                          arbitrary_color, arbitrary_bool4, arbitrary_bool5,
-                          arbitrary_bool6, arbitrary_protected_video_type);
-      texture_in4->set_vertex_opacity(arbitrary_float_array);
+                          arbitrary_color, arbitrary_bool5, arbitrary_bool6,
+                          arbitrary_protected_video_type);
     }
 
     // Tiled quads

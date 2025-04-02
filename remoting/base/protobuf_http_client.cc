@@ -5,6 +5,7 @@
 #include "remoting/base/protobuf_http_client.h"
 
 #include "base/strings/stringprintf.h"
+#include "google_apis/common/api_key_request_util.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "remoting/base/oauth_token_getter.h"
@@ -21,7 +22,6 @@
 namespace {
 
 constexpr char kAuthorizationHeaderFormat[] = "Authorization: Bearer %s";
-constexpr char kApiKeyHeaderFormat[] = "x-goog-api-key: %s";
 
 }  // namespace
 
@@ -44,8 +44,8 @@ void ProtobufHttpClient::ExecuteRequest(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (!request->config().authenticated) {
-    DoExecuteRequest(std::move(request), OAuthTokenGetter::Status::SUCCESS, {},
-                     {});
+    DoExecuteRequest(std::move(request), OAuthTokenGetter::Status::SUCCESS,
+                     OAuthTokenInfo());
     return;
   }
 
@@ -71,8 +71,7 @@ bool ProtobufHttpClient::HasPendingRequests() const {
 void ProtobufHttpClient::DoExecuteRequest(
     std::unique_ptr<ProtobufHttpRequestBase> request,
     OAuthTokenGetter::Status status,
-    const std::string& user_email,
-    const std::string& access_token) {
+    const OAuthTokenInfo& token_info) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   if (status != OAuthTokenGetter::Status::SUCCESS) {
@@ -91,7 +90,6 @@ void ProtobufHttpClient::DoExecuteRequest(
         break;
       default:
         NOTREACHED() << "Unknown OAuthTokenGetter Status: " << status;
-        code = ProtobufHttpStatus::Code::UNKNOWN;
     }
     request->OnAuthFailed(ProtobufHttpStatus(code, error_message));
     return;
@@ -103,18 +101,19 @@ void ProtobufHttpClient::DoExecuteRequest(
   resource_request->load_flags =
       net::LOAD_BYPASS_CACHE | net::LOAD_DISABLE_CACHE;
   resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-  resource_request->method = net::HttpRequestHeaders::kPostMethod;
+  resource_request->method = request->config().method;
 
-  if (status == OAuthTokenGetter::Status::SUCCESS && !access_token.empty()) {
-    resource_request->headers.AddHeaderFromString(
-        base::StringPrintf(kAuthorizationHeaderFormat, access_token.c_str()));
+  if (status == OAuthTokenGetter::Status::SUCCESS &&
+      !token_info.access_token().empty()) {
+    resource_request->headers.AddHeaderFromString(base::StringPrintf(
+        kAuthorizationHeaderFormat, token_info.access_token().c_str()));
   } else {
     VLOG(1) << "Attempting to execute request without access token";
   }
 
   if (!request->config().api_key.empty()) {
-    resource_request->headers.AddHeaderFromString(base::StringPrintf(
-        kApiKeyHeaderFormat, request->config().api_key.c_str()));
+    google_apis::AddAPIKeyToRequest(*resource_request,
+                                    request->config().api_key);
   }
 
   if (request->config().provide_certificate) {

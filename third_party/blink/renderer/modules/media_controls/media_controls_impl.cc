@@ -24,6 +24,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/modules/media_controls/media_controls_impl.h"
 
 #include "base/auto_reset.h"
@@ -48,6 +53,7 @@
 #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
 #include "third_party/blink/renderer/core/html/media/autoplay_policy.h"
+#include "third_party/blink/renderer/core/html/media/html_audio_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element_controls_list.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
@@ -1296,9 +1302,19 @@ void MediaControlsImpl::UpdateOverflowMenuWanted() const {
   if (ShouldShowVideoControls()) {
     // Allocate vertical room for overlay play button if necessary.
     if (overlay_play_button_) {
-      gfx::Size overlay_play_button_size =
+      const gfx::Size overlay_play_button_size =
           overlay_play_button_->GetSizeOrDefault();
-      if (controls_size.height() >= overlay_play_button_size.height() &&
+      const gfx::Size play_button_size = play_button_->GetSizeOrDefault();
+      const gfx::Size timeline_size =
+          timeline_->IsWanted() ? timeline_->GetSizeOrDefault() : gfx::Size();
+      // There must be at least enough room left over vertically to show the
+      // normal button controls, else the overlay play button will push them off
+      // the bottom of the element.  We use the regular play button's size as a
+      // proxy for this.  Similarly, make sure that it leaves room for the
+      // timeline if we want it.
+      if (controls_size.height() - play_button_size.height() -
+                  timeline_size.height() >=
+              overlay_play_button_size.height() &&
           controls_size.width() >= kMinWidthForOverlayPlayButton) {
         overlay_play_button_->SetDoesFit(true);
         controls_size.Enlarge(0, -overlay_play_button_size.height());
@@ -1532,8 +1548,8 @@ void MediaControlsImpl::DefaultEventHandler(Event& event) {
   auto* keyboard_event = DynamicTo<KeyboardEvent>(event);
   if (keyboard_event && !event.defaultPrevented() &&
       !IsSpatialNavigationEnabled(GetDocument().GetFrame())) {
-    const String& key = keyboard_event->key();
-    if (key == "Enter" || keyboard_event->keyCode() == ' ') {
+    const AtomicString key(keyboard_event->key());
+    if (key == keywords::kCapitalEnter || keyboard_event->keyCode() == ' ') {
       if (overlay_play_button_) {
         overlay_play_button_->OnMediaKeyboardEvent(&event);
       } else {
@@ -1541,12 +1557,13 @@ void MediaControlsImpl::DefaultEventHandler(Event& event) {
       }
       return;
     }
-    if (key == "ArrowLeft" || key == "ArrowRight" || key == "Home" ||
-        key == "End") {
+    if (key == keywords::kArrowLeft || key == keywords::kArrowRight ||
+        key == keywords::kHome || key == keywords::kEnd) {
       timeline_->OnMediaKeyboardEvent(&event);
       return;
     }
-    if (volume_slider_ && (key == "ArrowDown" || key == "ArrowUp")) {
+    if (volume_slider_ &&
+        (key == keywords::kArrowDown || key == keywords::kArrowUp)) {
       for (int i = 0; i < 5; i++)
         volume_slider_->OnMediaKeyboardEvent(&event);
       return;
@@ -1674,7 +1691,7 @@ bool MediaControlsImpl::IsOnLeftSide(Event* event) {
   DOMRect* rect = GetBoundingClientRect();
   double middle = rect->x() + (rect->width() / 2);
   if (GetDocument().GetFrame())
-    middle *= GetDocument().GetFrame()->PageZoomFactor();
+    middle *= GetDocument().GetFrame()->LayoutZoomFactor();
 
   return tap_x < middle;
 }

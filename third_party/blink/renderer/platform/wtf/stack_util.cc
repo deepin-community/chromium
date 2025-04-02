@@ -2,17 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "build/build_config.h"
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
 
 #include "third_party/blink/renderer/platform/wtf/stack_util.h"
 
+#include "build/build_config.h"
 #include "base/notreached.h"
 #include "third_party/blink/renderer/platform/wtf/threading.h"
 
 #if BUILDFLAG(IS_WIN)
+#include <windows.h>
+
 #include <intrin.h>
 #include <stddef.h>
-#include <windows.h>
 #include <winnt.h>
 #elif defined(__GLIBC__)
 extern "C" void* __libc_stack_end;  // NOLINT
@@ -127,7 +132,6 @@ void* GetStackStart() {
 #else
   NOTREACHED() << "pthread_getattr_np() failed for stack end and no "
                   "glibc __libc_stack_end is present.";
-  return nullptr;
 #endif
 #elif BUILDFLAG(IS_APPLE)
   return pthread_get_stackaddr_np(pthread_self());

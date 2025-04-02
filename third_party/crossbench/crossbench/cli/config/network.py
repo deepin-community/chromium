@@ -3,108 +3,79 @@
 # found in the LICENSE file.
 
 from __future__ import annotations
-import argparse
 
+import argparse
 import dataclasses
 import enum
-import pathlib
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from crossbench import cli_helper, compat
-from crossbench.config import ConfigObject, ConfigParser
+from crossbench import exception
+from crossbench.cli.config.network_speed import NetworkSpeedConfig
+from crossbench.config import ConfigEnum, ConfigObject, ConfigParser
+from crossbench.network.live import LiveNetwork
+from crossbench.network.local_file_server import LocalFileNetwork
+from crossbench.network.replay.wpr import (GS_PREFIX, LocalWprReplayNetwork,
+                                           RemoteWprReplayNetwork)
 from crossbench.network.traffic_shaping import ts_proxy
+from crossbench.network.traffic_shaping.live import NoTrafficShaper
+from crossbench.parse import PathParser
 
+if TYPE_CHECKING:
+  from crossbench import path as pth
+  from crossbench.network.base import Network
+  from crossbench.network.traffic_shaping.base import TrafficShaper
+  from crossbench.plt.base import Platform
+
+# We're using 'type' here a lot, let's skip the warnings from pylint.
+# pylint: disable=redefined-builtin
 
 @enum.unique
-class NetworkType(compat.StrEnumWithHelp):
+class NetworkType(ConfigEnum):
   LIVE = ("live", "Live network.")
   WPR = ("wpr", "Replayed network from a wpr.go archive.")
   LOCAL = ("local", "Serve content from a local http file server.")
-
-
-def _settings_str(name: str) -> str:
-  settings = ts_proxy.TRAFFIC_SETTINGS[name]
-  return (f"rtt={settings['rtt_ms']}ms, "
-          f"in={settings['in_kbps']} kbps,"
-          f"out={settings['out_kbps']} kbps")
-
-
-@enum.unique
-class NetworkSpeedPreset(compat.StrEnumWithHelp):
-  """Presets that match ts_proxy settings."""
-  LIVE = ("live", "Untroubled default network settings")
-  MOBILE_3G_SLOW = ("3G-slow",
-                    f"Slow 3G network settings: {_settings_str('3G-slow')}")
-  MOBILE_3G_REGULAR = (
-      "3G-regular",
-      f"Regular 3G network settings: {_settings_str('3G-regular')}")
-  MOBILE_3G_FAST = ("3G-fast",
-                    f"Slow 3G network settings: {_settings_str('3G-fast')}")
-  MOBILE_4G = ("4G", f"Regular 4G network settings: {_settings_str('4G')}")
-
-
-@dataclasses.dataclass(frozen=True)
-class NetworkSpeedConfig(ConfigObject):
-  rtt_ms: Optional[int] = None
-  in_kbps: Optional[int] = None
-  out_kbps: Optional[int] = None
-  window: Optional[int] = None
-
-  @classmethod
-  def default(cls) -> NetworkSpeedConfig:
-    return NetworkSpeedConfig()
-
-  @classmethod
-  def loads(cls, value: str) -> NetworkSpeedConfig:
-    if not value:
-      raise argparse.ArgumentTypeError("Cannot parse empty string")
-    if value == "default":
-      return cls.default()
-    try:
-      preset = NetworkSpeedPreset(value)  # pytype: disable=wrong-arg-types
-      return cls.load_preset(preset)
-    except ValueError as e:
-      choices: str = ", ".join(preset.value for preset in NetworkSpeedPreset)  # pytype: disable=missing-parameter
-      raise argparse.ArgumentTypeError(
-          f"Unknown network speed preset: '{value}'.\n"
-          f"Choices are {choices}.") from e
-
-  @classmethod
-  def load_preset(cls, preset: NetworkSpeedPreset) -> NetworkSpeedConfig:
-    if preset == NetworkSpeedPreset.LIVE:
-      return cls.default()
-    preset_kwargs = ts_proxy.TRAFFIC_SETTINGS[str(preset)]
-    return cls(**preset_kwargs)
-
-  @classmethod
-  def load_dict(cls, config: Dict[str, Any]) -> NetworkSpeedConfig:
-    # TODO: implement
-    # return cls.config_parser().parse(config)
-    return cls.default()
 
 
 @dataclasses.dataclass(frozen=True)
 class NetworkConfig(ConfigObject):
   type: NetworkType = NetworkType.LIVE
   speed: NetworkSpeedConfig = NetworkSpeedConfig.default()
-  path: Optional[pathlib.Path] = None
+  path: Optional[pth.LocalPath] = None
+  url: Optional[str] = None
+  wpr_go_bin: Optional[pth.LocalPath] = None
+  persist_server: bool = False
+  run_on_device: bool = False
+  skip_injection: bool = False
 
   ARCHIVE_EXTENSIONS = (".archive", ".wprgo")
   VALID_EXTENSIONS = ConfigObject.VALID_EXTENSIONS + ARCHIVE_EXTENSIONS
 
   @classmethod
-  def default(cls) -> NetworkConfig:
-    return NetworkConfig()
+  def default(cls, type: Optional[NetworkType] = None) -> NetworkConfig:
+    return NetworkConfig(type=type or NetworkType.LIVE)
 
   @classmethod
   def config_parser(cls) -> ConfigParser[NetworkConfig]:
-    parser = ConfigParser(
-        "DriverConfig parser", cls, default=NetworkConfig.default())
+    parser = ConfigParser(cls, default=NetworkConfig.default())
     parser.add_argument("type", type=NetworkType, default=NetworkType.LIVE)
     parser.add_argument(
         "speed", type=NetworkSpeedConfig, default=NetworkSpeedConfig.default())
+    parser.add_argument("path", type=PathParser.existing_path)
+    parser.add_argument("url", type=str)
     parser.add_argument(
-        "path", type=cli_helper.parse_existing_file_path, required=False)
+        "wpr_go_bin",
+        type=PathParser.existing_file_path,
+        help=("Location of the wpr.go binary or source, "
+              "used for WPR replay network. "
+              "If not specified, a default lookup in known locations is used."))
+    parser.add_argument("persist_server", type=bool, default=False)
+    parser.add_argument("run_on_device", type=bool, default=False)
+    parser.add_argument(
+        "skip_injection",
+        type=bool,
+        default=False,
+        help=("Don't inject the deterministic.js script into every response "
+              "in WPR replay mode. Makes WPR response timings more stable."))
     return parser
 
   @classmethod
@@ -119,50 +90,74 @@ class NetworkConfig(ConfigObject):
     return config
 
   @classmethod
-  def loads(cls, value: str) -> NetworkConfig:
+  def parse_local(cls, value: Any) -> NetworkConfig:
+    config = cls.parse(value, type=NetworkType.LOCAL)
+    if config.type != NetworkType.LOCAL:
+      raise argparse.ArgumentTypeError(
+          f"Expected local file server, but got {config.type}. ")
+    return config
+
+  @classmethod
+  def parse_str(  # pylint: disable=arguments-differ
+      cls,
+      value: str,
+      type: Optional[NetworkType] = None) -> NetworkConfig:
     if not value:
       raise argparse.ArgumentTypeError("Network: Cannot parse empty string")
     if value == "default":
-      return cls.default()
-    try:
-      preset = NetworkSpeedPreset(value)  # pytype: disable=wrong-arg-types
-      return cls.load_preset(preset)
-    except ValueError as e:
+      return cls.default(type)
+    if value[0] == "{":
+      return cls.parse_inline_hjson(value, type=type)
+    # TODO(346197734): Move to load_url once available.
+    if value.startswith(GS_PREFIX):
+      if type and type is not NetworkType.WPR:
+        raise argparse.ArgumentTypeError(
+            f"Network type mismatch, expected WPR, got {type}")
+      return cls.parse_wpr_archive_url(value)
+    if type and type is not NetworkType.LIVE:
       raise argparse.ArgumentTypeError(
-          f"Unknown network config string: '{value}'") from e
-    # TODO: implement more
-    return cls.default()
+          f"Network type mismatch expected LIVE, got {type}")
+    return cls.parse_live(value)
 
   @classmethod
-  def load_preset(cls, preset: NetworkSpeedPreset) -> NetworkConfig:
-    speed = NetworkSpeedConfig.load_preset(preset)
-    return cls(NetworkType.LIVE, speed)
+  def parse_live(cls, value: Any) -> NetworkConfig:
+    with exception.annotate_argparsing("Live network with speed config"):
+      speed = NetworkSpeedConfig.parse(value)
+      return cls(NetworkType.LIVE, speed)
+    raise exception.UnreachableError()
 
   @classmethod
-  def is_valid_path(cls, path: pathlib.Path) -> bool:
+  def is_valid_path(cls, path: pth.LocalPath) -> bool:
     if path.suffix in cls.ARCHIVE_EXTENSIONS:
       return True
     # for local file server
-    if path.is_dir():
-      return True
+    try:
+      if path.is_dir():
+        return True
+    except OSError:
+      pass
     return super().is_valid_path(path)
 
   @classmethod
-  def load_path(cls, path: pathlib.Path) -> NetworkConfig:
+  def parse_path(cls, path: pth.LocalPath, **kwargs) -> NetworkConfig:
     if path.suffix in cls.ARCHIVE_EXTENSIONS:
-      return cls.load_wpr_archive_path(path)
+      return cls.parse_wpr_archive_path(path)
     if path.is_dir():
       return NetworkConfig(NetworkType.LOCAL, path=path)
-    return super().load_path(path)
+    return super().parse_path(path, **kwargs)
 
   @classmethod
-  def load_wpr_archive_path(cls, path: pathlib.Path) -> NetworkConfig:
-    path = cli_helper.parse_non_empty_file_path(path, "wpr.go archive")
+  def parse_wpr_archive_path(cls, path: pth.LocalPath) -> NetworkConfig:
+    path = PathParser.non_empty_file_path(path, "wpr.go archive")
     return NetworkConfig(type=NetworkType.WPR, path=path)
 
   @classmethod
-  def load_dict(cls, config: Dict[str, Any]) -> NetworkConfig:
-    return cls.config_parser().parse(config)
+  def parse_wpr_archive_url(cls, url: str) -> NetworkConfig:
+    return NetworkConfig(type=NetworkType.WPR, url=url)
+
+  @classmethod
+  def parse_dict(cls, config: Dict[str, Any], **kwargs) -> NetworkConfig:
+    return cls.config_parser().parse(config, **kwargs)
 
   def validate(self) -> None:
     if not self.type:
@@ -173,15 +168,69 @@ class NetworkConfig(ConfigObject):
       if self.path:
         raise argparse.ArgumentTypeError(
             "NetworkConfig path cannot be used with type=live")
-    elif self.type == NetworkType.WPR:
-      if not self.path:
+    elif self.type is NetworkType.WPR:
+      if not self.path and not self.url:
         raise argparse.ArgumentTypeError(
             "NetworkConfig with type=replay requires "
-            "a valid wpr.go archive path.")
-      cli_helper.parse_non_empty_file_path(self.path, "wpr.go-archive")
-    elif self.type == NetworkType.LOCAL:
+            "a valid wpr.go archive path or download url.")
+      if self.path and self.url:
+        raise argparse.ArgumentTypeError(
+            "NetworkConfig with type=replay requires "
+            "either archive path or download url but not both.")
+    elif self.type is NetworkType.LOCAL:
       if not self.path:
         raise argparse.ArgumentTypeError(
             "NetworkConfig with type=local requires "
             "a valid local dir path to serve files.")
-      cli_helper.parse_non_empty_dir_path(self.path, "local-serve dir")
+      PathParser.non_empty_dir_path(self.path, "local-serve dir")
+    if self.wpr_go_bin and self.type is not NetworkType.WPR:
+      raise argparse.ArgumentTypeError(
+          "wpr_go_bin can only be used for the WPR replay network")
+    if self.persist_server and self.type is not NetworkType.WPR:
+      # TODO: support file server as well
+      raise argparse.ArgumentTypeError(
+          "persist_server can only be used for the WPR replay network")
+    if self.run_on_device and self.type is not NetworkType.WPR:
+      raise argparse.ArgumentTypeError(
+          "run_on_device can only be used for the WPR replay network")
+    if self.skip_injection and self.type is not NetworkType.WPR:
+      raise argparse.ArgumentTypeError(
+          "skip_injection can only be used for the WPR replay network")
+
+  def create(self, browser_platform: Platform) -> Network:
+    with exception.annotate_argparsing(
+        f"Setting up {self.type} network for {browser_platform}"):
+      traffic_shaper = self._create_traffic_shaper(browser_platform)
+      if self.type is NetworkType.LIVE:
+        return LiveNetwork(traffic_shaper, browser_platform)
+      if self.type is NetworkType.LOCAL:
+        assert self.path
+        return LocalFileNetwork(self.path, self.url, traffic_shaper,
+                                browser_platform)
+      if self.type is NetworkType.WPR:
+        if self.run_on_device and browser_platform.is_remote:
+          if not RemoteWprReplayNetwork.is_compatible(browser_platform):
+            raise ValueError(
+                f"run_on_device is unsupported on {browser_platform}")
+          return RemoteWprReplayNetwork(
+              self.url or str(self.path),
+              traffic_shaper,
+              self.wpr_go_bin,
+              browser_platform,
+              self.persist_server,
+              inject_deterministic_script=not self.skip_injection)
+        return LocalWprReplayNetwork(
+            self.url or str(self.path),
+            traffic_shaper,
+            self.wpr_go_bin,
+            browser_platform,
+            self.persist_server,
+            inject_deterministic_script=not self.skip_injection)
+    raise ValueError(f"Unknown network type {self.type}")
+
+  def _create_traffic_shaper(self, browser_platform: Platform) -> TrafficShaper:
+    if self.speed.is_live:
+      return NoTrafficShaper(browser_platform)
+    return ts_proxy.TsProxyTrafficShaper(browser_platform, self.speed.ts_proxy,
+                                         self.speed.rtt_ms, self.speed.in_kbps,
+                                         self.speed.out_kbps, self.speed.window)

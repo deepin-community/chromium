@@ -44,7 +44,6 @@ mojom::NetworkRequestStatus ConvertInterruptReasonToMojoNetworkRequestStatus(
       return mojom::NetworkRequestStatus::NETWORK_FAILED;
     default:
       NOTREACHED();
-      return mojom::NetworkRequestStatus::NETWORK_FAILED;
   }
 }
 

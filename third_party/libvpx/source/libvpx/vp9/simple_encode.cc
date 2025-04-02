@@ -502,6 +502,7 @@ static bool init_encode_frame_result(EncodeFrameResult *encode_frame_result,
 
   encode_frame_result->coding_data.reset(
       new (std::nothrow) uint8_t[max_coding_data_byte_size]);
+  encode_frame_result->max_coding_data_byte_size = max_coding_data_byte_size;
 
   encode_frame_result->num_rows_4x4 = get_num_unit_4x4(frame_height);
   encode_frame_result->num_cols_4x4 = get_num_unit_4x4(frame_width);
@@ -512,6 +513,7 @@ static bool init_encode_frame_result(EncodeFrameResult *encode_frame_result,
   encode_frame_result->tpl_stats_info.resize(MAX_LAG_BUFFERS);
 
   if (encode_frame_result->coding_data.get() == nullptr) {
+    encode_frame_result->max_coding_data_byte_size = 0;
     return false;
   }
   return init_image_buffer(&encode_frame_result->coded_frame, frame_width,
@@ -919,7 +921,7 @@ void SimpleEncode::ComputeFirstPassStats() {
         ENCODE_FRAME_RESULT encode_frame_info;
         vp9_init_encode_frame_result(&encode_frame_info);
         // TODO(angiebird): Call vp9_first_pass directly
-        vp9_get_compressed_data(impl_ptr_->cpi, &frame_flags, &size, nullptr,
+        vp9_get_compressed_data(impl_ptr_->cpi, &frame_flags, &size, nullptr, 0,
                                 &time_stamp, &time_end, flush,
                                 &encode_frame_info);
         // vp9_get_compressed_data only generates first pass stats not
@@ -962,10 +964,12 @@ std::vector<std::vector<double>> SimpleEncode::ObserveFirstPassStats() {
   for (size_t i = 0; i < impl_ptr_->first_pass_stats.size() - 1; ++i) {
     double *buf_start =
         reinterpret_cast<double *>(&impl_ptr_->first_pass_stats[i]);
-    // We use - 1 here because the last member in FIRSTPASS_STATS is not double
+    // We use - 2 here because:
+    // (1). The last member in FIRSTPASS_STATS is not double.
+    // (2). We do not need the last - 1 member.
     double *buf_end =
         buf_start + sizeof(impl_ptr_->first_pass_stats[i]) / sizeof(*buf_end) -
-        1;
+        2;
     std::vector<double> this_stats(buf_start, buf_end);
     output_stats.push_back(this_stats);
   }
@@ -1205,8 +1209,9 @@ void SimpleEncode::EncodeFrame(EncodeFrameResult *encode_frame_result) {
                                 &encode_frame_info.coded_frame);
     vp9_get_compressed_data(cpi, &frame_flags,
                             &encode_frame_result->coding_data_byte_size,
-                            encode_frame_result->coding_data.get(), &time_stamp,
-                            &time_end, flush, &encode_frame_info);
+                            encode_frame_result->coding_data.get(),
+                            encode_frame_result->max_coding_data_byte_size,
+                            &time_stamp, &time_end, flush, &encode_frame_info);
     if (out_file_ != nullptr) {
       ivf_write_frame_header(out_file_, time_stamp,
                              encode_frame_result->coding_data_byte_size);
@@ -1220,10 +1225,8 @@ void SimpleEncode::EncodeFrame(EncodeFrameResult *encode_frame_result) {
       fprintf(stderr, "Coding data size <= 0\n");
       abort();
     }
-    const size_t max_coding_data_byte_size =
-        get_max_coding_data_byte_size(frame_width_, frame_height_);
     if (encode_frame_result->coding_data_byte_size >
-        max_coding_data_byte_size) {
+        encode_frame_result->max_coding_data_byte_size) {
       fprintf(stderr, "Coding data size exceeds the maximum.\n");
       abort();
     }

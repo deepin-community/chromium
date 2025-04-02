@@ -27,6 +27,8 @@ class Value;
 
 namespace webapps {
 enum class InstallResultCode;
+enum class UninstallResultCode;
+class WebAppUrlLoader;
 }
 
 namespace content {
@@ -39,10 +41,28 @@ class AllAppsLock;
 class ExternallyManagedAppInstallTask;
 class ExternallyManagedAppRegistrationTaskBase;
 class WebAppDataRetriever;
-class WebAppUrlLoader;
 class WebAppProvider;
 
 enum class RegistrationResultCode { kSuccess, kAlreadyRegistered, kTimeout };
+
+struct ExternallyManagedAppManagerInstallResult {
+  ExternallyManagedAppManagerInstallResult();
+  explicit ExternallyManagedAppManagerInstallResult(
+      webapps::InstallResultCode code,
+      std::optional<webapps::AppId> app_id = std::nullopt,
+      bool did_uninstall_and_replace = false);
+  ExternallyManagedAppManagerInstallResult(
+      const ExternallyManagedAppManagerInstallResult&);
+  ~ExternallyManagedAppManagerInstallResult();
+
+  bool operator==(const ExternallyManagedAppManagerInstallResult& other) const;
+
+  webapps::InstallResultCode code;
+  std::optional<webapps::AppId> app_id;
+  bool did_uninstall_and_replace = false;
+  // When adding fields, please update the `==` and `<<` operators to include
+  // the new field.
+};
 
 // ExternallyManagedAppManager installs, uninstalls, and updates apps that are
 // externally managed. This means that they are not installed by the user, but
@@ -66,22 +86,7 @@ enum class RegistrationResultCode { kSuccess, kAlreadyRegistered, kTimeout };
 // re-initiated, and if successful, the placeholder app is removed.
 class ExternallyManagedAppManager {
  public:
-  struct InstallResult {
-    InstallResult();
-    explicit InstallResult(webapps::InstallResultCode code,
-                           std::optional<webapps::AppId> app_id = std::nullopt,
-                           bool did_uninstall_and_replace = false);
-    InstallResult(const InstallResult&);
-    ~InstallResult();
-
-    bool operator==(const InstallResult& other) const;
-
-    webapps::InstallResultCode code;
-    std::optional<webapps::AppId> app_id;
-    bool did_uninstall_and_replace = false;
-    // When adding fields, please update the `==` and `<<` operators to include
-    // the new field.
-  };
+  using InstallResult = ExternallyManagedAppManagerInstallResult;
 
   using OnceInstallCallback =
       base::OnceCallback<void(const GURL& install_url, InstallResult result)>;
@@ -92,10 +97,12 @@ class ExternallyManagedAppManager {
       base::RepeatingCallback<void(const GURL& launch_url,
                                    RegistrationResultCode code)>;
   using UninstallCallback =
-      base::RepeatingCallback<void(const GURL& install_url, bool succeeded)>;
+      base::RepeatingCallback<void(const GURL& install_url,
+                                   webapps::UninstallResultCode)>;
   using SynchronizeCallback = base::OnceCallback<void(
       std::map<GURL /*install_url*/, InstallResult> install_results,
-      std::map<GURL /*install_url*/, bool /*succeeded*/> uninstall_results)>;
+      std::map<GURL /*install_url*/, webapps::UninstallResultCode>
+          uninstall_results)>;
 
   explicit ExternallyManagedAppManager(Profile* profile);
   ExternallyManagedAppManager(const ExternallyManagedAppManager&) = delete;
@@ -169,7 +176,8 @@ class ExternallyManagedAppManager {
   void Shutdown();
 
   // TODO(http://b/283521737): Remove this and use WebContentsManager.
-  void SetUrlLoaderForTesting(std::unique_ptr<WebAppUrlLoader> url_loader);
+  void SetUrlLoaderForTesting(
+      std::unique_ptr<webapps::WebAppUrlLoader> url_loader);
   // TODO(http://b/283521737): Remove this and use WebContentsManager.
   void SetDataRetrieverFactoryForTesting(
       base::RepeatingCallback<std::unique_ptr<WebAppDataRetriever>()> factory);
@@ -210,7 +218,7 @@ class ExternallyManagedAppManager {
     std::vector<ExternalInstallOptions> pending_installs;
     int remaining_uninstall_requests;
     std::map<GURL, InstallResult> install_results;
-    std::map<GURL, bool> uninstall_results;
+    std::map<GURL, webapps::UninstallResultCode> uninstall_results;
   };
 
   void SynchronizeInstalledAppsOnLockAcquired(
@@ -226,7 +234,7 @@ class ExternallyManagedAppManager {
       ExternallyManagedAppManager::InstallResult result);
   void UninstallForSynchronizeCallback(ExternalInstallSource source,
                                        const GURL& install_url,
-                                       bool succeeded);
+                                       webapps::UninstallResultCode code);
   void ContinueSynchronization(ExternalInstallSource source);
   void CompleteSynchronization(ExternalInstallSource source);
 
@@ -261,7 +269,7 @@ class ExternallyManagedAppManager {
       synchronize_requests_;
 
   // unique_ptr so that it can be replaced in tests.
-  std::unique_ptr<WebAppUrlLoader> url_loader_;
+  std::unique_ptr<webapps::WebAppUrlLoader> url_loader_;
   // Allows tests to set the data retriever for install tasks.
   base::RepeatingCallback<std::unique_ptr<WebAppDataRetriever>()>
       data_retriever_factory_;

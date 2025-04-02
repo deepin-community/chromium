@@ -47,6 +47,7 @@ TEST(CookieManagerTraitsTest, Roundtrips_CanonicalCookie) {
   EXPECT_EQ(std::nullopt, copied.PartitionKey());
   EXPECT_EQ(original->SourceScheme(), copied.SourceScheme());
   EXPECT_EQ(original->SourcePort(), copied.SourcePort());
+  EXPECT_EQ(original->SourceType(), copied.SourceType());
 
   // Test port edge cases: unspecified.
   auto original_unspecified =
@@ -91,12 +92,12 @@ TEST(CookieManagerTraitsTest, Roundtrips_CanonicalCookie) {
 TEST(CookieManagerTraitsTest, Roundtrips_CookieAccessResult) {
   net::CookieAccessResult original = net::CookieAccessResult(
       net::CookieEffectiveSameSite::LAX_MODE,
-      net::CookieInclusionStatus(
-          net::CookieInclusionStatus::
-              EXCLUDE_SAMESITE_UNSPECIFIED_TREATED_AS_LAX,
-          net::CookieInclusionStatus::
-              WARN_SAMESITE_UNSPECIFIED_CROSS_SITE_CONTEXT),
-      net::CookieAccessSemantics::LEGACY,
+      net::CookieInclusionStatus::MakeFromReasonsForTesting(
+          {net::CookieInclusionStatus::ExclusionReason::
+               EXCLUDE_SAMESITE_UNSPECIFIED_TREATED_AS_LAX},
+          {net::CookieInclusionStatus::WarningReason::
+               WARN_SAMESITE_UNSPECIFIED_CROSS_SITE_CONTEXT}),
+      net::CookieAccessSemantics::LEGACY, net::CookieScopeSemantics::LEGACY,
       true /* is_allowed_to_access_secure_cookies */);
   net::CookieAccessResult copied;
 
@@ -105,10 +106,10 @@ TEST(CookieManagerTraitsTest, Roundtrips_CookieAccessResult) {
 
   EXPECT_EQ(original.effective_same_site, copied.effective_same_site);
   EXPECT_TRUE(copied.status.HasExactlyExclusionReasonsForTesting(
-      {net::CookieInclusionStatus::
+      {net::CookieInclusionStatus::ExclusionReason::
            EXCLUDE_SAMESITE_UNSPECIFIED_TREATED_AS_LAX}));
   EXPECT_TRUE(copied.status.HasExactlyWarningReasonsForTesting(
-      {net::CookieInclusionStatus::
+      {net::CookieInclusionStatus::WarningReason::
            WARN_SAMESITE_UNSPECIFIED_CROSS_SITE_CONTEXT}));
   EXPECT_EQ(original.is_allowed_to_access_secure_cookies,
             copied.is_allowed_to_access_secure_cookies);
@@ -141,6 +142,7 @@ TEST(CookieManagerTraitsTest, Rountrips_CookieWithAccessResult) {
   EXPECT_EQ(original.cookie.IsHttpOnly(), copied.cookie.IsHttpOnly());
   EXPECT_EQ(original.cookie.SameSite(), copied.cookie.SameSite());
   EXPECT_EQ(original.cookie.Priority(), copied.cookie.Priority());
+  EXPECT_EQ(original.cookie.SourceType(), copied.cookie.SourceType());
   EXPECT_EQ(original.access_result.effective_same_site,
             copied.access_result.effective_same_site);
   EXPECT_EQ(original.access_result.status, copied.access_result.status);
@@ -174,6 +176,7 @@ TEST(CookieManagerTraitsTest, Roundtrips_CookieAndLineWithAccessResult) {
   EXPECT_EQ(original.cookie->IsHttpOnly(), copied.cookie->IsHttpOnly());
   EXPECT_EQ(original.cookie->SameSite(), copied.cookie->SameSite());
   EXPECT_EQ(original.cookie->Priority(), copied.cookie->Priority());
+  EXPECT_EQ(original.cookie->SourceType(), copied.cookie->SourceType());
   EXPECT_EQ(original.access_result.effective_same_site,
             copied.access_result.effective_same_site);
   EXPECT_EQ(original.cookie_string, copied.cookie_string);
@@ -310,8 +313,6 @@ TEST(CookieManagerTraitsTest, Roundtrips_CookieSameSiteContextMetadata) {
   metadata.redirect_type_bug_1221316 =
       net::CookieOptions::SameSiteCookieContext::ContextMetadata::
           ContextRedirectTypeBug1221316::kPartialSameSiteRedirect;
-  metadata.http_method_bug_1221316 = net::CookieOptions::SameSiteCookieContext::
-      ContextMetadata::HttpMethod::kPost;
   ASSERT_TRUE(
       mojo::test::SerializeAndDeserialize<mojom::CookieSameSiteContextMetadata>(
           metadata, roundtrip));
@@ -332,15 +333,11 @@ TEST(CookieManagerTraitsTest, Roundtrips_CookieSameSiteContext) {
       ContextMetadata::ContextDowngradeType::kStrictToLax;
   metadata1.redirect_type_bug_1221316 =
       ContextMetadata::ContextRedirectTypeBug1221316::kCrossSiteRedirect;
-  metadata1.http_method_bug_1221316 = net::CookieOptions::
-      SameSiteCookieContext::ContextMetadata::HttpMethod::kGet;
   ContextMetadata metadata2;
   metadata2.cross_site_redirect_downgrade =
       ContextMetadata::ContextDowngradeType::kLaxToCross;
   metadata2.redirect_type_bug_1221316 =
       ContextMetadata::ContextRedirectTypeBug1221316::kNoRedirect;
-  metadata2.http_method_bug_1221316 = net::CookieOptions::
-      SameSiteCookieContext::ContextMetadata::HttpMethod::kGet;
 
   const ContextMetadata metadatas[]{ContextMetadata(), metadata1, metadata2};
 
@@ -393,6 +390,33 @@ TEST(CookieManagerTraitsTest, Roundtrips_PartitionKey) {
   EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::CanonicalCookie>(
       *original, copied));
   EXPECT_TRUE(copied.PartitionKey()->from_script());
+}
+
+TEST(CookieManagerTraitsTest, Roundtrips_AncestorChainBit) {
+  struct {
+    net::CookiePartitionKey key;
+    bool expected_third_party;
+  } cases[]{
+      {net::CookiePartitionKey::FromURLForTesting(
+           GURL("https://toplevelsite.com"),
+           net::CookiePartitionKey::AncestorChainBit::kCrossSite),
+       true},
+      {net::CookiePartitionKey::FromURLForTesting(
+           GURL("https://toplevelsite.com"),
+           net::CookiePartitionKey::AncestorChainBit::kSameSite),
+       false},
+  };
+
+  for (auto tc : cases) {
+    net::CookiePartitionKey copied =
+        net::CookiePartitionKey::FromURLForTesting(GURL(""));
+    EXPECT_TRUE(mojo::test::SerializeAndDeserialize<mojom::CookiePartitionKey>(
+        tc.key, copied));
+    // IsThirdParty() is used to access the value of the ancestor chain bit in
+    // net::CookiePartitionKey.
+    EXPECT_EQ(tc.key.IsThirdParty(), copied.IsThirdParty());
+    EXPECT_EQ(tc.key.IsThirdParty(), tc.expected_third_party);
+  };
 }
 
 TEST(CookieManagerTraitsTest, Roundtrips_CookiePartitionKeyCollection) {
@@ -490,10 +514,10 @@ TEST(CookieManagerTraitsTest, Roundtrips_CookieChangeInfo) {
 
   net::CookieChangeInfo original(
       *original_cookie,
-      net::CookieAccessResult(net::CookieEffectiveSameSite::UNDEFINED,
-                              net::CookieInclusionStatus(),
-                              net::CookieAccessSemantics::LEGACY,
-                              false /* is_allowed_to_access_secure_cookies */),
+      net::CookieAccessResult(
+          net::CookieEffectiveSameSite::UNDEFINED, net::CookieInclusionStatus(),
+          net::CookieAccessSemantics::LEGACY, net::CookieScopeSemantics::LEGACY,
+          false /* is_allowed_to_access_secure_cookies */),
       net::CookieChangeCause::EXPLICIT);
 
   net::CookieChangeInfo copied;
@@ -513,8 +537,11 @@ TEST(CookieManagerTraitsTest, Roundtrips_CookieChangeInfo) {
   EXPECT_EQ(original.cookie.IsHttpOnly(), copied.cookie.IsHttpOnly());
   EXPECT_EQ(original.cookie.SameSite(), copied.cookie.SameSite());
   EXPECT_EQ(original.cookie.Priority(), copied.cookie.Priority());
+  EXPECT_EQ(original.cookie.SourceType(), copied.cookie.SourceType());
   EXPECT_EQ(original.access_result.access_semantics,
             copied.access_result.access_semantics);
+  EXPECT_EQ(original.access_result.scope_semantics,
+            copied.access_result.scope_semantics);
   EXPECT_EQ(original.cause, copied.cause);
 }
 

@@ -11,11 +11,10 @@
 #include "components/performance_manager/graph/frame_node_impl.h"
 #include "components/performance_manager/performance_manager_tab_helper.h"
 #include "components/performance_manager/public/graph/frame_node.h"
+#include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/graph/page_node.h"
 #include "components/performance_manager/public/render_frame_host_proxy.h"
-#include "components/performance_manager/public/web_contents_proxy.h"
 #include "components/performance_manager/test_support/performance_manager_browsertest_harness.h"
-#include "components/performance_manager/test_support/run_in_graph.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_frame_host.h"
@@ -24,8 +23,10 @@
 #include "content/public/test/fenced_frame_test_util.h"
 #include "content/shell/browser/shell.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/features.h"
+#include "url/origin.h"
 
 namespace performance_manager {
 
@@ -102,16 +103,94 @@ IN_PROC_BROWSER_TEST_F(PerformanceManagerBrowserTest, OpenerTrackingWorks) {
   WaitForLoad(popup->web_contents());
 
   auto* contents = shell()->web_contents();
+
+  // Make sure everything is connected as expected in the graph.
+  auto page = PerformanceManager::GetPrimaryPageNodeForWebContents(contents);
+  EXPECT_TRUE(page);
+  auto* frame = page->GetMainFrameNode();
+  EXPECT_EQ(1u, frame->GetOpenedPageNodes().size());
+  auto* embedded_page = *(frame->GetOpenedPageNodes().begin());
+  EXPECT_EQ(frame, embedded_page->GetOpenerFrameNode());
+}
+
+namespace {
+
+class WebRTCUsageChangeWaiter : public PageNodeObserver {
+ public:
+  WebRTCUsageChangeWaiter() = default;
+
+  void WaitForWebRTCUsageChange() { run_loop_.Run(); }
+
+  // PageNodeObserver:
+  void OnPageUsesWebRTCChanged(const PageNode* page_node) override {
+    run_loop_.Quit();
+  }
+
+ private:
+  base::RunLoop run_loop_;
+};
+
+}  // namespace
+
+// Integration test for WebRTC usage tracking on PageNode and FrameNode.
+IN_PROC_BROWSER_TEST_F(PerformanceManagerBrowserTest, UsesWebRTC) {
+  Graph* graph = PerformanceManager::GetGraph();
+
+  WebRTCUsageChangeWaiter waiter;
+  graph->AddPageNodeObserver(&waiter);
+
+  GURL url(embedded_test_server()->GetURL("a.com", "/webrtc_basic.html"));
+  content::ShellAddedObserver shell_added_observer;
+  ASSERT_TRUE(NavigateToURL(shell(), url));
+
+  auto* contents = shell()->web_contents();
   auto page = PerformanceManager::GetPrimaryPageNodeForWebContents(contents);
 
-  // Jump into the graph and make sure everything is connected as expected.
-  RunInGraph([page]() {
-    EXPECT_TRUE(page);
-    auto* frame = page->GetMainFrameNode();
-    EXPECT_EQ(1u, frame->GetOpenedPageNodes().size());
-    auto* embedded_page = *(frame->GetOpenedPageNodes().begin());
-    EXPECT_EQ(frame, embedded_page->GetOpenerFrameNode());
-  });
+  waiter.WaitForWebRTCUsageChange();
+
+  EXPECT_TRUE(page->UsesWebRTC());
+  EXPECT_TRUE(page->GetMainFrameNode()->UsesWebRTC());
+
+  graph->RemovePageNodeObserver(&waiter);
+}
+
+namespace {
+
+MATCHER_P(IsOpaqueDerivedFrom,
+          base_origin,
+          "is opaque derived from " + base_origin.GetDebugString()) {
+  return arg.has_value() && arg->opaque() &&
+         arg->GetTupleOrPrecursorTupleIfOpaque() ==
+             base_origin.GetTupleOrPrecursorTupleIfOpaque();
+}
+
+}  // namespace
+
+IN_PROC_BROWSER_TEST_F(PerformanceManagerBrowserTest, OriginAboutBlankFrame) {
+  // Load a page with:
+  // - A regular frame navigated to about:blank.
+  // - A sandboxed frame navigated to about:blank.
+  GURL main_frame_url(
+      embedded_test_server()->GetURL("a.com", "/about_blank_iframes.html"));
+  const url::Origin main_frame_origin = url::Origin::Create(main_frame_url);
+  ASSERT_TRUE(NavigateToURL(shell(), main_frame_url));
+
+  auto* contents = shell()->web_contents();
+  auto page = PerformanceManager::GetPrimaryPageNodeForWebContents(contents);
+
+  // Make sure everything is connected as expected in the graph.
+  EXPECT_TRUE(page);
+
+  // Verify that the regular frame has the same origin as its parent whereas
+  // the sandboxed frame has an opaque origin derived from it, as assumed by
+  // Resource Attribution.
+  std::vector<std::optional<url::Origin>> child_frame_origins;
+  for (const FrameNode* node : page->GetMainFrameNode()->GetChildFrameNodes()) {
+    child_frame_origins.push_back(node->GetOrigin());
+  }
+  EXPECT_THAT(child_frame_origins,
+              testing::UnorderedElementsAre(
+                  main_frame_origin, IsOpaqueDerivedFrom(main_frame_origin)));
 }
 
 class PerformanceManagerFencedFrameBrowserTest
@@ -153,16 +232,12 @@ IN_PROC_BROWSER_TEST_F(PerformanceManagerFencedFrameBrowserTest,
   FrameNodeImpl* fenced_frame_node =
       tab_helper->GetFrameNode(fenced_frame_host);
 
-  // Jump into the graph and make sure |fenced_frame_node| does not have a
-  // parent frame node.
-  RunInGraph([main_frame_node, fenced_frame_node]() {
-    // Fenced frames have an outer document instead of a parent frame node.
-    EXPECT_EQ(fenced_frame_node->parent_frame_node(), nullptr);
+  // Make sure |fenced_frame_node| does not have a parent frame node.
+  EXPECT_EQ(fenced_frame_node->parent_frame_node(), nullptr);
 
-    // The outer document of the fenced frame is available.
-    EXPECT_EQ(fenced_frame_node->parent_or_outer_document_or_embedder(),
-              main_frame_node);
-  });
+  // The outer document of the fenced frame is available.
+  EXPECT_EQ(fenced_frame_node->parent_or_outer_document_or_embedder(),
+            main_frame_node);
 }
 
 }  // namespace performance_manager

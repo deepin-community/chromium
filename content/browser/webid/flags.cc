@@ -4,6 +4,8 @@
 
 #include "flags.h"
 
+#include <optional>
+
 #include "base/command_line.h"
 #include "base/metrics/field_trial_params.h"
 #include "content/common/features.h"
@@ -12,23 +14,17 @@
 
 namespace content {
 
-bool IsFedCmAuthzEnabled() {
+std::optional<bool> IsFedCmAuthzOverridden() {
+  return base::FeatureList::GetStateIfOverridden(features::kFedCmAuthz);
+}
+
+bool IsFedCmAuthzFlagEnabled() {
   return base::FeatureList::IsEnabled(features::kFedCmAuthz);
 }
 
 bool IsFedCmMultipleIdentityProvidersEnabled() {
   return base::FeatureList::IsEnabled(
       features::kFedCmMultipleIdentityProviders);
-}
-
-FedCmIdpSigninStatusMode GetFedCmIdpSigninStatusFlag() {
-  if (base::FeatureList::IsEnabled(features::kFedCmIdpSigninStatusEnabled)) {
-    return FedCmIdpSigninStatusMode::ENABLED;
-  }
-  if (base::FeatureList::IsEnabled(features::kFedCmIdpSigninStatusMetrics)) {
-    return FedCmIdpSigninStatusMode::METRICS_ONLY;
-  }
-  return FedCmIdpSigninStatusMode::DISABLED;
 }
 
 bool IsFedCmMetricsEndpointEnabled() {
@@ -39,8 +35,8 @@ bool IsFedCmSelectiveDisclosureEnabled() {
   return base::FeatureList::IsEnabled(features::kFedCmSelectiveDisclosure);
 }
 
-bool IsFedCmSkipWellKnownForSameSiteEnabled() {
-  return base::FeatureList::IsEnabled(features::kFedCmSkipWellKnownForSameSite);
+bool IsFedCmDelegationEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmDelegation);
 }
 
 bool IsFedCmIdPRegistrationEnabled() {
@@ -56,33 +52,31 @@ bool IsWebIdentityDigitalCredentialsEnabled() {
   return base::FeatureList::IsEnabled(features::kWebIdentityDigitalCredentials);
 }
 
-bool IsFedCmAutoSelectedFlagEnabled() {
-  return base::FeatureList::IsEnabled(features::kFedCmAutoSelectedFlag);
-}
-
-bool IsFedCmDomainHintEnabled() {
-  return base::FeatureList::IsEnabled(features::kFedCmDomainHint);
-}
-
-bool IsFedCmErrorEnabled() {
-  return base::FeatureList::IsEnabled(features::kFedCmError);
-}
-
-bool IsFedCmDisconnectEnabled() {
-  return base::FeatureList::IsEnabled(features::kFedCmDisconnect);
+bool IsWebIdentityDigitalCredentialsCreationEnabled() {
+  return base::FeatureList::IsEnabled(
+      features::kWebIdentityDigitalCredentialsCreation);
 }
 
 bool IsFedCmUseOtherAccountEnabled() {
-  return base::FeatureList::IsEnabled(features::kFedCmUseOtherAccount);
+  // The active mode origin trial can also enable this feature at this moment.
+  return base::FeatureList::IsEnabled(features::kFedCmUseOtherAccount) ||
+         IsFedCmActiveModeEnabled();
 }
 
-bool IsFedCmExemptIdpWithThirdPartyCookiesEnabled() {
-  return base::FeatureList::IsEnabled(
-      features::kFedCmExemptIdpWithThirdPartyCookies);
-}
-
-bool IsFedCmButtonModeEnabled() {
+bool IsFedCmActiveModeEnabled() {
   return base::FeatureList::IsEnabled(features::kFedCmButtonMode);
+}
+
+bool IsFedCmSameSiteLaxEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmSameSiteLax);
+}
+
+bool IsFedCmFlexibleFieldsEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmFlexibleFields);
+}
+
+bool IsFedCmShowFilteredAccountsEnabled() {
+  return base::FeatureList::IsEnabled(features::kFedCmShowFilteredAccounts);
 }
 
 }  // namespace content

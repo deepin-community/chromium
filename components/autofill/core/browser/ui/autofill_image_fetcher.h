@@ -5,14 +5,14 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_UI_AUTOFILL_IMAGE_FETCHER_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_UI_AUTOFILL_IMAGE_FETCHER_H_
 
-#include "components/autofill/core/browser/ui/autofill_image_fetcher_base.h"
-
+#include <map>
 #include <memory>
 #include <optional>
 
 #include "base/barrier_callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "components/autofill/core/browser/ui/autofill_image_fetcher_base.h"
 
 class GURL;
 
@@ -34,11 +34,15 @@ namespace autofill {
 // image_fetcher::ImageFetcher.
 class AutofillImageFetcher : public AutofillImageFetcherBase {
  public:
-  virtual ~AutofillImageFetcher() = default;
+  virtual ~AutofillImageFetcher();
 
   // AutofillImageFetcherBase:
+  // The image sizes passed in the arguments are unused as this param is only
+  // used for Android. For Desktop, the implementation of this method has
+  // hardcoded image sizes.
   void FetchImagesForURLs(
-      base::span<const GURL> card_art_urls,
+      base::span<const GURL> image_urls,
+      base::span<const AutofillImageFetcherBase::ImageSize> image_sizes_unused,
       base::OnceCallback<void(
           const std::vector<std::unique_ptr<CreditCardArtImage>>&)> callback)
       override;
@@ -66,6 +70,8 @@ class AutofillImageFetcher : public AutofillImageFetcherBase {
   virtual base::WeakPtr<AutofillImageFetcher> GetWeakPtr() = 0;
 
  protected:
+  AutofillImageFetcher();
+
   // Called when an image is fetched. If the fetch was unsuccessful,
   // `card_art_image` will be an empty gfx::Image(). If the original URL was
   // invalid, `fetch_image_request_timestamp` will also be null.
@@ -82,6 +88,11 @@ class AutofillImageFetcher : public AutofillImageFetcherBase {
       base::OnceCallback<void(std::unique_ptr<CreditCardArtImage>)>
           barrier_callback,
       const GURL& card_art_url);
+
+  // Stores the result of fetching images for card art URLs. It's used to
+  // mitigate the issue of inflated failure metrics caused by repeated fetch
+  // attempts.
+  std::map<std::string, bool> url_to_image_fetch_result_map_;
 };
 
 }  // namespace autofill

@@ -15,9 +15,9 @@ static_library("diagnostics_ui") {
     "diagnostics_metrics_message_handler.h",
     "diagnostics_ui.cc",
     "diagnostics_ui.h",
-    "url_constants.cc",
-    "url_constants.h",
   ]
+
+  public_deps = [ ":url_constants" ]
 
   deps = [
     "//ash/constants",
@@ -34,9 +34,18 @@ static_library("diagnostics_ui") {
     "//content/public/browser",
     "//ui/base",
     "//ui/chromeos/strings:strings_provider",
-    "//ui/resources",
     "//ui/web_dialogs",
     "//ui/webui",
+    "//ui/webui/resources",
+  ]
+}
+
+# Url constants pulled out to enable depending on production url constants in
+# browser tests.
+source_set("url_constants") {
+  sources = [
+    "url_constants.cc",
+    "url_constants.h",
   ]
 }
 

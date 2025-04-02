@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ui/events/gesture_detection/gesture_detector.h"
 
 #include <stddef.h>
@@ -10,14 +15,13 @@
 #include <cmath>
 
 #include "base/memory/raw_ptr.h"
+#include "base/numerics/angle_conversions.h"
 #include "base/timer/timer.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/events/event_constants.h"
 #include "ui/events/gesture_detection/gesture_listeners.h"
 #include "ui/events/velocity_tracker/motion_event.h"
-#include "ui/gfx/geometry/angle_conversions.h"
 
 namespace ui {
 namespace {
@@ -144,7 +148,6 @@ bool GestureDetector::OnTouchEvent(const MotionEvent& ev,
     case MotionEvent::Action::BUTTON_PRESS:
     case MotionEvent::Action::BUTTON_RELEASE:
       NOTREACHED();
-      return handled;
 
     case MotionEvent::Action::POINTER_DOWN: {
       down_focus_x_ = last_focus_x_ = focus_x;
@@ -313,7 +316,7 @@ bool GestureDetector::OnTouchEvent(const MotionEvent& ev,
         if (ev.GetToolType(0) == MotionEvent::ToolType::STYLUS &&
             stylus_button_accelerated_longpress_enabled_ &&
             (ev.GetFlags() & ui::EF_LEFT_MOUSE_BUTTON)) {
-          // This will generate a ET_GESTURE_LONG_PRESS event with
+          // This will generate a EventType::kGestureLongPress event with
           // EF_LEFT_MOUSE_BUTTON.
           ActivateShortPressGesture(ev);
           ActivateLongPressGesture(ev);
@@ -448,7 +451,7 @@ void GestureDetector::Init(const Config& config) {
   const float maximum_swipe_deviation_angle =
       std::clamp(config.maximum_swipe_deviation_angle, 0.001f, 45.0f);
   min_swipe_direction_component_ratio_ =
-      1.f / tan(gfx::DegToRad(maximum_swipe_deviation_angle));
+      1.f / tan(base::DegToRad(maximum_swipe_deviation_angle));
 
   two_finger_tap_enabled_ = config.two_finger_tap_enabled;
   two_finger_tap_distance_square_ = config.two_finger_tap_max_separation *

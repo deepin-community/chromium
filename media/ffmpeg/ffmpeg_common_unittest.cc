@@ -2,11 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/ffmpeg/ffmpeg_common.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <cstring>
 
 #include "base/files/memory_mapped_file.h"
@@ -220,9 +226,11 @@ TEST_F(FFmpegCommonTest, AVStreamToAudioDecoderConfig_9ch_wav) {
 }
 
 TEST_F(FFmpegCommonTest, TimeBaseConversions) {
-  const int64_t test_data[][5] = {
-      {1, 2, 1, 500000, 1}, {1, 3, 1, 333333, 1}, {1, 3, 2, 666667, 2},
-  };
+  const auto test_data = std::to_array<std::array<const int64_t, 5>>({
+      {1, 2, 1, 500000, 1},
+      {1, 3, 1, 333333, 1},
+      {1, 3, 2, 666667, 2},
+  });
 
   for (size_t i = 0; i < std::size(test_data); ++i) {
     SCOPED_TRACE(i);

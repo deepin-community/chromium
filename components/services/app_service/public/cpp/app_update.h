@@ -17,6 +17,7 @@
 #include "components/services/app_service/public/cpp/app.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/intent_filter.h"
+#include "components/services/app_service/public/cpp/package_id.h"
 #include "components/services/app_service/public/cpp/permission.h"
 
 namespace apps {
@@ -76,8 +77,8 @@ class COMPONENT_EXPORT(APP_UPDATE) AppUpdate {
   // At most one of |state| or |delta| may be nullptr.
   AppUpdate(const App* state, const App* delta, const AccountId& account_id);
 
-  AppUpdate(const AppUpdate&) = delete;
-  AppUpdate& operator=(const AppUpdate&) = delete;
+  AppUpdate(const AppUpdate&);
+  AppUpdate& operator=(const AppUpdate&);
 
   // Returns whether this is the first update for the given AppId.
   // Equivalently, there are no previous deltas for the AppId.
@@ -109,6 +110,13 @@ class COMPONENT_EXPORT(APP_UPDATE) AppUpdate {
   // considered as the canonical publisher ID.
   const std::string& PublisherId() const;
   bool PublisherIdChanged() const;
+
+  // An optional PackageId for the package that installed this app. In general,
+  // this will match the AppType() and PublisherId() of the app. However, this
+  // is permitted to diverge for alternate installation methods, e.g. web apps
+  // that are installed through the Play Store.
+  const std::optional<PackageId> InstallerPackageId() const;
+  bool InstallerPackageIdChanged() const;
 
   const std::string& Description() const;
   bool DescriptionChanged() const;
@@ -188,6 +196,9 @@ class COMPONENT_EXPORT(APP_UPDATE) AppUpdate {
   std::optional<bool> ResizeLocked() const;
   bool ResizeLockedChanged() const;
 
+  std::optional<bool> AllowWindowModeSelection() const;
+  bool AllowWindowModeSelectionChanged() const;
+
   apps::WindowMode WindowMode() const;
   bool WindowModeChanged() const;
 
@@ -227,7 +238,7 @@ class COMPONENT_EXPORT(APP_UPDATE) AppUpdate {
   raw_ptr<const apps::App, DanglingUntriaged> state_ = nullptr;
   raw_ptr<const apps::App, DanglingUntriaged> delta_ = nullptr;
 
-  const raw_ref<const ::AccountId> account_id_;
+  raw_ref<const ::AccountId> account_id_;
 };
 
 // For logging and debug purposes.

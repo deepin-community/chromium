@@ -2,14 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "content/browser/renderer_host/media/fake_video_capture_device_launcher.h"
+
 #include <memory>
+#include <optional>
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_forward.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/token.h"
-#include "build/chromeos_buildflags.h"
-#include "content/browser/renderer_host/media/fake_video_capture_device_launcher.h"
 #include "content/public/browser/browser_context.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
 #include "media/capture/video/video_capture_buffer_pool_impl.h"
@@ -17,9 +18,9 @@
 #include "media/capture/video/video_capture_device_client.h"
 #include "media/capture/video/video_frame_receiver_on_task_runner.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "media/capture/video/chromeos/video_capture_jpeg_decoder.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace {
 
@@ -29,6 +30,8 @@ class FakeLaunchedVideoCaptureDevice
   FakeLaunchedVideoCaptureDevice(
       std::unique_ptr<media::VideoCaptureDevice> device)
       : device_(std::move(device)) {}
+
+  ~FakeLaunchedVideoCaptureDevice() override { device_->StopAndDeAllocate(); }
 
   void GetPhotoState(
       media::VideoCaptureDevice::GetPhotoStateCallback callback) override {
@@ -87,8 +90,10 @@ void FakeVideoCaptureDeviceLauncher::LaunchDeviceAsync(
     base::OnceClosure connection_lost_cb,
     Callbacks* callbacks,
     base::OnceClosure done_cb,
-    mojo::PendingRemote<video_capture::mojom::VideoEffectsManager>
-        video_effects_manager) {
+    mojo::PendingRemote<video_effects::mojom::VideoEffectsProcessor>
+        video_effects_processor,
+    mojo::PendingRemote<media::mojom::ReadonlyVideoEffectsManager>
+        readonly_video_effects_manager) {
   auto device = system_->CreateDevice(device_id).ReleaseDevice();
 #if BUILDFLAG(IS_WIN)
   scoped_refptr<media::VideoCaptureBufferPool> buffer_pool(
@@ -101,7 +106,7 @@ void FakeVideoCaptureDeviceLauncher::LaunchDeviceAsync(
       new media::VideoCaptureBufferPoolImpl(
           media::VideoCaptureBufferType::kSharedMemory));
 #endif  // BUILDFLAG(IS_WIN)
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   auto device_client = std::make_unique<media::VideoCaptureDeviceClient>(
       std::make_unique<media::VideoFrameReceiverOnTaskRunner>(
           receiver, base::SingleThreadTaskRunner::GetCurrentDefault()),
@@ -112,9 +117,8 @@ void FakeVideoCaptureDeviceLauncher::LaunchDeviceAsync(
   auto device_client = std::make_unique<media::VideoCaptureDeviceClient>(
       std::make_unique<media::VideoFrameReceiverOnTaskRunner>(
           receiver, base::SingleThreadTaskRunner::GetCurrentDefault()),
-      std::move(buffer_pool),
-      mojo::PendingRemote<video_capture::mojom::VideoEffectsManager>{});
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+      std::move(buffer_pool), std::nullopt);
+#endif  // BUILDFLAG(IS_CHROMEOS)
   device->AllocateAndStart(params, std::move(device_client));
   auto launched_device =
       std::make_unique<FakeLaunchedVideoCaptureDevice>(std::move(device));

@@ -15,6 +15,8 @@
 #include "base/metrics/sample_vector.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
+#include "base/time/default_clock.h"
+#include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "net/base/isolation_info.h"
@@ -84,7 +86,11 @@ class NET_EXPORT_PRIVATE ResolveContext : public base::CheckedObserver {
     ~DohStatusObserver() override = default;
   };
 
-  ResolveContext(URLRequestContext* url_request_context, bool enable_caching);
+  ResolveContext(URLRequestContext* url_request_context,
+                 bool enable_caching,
+                 const base::Clock& clock = *base::DefaultClock::GetInstance(),
+                 const base::TickClock& tick_clock =
+                     *base::DefaultTickClock::GetInstance());
 
   ResolveContext(const ResolveContext&) = delete;
   ResolveContext& operator=(const ResolveContext&) = delete;
@@ -322,7 +328,7 @@ class NET_EXPORT_PRIVATE ResolveContext : public base::CheckedObserver {
   // Using a WeakPtr, so even if a new session has the same pointer as an old
   // invalidated session, it can be recognized as a different session.
   //
-  // TODO(crbug.com/1022059): Make const DnsSession once server stats have been
+  // TODO(crbug.com/40106440): Make const DnsSession once server stats have been
   // moved and no longer need to be read from DnsSession for availability logic.
   base::WeakPtr<const DnsSession> current_session_;
   // Current index into |config_.nameservers| to begin resolution with.

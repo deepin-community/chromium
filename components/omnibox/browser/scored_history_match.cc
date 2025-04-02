@@ -6,6 +6,8 @@
 
 #include <math.h>
 
+#include <algorithm>
+#include <array>
 #include <optional>
 #include <string>
 #include <utility>
@@ -14,7 +16,6 @@
 #include "base/check_op.h"
 #include "base/no_destructor.h"
 #include "base/numerics/safe_conversions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -45,7 +46,7 @@ const int kMaxRawTermScore = 30;
 // lookups of scores without requiring math. This is initialized by
 // InitDaysAgoToRecencyScoreArray called by
 // ScoredHistoryMatch::Init().
-float days_ago_to_recency_score[kDaysToPrecomputeRecencyScoresFor];
+std::array<float, kDaysToPrecomputeRecencyScoresFor> days_ago_to_recency_score;
 
 // Pre-computed information to speed up calculating topicality scores.
 // |raw_term_score_to_topicality_score| is a simple array mapping how raw terms
@@ -54,7 +55,7 @@ float days_ago_to_recency_score[kDaysToPrecomputeRecencyScoresFor];
 // assign it.  This allows easy lookups of scores without requiring math. This
 // is initialized by InitRawTermScoreToTopicalityScoreArray() called from
 // ScoredHistoryMatch::Init().
-float raw_term_score_to_topicality_score[kMaxRawTermScore];
+std::array<float, kMaxRawTermScore> raw_term_score_to_topicality_score;
 
 // Precalculates raw_term_score_to_topicality_score, used in
 // GetTopicalityScore().
@@ -496,9 +497,11 @@ ScoredHistoryMatch::ComputeUrlMatchingSignals(
   size_t last_part_of_host_pos =
       url.possibly_invalid_spec().rfind('.', path_pos);
 
-  // Get end position for 'www'. Not set if 'www' not exists in host.
+  // Get end position for 'www'. Not set if 'www' does not exist in the host
+  // component.
   std::optional<size_t> www_end_pos;
-  if (base::ToLowerASCII(url.spec().substr(host_pos, 3)).compare("www") == 0) {
+  if (host_pos + 3 <= url.spec().length() &&
+      base::ToLowerASCII(url.spec().substr(host_pos, 3)).compare("www") == 0) {
     www_end_pos = host_pos + 2;
   }
 
@@ -916,8 +919,8 @@ float ScoredHistoryMatch::GetFrequency(const base::Time& now,
   auto visits_end =
       visits.begin() + std::min(visits.size(), max_visits_to_score_);
   // Visits should be in newest to oldest order.
-  DCHECK(base::ranges::adjacent_find(visits.begin(), visits_end, std::less<>(),
-                                     &history::VisitInfo::first) == visits_end);
+  DCHECK(std::ranges::adjacent_find(visits.begin(), visits_end, std::less<>(),
+                                    &history::VisitInfo::first) == visits_end);
   for (auto i = visits.begin(); i != visits_end; ++i) {
     const bool is_page_transition_typed =
         ui::PageTransitionCoreTypeIs(i->second, ui::PAGE_TRANSITION_TYPED);

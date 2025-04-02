@@ -5,6 +5,7 @@
 #include "components/page_load_metrics/browser/page_load_metrics_util.h"
 
 #include <algorithm>
+#include <string_view>
 
 #include "components/page_load_metrics/common/page_load_timing.h"
 #include "components/page_load_metrics/common/page_visit_final_status.h"
@@ -45,8 +46,8 @@ PageAbortReason GetAbortReasonForEndReason(PageEndReason end_reason) {
 }
 
 // Common helper for QueryContainsComponent and QueryContainsComponentPrefix.
-bool QueryContainsComponentHelper(const base::StringPiece query,
-                                  const base::StringPiece component,
+bool QueryContainsComponentHelper(std::string_view query,
+                                  std::string_view component,
                                   bool component_is_prefix) {
   if (query.empty() || component.empty() ||
       component.length() > query.length()) {
@@ -59,7 +60,7 @@ bool QueryContainsComponentHelper(const base::StringPiece query,
   // Note: This heuristic can cause a component string that starts with one of
   // these characters to not match a query string which contains it at the
   // beginning.
-  const base::StringPiece trimmed_query =
+  const std::string_view trimmed_query =
       base::TrimString(query, "?#", base::TrimPositions::TRIM_LEADING);
 
   // We shouldn't try to find matches beyond the point where there aren't enough
@@ -194,7 +195,7 @@ bool EventOccurredBeforeNonPrerenderingBackgroundStart(
 
 // Currently, multiple implementations of PageLoadMetricsObserver is ongoing.
 // We'll left the old version for a while.
-// TODO(https://crbug.com/1317494): Use the above version and delete this.
+// TODO(crbug.com/40222513): Use the above version and delete this.
 bool EventOccurredBeforeNonPrerenderingBackgroundStart(
     const PageLoadMetricsObserverDelegate& delegate,
     const page_load_metrics::mojom::PageLoadTiming& timing,
@@ -216,14 +217,15 @@ base::TimeDelta CorrectEventAsNavigationOrActivationOrigined(
       return zero;
     case PrerenderingState::kActivated: {
       base::TimeDelta corrected = event - delegate.GetActivationStart().value();
-      return std::max(zero, corrected);
+      CHECK_GE(corrected, zero);
+      return corrected;
     }
   }
 }
 
 // Currently, multiple implementations of PageLoadMetricsObserver is ongoing.
 // We'll left the old version for a while.
-// TODO(https://crbug.com/1317494): Use the above version and delete this.
+// TODO(crbug.com/40222513): Use the above version and delete this.
 base::TimeDelta CorrectEventAsNavigationOrActivationOrigined(
     const PageLoadMetricsObserverDelegate& delegate,
     const page_load_metrics::mojom::PageLoadTiming& timing,
@@ -255,7 +257,7 @@ std::optional<base::TimeDelta> GetInitialForegroundDuration(
     const PageLoadMetricsObserverDelegate& delegate,
     base::TimeTicks app_background_time) {
   if (!delegate.StartedInForeground())
-    return std::optional<base::TimeDelta>();
+    return std::nullopt;
 
   std::optional<base::TimeDelta> time_on_page = OptionalMin(
       delegate.GetTimeToFirstBackground(), delegate.GetTimeToPageEnd());
@@ -282,61 +284,18 @@ bool DidObserveLoadingBehaviorInAnyFrame(
   return (all_frame_loading_behavior_flags & behavior) != 0;
 }
 
-bool IsGoogleSearchHostname(const GURL& url) {
-  std::optional<std::string> result =
-      page_load_metrics::GetGoogleHostnamePrefix(url);
-  return result && result.value() == "www";
-}
-
-bool IsGoogleSearchResultUrl(const GURL& url) {
-  // NOTE: we do not require 'q=' in the query, as AJAXy search may instead
-  // store the query in the URL fragment.
-  if (!IsGoogleSearchHostname(url)) {
-    return false;
-  }
-
-  if (!QueryContainsComponentPrefix(url.query_piece(), "q=") &&
-      !QueryContainsComponentPrefix(url.ref_piece(), "q=")) {
-    return false;
-  }
-
-  const base::StringPiece path = url.path_piece();
-  return path == "/search" || path == "/webhp" || path == "/custom" ||
-         path == "/";
-}
-
-bool IsGoogleSearchRedirectorUrl(const GURL& url) {
-  if (!IsGoogleSearchHostname(url))
-    return false;
-
-  // The primary search redirector.  Google search result redirects are
-  // differentiated from other general google redirects by 'source=web' in the
-  // query string.
-  if (url.path_piece() == "/url" && url.has_query() &&
-      QueryContainsComponent(url.query_piece(), "source=web")) {
-    return true;
-  }
-
-  // Intent-based navigations from search are redirected through a second
-  // redirector, which receives its redirect URL in the fragment/hash/ref
-  // portion of the URL (the portion after '#'). We don't check for the presence
-  // of certain params in the ref since this redirector is only used for
-  // redirects from search.
-  return url.path_piece() == "/searchurl/r.html" && url.has_ref();
-}
-
 bool IsZstdUrl(const GURL& url) {
   return url.DomainIs("facebook.com") || url.DomainIs("instagram.com") ||
          url.DomainIs("whatsapp.com") || url.DomainIs("messenger.com");
 }
 
-bool QueryContainsComponent(const base::StringPiece query,
-                            const base::StringPiece component) {
+bool QueryContainsComponent(std::string_view query,
+                            std::string_view component) {
   return QueryContainsComponentHelper(query, component, false);
 }
 
-bool QueryContainsComponentPrefix(const base::StringPiece query,
-                                  const base::StringPiece component) {
+bool QueryContainsComponentPrefix(std::string_view query,
+                                  std::string_view component) {
   return QueryContainsComponentHelper(query, component, true);
 }
 

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/video/fake_gpu_memory_buffer.h"
 
 #include "base/atomic_sequence_num.h"
@@ -13,6 +18,11 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#endif
+
+#if BUILDFLAG(IS_FUCHSIA)
+#include <lib/zx/eventpair.h>
+#include <lib/zx/object.h>
 #endif
 
 namespace media {
@@ -31,6 +41,12 @@ class FakeGpuMemoryBufferImpl : public gpu::GpuMemoryBufferImpl {
 
   // gfx::GpuMemoryBuffer implementation
   bool Map() override { return fake_gmb_->Map(); }
+  void MapAsync(base::OnceCallback<void(bool)> result_cb) override {
+    fake_gmb_->MapAsync(std::move(result_cb));
+  }
+  bool AsyncMappingIsNonBlocking() const override {
+    return fake_gmb_->AsyncMappingIsNonBlocking();
+  }
   void* memory(size_t plane) override { return fake_gmb_->memory(plane); }
   void Unmap() override { fake_gmb_->Unmap(); }
   int stride(size_t plane) const override { return fake_gmb_->stride(plane); }
@@ -61,6 +77,15 @@ FakeGpuMemoryBuffer::FakeGpuMemoryBuffer(const gfx::Size& size,
 
 FakeGpuMemoryBuffer::FakeGpuMemoryBuffer(const gfx::Size& size,
                                          gfx::BufferFormat format,
+                                         bool premapped,
+                                         MapCallbackController* controller)
+    : FakeGpuMemoryBuffer(size, format, gfx::NativePixmapHandle::kNoModifier) {
+  premapped_ = premapped;
+  map_callback_controller_ = controller;
+}
+
+FakeGpuMemoryBuffer::FakeGpuMemoryBuffer(const gfx::Size& size,
+                                         gfx::BufferFormat format,
                                          uint64_t modifier)
     : size_(size), format_(format) {
   std::optional<VideoPixelFormat> video_pixel_format =
@@ -87,11 +112,30 @@ FakeGpuMemoryBuffer::FakeGpuMemoryBuffer(const gfx::Size& size,
   }
   handle_.native_pixmap_handle.modifier = modifier;
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_FUCHSIA)
+  zx::eventpair client_handle, service_handle;
+  zx::eventpair::create(0, &client_handle, &service_handle);
+  handle_.native_pixmap_handle.buffer_collection_handle =
+      std::move(client_handle);
+#endif
 }
 
 FakeGpuMemoryBuffer::~FakeGpuMemoryBuffer() = default;
 
 bool FakeGpuMemoryBuffer::Map() {
+  return true;
+}
+
+void FakeGpuMemoryBuffer::MapAsync(base::OnceCallback<void(bool)> result_cb) {
+  if (premapped_) {
+    std::move(result_cb).Run(true);
+    return;
+  }
+  map_callback_controller_->RegisterCallback(std::move(result_cb));
+}
+
+bool FakeGpuMemoryBuffer::AsyncMappingIsNonBlocking() const {
   return true;
 }
 
@@ -132,7 +176,7 @@ gfx::GpuMemoryBufferHandle FakeGpuMemoryBuffer::CloneHandle() const {
   gfx::GpuMemoryBufferHandle handle;
   handle.type = gfx::NATIVE_PIXMAP;
   handle.id = handle_.id;
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
   handle.native_pixmap_handle =
       gfx::CloneHandleForIPC(handle_.native_pixmap_handle);
 #endif

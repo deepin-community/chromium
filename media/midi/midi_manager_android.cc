@@ -7,15 +7,18 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/field_trial_params.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/strings/stringprintf.h"
 #include "media/midi/midi_device_android.h"
-#include "media/midi/midi_jni_headers/MidiManagerAndroid_jni.h"
 #include "media/midi/midi_manager_usb.h"
 #include "media/midi/midi_output_port_android.h"
 #include "media/midi/midi_service.h"
 #include "media/midi/midi_switches.h"
 #include "media/midi/task_service.h"
 #include "media/midi/usb_midi_device_factory_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "media/midi/midi_jni_headers/MidiManagerAndroid_jni.h"
 
 using base::android::JavaParamRef;
 using midi::mojom::PortState;
@@ -24,6 +27,17 @@ using midi::mojom::Result;
 namespace midi {
 
 namespace {
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+//
+// LINT.IfChange(MidiBackendType)
+enum class BackendType {
+  kAndroidMidi = 0,
+  kAndroidUsb = 1,
+  kMaxValue = kAndroidUsb,
+};
+// LINT.ThenChange(//tools/metrics/histograms/metadata/media/enums.xml:MidiBackendType)
 
 bool HasSystemFeatureMidi() {
   // Check if the MIDI service actually runs on the system.
@@ -34,8 +48,13 @@ bool HasSystemFeatureMidi() {
 }  // namespace
 
 MidiManager* MidiManager::Create(MidiService* service) {
-  if (HasSystemFeatureMidi())
+  const BackendType type = HasSystemFeatureMidi() ? BackendType::kAndroidMidi
+                                                  : BackendType::kAndroidUsb;
+  base::UmaHistogramEnumeration("Media.Midi.BackendType", type);
+
+  if (type == BackendType::kAndroidMidi) {
     return new MidiManagerAndroid(service);
+  }
 
   return new MidiManagerUsb(service,
                             std::make_unique<UsbMidiDeviceFactoryAndroid>());
@@ -45,8 +64,9 @@ MidiManagerAndroid::MidiManagerAndroid(MidiService* service)
     : MidiManager(service) {}
 
 MidiManagerAndroid::~MidiManagerAndroid() {
-  if (!service()->task_service()->UnbindInstance())
+  if (!service()->task_service()->UnbindInstance()) {
     return;
+  }
 
   // Finalization steps should be implemented after the UnbindInstance() call.
   JNIEnv* env = jni_zero::AttachCurrentThread();
@@ -54,8 +74,9 @@ MidiManagerAndroid::~MidiManagerAndroid() {
 }
 
 void MidiManagerAndroid::StartInitialization() {
-  if (!service()->task_service()->BindInstance())
+  if (!service()->task_service()->BindInstance()) {
     return CompleteInitialization(Result::INITIALIZATION_ERROR);
+  }
 
   JNIEnv* env = jni_zero::AttachCurrentThread();
 

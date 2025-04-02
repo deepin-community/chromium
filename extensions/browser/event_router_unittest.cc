@@ -150,8 +150,9 @@ scoped_refptr<const Extension> CreateExtension(bool component,
   manifest.SetByDottedPath("background.page", "background.html");
   manifest.SetByDottedPath("background.persistent", persistent);
   builder.SetManifest(std::move(manifest));
-  if (component)
+  if (component) {
     builder.SetLocation(mojom::ManifestLocation::kComponent);
+  }
 
   return builder.Build();
 }
@@ -309,8 +310,9 @@ class EventRouterFilterTest : public ExtensionsTest,
         ADD_FAILURE();
         return false;
       }
-      if (filter.GetDict() == to_check)
+      if (filter.GetDict() == to_check) {
         return true;
+      }
     }
     return false;
   }
@@ -322,8 +324,9 @@ class EventRouterFilterTest : public ExtensionsTest,
                                          const std::string& event_name) {
     const base::Value::Dict* filtered_events = GetFilteredEvents(extension_id);
     const auto iter = filtered_events->begin();
-    if (iter->first != event_name)
+    if (iter->first != event_name) {
       return nullptr;
+    }
 
     return iter->second.is_list() ? &iter->second.GetList() : nullptr;
   }
@@ -342,7 +345,7 @@ TEST_F(EventRouterTest, GetBaseEventName) {
 // Tests adding and removing observers from EventRouter.
 void EventRouterTest::RunEventRouterObserverTest(
     const EventListenerConstructor& constructor) {
-  EventRouter router(nullptr, nullptr);
+  EventRouter router(browser_context(), nullptr);
   std::unique_ptr<EventListener> listener =
       constructor.Run("event_name", render_process_host(), base::Value::Dict());
 
@@ -437,6 +440,9 @@ class EventRouterObserver : public EventRouter::TestObserver {
 // A fake that pretends that all contexts are WebUI.
 class ProcessMapFake : public ProcessMap {
  public:
+  explicit ProcessMapFake(content::BrowserContext* browser_context)
+      : ProcessMap(browser_context) {}
+
   mojom::ContextType GetMostLikelyContextType(const Extension* extension,
                                               int process_id,
                                               const GURL* url) const override {
@@ -446,7 +452,7 @@ class ProcessMapFake : public ProcessMap {
 
 std::unique_ptr<KeyedService> BuildProcessMap(
     content::BrowserContext* profile) {
-  return std::make_unique<ProcessMapFake>();
+  return std::make_unique<ProcessMapFake>(profile);
 }
 
 }  // namespace
@@ -465,8 +471,11 @@ TEST_F(EventRouterTest, WebUIEventsDoNotCrossIncognitoBoundaries) {
   feature->set_name("test feature");
   feature->set_matches({"chrome://settings/*"});
   provider.AddFeature(event_name, std::move(feature));
-  ExtensionAPI::GetSharedInstance()->RegisterDependencyProvider("api",
-                                                                &provider);
+
+  ExtensionAPI api;
+  api.RegisterDependencyProvider("api", &provider);
+  ExtensionAPI::OverrideSharedInstanceForTest scope(&api);
+
   EventRouter router(browser_context(), nullptr);
   content::MockRenderProcessHost regular_rph(browser_context());
   content::MockRenderProcessHost otr_rph(incognito_context());
@@ -479,9 +488,9 @@ TEST_F(EventRouterTest, WebUIEventsDoNotCrossIncognitoBoundaries) {
   router.AddEventListenerForURL(event_name, &otr_rph, dummy_url);
 
   // Hook up some test observers
-  EventRouterObserver regular_counter(regular_rph.GetID());
+  EventRouterObserver regular_counter(regular_rph.GetDeprecatedID());
   router.AddObserverForTesting(&regular_counter);
-  EventRouterObserver otr_counter(otr_rph.GetID());
+  EventRouterObserver otr_counter(otr_rph.GetDeprecatedID());
   router.AddObserverForTesting(&otr_counter);
 
   EXPECT_EQ(0, regular_counter.dispatch_count);
@@ -505,7 +514,7 @@ TEST_F(EventRouterTest, WebUIEventsDoNotCrossIncognitoBoundaries) {
 }
 
 TEST_F(EventRouterTest, MultipleEventRouterObserver) {
-  EventRouter router(nullptr, nullptr);
+  EventRouter router(browser_context(), nullptr);
   std::unique_ptr<EventListener> listener =
       EventListener::ForURL("event_name", GURL("http://google.com/path"),
                             render_process_host(), base::Value::Dict());
@@ -585,7 +594,7 @@ TEST_F(EventRouterTest, TestReportEvent) {
 }
 
 // Tests adding and removing events with filters.
-// TODO(crbug.com/1479954): test is flaky across platforms.
+// TODO(crbug.com/40281129): test is flaky across platforms.
 TEST_P(EventRouterFilterTest, DISABLED_Basic) {
   // For the purpose of this test, "." is important in |event_name| as it
   // exercises the code path that uses |event_name| as a key in
@@ -650,7 +659,7 @@ TEST_P(EventRouterFilterTest, DISABLED_Basic) {
   ASSERT_FALSE(ContainsFilter(kExtensionId, kEventName, filters[2]));
 }
 
-// TODO(crbug.com/1479954): test is flaky across platforms.
+// TODO(crbug.com/40281129): test is flaky across platforms.
 TEST_P(EventRouterFilterTest, DISABLED_URLBasedFilteredEventListener) {
   const std::string kEventName = "windows.onRemoved";
   const GURL kUrl("chrome-untrusted://terminal");
@@ -710,8 +719,11 @@ TEST_F(EventRouterDispatchTest, TestDispatch) {
   feature->set_name("test feature");
   feature->set_matches({webui1.spec().c_str(), webui2.spec().c_str()});
   provider.AddFeature(event_name, std::move(feature));
-  ExtensionAPI::GetSharedInstance()->RegisterDependencyProvider("api",
-                                                                &provider);
+
+  ExtensionAPI api;
+  api.RegisterDependencyProvider("api", &provider);
+  ExtensionAPI::OverrideSharedInstanceForTest scope(&api);
+
   TestEventRouterObserver observer(event_router());
   auto add_extension = [&](const std::string& id) {
     scoped_refptr<const Extension> extension =
@@ -758,7 +770,7 @@ TEST_F(EventRouterDispatchTest, TestDispatch) {
   EXPECT_EQ(0u, observer.dispatched_events().size());
 }
 
-// TODO(crbug.com/1479954): test is flaky across platforms.
+// TODO(crbug.com/40281129): test is flaky across platforms.
 TEST_F(EventRouterDispatchTest, DISABLED_TestDispatchCallback) {
   std::string ext1 = "ext1";
   std::string ext2 = "ext2";
@@ -768,8 +780,11 @@ TEST_F(EventRouterDispatchTest, DISABLED_TestDispatchCallback) {
   auto feature = std::make_unique<SimpleFeature>();
   feature->set_name("test feature");
   provider.AddFeature(event_name, std::move(feature));
-  ExtensionAPI::GetSharedInstance()->RegisterDependencyProvider("api",
-                                                                &provider);
+
+  ExtensionAPI api;
+  api.RegisterDependencyProvider("api", &provider);
+  ExtensionAPI::OverrideSharedInstanceForTest scope(&api);
+
   auto add_extension = [&](const std::string& id) {
     scoped_refptr<const Extension> extension =
         ExtensionBuilder("test extension")
@@ -825,7 +840,8 @@ TEST_F(EventRouterDispatchTest, DISABLED_TestDispatchCallback) {
           /*event_filter=*/std::nullopt),
       process4.get());
   event_router()->BindServiceWorkerEventDispatcher(
-      process4->GetID(), sw_thread_id, sw_event_dispatcher.BindAndPassRemote());
+      process4->GetDeprecatedID(), sw_thread_id,
+      sw_event_dispatcher.BindAndPassRemote());
 
   // Dispatch without callback set.
   event_router()->DispatchEventToExtension(ext1, create_event(event_name));
@@ -846,10 +862,10 @@ TEST_F(EventRouterDispatchTest, DISABLED_TestDispatchCallback) {
   const int sw_invalid_version_id =
       blink::mojom::kInvalidServiceWorkerVersionId;
   std::vector<EventTarget> expected{
-      {ext1, process1->GetID(), sw_invalid_version_id, kMainThreadId},
-      {ext2, process2->GetID(), sw_invalid_version_id, kMainThreadId},
-      {ext2, process3->GetID(), sw_invalid_version_id, kMainThreadId},
-      {ext3, process4->GetID(), sw_version_id, sw_thread_id},
+      {ext1, process1->GetDeprecatedID(), sw_invalid_version_id, kMainThreadId},
+      {ext2, process2->GetDeprecatedID(), sw_invalid_version_id, kMainThreadId},
+      {ext2, process3->GetDeprecatedID(), sw_invalid_version_id, kMainThreadId},
+      {ext3, process4->GetDeprecatedID(), sw_version_id, sw_thread_id},
   };
   std::sort(std::begin(dispatched), std::end(dispatched));
   EXPECT_EQ(dispatched, expected);

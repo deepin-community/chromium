@@ -9,8 +9,10 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
+#include "chrome/browser/ui/exclusive_access/exclusive_access_permission_manager.h"
 #include "chrome/browser/ui/exclusive_access/fullscreen_controller.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/permissions/features.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
@@ -31,11 +33,9 @@ constexpr base::TimeDelta kEffectiveUserEscapeDuration =
 PointerLockController::PointerLockController(ExclusiveAccessManager* manager)
     : ExclusiveAccessControllerBase(manager),
       pointer_lock_state_(POINTERLOCK_UNLOCKED),
-      fake_pointer_lock_for_test_(false),
-      bubble_hide_callback_for_test_() {}
+      fake_pointer_lock_for_test_(false) {}
 
-PointerLockController::~PointerLockController() {
-}
+PointerLockController::~PointerLockController() = default;
 
 bool PointerLockController::IsPointerLocked() const {
   return pointer_lock_state_ == POINTERLOCK_LOCKED ||
@@ -47,8 +47,8 @@ bool PointerLockController::IsPointerLockedSilently() const {
 }
 
 void PointerLockController::RequestToLockPointer(WebContents* web_contents,
-                                             bool user_gesture,
-                                             bool last_unlocked_by_target) {
+                                                 bool user_gesture,
+                                                 bool last_unlocked_by_target) {
   DCHECK(!IsPointerLocked());
 
   // To prevent misbehaving sites from constantly re-locking the pointer, the
@@ -61,44 +61,31 @@ void PointerLockController::RequestToLockPointer(WebContents* web_contents,
     if (!user_gesture) {
       web_contents->GotResponseToPointerLockRequest(
           blink::mojom::PointerLockResult::kRequiresUserGesture);
-      if (lock_state_callback_for_test_)
+      if (lock_state_callback_for_test_) {
         std::move(lock_state_callback_for_test_).Run();
+      }
       return;
     }
     if (base::TimeTicks::Now() <
         last_user_escape_time_ + kEffectiveUserEscapeDuration) {
       web_contents->GotResponseToPointerLockRequest(
           blink::mojom::PointerLockResult::kUserRejected);
-      if (lock_state_callback_for_test_)
+      if (lock_state_callback_for_test_) {
         std::move(lock_state_callback_for_test_).Run();
+      }
       return;
     }
   }
-  SetTabWithExclusiveAccess(web_contents);
 
-  // Lock pointer.
-  if (fake_pointer_lock_for_test_ ||
-      web_contents->GotResponseToPointerLockRequest(
-          blink::mojom::PointerLockResult::kSuccess)) {
-    if (last_unlocked_by_target &&
-        web_contents_granted_silent_pointer_lock_permission_ == web_contents) {
-      pointer_lock_state_ = POINTERLOCK_LOCKED_SILENTLY;
-    } else {
-      pointer_lock_state_ = POINTERLOCK_LOCKED;
-    }
-  } else {
-    SetTabWithExclusiveAccess(nullptr);
-    pointer_lock_state_ = POINTERLOCK_UNLOCKED;
-  }
+  content::GlobalRenderFrameHostId rfh_id =
+      web_contents->GetPrimaryMainFrame()->GetGlobalId();
+    LockPointer(web_contents->GetWeakPtr(), rfh_id, last_unlocked_by_target);
+}
 
-  if (!ShouldSuppressBubbleReshowForStateChange()) {
-    exclusive_access_manager()->UpdateExclusiveAccessExitBubbleContent(
-        base::BindOnce(&PointerLockController::OnBubbleHidden,
-                       weak_ptr_factory_.GetWeakPtr(), web_contents));
-  }
-
-  if (lock_state_callback_for_test_)
-    std::move(lock_state_callback_for_test_).Run();
+bool PointerLockController::IsWaitingForPointerLockPrompt(
+    WebContents* web_contents) {
+  return IsWaitingForPointerLockPromptHelper(
+      web_contents->GetPrimaryMainFrame()->GetGlobalId());
 }
 
 void PointerLockController::ExitExclusiveAccessIfNecessary() {
@@ -111,8 +98,7 @@ void PointerLockController::NotifyTabExclusiveAccessLost() {
     UnlockPointer();
     SetTabWithExclusiveAccess(nullptr);
     pointer_lock_state_ = POINTERLOCK_UNLOCKED;
-    exclusive_access_manager()->UpdateExclusiveAccessExitBubbleContent(
-        ExclusiveAccessBubbleHideCallback());
+    exclusive_access_manager()->UpdateBubble(base::NullCallback());
   }
 }
 
@@ -126,49 +112,129 @@ bool PointerLockController::HandleUserPressedEscape() {
   return false;
 }
 
-void PointerLockController::ExitExclusiveAccessToPreviousState() {
-  // Nothing to do for pointer lock.
+void PointerLockController::HandleUserHeldEscape() {
+  HandleUserPressedEscape();
 }
 
-void PointerLockController::LostPointerLock() {
-  if (lock_state_callback_for_test_)
+void PointerLockController::HandleUserReleasedEscapeEarly() {}
+
+bool PointerLockController::RequiresPressAndHoldEscToExit() const {
+  return false;
+}
+
+void PointerLockController::ExitExclusiveAccessToPreviousState() {
+  if (lock_state_callback_for_test_) {
     std::move(lock_state_callback_for_test_).Run();
+  }
 
   pointer_lock_state_ = POINTERLOCK_UNLOCKED;
   SetTabWithExclusiveAccess(nullptr);
 
   if (!ShouldSuppressBubbleReshowForStateChange()) {
-    exclusive_access_manager()->UpdateExclusiveAccessExitBubbleContent(
-        ExclusiveAccessBubbleHideCallback());
+    exclusive_access_manager()->UpdateBubble(base::NullCallback());
   }
 }
 
 void PointerLockController::UnlockPointer() {
   WebContents* tab = exclusive_access_tab();
 
-  if (!tab)
+  if (!tab) {
     return;
+  }
+
+  hosts_waiting_for_pointer_lock_permission_prompt_.erase(
+      tab->GetPrimaryMainFrame()->GetGlobalId());
 
   content::RenderWidgetHostView* pointer_lock_view = nullptr;
   RenderViewHost* const rvh =
       exclusive_access_tab()->GetPrimaryMainFrame()->GetRenderViewHost();
-  if (rvh)
+  if (rvh) {
     pointer_lock_view = rvh->GetWidget()->GetView();
+  }
 
-  if (pointer_lock_view)
+  if (pointer_lock_view) {
     pointer_lock_view->UnlockPointer();
+  }
+}
+
+void PointerLockController::LockPointer(
+    base::WeakPtr<content::WebContents> web_contents,
+    content::GlobalRenderFrameHostId rfh_id,
+    bool last_unlocked_by_target) {
+  hosts_waiting_for_pointer_lock_permission_prompt_.erase(rfh_id);
+
+  if (!web_contents) {
+    if (lock_state_callback_for_test_) {
+      std::move(lock_state_callback_for_test_).Run();
+    }
+    return;
+  }
+  SetTabWithExclusiveAccess(web_contents.get());
+  // Focus may have moved to the modal, so move it back to the WebContents.
+  web_contents->Focus();
+
+  // Lock the mouse pointer.
+  if (fake_pointer_lock_for_test_ ||
+      web_contents->GotResponseToPointerLockRequest(
+          blink::mojom::PointerLockResult::kSuccess)) {
+    if (last_unlocked_by_target &&
+        web_contents_granted_silent_pointer_lock_permission_ ==
+            web_contents.get()) {
+      pointer_lock_state_ = POINTERLOCK_LOCKED_SILENTLY;
+    } else {
+      pointer_lock_state_ = POINTERLOCK_LOCKED;
+    }
+  } else {
+    SetTabWithExclusiveAccess(nullptr);
+    pointer_lock_state_ = POINTERLOCK_UNLOCKED;
+  }
+
+  if (!ShouldSuppressBubbleReshowForStateChange()) {
+    exclusive_access_manager()->UpdateBubble(
+        base::BindOnce(&PointerLockController::OnBubbleHidden,
+                       weak_ptr_factory_.GetWeakPtr(), web_contents));
+  }
+  if (lock_state_callback_for_test_) {
+    std::move(lock_state_callback_for_test_).Run();
+  }
+}
+
+void PointerLockController::RejectRequestToLockPointer(
+    base::WeakPtr<content::WebContents> web_contents,
+    content::GlobalRenderFrameHostId rfh_id) {
+  DCHECK(IsWaitingForPointerLockPromptHelper(rfh_id));
+  hosts_waiting_for_pointer_lock_permission_prompt_.erase(rfh_id);
+
+  if (!web_contents) {
+    if (lock_state_callback_for_test_) {
+      std::move(lock_state_callback_for_test_).Run();
+    }
+    return;
+  }
+
+  // Focus has moved to the modal, so move it back to the WebContents.
+  web_contents->Focus();
+  web_contents->GotResponseToPointerLockRequest(
+      blink::mojom::PointerLockResult::kUserRejected);
+  if (lock_state_callback_for_test_) {
+    std::move(lock_state_callback_for_test_).Run();
+  }
 }
 
 void PointerLockController::OnBubbleHidden(
-    WebContents* web_contents,
+    base::WeakPtr<content::WebContents> web_contents,
     ExclusiveAccessBubbleHideReason reason) {
-  if (bubble_hide_callback_for_test_)
+  if (bubble_hide_callback_for_test_) {
     bubble_hide_callback_for_test_.Run(reason);
+  }
 
   // Allow silent pointer lock if the bubble has been display for a period of
   // time and dismissed due to timeout.
-  if (reason == ExclusiveAccessBubbleHideReason::kTimeout)
-    web_contents_granted_silent_pointer_lock_permission_ = web_contents;
+  if (reason == ExclusiveAccessBubbleHideReason::kTimeout) {
+    web_contents_granted_silent_pointer_lock_permission_ = web_contents.get();
+  } else {
+    web_contents_granted_silent_pointer_lock_permission_ = nullptr;
+  }
 }
 
 bool PointerLockController::ShouldSuppressBubbleReshowForStateChange() {
@@ -180,4 +246,9 @@ bool PointerLockController::ShouldSuppressBubbleReshowForStateChange() {
          (pointer_lock_state_ == POINTERLOCK_UNLOCKED &&
           bubble_type ==
               EXCLUSIVE_ACCESS_BUBBLE_TYPE_FULLSCREEN_EXIT_INSTRUCTION);
+}
+
+bool PointerLockController::IsWaitingForPointerLockPromptHelper(
+    content::GlobalRenderFrameHostId rfh_id) {
+  return hosts_waiting_for_pointer_lock_permission_prompt_.contains(rfh_id);
 }

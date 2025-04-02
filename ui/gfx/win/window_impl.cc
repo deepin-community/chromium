@@ -12,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/singleton.h"
+#include "base/notreached.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
@@ -135,7 +136,7 @@ ATOM ClassRegistrar::RetrieveClassAtom(const ClassInfo& class_info) {
   // gets above a certain small threshold, we may as well have a resource leak
   // caused by repeatedly registering a class with auto-generated name, which
   // would eventually lead to user atom table exhaustion.
-  // TODO(crbug.com/1470483): remove when source of ATOM leak is found.
+  // TODO(crbug.com/40925772): remove when source of ATOM leak is found.
   if (registered_count_ == 128) {
     base::debug::DumpWithoutCrashing();
   }
@@ -246,7 +247,7 @@ void WindowImpl::Init(HWND parent, const Rect& bounds) {
     bool procs_match = got_class && class_info.lpfnWndProc ==
         base::win::WrappedWindowProc<&WindowImpl::WndProc>;
     base::debug::Alias(&procs_match);
-    CHECK(false);
+    NOTREACHED();
   }
 
   CheckWindowCreated(hwnd_, create_window_error);

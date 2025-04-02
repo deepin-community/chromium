@@ -4,10 +4,11 @@
 
 #include "components/viz/host/client_frame_sink_video_capturer.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/functional/bind.h"
-#include "base/ranges/algorithm.h"
+#include "base/not_fatal_until.h"
 #include "base/task/single_thread_task_runner.h"
 #include "media/capture/mojom/video_capture_buffer.mojom.h"
 #include "media/capture/mojom/video_capture_types.mojom.h"
@@ -131,7 +132,7 @@ ClientFrameSinkVideoCapturer::CreateOverlay(int32_t stacking_index) {
 
   // If there is an existing overlay at the same index, drop it.
   auto it =
-      base::ranges::find(overlays_, stacking_index, &Overlay::stacking_index);
+      std::ranges::find(overlays_, stacking_index, &Overlay::stacking_index);
   if (it != overlays_.end()) {
     (*it)->DisconnectPermanently();
     overlays_.erase(it);
@@ -244,8 +245,8 @@ void ClientFrameSinkVideoCapturer::StartInternal() {
 void ClientFrameSinkVideoCapturer::OnOverlayDestroyed(Overlay* overlay) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  const auto it = base::ranges::find(overlays_, overlay);
-  DCHECK(it != overlays_.end());
+  const auto it = std::ranges::find(overlays_, overlay);
+  CHECK(it != overlays_.end(), base::NotFatalUntil::M130);
   overlays_.erase(it);
 }
 
@@ -294,7 +295,7 @@ void ClientFrameSinkVideoCapturer::Overlay::OnCapturedMouseEvent(
     return;
   }
 
-  // TODO(crbug.com/1444712): Transmit the coordinates to the client_capturer_.
+  // TODO(crbug.com/40267829): Transmit the coordinates to the client_capturer_.
   NOTIMPLEMENTED();
 }
 

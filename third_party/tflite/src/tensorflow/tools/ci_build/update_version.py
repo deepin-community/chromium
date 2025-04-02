@@ -34,7 +34,6 @@ import time
 TF_SRC_DIR = "tensorflow"
 VERSION_H = "%s/core/public/version.h" % TF_SRC_DIR
 SETUP_PY = "%s/tools/pip_package/setup.py" % TF_SRC_DIR
-SETUP_PY_V2 = "%s/tools/pip_package/v2/setup.py" % TF_SRC_DIR
 README_MD = "./README.md"
 TENSORFLOW_BZL = "%s/tensorflow.bzl" % TF_SRC_DIR
 TF_MAC_ARM64_CI_BUILD = (
@@ -217,8 +216,6 @@ def update_setup_dot_py(old_version, new_version):
   """Update setup.py."""
   replace_string_in_line("_VERSION = '%s'" % old_version.string,
                          "_VERSION = '%s'" % new_version.string, SETUP_PY)
-  replace_string_in_line("_VERSION = '%s'" % old_version.string,
-                         "_VERSION = '%s'" % new_version.string, SETUP_PY_V2)
 
 
 def update_readme(old_version, new_version):
@@ -237,6 +234,11 @@ def update_tensorflow_bzl(old_version, new_version):
                           new_version.patch)
   replace_string_in_line('VERSION = "%s"' % old_mmp,
                          'VERSION = "%s"' % new_mmp, TENSORFLOW_BZL)
+  replace_string_in_line(
+      'WHEEL_VERSION = "%s"' % old_version.string,
+      'WHEEL_VERSION = "%s"' % new_version.string,
+      TENSORFLOW_BZL,
+  )
 
 
 def update_m1_builds(old_version, new_version):

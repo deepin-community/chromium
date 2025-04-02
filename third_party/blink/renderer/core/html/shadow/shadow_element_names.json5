@@ -13,7 +13,7 @@
     // ID names for UA shadow elements
     //
     {
-      // This has an experimental pseudo-element to expose it to the Web.
+      // This name is used both as an ID and as a web-exposed pseudo-element.
       name: "details-content",
       Symbol: "kIdDetailsContent",
     },
@@ -58,10 +58,6 @@
       Symbol: "kIdPasswordRevealButton",
     },
     {
-      name: "password-strong-label",
-      Symbol: "kIdPasswordStrongLabel",
-    },
-    {
       name: "thumb",
       Symbol: "kIdSliderThumb",
     },
@@ -78,10 +74,6 @@
       Symbol: "kIdFileUploadButton",
     },
     {
-      name: "optgroup-label",
-      Symbol: "kIdOptGroupLabel",
-    },
-    {
       name: "select-options",
       Symbol: "kSelectOptions",
     },
@@ -90,14 +82,18 @@
       Symbol: "kSelectButton",
     },
     {
-      name: "select-datalist",
-      Symbol: "kSelectDatalist",
+      name: "select-popover-options",
+      Symbol: "kSelectPopoverOptions",
     },
 
     //
     // Pseudo names for UA shadow elements.
     // These are web-exposed as pseudo element selectors.
     //
+    {
+      name: "picker(select)",
+      Symbol: "kPickerSelect",
+    },
     {
       name: "-webkit-details-marker",
       Symbol: "kPseudoWebKitDetailsMarker",
@@ -117,6 +113,14 @@
     {
       name: "-internal-media-controls-segmented-track",
       Symbol: "kPseudoMediaControlsSegmentedTrack",
+    },
+    {
+      name: "-internal-select-autofill-preview",
+      Symbol: "kSelectAutofillPreview",
+    },
+    {
+      name: "-internal-select-autofill-preview-text",
+      Symbol: "kSelectAutofillPreviewText",
     },
     {
       name: "-webkit-calendar-picker-indicator",
@@ -157,6 +161,18 @@
     {
       name: "-internal-permission-text",
       Symbol: "kPseudoInternalPermissionTextSpan",
+    },
+    {
+      name: "-internal-optgroup-label",
+      Symbol: "kIdOptGroupLabel",
+    },
+    {
+      name: "-internal-option-label-container",
+      Symbol: "kOptionLabelContainer",
+    },
+    {
+      name: "-internal-option-slot",
+      Symbol: "kOptionSlot",
     },
   ],
 }

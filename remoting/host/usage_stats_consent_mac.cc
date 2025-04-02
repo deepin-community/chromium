@@ -5,9 +5,9 @@
 #include "remoting/host/usage_stats_consent.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include <optional>
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/notreached.h"
@@ -34,7 +34,7 @@ bool GetUsageStatsConsent(bool& allowed, bool& set_by_policy) {
       std::optional<bool> host_config_value =
           host_config->FindBool(kUsageStatsConsentConfigPath);
       if (host_config_value.has_value()) {
-        allowed = host_config_value.value();
+        allowed = *host_config_value;
         return true;
       }
     }

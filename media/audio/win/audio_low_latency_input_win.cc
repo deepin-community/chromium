@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "media/audio/win/audio_low_latency_input_win.h"
 
 #include <objbase.h>
+
 #include <propkey.h>
 #include <windows.devices.enumeration.h>
 #include <windows.media.devices.h>
@@ -35,6 +41,7 @@
 #include "media/base/audio_timestamp_helper.h"
 #include "media/base/channel_layout.h"
 #include "media/base/limits.h"
+#include "media/base/media_switches.h"
 #include "media/base/timestamp_constants.h"
 
 using ABI::Windows::Foundation::Collections::IVectorView;
@@ -282,7 +289,7 @@ class WASAPIAudioInputStream::DataDiscontinuityReporter {
     if (callback_count_ % kCallbacksPerLogPeriod)
       return;
 
-    // TODO(https://crbug.com/825744): It can be possible to replace
+    // TODO(crbug.com/41378888): It can be possible to replace
     // "Media.Audio.Capture.Glitches2" with this new (simplified) metric
     // instead.
     base::UmaHistogramCounts1000("Media.Audio.Capture.Win.Glitches2",
@@ -325,6 +332,17 @@ WASAPIAudioInputStream::WASAPIAudioInputStream(
   bool avrt_init = avrt::Initialize();
   if (!avrt_init)
     SendLogMessage("%s => (WARNING: failed to load Avrt.dll)", __func__);
+
+  if (!(params.effects() & AudioParameters::ECHO_CANCELLER)) {
+    SendLogMessage("%s => (system AEC is not requested)", __func__);
+  } else if (!manager->IsEchoCancellationSupported(device_id)) {
+    SendLogMessage("%s => (WARNING: failed to apply system AEC as requested)",
+                   __func__);
+  } else {
+    use_echo_cancellation_ = true;
+  }
+  SendLogMessage("%s => (use_echo_cancellation=[%s])", __func__,
+                 use_echo_cancellation_ ? "true" : "false");
 
   const SampleFormat kSampleFormat = kSampleFormatS16;
 
@@ -790,8 +808,9 @@ void WASAPIAudioInputStream::Run() {
   if (recording && error) {
     // TODO(henrika): perhaps it worth improving the cleanup here by e.g.
     // stopping the audio client, joining the thread etc.?
+    auto saved_last_error = GetLastError();
     NOTREACHED() << "WASAPI capturing failed with error code "
-                 << GetLastError();
+                 << saved_last_error;
   }
 
   // Disable MMCSS.
@@ -882,7 +901,7 @@ void WASAPIAudioInputStream::PullCaptureDataAndPushToSink() {
     // The behavior of the AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY flag is
     // undefined on the application's first call to GetBuffer after Start and
     // Windows 7 or later is required for support.
-    // TODO(https://crbug.com/1427096): take this into account when reporting
+    // TODO(crbug.com/40261628): take this into account when reporting
     // glitch info.
     const bool observed_data_discontinuity =
         (device_position > 0 && flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY);
@@ -897,7 +916,7 @@ void WASAPIAudioInputStream::PullCaptureDataAndPushToSink() {
     // current data packet.
     bool timestamp_error_was_detected = false;
     if (flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) {
-      // TODO(https://crbug.com/825744): it might be possible to improve error
+      // TODO(crbug.com/41378888): it might be possible to improve error
       // handling here and avoid using the counter in |capture_time_100ns|.
       LOG(WARNING) << "WAIS::" << __func__
                    << " => (WARNING: AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR)";
@@ -925,7 +944,7 @@ void WASAPIAudioInputStream::PullCaptureDataAndPushToSink() {
         }
         glitch_reporter_.UpdateStats(glitch_duration);
         if (glitch_duration.is_positive()) {
-          glitch_accumulator_.Add(AudioGlitchInfo::SingleBoundedGlitch(
+          glitch_accumulator_.Add(AudioGlitchInfo::SingleBoundedSystemGlitch(
               glitch_duration, AudioGlitchInfo::Direction::kCapture));
         }
       }
@@ -1043,8 +1062,6 @@ void WASAPIAudioInputStream::PullCaptureDataAndPushToSink() {
 
 void WASAPIAudioInputStream::HandleError(HRESULT err) {
   NOTREACHED() << "Error code: " << err;
-  if (sink_)
-    sink_->OnError();
 }
 
 HRESULT WASAPIAudioInputStream::SetCaptureDevice() {
@@ -1374,6 +1391,15 @@ WASAPIAudioInputStream::SetCommunicationsCategoryAndMaybeRawCaptureMode(
     // capture mode on devices with more than eight input channels.
     if (channels > 0 && channels <= media::kMaxConcurrentChannels) {
       audio_props.Options = AUDCLNT_STREAMOPTIONS_RAW;
+    }
+    // Use AUDCLNT_STREAMOPTIONS_NONE instead of AUDCLNT_STREAMOPTIONS_RAW if
+    // system AEC has been enabled to ensure that "Voice Clarity" can kick in.
+    // From Win11 24H2, apps which use Communications Signal Processing Mode
+    // do not need any additional modifications and Voice Clarity will work for
+    // them automatically when the OEM device does not offer Communications Mode
+    // processing.
+    if (use_echo_cancellation_) {
+      audio_props.Options = AUDCLNT_STREAMOPTIONS_NONE;
     }
     hr = audio_client2->SetClientProperties(&audio_props);
     if (FAILED(hr)) {

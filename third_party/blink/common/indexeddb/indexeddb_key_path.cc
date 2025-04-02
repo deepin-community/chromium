@@ -49,7 +49,6 @@ bool IndexedDBKeyPath::operator==(const IndexedDBKeyPath& other) const {
       return array_ == other.array_;
   }
   NOTREACHED();
-  return false;
 }
 
 }  // namespace blink

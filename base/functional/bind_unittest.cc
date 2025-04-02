@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40284755): Remove this and spanify to fix the errors.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "base/functional/bind.h"
 
 #include <functional>
@@ -12,10 +17,6 @@
 
 #include "base/allocator/partition_alloc_features.h"
 #include "base/allocator/partition_alloc_support.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/dangling_raw_ptr_checks.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_buildflags.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_for_testing.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_root.h"
 #include "base/functional/callback.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
@@ -27,6 +28,10 @@
 #include "base/test/gtest_util.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
+#include "partition_alloc/buildflags.h"
+#include "partition_alloc/dangling_raw_ptr_checks.h"
+#include "partition_alloc/partition_alloc_for_testing.h"
+#include "partition_alloc/partition_root.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -431,7 +436,7 @@ TEST_F(BindTest, OnceCallbackBasicTest) {
   // After running via the rvalue-reference, the value of the OnceCallback
   // is undefined. The implementation simply clears the instance after the
   // invocation.
-  EXPECT_TRUE(c0.is_null());
+  EXPECT_TRUE(c0.is_null());  // NOLINT(bugprone-use-after-move)
 
   c0 = BindOnce(&Sum, 2, 3, 5, 7, 11);
 
@@ -1305,6 +1310,15 @@ TEST_F(BindTest, BindMoveOnlyVector) {
   VerifyVector(final_result);
 }
 
+// Using Passed() on a functor should not cause a compile error.
+TEST_F(BindTest, PassedFunctor) {
+  struct S {
+    void operator()() const {}
+  };
+
+  BindRepeating(Passed(S())).Run();
+}
+
 // Argument copy-constructor usage for non-reference copy-only parameters.
 //   - Bound arguments are only copied once.
 //   - Forwarded arguments are only copied once.
@@ -1625,7 +1639,7 @@ TEST_F(BindTest, OnceCallback) {
   cb = cb3;
   std::move(cb).Run();
 
-  cb = std::move(cb2);
+  cb = std::move(cb2);  // NOLINT(bugprone-use-after-move)
 
   OnceCallback<void(int)> cb4 =
       BindOnce(&VoidPolymorphic<std::unique_ptr<int>, int>::Run,
@@ -1775,6 +1789,30 @@ TEST_F(BindTest, OverloadedOperator) {
   EXPECT_EQ("Hello", BindOnce(s, "Hello").Run());
 }
 
+TEST_F(BindTest, OverloadedOperatorQualifiers) {
+  // Bind should be able to pick the correct `operator()()` to invoke on a
+  // functor when the only difference between the overloads is their qualifiers.
+  struct S {
+    int operator()() const& { return 1; }
+    int operator()() && { return 2; }
+  } s;
+
+  // `BindRepeating()` normally stores a value and passes a const ref to the
+  // invoked method, regardless of whether lvalue or rvalue was originally
+  // provided.
+  EXPECT_EQ(1, BindRepeating(s).Run());
+  EXPECT_EQ(1, BindRepeating(S()).Run());
+
+  // The exception is if `Passed()` is used, which tells `BindRepeating()` to
+  // move the specified argument during invocation.
+  EXPECT_EQ(2, BindRepeating(Passed(S())).Run());
+
+  // `BindOnce()` also stores a value, but it always moves that value during
+  // invocation, regardless of whether lvalue or rvalue was originally provided.
+  EXPECT_EQ(2, BindOnce(s).Run());
+  EXPECT_EQ(2, BindOnce(S()).Run());
+}
+
 TEST_F(BindTest, OverloadedOperatorInexactMatch) {
   // The Bind machinery guesses signatures for overloaded `operator()()`s based
   // on the decay_t<>s of the bound args. But as long as all args are bound and
@@ -1860,7 +1898,8 @@ TEST(BindDeathTest, BanFirstOwnerOfRefCountedType) {
   });
 }
 
-#if BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT)
+#if PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT) && \
+    PA_BUILDFLAG(USE_RAW_PTR_BACKUP_REF_IMPL)
 
 void HandleOOM(size_t unused_size) {
   LOG(FATAL) << "Out of memory";
@@ -1869,7 +1908,7 @@ void HandleOOM(size_t unused_size) {
 // Basic set of options to mostly only enable `BackupRefPtr::kEnabled`.
 // This avoids the boilerplate of having too much options enabled for simple
 // testing purpose.
-static constexpr auto kOnlyEnableBackupRefPtrOptions = []() {
+static constexpr auto kOnlyEnableBackupRefPtrOptions = [] {
   partition_alloc::PartitionOptions opts;
   opts.backup_ref_ptr = partition_alloc::PartitionOptions::kEnabled;
   return opts;
@@ -2104,7 +2143,8 @@ TEST_F(BindUnretainedDanglingDeathTest, UnretainedWeakReceiverDangling) {
 
 #endif  // defined(GTEST_HAS_DEATH_TEST) && !BUILDFLAG(IS_ANDROID)
 
-#endif  // BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT)
+#endif  // PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT) &&
+        // PA_BUILDFLAG(USE_RAW_PTR_BACKUP_REF_IMPL)
 
 }  // namespace
 }  // namespace base

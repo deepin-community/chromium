@@ -114,16 +114,11 @@ void AppPlatformMetricsServiceTestBase::SetUp() {
   app_platform_metrics_service_ =
       std::make_unique<AppPlatformMetricsService>(profile());
 
-  // Install a BuiltIn app before app_platform_metrics_service_ started to
-  // verify the install AppKM.
-  AddApp(AppServiceProxyFactory::GetForProfile(profile()),
-         {/*app_id=*/"bu", AppType::kBuiltIn, "", Readiness::kReady,
-          InstallReason::kSystem, InstallSource::kSystem,
-          /*should_notify_initialized=*/true});
-
   app_platform_metrics_service_->Start(
       AppServiceProxyFactory::GetForProfile(profile())->AppRegistryCache(),
-      AppServiceProxyFactory::GetForProfile(profile())->InstanceRegistry());
+      AppServiceProxyFactory::GetForProfile(profile())->InstanceRegistry(),
+      AppServiceProxyFactory::GetForProfile(profile())
+          ->AppCapabilityAccessCache());
 }
 
 void AppPlatformMetricsServiceTestBase::TearDown() {
@@ -158,7 +153,9 @@ void AppPlatformMetricsServiceTestBase::ResetAppPlatformMetricsService() {
 
   app_platform_metrics_service_->Start(
       AppServiceProxyFactory::GetForProfile(profile())->AppRegistryCache(),
-      AppServiceProxyFactory::GetForProfile(profile())->InstanceRegistry());
+      AppServiceProxyFactory::GetForProfile(profile())->InstanceRegistry(),
+      AppServiceProxyFactory::GetForProfile(profile())
+          ->AppCapabilityAccessCache());
 }
 
 void AppPlatformMetricsServiceTestBase::ModifyInstance(

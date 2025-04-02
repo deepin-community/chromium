@@ -19,8 +19,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/nss_service.h"
 #include "chrome/browser/net/nss_service_factory.h"
-#include "chrome/browser/policy/networking/policy_cert_service.h"
-#include "chrome/browser/policy/networking/policy_cert_service_factory.h"
 #include "chrome/browser/policy/networking/user_network_configuration_updater_ash.h"
 #include "chrome/browser/policy/networking/user_network_configuration_updater_factory.h"
 #include "chrome/browser/policy/profile_policy_connector_builder.h"
@@ -277,7 +275,7 @@ class UserPolicyCertsHelper {
 
 // A class that allows testing multiple profiles in a browsertest, each having
 // its own MockConfigurationPolicyProvider.
-// TODO(https://crbug.com/1127263): Transform this into a general-purpose mixin.
+// TODO(crbug.com/40718963): Transform this into a general-purpose mixin.
 class MultiProfilePolicyProviderHelper {
  public:
   MultiProfilePolicyProviderHelper() = default;
@@ -437,19 +435,6 @@ IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsRegularUserTest, NoTrustAnchor) {
   EXPECT_EQ(net::ERR_CERT_AUTHORITY_INVALID,
             VerifyTestServerCert(multi_profile_policy_helper_.profile_2(),
                                  user_policy_certs_helper_.server_cert()));
-
-  if (PolicyCertServiceFactory::GetForProfile(
-          multi_profile_policy_helper_.profile_1())) {
-    EXPECT_FALSE(PolicyCertServiceFactory::GetForProfile(
-                     multi_profile_policy_helper_.profile_1())
-                     ->UsedPolicyCertificates());
-  }
-  if (PolicyCertServiceFactory::GetForProfile(
-          multi_profile_policy_helper_.profile_2())) {
-    EXPECT_FALSE(PolicyCertServiceFactory::GetForProfile(
-                     multi_profile_policy_helper_.profile_2())
-                     ->UsedPolicyCertificates());
-  }
 }
 
 IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsRegularUserTest, TrustAnchorApplied) {
@@ -459,10 +444,6 @@ IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsRegularUserTest, TrustAnchorApplied) {
   EXPECT_EQ(net::OK,
             VerifyTestServerCert(multi_profile_policy_helper_.profile_1(),
                                  user_policy_certs_helper_.server_cert()));
-
-  EXPECT_TRUE(PolicyCertServiceFactory::GetForProfile(
-                  multi_profile_policy_helper_.profile_1())
-                  ->UsedPolicyCertificates());
 }
 
 // Test that policy provided trust anchors are available in Incognito mode.
@@ -493,16 +474,6 @@ IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsRegularUserTest,
   EXPECT_EQ(net::ERR_CERT_AUTHORITY_INVALID,
             VerifyTestServerCert(multi_profile_policy_helper_.profile_2(),
                                  user_policy_certs_helper_.server_cert()));
-
-  EXPECT_TRUE(PolicyCertServiceFactory::GetForProfile(
-                  multi_profile_policy_helper_.profile_1())
-                  ->UsedPolicyCertificates());
-  if (PolicyCertServiceFactory::GetForProfile(
-          multi_profile_policy_helper_.profile_2())) {
-    EXPECT_FALSE(PolicyCertServiceFactory::GetForProfile(
-                     multi_profile_policy_helper_.profile_2())
-                     ->UsedPolicyCertificates());
-  }
 }
 
 IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsRegularUserTest,
@@ -516,7 +487,7 @@ IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsRegularUserTest,
             VerifyTestServerCert(multi_profile_policy_helper_.profile_1(),
                                  user_policy_certs_helper_.server_cert()));
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  // TODO(https://crbug.com/1127263): That the cert from a secondary user's
+  // TODO(crbug.com/40718963): That the cert from a secondary user's
   // policy is used at all is currently an artifact of the test, which reuses
   // the primary user_manager::User for the secondary Profile.
   // Fix that and then expect ERR_CERT_AUTHORITY_INVALID here too, and rename
@@ -526,8 +497,8 @@ IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsRegularUserTest,
   EXPECT_EQ(net::OK,
             VerifyTestServerCert(multi_profile_policy_helper_.profile_2(),
                                  user_policy_certs_helper_.server_cert()));
-#else  // Implies #if BUILDFLAG(IS_CHROMEOS_LACROS), but this is a generally
-       // correct behavior according to the comment above.
+#else   // Implies #if BUILDFLAG(IS_CHROMEOS_LACROS), but this is a generally
+        // correct behavior according to the comment above.
   EXPECT_EQ(net::ERR_CERT_AUTHORITY_INVALID,
             VerifyTestServerCert(multi_profile_policy_helper_.profile_2(),
                                  user_policy_certs_helper_.server_cert()));
@@ -564,8 +535,9 @@ bool IsCertInCertificateList(
     const net::X509Certificate* cert,
     const ash::NetworkCertLoader::NetworkCertList& network_cert_list) {
   for (const auto& network_cert : network_cert_list) {
-    if (net::x509_util::IsSameCertificate(network_cert.cert(), cert))
+    if (net::x509_util::IsSameCertificate(network_cert.cert(), cert)) {
       return true;
+    }
   }
   return false;
 }
@@ -598,8 +570,7 @@ IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsRegularUserTest,
 }
 
 // Test that the lock screen profile uses the policy provided custom trusted
-// anchors of the primary profile when the
-// `PolicyProvidedTrustAnchorsAllowedAtLockScreen` flag is enabled.
+// anchors of the primary profile .
 IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsRegularUserTest,
                        LockScreenPrimaryProfileCerts) {
   ash::ScreenLockerTester locker;
@@ -620,12 +591,6 @@ IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsRegularUserTest,
   EXPECT_EQ(net::OK,
             VerifyTestServerCert(ash::ProfileHelper::GetLockScreenProfile(),
                                  user_policy_certs_helper_.server_cert()));
-
-  EXPECT_TRUE(PolicyCertServiceFactory::GetForProfile(browser()->profile())
-                  ->UsedPolicyCertificates());
-  EXPECT_TRUE(PolicyCertServiceFactory::GetForProfile(
-                  ash::ProfileHelper::GetLockScreenProfile())
-                  ->UsedPolicyCertificates());
 }
 
 // Test that the lock screen profile doesn't use the policy provided custom
@@ -650,54 +615,6 @@ IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsRegularUserTest,
             VerifyTestServerCert(ash::ProfileHelper::GetLockScreenProfile(),
                                  user_policy_certs_helper_.server_cert()));
 }
-
-class PolicyProvidedCertsLockScreenFeatureTest
-    : public PolicyProvidedCertsRegularUserTest {
- protected:
-  PolicyProvidedCertsLockScreenFeatureTest() {
-    feature_list_.InitAndDisableFeature(
-        ash::features::kPolicyProvidedTrustAnchorsAllowedAtLockScreen);
-  }
-  ~PolicyProvidedCertsLockScreenFeatureTest() override = default;
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-// Test that the lock screen profile does not use the policy provided custom
-// trusted anchors of the primary profile if the
-// PolicyProvidedTrustAnchorsAllowedAtLockScreen flag is disabled.
-IN_PROC_BROWSER_TEST_F(PolicyProvidedCertsLockScreenFeatureTest,
-                       LockScreenPrimaryProfileCertsFlagDisabled) {
-  ash::ScreenLockerTester locker;
-  locker.Lock();
-  // Showing the reauth dialog will create the lock screen profile.
-  ash::LockScreenReauthDialogTestHelper::ShowDialogAndWait();
-  ASSERT_THAT(ash::ProfileHelper::GetLockScreenProfile(), NotNull());
-
-  // Set policy provided trusted anchors on the primary profile.
-  user_policy_certs_helper_.SetRootCertONCUserPolicy(
-      browser()->profile(),
-      multi_profile_policy_helper_.policy_for_profile_1());
-
-  EXPECT_EQ(net::OK,
-            VerifyTestServerCert(browser()->profile(),
-                                 user_policy_certs_helper_.server_cert()));
-  // Verify that the lock screen can't access the policy provided certs.
-  EXPECT_EQ(net::ERR_CERT_AUTHORITY_INVALID,
-            VerifyTestServerCert(ash::ProfileHelper::GetLockScreenProfile(),
-                                 user_policy_certs_helper_.server_cert()));
-
-  EXPECT_TRUE(PolicyCertServiceFactory::GetForProfile(browser()->profile())
-                  ->UsedPolicyCertificates());
-  if (PolicyCertServiceFactory::GetForProfile(
-          ash::ProfileHelper::GetLockScreenProfile())) {
-    EXPECT_FALSE(PolicyCertServiceFactory::GetForProfile(
-                     ash::ProfileHelper::GetLockScreenProfile())
-                     ->UsedPolicyCertificates());
-  }
-}
-
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 }  // namespace

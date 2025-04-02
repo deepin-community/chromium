@@ -27,7 +27,7 @@ const TVariable &sh::CreateInstanceVariable(TSymbolTable &symbolTable,
                                             const TStructure &structure,
                                             const Name &name,
                                             TQualifier qualifier,
-                                            const TSpan<const unsigned int> *arraySizes)
+                                            const angle::Span<const unsigned int> *arraySizes)
 {
     TType *type = new TType(&structure, false);
     type->setQualifier(qualifier);
@@ -196,36 +196,26 @@ void sh::SetArg(TIntermAggregate &call, size_t index, TIntermTyped &arg)
     (*call.getSequence())[index] = &arg;
 }
 
-int sh::GetFieldIndex(const TStructure &structure, const ImmutableString &fieldName)
+TIntermBinary &sh::AccessField(const TVariable &structInstanceVar, const Name &name)
 {
-    const TFieldList &fieldList = structure.fields();
-
-    int i = 0;
-    for (TField *field : fieldList)
-    {
-        if (field->name() == fieldName)
-        {
-            return i;
-        }
-        ++i;
-    }
-
-    return -1;
+    return AccessField(*new TIntermSymbol(&structInstanceVar), name);
 }
 
-TIntermBinary &sh::AccessField(const TVariable &structInstanceVar, const ImmutableString &fieldName)
-{
-    return AccessField(*new TIntermSymbol(&structInstanceVar), fieldName);
-}
-
-TIntermBinary &sh::AccessField(TIntermTyped &object, const ImmutableString &fieldName)
+TIntermBinary &sh::AccessField(TIntermTyped &object, const Name &name)
 {
     const TStructure *structure = object.getType().getStruct();
     ASSERT(structure);
-
-    const int index = GetFieldIndex(*structure, fieldName);
-    ASSERT(index >= 0);
-    return AccessFieldByIndex(object, index);
+    const TFieldList &fieldList = structure->fields();
+    for (int i = 0; i < static_cast<int>(fieldList.size()); ++i)
+    {
+        TField *current = fieldList[i];
+        if (Name(*current) == name)
+        {
+            return AccessFieldByIndex(object, i);
+        }
+    }
+    UNREACHABLE();
+    return AccessFieldByIndex(object, -1);
 }
 
 TIntermBinary &sh::AccessFieldByIndex(TIntermTyped &object, int index)
@@ -279,7 +269,7 @@ TIntermTyped &sh::SubVector(TIntermTyped &vectorNode, int begin, int end)
     TVector<int> offsets(static_cast<size_t>(end - begin));
     std::iota(offsets.begin(), offsets.end(), begin);
     TIntermSwizzle *swizzle = new TIntermSwizzle(vectorNode.deepCopy(), offsets);
-    return *swizzle;
+    return *swizzle->fold(nullptr);  // Swizzles must always be folded to prevent double swizzles.
 }
 
 bool sh::IsScalarBasicType(const TType &type)
@@ -305,7 +295,6 @@ bool sh::HasScalarBasicType(TBasicType type)
     switch (type)
     {
         case TBasicType::EbtFloat:
-        case TBasicType::EbtDouble:
         case TBasicType::EbtInt:
         case TBasicType::EbtUInt:
         case TBasicType::EbtBool:
@@ -423,7 +412,6 @@ TIntermTyped &sh::CoerceSimple(TBasicType toBasicType,
             switch (fromBasicType)
             {
                 case TBasicType::EbtFloat:
-                case TBasicType::EbtDouble:
                 case TBasicType::EbtInt:
                 case TBasicType::EbtUInt:
                 {
@@ -476,7 +464,6 @@ TIntermTyped &sh::CoerceSimple(const TType &toType,
             switch (fromBasicType)
             {
                 case TBasicType::EbtFloat:
-                case TBasicType::EbtDouble:
                 case TBasicType::EbtInt:
                 case TBasicType::EbtUInt:
                 {

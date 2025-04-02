@@ -44,7 +44,8 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdev
       base::RepeatingCallback<void(const InProgressStylusState**)>;
 
   using ReceivedValidInputCallback =
-      base::RepeatingCallback<void(const EventConverterEvdev* converter)>;
+      base::RepeatingCallback<void(const EventConverterEvdev* converter,
+                                   const double input_timestamp_in_seconds)>;
 
   EventConverterEvdev(int fd,
                       const base::FilePath& path,
@@ -151,6 +152,9 @@ class COMPONENT_EXPORT(EVDEV) EventConverterEvdev
 
   // Returns true if the converter is a keyboard and has an assistant key.
   virtual bool HasAssistantKey() const;
+
+  // Returns true if the converter is a keyboard and has a function key.
+  virtual bool HasFunctionKey() const;
 
   // Returns the current state of the stylus garage switch, indicating whether a
   // stylus is inserted in (or attached) to a stylus dock or garage, or has been

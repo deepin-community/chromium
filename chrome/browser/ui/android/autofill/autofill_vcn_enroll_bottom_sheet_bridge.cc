@@ -8,19 +8,22 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "chrome/android/chrome_jni_headers/AutofillVcnEnrollBottomSheetBridge_jni.h"
+#include "chrome/browser/android/resource_mapper.h"
 #include "components/autofill/android/payments/legal_message_line_android.h"
 #include "components/autofill/core/browser/metrics/payments/virtual_card_enrollment_metrics.h"
 #include "components/autofill/core/browser/payments/autofill_virtual_card_enrollment_infobar_delegate_mobile.h"
+#include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/infobars/core/confirm_infobar_delegate.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/web_contents.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/android/java_bitmap.h"
+#include "url/android/gurl_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "chrome/android/chrome_jni_headers/AutofillVcnEnrollBottomSheetBridge_jni.h"
 
 namespace autofill {
-
-using base::android::ConvertUTF16ToJavaString;
 
 AutofillVCNEnrollBottomSheetBridge::AutofillVCNEnrollBottomSheetBridge()
     : java_bridge_(Java_AutofillVcnEnrollBottomSheetBridge_Constructor(
@@ -48,31 +51,37 @@ bool AutofillVCNEnrollBottomSheetBridge::RequestShowContent(
   delegate_ = std::move(delegate);
 
   JNIEnv* env = base::android::AttachCurrentThread();
+  base::android::ScopedJavaLocalRef<jobject> issuer_icon_bitmap = nullptr;
+  int network_icon_resource_id = 0;
+  GURL issuer_icon_url;
+  if (base::FeatureList::IsEnabled(
+          autofill::features::
+              kAutofillEnableVirtualCardJavaPaymentsDataManager)) {
+    network_icon_resource_id = ResourceMapper::MapToJavaDrawableId(
+        delegate_->GetNetworkIconResourceId());
+    issuer_icon_url = delegate_->GetIssuerIconUrl();
+  } else {
+    issuer_icon_bitmap =
+        gfx::ConvertToJavaBitmap(*delegate_->GetIssuerIcon()->bitmap());
+  }
 
   return Java_AutofillVcnEnrollBottomSheetBridge_requestShowContent(
       env, java_bridge_, reinterpret_cast<jlong>(this), java_web_contents,
-      ConvertUTF16ToJavaString(env, delegate_->GetMessageText()),
-      ConvertUTF16ToJavaString(env, delegate_->GetDescriptionText()),
-      ConvertUTF16ToJavaString(env, delegate_->GetLearnMoreLinkText()),
-      ConvertUTF16ToJavaString(
-          env,
-          l10n_util::GetStringFUTF16(
-              IDS_AUTOFILL_VIRTUAL_CARD_CONTAINER_ACCESSIBILITY_DESCRIPTION,
-              delegate_->GetCardLabel())),
-      gfx::ConvertToJavaBitmap(*delegate_->GetIssuerIcon()->bitmap()),
-      ConvertUTF16ToJavaString(env, delegate_->GetCardLabel()),
-      ConvertUTF16ToJavaString(
-          env,
-          l10n_util::GetStringUTF16(IDS_AUTOFILL_VIRTUAL_CARD_ENTRY_PREFIX)),
+      delegate_->GetMessageText(), delegate_->GetDescriptionText(),
+      delegate_->GetLearnMoreLinkText(), issuer_icon_bitmap,
+      network_icon_resource_id, std::move(issuer_icon_url),
+      delegate_->GetCardLabel(),
       LegalMessageLineAndroid::ConvertToJavaLinkedList(
           delegate_->GetGoogleLegalMessage()),
       LegalMessageLineAndroid::ConvertToJavaLinkedList(
           delegate_->GetIssuerLegalMessage()),
-      ConvertUTF16ToJavaString(
-          env, delegate_->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_OK)),
-      ConvertUTF16ToJavaString(
-          env,
-          delegate_->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_CANCEL)));
+      delegate_->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_OK),
+      delegate_->GetButtonLabel(ConfirmInfoBarDelegate::BUTTON_CANCEL));
+}
+
+void AutofillVCNEnrollBottomSheetBridge::Hide() {
+  Java_AutofillVcnEnrollBottomSheetBridge_hide(
+      base::android::AttachCurrentThread(), java_bridge_);
 }
 
 void AutofillVCNEnrollBottomSheetBridge::OnAccept(JNIEnv* env) {
@@ -86,6 +95,7 @@ void AutofillVCNEnrollBottomSheetBridge::OnCancel(JNIEnv* env) {
 void AutofillVCNEnrollBottomSheetBridge::OnDismiss(JNIEnv* env) {
   delegate_->InfoBarDismissed();
 }
+
 void AutofillVCNEnrollBottomSheetBridge::RecordLinkClickMetric(JNIEnv* env,
                                                                int link_type) {
   LogVirtualCardEnrollmentLinkClickedMetric(

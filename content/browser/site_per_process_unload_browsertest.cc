@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <list>
 #include <memory>
 #include <string>
@@ -13,7 +14,6 @@
 #include "base/location.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
 #include "base/test/run_until.h"
@@ -34,6 +34,7 @@
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/common/content_navigation_policy.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/common/isolated_world_ids.h"
 #include "content/public/common/url_constants.h"
 #include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
@@ -356,7 +357,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
   web_contents->GetPrimaryMainFrame()
       ->DisableBeforeUnloadHangMonitorForTesting();
   web_contents->GetPrimaryMainFrame()->ExecuteJavaScriptWithUserGestureForTests(
-      std::u16string(), base::NullCallback());
+      std::u16string(), base::NullCallback(), ISOLATED_WORLD_ID_GLOBAL);
 
   // Hang the first contents in a beforeunload dialog.
   BeforeUnloadBlockingDelegate test_delegate(web_contents);
@@ -458,13 +459,13 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, PagehideHandlerSubframes) {
   // https://html.spec.whatwg.org/multipage/browsing-the-web.html#unloading-documents
   //
   // In process B:
-  auto B1 = base::ranges::find(messages, "B1");
-  auto B2 = base::ranges::find(messages, "B2");
+  auto B1 = std::ranges::find(messages, "B1");
+  auto B2 = std::ranges::find(messages, "B2");
   EXPECT_LT(B1, B2);
 
   // In process C:
-  auto C2 = base::ranges::find(messages, "C2");
-  auto C3 = base::ranges::find(messages, "C3");
+  auto C2 = std::ranges::find(messages, "C2");
+  auto C3 = std::ranges::find(messages, "C3");
   EXPECT_LT(C2, C3);
 
   // Make sure the processes are deleted at some point.
@@ -547,10 +548,10 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest, PagehideHandlerABAB) {
   EXPECT_FALSE(dom_message_queue.PopMessage(&message));
 
   EXPECT_THAT(messages, WhenSorted(ElementsAre("A1", "A2", "B1", "B2")));
-  auto A1 = base::ranges::find(messages, "A1");
-  auto A2 = base::ranges::find(messages, "A2");
-  auto B1 = base::ranges::find(messages, "B1");
-  auto B2 = base::ranges::find(messages, "B2");
+  auto A1 = std::ranges::find(messages, "A1");
+  auto A2 = std::ranges::find(messages, "A2");
+  auto B1 = std::ranges::find(messages, "B1");
+  auto B2 = std::ranges::find(messages, "B2");
   EXPECT_LT(A1, A2);
   EXPECT_LT(B1, B2);
 
@@ -1302,7 +1303,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
     document.querySelector('iframe').remove();
   )"));
   delete_B2.WaitUntilDeleted();
-  // TODO(https://crbug.com/964950): PostMessage called from an unloading frame
+  // TODO(crbug.com/41459857): PostMessage called from an unloading frame
   // must work. A1 must received 'B2 message'. This is not the case here.
   EXPECT_EQ("nothing received", EvalJs(A1, "received_message"));
 }
@@ -1339,7 +1340,7 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
 // 2. Navigate A1 to A3, same-process.
 // 3. A1 requests the browser to detach B1, but this message is dropped.
 // 4. The browser must be resilient and detach B1 when A3 commits.
-// TODO(crbug.com/1449668): Fix flakes and re-enable test.
+// TODO(crbug.com/40914915): Fix flakes and re-enable test.
 IN_PROC_BROWSER_TEST_P(SitePerProcessBrowserTest,
                        DISABLED_SameProcessNavigationResilientToDetachDropped) {
   // The test assumes the previous page gets deleted after navigation. Disable
@@ -1464,12 +1465,12 @@ class SitePerProcessSSLBrowserTest : public SitePerProcessBrowserTest {
 //  2. Go to A3.
 //  3. Go back to A4(B5).
 //
-// TODO(https://crbug.com/960976): history.replaceState is broken in OOPIFs.
+// TODO(crbug.com/41457585): history.replaceState is broken in OOPIFs.
 //
 // This test is similar to PagehideHandlersArePowerfulGrandChild, but with a
 // different frame hierarchy.
 //
-// TODO(crbug/1488371): investigate test flakes and re-enable test.
+// TODO(crbug.com/40283595): investigate test flakes and re-enable test.
 IN_PROC_BROWSER_TEST_P(SitePerProcessSSLBrowserTest,
                        DISABLED_PagehideHandlersArePowerful) {
   // The test expects the previous document to be deleted on navigation.
@@ -1569,12 +1570,12 @@ IN_PROC_BROWSER_TEST_P(SitePerProcessSSLBrowserTest,
 //  2. Go to A4.
 //  3. Go back to A5(B6(C7)).
 //
-// TODO(https://crbug.com/960976): history.replaceState is broken in OOPIFs.
+// TODO(crbug.com/41457585): history.replaceState is broken in OOPIFs.
 //
 // This test is similar to PagehideHandlersArePowerful, but with a different
 // frame hierarchy.
 //
-// TODO(crbug/1488371): investigate test flakes and re-enable test.
+// TODO(crbug.com/40283595): investigate test flakes and re-enable test.
 IN_PROC_BROWSER_TEST_P(SitePerProcessSSLBrowserTest,
                        DISABLED_PagehideHandlersArePowerfulGrandChild) {
   // The test expects the previous document to be deleted on navigation.

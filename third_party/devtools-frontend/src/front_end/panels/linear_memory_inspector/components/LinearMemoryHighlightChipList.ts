@@ -2,14 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import '../../../ui/components/icon_button/icon_button.js';
+
 import * as i18n from '../../../core/i18n/i18n.js';
-import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
-import * as IconButton from '../../../ui/components/icon_button/icon_button.js';
-import * as LitHtml from '../../../ui/lit-html/lit-html.js';
+import * as Lit from '../../../ui/lit/lit.js';
 import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 
-import linearMemoryHighlightChipListStyles from './linearMemoryHighlightChipList.css.js';
-import {type HighlightInfo} from './LinearMemoryViewerUtils.js';
+import linearMemoryHighlightChipListStylesRaw from './linearMemoryHighlightChipList.css.js';
+import type {HighlightInfo} from './LinearMemoryViewerUtils.js';
+
+// TODO(crbug.com/391381439): Fully migrate off of constructed style sheets.
+const linearMemoryHighlightChipListStyles = new CSSStyleSheet();
+linearMemoryHighlightChipListStyles.replaceSync(linearMemoryHighlightChipListStylesRaw.cssContent);
 
 const UIStrings = {
   /**
@@ -27,7 +31,7 @@ const UIStrings = {
 const str_ = i18n.i18n.registerUIStrings(
     'panels/linear_memory_inspector/components/LinearMemoryHighlightChipList.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
-const {render, html} = LitHtml;
+const {render, html} = Lit;
 
 export interface LinearMemoryHighlightChipListData {
   highlightInfos: Array<HighlightInfo>;
@@ -55,8 +59,6 @@ export class JumpToHighlightedMemoryEvent extends Event {
 }
 
 export class LinearMemoryHighlightChipList extends HTMLElement {
-  static readonly litTagName = LitHtml.literal`devtools-linear-memory-highlight-chip-list`;
-
   readonly #shadow = this.attachShadow({mode: 'open'});
   #highlightedAreas: HighlightInfo[] = [];
   #focusedMemoryHighlight?: HighlightInfo;
@@ -87,7 +89,7 @@ export class LinearMemoryHighlightChipList extends HTMLElement {
     // clang-format on
   }
 
-  #createChip(highlightInfo: HighlightInfo): LitHtml.TemplateResult {
+  #createChip(highlightInfo: HighlightInfo): Lit.TemplateResult {
     const expressionName = highlightInfo.name || '<anonymous>';
     const expressionType = highlightInfo.type;
     const isFocused = highlightInfo === this.#focusedMemoryHighlight;
@@ -98,7 +100,7 @@ export class LinearMemoryHighlightChipList extends HTMLElement {
     // Disabled until https://crbug.com/1079231 is fixed.
     // clang-format off
     return html`
-      <div class=${LitHtml.Directives.classMap(classMap)}>
+      <div class=${Lit.Directives.classMap(classMap)}>
         <button class="jump-to-highlight-button" title=${i18nString(UIStrings.jumpToAddress)}
             jslog=${VisualLogging.action('linear-memory-inspector.jump-to-highlight').track({click:true})}
             @click=${():void => this.#onJumpToHighlightClick(highlightInfo.startAddress)}>
@@ -110,12 +112,12 @@ export class LinearMemoryHighlightChipList extends HTMLElement {
           <button class="delete-highlight-button" title=${i18nString(UIStrings.deleteHighlight)}
               jslog=${VisualLogging.action('linear-memory-inspector.delete-highlight').track({click:true})}
               @click=${():void => this.#onDeleteHighlightClick(highlightInfo)}>
-            <${IconButton.Icon.Icon.litTagName} .data=${{
+            <devtools-icon .data=${{
               iconName: 'cross',
               color: 'var(--icon-default-hover)',
               width: '16px',
-              } as IconButton.Icon.IconData}>
-            </${IconButton.Icon.Icon.litTagName}>
+              }}>
+            </devtools-icon>
           </button>
         </div>
       </div>
@@ -132,11 +134,11 @@ export class LinearMemoryHighlightChipList extends HTMLElement {
   }
 }
 
-ComponentHelpers.CustomElements.defineComponent(
+customElements.define(
     'devtools-linear-memory-highlight-chip-list', LinearMemoryHighlightChipList);
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
   interface HTMLElementTagNameMap {
     'devtools-linear-memory-highlight-chip-list': LinearMemoryHighlightChipList;
   }

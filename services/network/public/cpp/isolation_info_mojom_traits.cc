@@ -43,7 +43,6 @@ network::mojom::IsolationInfoRequestType EnumTraits<
   }
 
   NOTREACHED();
-  return network::mojom::IsolationInfoRequestType::kOther;
 }
 
 bool StructTraits<network::mojom::IsolationInfoDataView, net::IsolationInfo>::

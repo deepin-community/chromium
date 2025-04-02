@@ -10,15 +10,17 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
+#include "base/scoped_observation.h"
 #include "base/threading/thread_checker.h"
 #include "components/signin/internal/identity_manager/profile_oauth2_token_service_delegate.h"
+#include "components/signin/public/identity_manager/ios/device_accounts_provider.h"
 
 class AccountTrackerService;
-class DeviceAccountsProvider;
 class SigninClient;
 
 class ProfileOAuth2TokenServiceIOSDelegate
-    : public ProfileOAuth2TokenServiceDelegate {
+    : public ProfileOAuth2TokenServiceDelegate,
+      public DeviceAccountsProvider::Observer {
  public:
   ProfileOAuth2TokenServiceIOSDelegate(
       SigninClient* client,
@@ -42,19 +44,12 @@ class ProfileOAuth2TokenServiceIOSDelegate
   void Shutdown() override;
 
   bool RefreshTokenIsAvailable(const CoreAccountId& account_id) const override;
+  bool RefreshTokenIsAvailableOnDevice(
+      const CoreAccountId& account_id) const override;
 
-  void LoadCredentials(const CoreAccountId& primary_account_id,
-                       bool is_syncing) override;
   std::vector<CoreAccountId> GetAccounts() const override;
 
-  // This method should not be called when using shared authentication.
-  void UpdateCredentials(const CoreAccountId& account_id,
-                         const std::string& refresh_token) override;
-
-  // Removes all credentials from this instance of |ProfileOAuth2TokenService|,
-  // however, it does not revoke the identities from the device.
-  // Subsequent calls to |RefreshTokenIsAvailable| will return |false|.
-  void RevokeAllCredentials() override;
+  std::vector<AccountInfo> GetAccountsOnDevice() const override;
 
   void ReloadAllAccountsFromSystemWithPrimaryAccount(
       const std::optional<CoreAccountId>& primary_account_id) override;
@@ -65,6 +60,11 @@ class ProfileOAuth2TokenServiceIOSDelegate
   // |OnRefreshTokenAvailable| if the account info is updated.
   virtual void AddOrUpdateAccount(const CoreAccountId& account_id);
 
+  // DeviceAccountsProvider::Observer:
+  void OnAccountsOnDeviceChanged() override;
+  void OnAccountOnDeviceUpdated(
+      const DeviceAccountsProvider::AccountInfo& device_account) override;
+
  protected:
   // Removes |account_id| from |accounts_|. Fires |OnRefreshTokenRevoked|
   // if the account info is removed.
@@ -72,6 +72,18 @@ class ProfileOAuth2TokenServiceIOSDelegate
 
  private:
   friend class ProfileOAuth2TokenServiceIOSDelegateTest;
+
+  // ProfileOAuth2TokenServiceDelegate implementation:
+  void LoadCredentialsInternal(const CoreAccountId& primary_account_id,
+                               bool is_syncing) override;
+  // This method should not be called when using shared authentication.
+  void UpdateCredentialsInternal(const CoreAccountId& account_id,
+                                 const std::string& refresh_token) override;
+  // Removes all credentials from this instance of |ProfileOAuth2TokenService|,
+  // however, it does not revoke the identities from the device.
+  // Subsequent calls to |RefreshTokenIsAvailable| will return |false|.
+  void RevokeAllCredentialsInternal(
+      signin_metrics::SourceForRefreshTokenOperation source) override;
 
   // Reloads accounts from the provider. Fires |OnRefreshTokenAvailable| for
   // each new account. Fires |OnRefreshTokenRevoked| for each account that was
@@ -90,5 +102,8 @@ class ProfileOAuth2TokenServiceIOSDelegate
   SigninClient* client_ = nullptr;
   std::unique_ptr<DeviceAccountsProvider> provider_;
   AccountTrackerService* account_tracker_service_;
+  base::ScopedObservation<DeviceAccountsProvider,
+                          ProfileOAuth2TokenServiceIOSDelegate>
+      device_accounts_provider_observation_{this};
 };
 #endif  // COMPONENTS_SIGNIN_INTERNAL_IDENTITY_MANAGER_PROFILE_OAUTH2_TOKEN_SERVICE_DELEGATE_IOS_H_

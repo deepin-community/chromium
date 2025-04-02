@@ -13,11 +13,12 @@
 #include "include/core/SkRefCnt.h"
 #include "include/private/base/SkTArray.h"
 #include "src/gpu/GpuRefCnt.h"
-#include "src/gpu/graphite/AttachmentTypes.h"
 #include "src/gpu/graphite/CommandTypes.h"
 #include "src/gpu/graphite/DrawTypes.h"
 #include "src/gpu/graphite/DrawWriter.h"
 #include "src/gpu/graphite/Resource.h"
+
+#include <optional>
 
 namespace skgpu {
 class RefCntedCallback;
@@ -31,6 +32,8 @@ class DispatchGroup;
 class DrawPass;
 class SharedContext;
 class GraphicsPipeline;
+struct RenderPassDesc;
+class ResourceProvider;
 class Sampler;
 class Texture;
 class TextureProxy;
@@ -38,7 +41,7 @@ class TextureProxy;
 class CommandBuffer {
 public:
     using DrawPassList = skia_private::TArray<std::unique_ptr<DrawPass>>;
-    using DispatchGroupList = skia_private::TArray<std::unique_ptr<DispatchGroup>>;
+    using DispatchGroupSpan = SkSpan<const std::unique_ptr<DispatchGroup>>;
 
     virtual ~CommandBuffer();
 
@@ -60,6 +63,10 @@ public:
     // If any work is needed to create new resources for a fresh command buffer do that here.
     virtual bool setNewCommandBufferResources() = 0;
 
+    virtual bool startTimerQuery() { SK_ABORT("Timer query unsupported."); }
+    virtual void endTimerQuery() { SK_ABORT("Timer query unsupported."); }
+    virtual std::optional<GpuStats> gpuStats() { return {}; }
+
     void addFinishedProc(sk_sp<RefCntedCallback> finishedProc);
     void callFinishedProcs(bool success);
 
@@ -73,14 +80,23 @@ public:
     void addBuffersToAsyncMapOnSubmit(SkSpan<const sk_sp<Buffer>>);
     SkSpan<const sk_sp<Buffer>> buffersToAsyncMapOnSubmit() const;
 
+    // If any recorded draw requires a dst texture copy for blending, that texture must be provided
+    // in `dstCopy`; otherwise it should be null. The `dstReadBounds` are in the same coordinate
+    // space of the logical viewport *before* any replay translation is applied.
+    //
+    // The logical viewport is always (0,0,viewportDims) and matches the "device" coordinate space
+    // of the higher-level SkDevices that recorded the rendering operations. The actual viewport
+    // is automatically adjusted by the replay translation.
     bool addRenderPass(const RenderPassDesc&,
                        sk_sp<Texture> colorTexture,
                        sk_sp<Texture> resolveTexture,
                        sk_sp<Texture> depthStencilTexture,
-                       SkRect viewport,
+                       const Texture* dstCopy,
+                       SkIRect dstReadBounds,
+                       SkISize viewportDims,
                        const DrawPassList& drawPasses);
 
-    bool addComputePass(const DispatchGroupList& dispatchGroups);
+    bool addComputePass(DispatchGroupSpan dispatchGroups);
 
     //---------------------------------------------------------------
     // Can only be used outside renderpasses
@@ -107,31 +123,56 @@ public:
     bool synchronizeBufferToCpu(sk_sp<Buffer>);
     bool clearBuffer(const Buffer* buffer, size_t offset, size_t size);
 
-    // This sets a translation to be applied to any subsequently added command, assuming these
-    // commands are part of a translated replay of a Graphite recording.
-    void setReplayTranslation(SkIVector translation) { fReplayTranslation = translation; }
-    void clearReplayTranslation() { fReplayTranslation = {0, 0}; }
+    // This sets a translation and clip to be applied to any subsequently added command, assuming
+    // these commands are part of a transformed replay of a Graphite recording.
+    void setReplayTranslationAndClip(const SkIVector& translation, const SkIRect& clip) {
+        fReplayTranslation = translation;
+        fReplayClip = clip.makeOffset(translation);
+    }
+
+    Protected isProtected() const { return fIsProtected; }
 
 protected:
-    CommandBuffer();
+    CommandBuffer(Protected);
 
-    SkISize fRenderPassSize;
+    SkISize fColorAttachmentSize;
+    // This is also the origin of the logical viewport relative to the target texture's (0,0) pixel
     SkIVector fReplayTranslation;
+    // This is in target texture space, having been transformed by the replay translation.
+    SkIRect fReplayClip;
+
+    // The texture to use for implementing DstReadStrategy::kTextureCopy for the current render
+    // pass. This is a bare pointer since the CopyTask that initializes the texture's contents
+    // will have tracked the resource on the CommandBuffer already.
+    std::pair<const Texture*, const Sampler*> fDstCopy;
+    // Already includes replay translation and respects final color attachment bounds, but with
+    // dimensions that equal fDstCopy's width and height.
+    SkIRect fDstReadBounds;
+
+    Protected fIsProtected;
 
 private:
     // Release all tracked Resources
     void releaseResources();
 
+    // Subclasses will hold their backend-specific ResourceProvider directly to avoid virtual calls
+    // and access backend-specific behavior, but they can reflect it back to the base CommandBuffer
+    // if it needs to make generic resources.
+    virtual ResourceProvider* resourceProvider() const = 0;
+
     virtual void onResetCommandBuffer() = 0;
 
+    // Renderpass, viewport bounds have already been adjusted by the replay translation. The render
+    // pass bounds has been intersected with the color attachment bounds.
     virtual bool onAddRenderPass(const RenderPassDesc&,
+                                 SkIRect renderPassBounds,
                                  const Texture* colorTexture,
                                  const Texture* resolveTexture,
                                  const Texture* depthStencilTexture,
-                                 SkRect viewport,
+                                 SkIRect viewport,
                                  const DrawPassList& drawPasses) = 0;
 
-    virtual bool onAddComputePass(const DispatchGroupList& dispatchGroups) = 0;
+    virtual bool onAddComputePass(DispatchGroupSpan dispatchGroups) = 0;
 
     virtual bool onCopyBufferToBuffer(const Buffer* srcBuffer,
                                       size_t srcOffset,

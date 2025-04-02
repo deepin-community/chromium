@@ -28,11 +28,9 @@ const int kDownstreamEnrollBillableServiceNumber =
 }  // namespace
 
 GetDetailsForEnrollmentRequest::GetDetailsForEnrollmentRequest(
-    const PaymentsNetworkInterface::GetDetailsForEnrollmentRequestDetails&
-        request_details,
-    base::OnceCallback<void(AutofillClient::PaymentsRpcResult,
-                            const PaymentsNetworkInterface::
-                                GetDetailsForEnrollmentResponseDetails&)>
+    const GetDetailsForEnrollmentRequestDetails& request_details,
+    base::OnceCallback<void(PaymentsAutofillClient::PaymentsRpcResult,
+                            const GetDetailsForEnrollmentResponseDetails&)>
         callback)
     : request_details_(request_details), callback_(std::move(callback)) {}
 
@@ -62,7 +60,6 @@ std::string GetDetailsForEnrollmentRequest::GetRequestContent() {
       break;
     case VirtualCardEnrollmentSource::kNone:
       NOTREACHED();
-      break;
   }
   context.Set("billable_service", billable_service_number);
   if (request_details_.billing_customer_number != 0) {
@@ -90,7 +87,6 @@ std::string GetDetailsForEnrollmentRequest::GetRequestContent() {
       break;
     case VirtualCardEnrollmentSource::kNone:
       NOTREACHED();
-      break;
   }
 
   std::string request_content;
@@ -128,7 +124,7 @@ bool GetDetailsForEnrollmentRequest::IsResponseComplete() {
 }
 
 void GetDetailsForEnrollmentRequest::RespondToDelegate(
-    AutofillClient::PaymentsRpcResult result) {
+    PaymentsAutofillClient::PaymentsRpcResult result) {
   std::move(callback_).Run(result, response_details_);
 }
 

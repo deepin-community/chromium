@@ -2,13 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import './Toolbar.js';
+
 import * as i18n from '../../core/i18n/i18n.js';
 import * as Platform from '../../core/platform/platform.js';
+import * as Buttons from '../../ui/components/buttons/buttons.js';
+import {html, render} from '../lit/lit.js';
 import * as VisualLogging from '../visual_logging/visual_logging.js';
 
 import * as ARIAUtils from './ARIAUtils.js';
-import listWidgetStyles from './listWidget.css.legacy.js';
-import {Toolbar, ToolbarButton} from './Toolbar.js';
+import listWidgetStyles from './listWidget.css.js';
 import {Tooltip} from './Tooltip.js';
 import {createInput, createTextButton, ElementFocusRestorer} from './UIUtils.js';
 import {VBox} from './Widget.js';
@@ -113,8 +116,11 @@ export class ListWidget<T> extends VBox {
     if (this.isTable) {
       element.role = 'rowgroup';
     }
-    element.setAttribute('jslog', `${VisualLogging.item()}`);
-    element.appendChild(this.delegate.renderItem(item, editable));
+    const content = this.delegate.renderItem(item, editable);
+    if (!content.hasAttribute('jslog')) {
+      element.setAttribute('jslog', `${VisualLogging.item()}`);
+    }
+    element.appendChild(content);
     if (editable) {
       element.classList.add('editable');
       element.tabIndex = 0;
@@ -168,19 +174,27 @@ export class ListWidget<T> extends VBox {
     const controls = document.createElement('div');
     controls.classList.add('controls-container');
     controls.classList.add('fill');
-    controls.createChild('div', 'controls-gradient');
 
-    const buttons = controls.createChild('div', 'controls-buttons');
-
-    const toolbar = new Toolbar('', buttons);
-
-    const editButton = new ToolbarButton(i18nString(UIStrings.editString), 'edit', undefined, 'edit-item');
-    editButton.addEventListener(ToolbarButton.Events.Click, onEditClicked.bind(this));
-    toolbar.appendToolbarItem(editButton);
-
-    const removeButton = new ToolbarButton(i18nString(UIStrings.removeString), 'bin', undefined, 'remove-item');
-    removeButton.addEventListener(ToolbarButton.Events.Click, onRemoveClicked.bind(this));
-    toolbar.appendToolbarItem(removeButton);
+    // clang-format off
+    render(html`
+      <div class="controls-gradient"></div>
+      <div class="controls-buttons">
+        <devtools-toolbar>
+          <devtools-button class=toolbar-button
+                           .iconName=${'edit'}
+                           .jslogContext=${'edit-item'}
+                           .title=${i18nString(UIStrings.editString)}
+                           .variant=${Buttons.Button.Variant.ICON}
+                           @click=${onEditClicked}></devtools-button>
+          <devtools-button class=toolbar-button
+                           .iconName=${'bin'}
+                           .jslogContext=${'remove-item'}
+                           .title=${i18nString(UIStrings.removeString)}
+                           .variant=${Buttons.Button.Variant.ICON}
+                           @click=${onRemoveClicked}></devtools-button>
+        </devtools-toolbar>
+      </div>`, controls, {host: this});
+    // clang-format on
 
     return controls;
 
@@ -195,8 +209,10 @@ export class ListWidget<T> extends VBox {
       this.element.focus();
       this.delegate.removeItemRequested(this.items[index], index);
       ARIAUtils.alert(i18nString(UIStrings.removedItem));
-      // focus on the next item in the list, or the last item if we're removing the last item
-      (this.elements[Math.min(index, this.elements.length - 1)] as HTMLElement).focus();
+      if (this.elements.length >= 1) {
+        // focus on the next item in the list, or the last item if we're removing the last item
+        (this.elements[Math.min(index, this.elements.length - 1)] as HTMLElement).focus();
+      }
     }
   }
 
@@ -295,8 +311,8 @@ export type EditorControl<T = string> = (HTMLInputElement|HTMLSelectElement|Cust
 export class Editor<T> {
   element: HTMLDivElement;
   private readonly contentElementInternal: HTMLElement;
-  private commitButton: HTMLButtonElement;
-  private readonly cancelButton: HTMLButtonElement;
+  private commitButton: Buttons.Button.Button;
+  private readonly cancelButton: Buttons.Button.Button;
   private errorMessageContainer: HTMLElement;
   private readonly controls: EditorControl[];
   private readonly controlByName: Map<string, EditorControl>;
@@ -309,6 +325,7 @@ export class Editor<T> {
   constructor() {
     this.element = document.createElement('div');
     this.element.classList.add('editor-container');
+    this.element.setAttribute('jslog', `${VisualLogging.pane('editor').track({resize: true})}`);
     this.element.addEventListener(
         'keydown', onKeyDown.bind(null, Platform.KeyboardUtilities.isEscKey, this.cancelClicked.bind(this)), false);
 
@@ -325,17 +342,17 @@ export class Editor<T> {
     }, this.commitClicked.bind(this)), false);
 
     const buttonsRow = this.element.createChild('div', 'editor-buttons');
-    this.commitButton = createTextButton('', this.commitClicked.bind(this), {
-      jslogContext: 'commit',
-      primary: true,
-    });
-    buttonsRow.appendChild(this.commitButton);
     this.cancelButton = createTextButton(i18nString(UIStrings.cancelString), this.cancelClicked.bind(this), {
       jslogContext: 'cancel',
-      primary: true,
+      variant: Buttons.Button.Variant.OUTLINED,
     });
     this.cancelButton.setAttribute('jslog', `${VisualLogging.action('cancel').track({click: true})}`);
     buttonsRow.appendChild(this.cancelButton);
+    this.commitButton = createTextButton('', this.commitClicked.bind(this), {
+      jslogContext: 'commit',
+      variant: Buttons.Button.Variant.PRIMARY,
+    });
+    buttonsRow.appendChild(this.commitButton);
 
     this.errorMessageContainer = this.element.createChild('div', 'list-widget-input-validation-error');
     ARIAUtils.markAsAlert(this.errorMessageContainer);
@@ -367,7 +384,7 @@ export class Editor<T> {
     const input = (createInput('', type) as HTMLInputElement);
     input.placeholder = title;
     input.addEventListener('input', this.validateControls.bind(this, false), false);
-    input.setAttribute('jslog', `${VisualLogging.textField().track({keydown: true}).context(name)}`);
+    input.setAttribute('jslog', `${VisualLogging.textField().track({change: true, keydown: 'Enter'}).context(name)}`);
     ARIAUtils.setLabel(input, title);
     this.controlByName.set(name, input);
     this.controls.push(input);
@@ -380,11 +397,12 @@ export class Editor<T> {
       title?: string): HTMLSelectElement {
     const select = document.createElement('select');
     select.setAttribute('jslog', `${VisualLogging.dropDown().track({change: true}).context(name)}`);
-    select.classList.add('chrome-select');
     for (let index = 0; index < options.length; ++index) {
-      const option = (select.createChild('option') as HTMLOptionElement);
+      const option = select.createChild('option');
       option.value = options[index];
       option.textContent = options[index];
+      option.setAttribute(
+          'jslog', `${VisualLogging.item(Platform.StringUtilities.toKebabCase(options[index])).track({click: true})}`);
     }
     if (title) {
       Tooltip.install(select, title);

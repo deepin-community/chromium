@@ -26,7 +26,6 @@ idl::ColorMode ColorModeProtoToIdl(proto::PrintSettings_ColorMode color_proto) {
     default:
       NOTREACHED();
   }
-  return idl::ColorMode::kBlackAndWhite;
 }
 
 idl::DuplexMode DuplexModeProtoToIdl(
@@ -41,7 +40,6 @@ idl::DuplexMode DuplexModeProtoToIdl(
     default:
       NOTREACHED();
   }
-  return idl::DuplexMode::kOneSided;
 }
 
 idl::MediaSize MediaSizeProtoToIdl(const proto::MediaSize& media_size_proto) {
@@ -77,7 +75,6 @@ idl::PrintJobSource PrintJobSourceProtoToIdl(
     default:
       NOTREACHED();
   }
-  return idl::PrintJobSource::kPrintPreview;
 }
 
 idl::PrintJobStatus PrintJobStatusProtoToIdl(
@@ -92,7 +89,6 @@ idl::PrintJobStatus PrintJobStatusProtoToIdl(
     default:
       NOTREACHED();
   }
-  return idl::PrintJobStatus::kFailed;
 }
 
 idl::PrinterSource PrinterSourceProtoToIdl(
@@ -105,7 +101,6 @@ idl::PrinterSource PrinterSourceProtoToIdl(
     default:
       NOTREACHED();
   }
-  return idl::PrinterSource::kUser;
 }
 
 idl::Printer PrinterProtoToIdl(const proto::Printer& printer_proto) {
@@ -148,9 +143,7 @@ api::printing::PrinterStatus PrinterErrorCodeToIdl(
     case proto::
         PrintJobInfo_PrinterErrorCode_PrintJobInfo_PrinterErrorCode_INT_MAX_SENTINEL_DO_NOT_USE_:
       NOTREACHED();
-      return api::printing::PrinterStatus::kGenericIssue;
   }
-  return api::printing::PrinterStatus::kGenericIssue;
 }
 
 }  // namespace

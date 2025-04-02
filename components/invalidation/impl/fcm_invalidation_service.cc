@@ -12,15 +12,14 @@
 #include "components/gcm_driver/instance_id/instance_id_driver.h"
 #include "components/invalidation/impl/fcm_network_handler.h"
 #include "components/invalidation/impl/invalidation_prefs.h"
+#include "components/invalidation/public/invalidation_util.h"
 #include "components/invalidation/public/invalidator_state.h"
-#include "components/invalidation/public/topic_data.h"
 #include "components/prefs/scoped_user_pref_update.h"
 
 namespace invalidation {
 namespace {
 constexpr char kApplicationName[] = "com.google.chrome.fcm.invalidations";
 constexpr char kDisableFcmInvalidationsSwitch[] = "disable-fcm-invalidations";
-constexpr char kDeprecatedSyncInvalidationGCMSenderId[] = "8181035976";
 }  // namespace
 
 FCMInvalidationService::FCMInvalidationService(
@@ -47,7 +46,6 @@ FCMInvalidationService::FCMInvalidationService(
 
 FCMInvalidationService::~FCMInvalidationService() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  invalidator_registrar_.UpdateInvalidatorState(INVALIDATOR_SHUTTING_DOWN);
 
   if (IsStarted()) {
     StopInvalidator();
@@ -71,14 +69,6 @@ void FCMInvalidationService::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(prefs::kInvalidationClientIDCache);
 }
 
-// static
-void FCMInvalidationService::ClearDeprecatedPrefs(PrefService* prefs) {
-  if (prefs->HasPrefPath(prefs::kInvalidationClientIDCache)) {
-    ScopedDictPrefUpdate update(prefs, prefs::kInvalidationClientIDCache);
-    update->Remove(kDeprecatedSyncInvalidationGCMSenderId);
-  }
-}
-
 void FCMInvalidationService::AddObserver(InvalidationHandler* handler) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DVLOG(2) << "Registering an invalidation handler";
@@ -93,18 +83,18 @@ bool FCMInvalidationService::HasObserver(
 
 bool FCMInvalidationService::UpdateInterestedTopics(
     InvalidationHandler* handler,
-    const TopicSet& legacy_topic_set) {
+    const TopicSet& topic_set) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   update_was_requested_ = true;
-  DVLOG(2) << "Subscribing to topics: " << legacy_topic_set.size();
-  std::set<TopicData> topic_set;
-  for (const auto& topic_name : legacy_topic_set) {
-    topic_set.insert(TopicData(topic_name, handler->IsPublicTopic(topic_name)));
+  DVLOG(2) << "Subscribing to topics: " << topic_set.size();
+  TopicMap topic_map;
+  for (const auto& topic_name : topic_set) {
+    topic_map[topic_name] = TopicMetadata(handler->IsPublicTopic(topic_name));
   }
-  // TODO(crbug.com/1054404): UpdateRegisteredTopics() should be renamed to
+  // TODO(crbug.com/40675708): UpdateRegisteredTopics() should be renamed to
   // clarify that it actually updates whether topics need subscription (aka
   // interested).
-  if (!invalidator_registrar_.UpdateRegisteredTopics(handler, topic_set)) {
+  if (!invalidator_registrar_.UpdateRegisteredTopics(handler, topic_map)) {
     return false;
   }
   DoUpdateSubscribedTopicsIfNeeded();
@@ -122,11 +112,12 @@ InvalidatorState FCMInvalidationService::GetInvalidatorState() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (invalidation_listener_) {
     DVLOG(2) << "GetInvalidatorState returning "
-             << invalidator_registrar_.GetInvalidatorState();
+             << InvalidatorStateToString(
+                    invalidator_registrar_.GetInvalidatorState());
     return invalidator_registrar_.GetInvalidatorState();
   }
   DVLOG(2) << "Invalidator currently stopped";
-  return STOPPED;
+  return InvalidatorState::kDisabled;
 }
 
 std::string FCMInvalidationService::GetInvalidatorClientId() const {
@@ -154,8 +145,9 @@ void FCMInvalidationService::OnActiveAccountLogout() {
   }
 }
 
-void FCMInvalidationService::OnInvalidate(const Invalidation& invalidation) {
-  invalidator_registrar_.DispatchInvalidationToHandlers(invalidation);
+std::optional<Invalidation> FCMInvalidationService::OnInvalidate(
+    const Invalidation& invalidation) {
+  return invalidator_registrar_.DispatchInvalidationToHandlers(invalidation);
 }
 
 void FCMInvalidationService::OnInvalidatorStateChange(InvalidatorState state) {
@@ -212,8 +204,8 @@ void FCMInvalidationService::StartInvalidator() {
   // the startup cached messages might exists.
   invalidation_listener_ =
       fcm_invalidation_listener_callback_.Run(std::move(network));
-  auto subscription_manager =
-      per_user_topic_subscription_manager_callback_.Run(sender_id_);
+  auto subscription_manager = per_user_topic_subscription_manager_callback_.Run(
+      identity_provider_, pref_service_, sender_id_);
   invalidation_listener_->Start(this, std::move(subscription_manager));
 
   PopulateClientID();

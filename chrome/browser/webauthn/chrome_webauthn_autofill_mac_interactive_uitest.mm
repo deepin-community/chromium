@@ -11,18 +11,22 @@
 #include "chrome/browser/password_manager/chrome_webauthn_credentials_delegate.h"
 #include "chrome/browser/ssl/cert_verifier_browser_test.h"
 #include "chrome/browser/ui/autofill/autofill_popup_controller_impl.h"
+#include "chrome/browser/ui/autofill/autofill_popup_controller_impl_test_api.h"
+#include "chrome/browser/ui/autofill/autofill_suggestion_controller.h"
 #include "chrome/browser/ui/autofill/chrome_autofill_client.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
+#include "chrome/browser/webauthn/chrome_web_authentication_delegate.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
-#include "components/autofill/core/browser/ui/popup_item_ids.h"
+#include "components/autofill/core/browser/suggestions/suggestion_type.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/password_manager/core/browser/password_ui_utils.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "device/fido/features.h"
 #include "device/fido/mac/credential_store.h"
 #include "device/fido/mac/scoped_touch_id_test_environment.h"
 #include "device/fido/public_key_credential_user_entity.h"
@@ -45,6 +49,10 @@ navigator.credentials.get({
 
 class WebAuthnMacAutofillIntegrationTest : public CertVerifierBrowserTest {
  protected:
+  WebAuthnMacAutofillIntegrationTest() {
+    feature_.InitAndEnableFeature(device::kWebAuthnEnclaveAuthenticator);
+  }
+
   void SetUpCommandLine(base::CommandLine* command_line) override {
     CertVerifierBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(switches::kIgnoreCertificateErrors);
@@ -90,6 +98,7 @@ class WebAuthnMacAutofillIntegrationTest : public CertVerifierBrowserTest {
     touch_id_test_environment_->SimulateTouchIdPromptSuccess();
   }
 
+  base::test::ScopedFeatureList feature_;
   net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
   device::fido::mac::AuthenticatorConfig config_;
   std::unique_ptr<device::fido::mac::ScopedTouchIdTestEnvironment>
@@ -105,7 +114,7 @@ IN_PROC_BROWSER_TEST_F(WebAuthnMacAutofillIntegrationTest, SelectAccount) {
       browser()->tab_strip_model()->GetActiveWebContents();
   autofill::ChromeAutofillClient* autofill_client =
       autofill::ChromeAutofillClient::FromWebContentsForTesting(web_contents);
-  autofill_client->KeepPopupOpenForTesting();
+  autofill_client->SetKeepPopupOpenForTesting(true);
 
   // Execute the Conditional UI request.
   content::DOMMessageQueue message_queue(web_contents);
@@ -114,19 +123,19 @@ IN_PROC_BROWSER_TEST_F(WebAuthnMacAutofillIntegrationTest, SelectAccount) {
   // Interact with the username field until the popup shows up. This has the
   // effect of waiting for the browser to send the renderer the password
   // information, and waiting for the UI to render.
-  base::WeakPtr<autofill::AutofillPopupControllerImpl> popup_controller;
-  while (!popup_controller) {
+  base::WeakPtr<autofill::AutofillSuggestionController> controller;
+  while (!controller) {
     content::SimulateMouseClickOrTapElementWithId(web_contents, "username");
-    popup_controller = autofill_client->popup_controller_for_testing();
+    controller = autofill_client->suggestion_controller_for_testing();
   }
 
-  auto suggestions = popup_controller->GetSuggestions();
+  auto suggestions = controller->GetSuggestions();
   size_t suggestion_index;
   autofill::Suggestion webauthn_entry;
   for (suggestion_index = 0; suggestion_index < suggestions.size();
        ++suggestion_index) {
-    if (suggestions[suggestion_index].popup_item_id ==
-        autofill::PopupItemId::kWebauthnCredential) {
+    if (suggestions[suggestion_index].type ==
+        autofill::SuggestionType::kWebauthnCredential) {
       webauthn_entry = suggestions[suggestion_index];
       break;
     }
@@ -135,12 +144,13 @@ IN_PROC_BROWSER_TEST_F(WebAuthnMacAutofillIntegrationTest, SelectAccount) {
   EXPECT_EQ(webauthn_entry.main_text.value, u"flandre");
   EXPECT_EQ(webauthn_entry.labels.at(0).at(0).value,
             l10n_util::GetStringUTF16(
-                IDS_PASSWORD_MANAGER_PASSKEY_FROM_CHROME_PROFILE));
+                IDS_PASSWORD_MANAGER_PASSKEY_FROM_CHROME_PROFILE_NEW));
   EXPECT_EQ(webauthn_entry.icon, autofill::Suggestion::Icon::kGlobe);
 
   // Click the credential.
-  popup_controller->DisableThresholdForTesting(true);
-  popup_controller->AcceptSuggestion(suggestion_index, base::TimeTicks::Now());
+  test_api(static_cast<autofill::AutofillPopupControllerImpl&>(*controller))
+      .DisableThreshold(true);
+  controller->AcceptSuggestion(suggestion_index);
   std::string result;
   ASSERT_TRUE(message_queue.WaitForMessage(&result));
   EXPECT_EQ(result, "\"webauthn: OK\"");

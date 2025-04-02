@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_DESKTOP_WINDOW_TREE_HOST_WIN_H_
 
 #include <shobjidl.h>
+
 #include <wrl/client.h>
 
 #include <memory>
@@ -19,6 +20,7 @@
 #include "chrome/browser/profiles/profile_attributes_storage.h"
 #include "chrome/browser/ui/views/frame/browser_desktop_window_tree_host.h"
 #include "chrome/browser/ui/views/frame/minimize_button_metrics_win.h"
+#include "ui/base/mojom/window_show_state.mojom-forward.h"
 #include "ui/views/widget/desktop_aura/desktop_window_tree_host_win.h"
 
 class BrowserFrame;
@@ -29,7 +31,7 @@ class VirtualDesktopHelper;
 namespace views {
 class DesktopNativeWidgetAura;
 class NativeMenuWin;
-}
+}  // namespace views
 
 class BrowserDesktopWindowTreeHostWin
     : public BrowserDesktopWindowTreeHost,
@@ -57,7 +59,7 @@ class BrowserDesktopWindowTreeHostWin
 
   // Overridden from DesktopWindowTreeHostWin:
   void Init(const views::Widget::InitParams& params) override;
-  void Show(ui::WindowShowState show_state,
+  void Show(ui::mojom::WindowShowState show_state,
             const gfx::Rect& restore_bounds) override;
   std::string GetWorkspace() const override;
   int GetInitialShowState() const override;
@@ -106,7 +108,7 @@ class BrowserDesktopWindowTreeHostWin
                           ProfileAttributesStorage::Observer>
       profile_observation_{this};
 
-  base::win::ScopedHICON icon_handle_;
+  base::win::ScopedGDIObject<HICON> icon_handle_;
 
   // This will be null pre Win10.
   scoped_refptr<VirtualDesktopHelper> virtual_desktop_helper_;

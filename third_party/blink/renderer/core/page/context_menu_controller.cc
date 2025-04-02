@@ -26,13 +26,14 @@
 
 #include "third_party/blink/renderer/core/page/context_menu_controller.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "components/shared_highlighting/core/common/shared_highlighting_features.h"
 #include "third_party/blink/public/common/context_menu_data/context_menu_data.h"
 #include "third_party/blink/public/common/context_menu_data/edit_flags.h"
@@ -43,7 +44,6 @@
 #include "third_party/blink/public/web/web_local_frame_client.h"
 #include "third_party/blink/public/web/web_plugin.h"
 #include "third_party/blink/public/web/web_text_check_client.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_regexp.h"
 #include "third_party/blink/renderer/core/annotation/annotation_agent_container_impl.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
@@ -76,9 +76,12 @@
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/html_anchor_element.h"
 #include "third_party/blink/renderer/core/html/html_document.h"
+#include "third_party/blink/renderer/core/html/html_embed_element.h"
 #include "third_party/blink/renderer/core/html/html_frame_element_base.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
+#include "third_party/blink/renderer/core/html/html_object_element.h"
 #include "third_party/blink/renderer/core/html/html_plugin_element.h"
+#include "third_party/blink/renderer/core/html/media/html_audio_element.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/core/html/media/html_video_element.h"
 #include "third_party/blink/renderer/core/input/context_menu_allowed_scope.h"
@@ -90,7 +93,9 @@
 #include "third_party/blink/renderer/core/page/focus_controller.h"
 #include "third_party/blink/renderer/core/page/page.h"
 #include "third_party/blink/renderer/core/paint/paint_layer.h"
+#include "third_party/blink/renderer/platform/bindings/script_regexp.h"
 #include "third_party/blink/renderer/platform/exported/wrapped_resource_response.h"
+#include "third_party/blink/renderer/platform/wtf/text/character_visitor.h"
 
 namespace blink {
 
@@ -98,50 +103,11 @@ using mojom::blink::FormControlType;
 
 namespace {
 
-constexpr char kPasswordRe[] =
-    // Synonyms and abbreviations of password.
-    "pass(?:word|code)|pas(?:word|code)|pswrd|psw|pswd|pwd|parole|watchword|"
-
-    // Translations.
-    "pasahitza|parol|lozinka|sifr|contrasenya|heslo|adgangskode|losen|"
-    "wachtwoord|paswoord|salasana|passe|contrasinal|passwort|jelszo|"
-    "sandi|signum|slaptazodis|kata|passord|haslo|senha|geslo|contrasena|"
-    "khau";
-
-void SetPasswordManagerData(Element* element, ContextMenuData& data) {
-  // Uses heuristics (finding 'password' and its short versions and translations
-  // in field name and id etc.) to recognize a field intended for password input
-  // of plain text HTML field type or `HasBeenPasswordField` which returns true
-  // due to either server predictions or user's masking of input values. It is
-  // used to set the field is_password_type_by_heuristics.
-  if (auto* input = DynamicTo<HTMLInputElement>(element)) {
-    const AtomicString& id = input->GetIdAttribute();
-    const AtomicString& name = input->GetNameAttribute();
-
-    // TODO(crbug.com/1504626): This should be generic V8PerIsolateData.
-    DEFINE_STATIC_LOCAL(Persistent<ScriptRegexp>, passwordRegexp,
-                        (MakeGarbageCollected<ScriptRegexp>(
-                            element->GetDocument().GetAgent().isolate(),
-                            kPasswordRe, kTextCaseUnicodeInsensitive)));
-
-    data.is_password_type_by_heuristics =
-        (data.form_control_type == mojom::blink::FormControlType::kInputText ||
-         data.form_control_type == mojom::blink::FormControlType::kInputEmail ||
-         data.form_control_type ==
-             mojom::blink::FormControlType::kInputSearch ||
-         data.form_control_type == mojom::blink::FormControlType::kInputUrl ||
-         data.form_control_type == mojom::blink::FormControlType::kTextArea) &&
-        (passwordRegexp->Match(id.GetString()) >= 0 ||
-         passwordRegexp->Match(name.GetString()) >= 0 ||
-         input->HasBeenPasswordField());
-  }
-}
-
 void SetAutofillData(Node* node, ContextMenuData& data) {
   if (auto* form_control = DynamicTo<HTMLFormControlElement>(node)) {
     data.form_control_type = form_control->FormControlType();
     data.field_renderer_id = form_control->GetDomNodeId();
-    if (auto* form = form_control->Form()) {
+    if (auto* form = form_control->GetOwningFormForAutofill()) {
       data.form_renderer_id = form->GetDomNodeId();
     } else {
       data.form_renderer_id = 0;
@@ -209,6 +175,12 @@ void ContextMenuController::Trace(Visitor* visitor) const {
 }
 
 void ContextMenuController::ClearContextMenu() {
+  if (auto* selected_web_frame =
+          WebLocalFrameImpl::FromFrame(hit_test_result_.InnerNodeFrame())) {
+    selected_web_frame->SendAttributionSrc(/*impression=*/std::nullopt,
+                                           /*did_navigate=*/false);
+  }
+
   if (menu_provider_)
     menu_provider_->ContextMenuCleared();
   menu_provider_ = nullptr;
@@ -367,12 +339,18 @@ void ContextMenuController::CustomContextMenuAction(uint32_t action) {
   CustomContextMenuItemSelected(action);
 }
 
-void ContextMenuController::ContextMenuClosed(const KURL& link_followed) {
-  if (link_followed.IsValid()) {
-    WebLocalFrameImpl* selected_web_frame =
-        WebLocalFrameImpl::FromFrame(hit_test_result_.InnerNodeFrame());
-    if (selected_web_frame)
+void ContextMenuController::ContextMenuClosed(
+    const KURL& link_followed,
+    const std::optional<Impression>& impression) {
+  if (auto* selected_web_frame =
+          WebLocalFrameImpl::FromFrame(hit_test_result_.InnerNodeFrame())) {
+    if (link_followed.IsValid()) {
       selected_web_frame->SendPings(link_followed);
+    }
+    if (impression.has_value()) {
+      selected_web_frame->SendAttributionSrc(impression,
+                                             link_followed.IsValid());
+    }
   }
   ClearContextMenu();
 }
@@ -659,9 +637,7 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
           GURL(HitTestResult::AbsoluteImageURL(potential_image_node));
       data.media_type = mojom::blink::ContextMenuDataMediaType::kImage;
       data.media_flags |= ContextMenuData::kMediaCanPrint;
-      data.has_image_contents =
-          HitTestResult::GetImage(potential_image_node) &&
-          !HitTestResult::GetImage(potential_image_node)->IsNull();
+      data.has_image_contents = HitTestResult::GetImage(potential_image_node);
     }
   }
   // If it's not a link, an image, a media element, or an image/media link,
@@ -688,16 +664,12 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
             .Utf8();
     WebRange range =
         selected_frame->GetInputMethodController().GetSelectionOffsets();
-    data.selection_start_offset = range.StartOffset();
-    // TODO(crbug.com/850954): Remove redundant log after we identified the
-    // issue.
-    CHECK_GE(data.selection_start_offset, 0)
-        << "Log issue against https://crbug.com/850954\n"
-        << "data.selection_start_offset: " << data.selection_start_offset
-        << "\nrange: [" << range.StartOffset() << ", " << range.EndOffset()
-        << "]\nVisibleSelection: "
-        << selected_frame->Selection()
-               .ComputeVisibleSelectionInDOMTreeDeprecated();
+    // TODO(crbug.com/40093243): `range.StartOffset()` shouldn't be negative but
+    // it happens. crbug.com/40093243#comment28 suggested not to show context
+    // menu. For now, prefer showing it at wrong place/data than not showing.
+    if (range.StartOffset() >= 0) {
+      data.selection_start_offset = range.StartOffset();
+    }
     if (!result.IsContentEditable()) {
       TextFragmentHandler::OpenedContextMenuOverSelection(selected_frame);
       AnnotationAgentContainerImpl* annotation_container =
@@ -710,7 +682,7 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
   // If there is a text fragment at the same location as the click indicate that
   // the context menu is being opened from an existing highlight.
   if (result.InnerNodeFrame()) {
-    result.InnerNodeFrame()->View()->UpdateLifecycleToPrePaintClean(
+    result.InnerNodeFrame()->View()->UpdateAllLifecyclePhasesExceptPaint(
         DocumentUpdateReason::kHitTest);
     if (TextFragmentHandler::IsOverTextFragment(result)) {
       data.opened_from_highlight = true;
@@ -729,35 +701,27 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
         spell_checker.SelectMisspellingAsync();
     const String& misspelled_word = misspelled_word_and_description.first;
     if (misspelled_word.length()) {
-      data.misspelled_word =
-          WebString::FromUTF8(misspelled_word.Utf8()).Utf16();
+      data.misspelled_word = WebString(misspelled_word).Utf16();
       const String& description = misspelled_word_and_description.second;
       if (description.length()) {
-        // Suggestions were cached for the misspelled word (won't be true for
-        // Hunspell, or Windows platform spellcheck if the
-        // kWinRetrieveSuggestionsOnlyOnDemand feature flag is set).
+        // Suggestions were cached for the misspelled word (not true for
+        // Hunspell or Windows platform spellcheck).
         Vector<String> suggestions;
         description.Split('\n', suggestions);
-        WebVector<std::u16string> web_suggestions(suggestions.size());
-        base::ranges::transform(suggestions, web_suggestions.begin(),
-                                [](const String& s) {
-                                  return WebString::FromUTF8(s.Utf8()).Utf16();
-                                });
-        data.dictionary_suggestions = web_suggestions.ReleaseVector();
+        data.dictionary_suggestions = base::ToVector(
+            suggestions, [](const String& s) { return WebString(s).Utf16(); });
       } else if (spell_checker.GetTextCheckerClient()) {
         // No suggestions cached for the misspelled word. Retrieve suggestions
         // for it (Windows platform spellchecker will do this later from
         // SpellingMenuObserver::InitMenu on the browser process side to avoid a
         // blocking IPC here).
         size_t misspelled_offset, misspelled_length;
-        WebVector<WebString> web_suggestions;
+        std::vector<WebString> suggestions;
         spell_checker.GetTextCheckerClient()->CheckSpelling(
             WebString::FromUTF16(data.misspelled_word), misspelled_offset,
-            misspelled_length, &web_suggestions);
-        WebVector<std::u16string> suggestions(web_suggestions.size());
-        base::ranges::transform(web_suggestions, suggestions.begin(),
-                                &WebString::Utf16);
-        data.dictionary_suggestions = suggestions.ReleaseVector();
+            misspelled_length, &suggestions);
+        data.dictionary_suggestions =
+            base::ToVector(suggestions, &WebString::Utf16);
       }
     }
   }
@@ -784,9 +748,10 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
 
   if (menu_provider_) {
     // Filter out custom menu elements and add them into the data.
-    data.custom_items = menu_provider_->PopulateContextMenu().ReleaseVector();
+    data.custom_items = menu_provider_->PopulateContextMenu();
   }
 
+  // TODO(crbug.com/369219144): Should this be DynamicTo<HTMLAnchorElementBase>?
   if (auto* anchor = DynamicTo<HTMLAnchorElement>(result.URLElement())) {
     // Extract suggested filename for same-origin URLS for saving file.
     const SecurityOrigin* origin =
@@ -802,26 +767,13 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
       data.referrer_policy = network::mojom::ReferrerPolicy::kNever;
 
     data.link_text = anchor->innerText().Utf8();
+  }
 
-    if (const AtomicString& attribution_src_value =
-            anchor->FastGetAttribute(html_names::kAttributionsrcAttr);
-        !attribution_src_value.IsNull()) {
-      // TODO(crbug.com/1381123): Support background attributionsrc requests
-      // if attribute value is non-empty.
-
-      // An impression should be attached to the navigation regardless of
-      // whether a background request would have been allowed or attempted.
-      if (!data.impression) {
-        if (AttributionSrcLoader* attribution_src_loader =
-                selected_frame->GetAttributionSrcLoader();
-            attribution_src_loader->CanRegister(result.AbsoluteLinkURL(),
-                                                /*element=*/anchor,
-                                                /*request_id=*/std::nullopt)) {
-          data.impression = blink::Impression{
-              .runtime_features = attribution_src_loader->GetRuntimeFeatures(),
-          };
-        }
-      }
+  if (auto* anchor = DynamicTo<HTMLAnchorElementBase>(result.URLElement())) {
+    if (AttributionSrcLoader* attribution_src_loader =
+            selected_frame->GetAttributionSrcLoader()) {
+      data.impression = attribution_src_loader->PrepareContextMenuNavigation(
+          result.AbsoluteLinkURL(), anchor);
     }
   }
 
@@ -829,7 +781,6 @@ bool ContextMenuController::ShowContextMenu(LocalFrame* frame,
   data.source_type = source_type;
 
   SetAutofillData(result.InnerNode(), data);
-  SetPasswordManagerData(result.InnerElement(), data);
 
   const bool from_touch = source_type == kMenuSourceTouch ||
                           source_type == kMenuSourceLongPress ||

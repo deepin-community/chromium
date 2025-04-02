@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "components/signin/internal/identity_manager/account_capabilities_fetcher.h"
 
 #include <optional>
+#include <string_view>
 
 #include "account_capabilities_fetcher.h"
 #include "base/notreached.h"
@@ -28,7 +34,7 @@
 #include "components/signin/internal/identity_manager/account_capabilities_fetcher_android.h"
 #include "components/signin/public/android/test_support_jni_headers/AccountCapabilitiesFetcherTestUtil_jni.h"
 #else
-#include "base/strings/string_piece.h"
+
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "components/prefs/testing_pref_service.h"
@@ -74,10 +80,9 @@ class TestSupportAndroid {
   }
 
   void AddAccount(const CoreAccountInfo& account_info) {
-    JNIEnv* env = base::android::AttachCurrentThread();
     signin::Java_AccountCapabilitiesFetcherTestUtil_expectAccount(
-        env, java_test_util_ref_,
-        ConvertToJavaCoreAccountInfo(env, account_info));
+        base::android::AttachCurrentThread(), java_test_util_ref_,
+        account_info);
   }
 
   std::unique_ptr<AccountCapabilitiesFetcher> CreateFetcher(
@@ -113,8 +118,7 @@ class TestSupportAndroid {
                           const AccountCapabilities& capabilities) {
     JNIEnv* env = base::android::AttachCurrentThread();
     signin::Java_AccountCapabilitiesFetcherTestUtil_returnCapabilities(
-        env, java_test_util_ref_,
-        ConvertToJavaCoreAccountInfo(env, account_info),
+        env, java_test_util_ref_, account_info,
         capabilities.ConvertToJavaAccountCapabilities(env));
   }
 
@@ -129,17 +133,17 @@ const char kAccountCapabilitiesResponseFormat[] =
     R"({"accountCapabilities": [%s]})";
 
 const char kSingleCapabilitiyResponseFormat[] =
-    R"({"name": "%s", "booleanValue": %s})";
+    R"({"name": "%.*s", "booleanValue": %s})";
 
 const char kCapabilityParamName[] = "names=";
 
 std::string GenerateValidAccountCapabilitiesResponse(bool capability_value) {
   std::vector<std::string> dict_array;
-  for (const std::string& name :
+  for (std::string_view name :
        AccountCapabilitiesTestMutator::GetSupportedAccountCapabilityNames()) {
     dict_array.push_back(
-        base::StringPrintf(kSingleCapabilitiyResponseFormat, name.c_str(),
-                           capability_value ? "true" : "false"));
+        base::StringPrintf(kSingleCapabilitiyResponseFormat, name.size(),
+                           name.data(), capability_value ? "true" : "false"));
   }
   return base::StringPrintf(kAccountCapabilitiesResponseFormat,
                             base::JoinString(dict_array, ",").c_str());
@@ -147,13 +151,13 @@ std::string GenerateValidAccountCapabilitiesResponse(bool capability_value) {
 
 void VerifyAccountCapabilitiesRequest(const network::ResourceRequest& request) {
   EXPECT_EQ(request.method, "POST");
-  base::StringPiece request_string = request.request_body->elements()
-                                         ->at(0)
-                                         .As<network::DataElementBytes>()
-                                         .AsStringPiece();
+  std::string_view request_string = request.request_body->elements()
+                                        ->at(0)
+                                        .As<network::DataElementBytes>()
+                                        .AsStringPiece();
   // The request body should look like:
   // "names=Name1&names=Name2&names=Name3"
-  std::vector<std::string> requested_capabilities = base::SplitString(
+  std::vector<std::string_view> requested_capabilities = base::SplitStringPiece(
       request_string, "&", base::KEEP_WHITESPACE, base::SPLIT_WANT_ALL);
   for (auto& name : requested_capabilities) {
     EXPECT_TRUE(base::StartsWith(name, kCapabilityParamName));

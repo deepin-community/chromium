@@ -9,7 +9,6 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/autocomplete/chrome_autocomplete_provider_client.h"
 #include "chrome/browser/extensions/extension_action_test_util.h"
@@ -23,7 +22,7 @@
 #include "chrome/browser/signin/chrome_signin_client_test_util.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/web_data_service_factory.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "components/omnibox/browser/autocomplete_classifier.h"
@@ -36,7 +35,7 @@
 #include "content/public/test/test_utils.h"
 #include "services/network/test/test_url_loader_factory.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/input_method/input_method_configuration.h"
 #include "ui/base/ime/ash/mock_input_method_manager_impl.h"
 #endif
@@ -47,20 +46,15 @@ std::unique_ptr<KeyedService> CreateTemplateURLService(
     content::BrowserContext* context) {
   Profile* profile = Profile::FromBrowserContext(context);
   return std::make_unique<TemplateURLService>(
-      profile->GetPrefs(),
-      search_engines::SearchEngineChoiceServiceFactory::GetForProfile(profile),
+      *profile->GetPrefs(),
+      *search_engines::SearchEngineChoiceServiceFactory::GetForProfile(profile),
       std::make_unique<UIThreadSearchTermsData>(),
       WebDataServiceFactory::GetKeywordWebDataForProfile(
           profile, ServiceAccessType::EXPLICIT_ACCESS),
       std::make_unique<ChromeTemplateURLServiceClient>(
           HistoryServiceFactory::GetForProfile(
               profile, ServiceAccessType::EXPLICIT_ACCESS)),
-      base::RepeatingClosure()
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-          ,
-      profile->IsMainProfile()
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
-  );
+      base::RepeatingClosure());
 }
 
 std::unique_ptr<KeyedService> CreateAutocompleteClassifier(
@@ -78,7 +72,7 @@ std::unique_ptr<KeyedService> CreateAutocompleteClassifier(
 TestWithBrowserView::~TestWithBrowserView() = default;
 
 void TestWithBrowserView::SetUp() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::input_method::InitializeForTesting(
       new ash::input_method::MockInputMethodManagerImpl);
 #endif
@@ -104,7 +98,7 @@ void TestWithBrowserView::TearDown() {
   content::RunAllTasksUntilIdle();
 
   BrowserWithTestWindowTest::TearDown();
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   ash::input_method::Shutdown();
 #endif
 }
@@ -138,7 +132,8 @@ std::unique_ptr<BrowserWindow> TestWithBrowserView::CreateBrowserWindow() {
 }
 
 TestingProfile::TestingFactories TestWithBrowserView::GetTestingFactories() {
-  return {{ChromeSigninClientFactory::GetInstance(),
-           base::BindRepeating(&BuildChromeSigninClientWithURLLoader,
-                               test_url_loader_factory())}};
+  return {TestingProfile::TestingFactory{
+      ChromeSigninClientFactory::GetInstance(),
+      base::BindRepeating(&BuildChromeSigninClientWithURLLoader,
+                          test_url_loader_factory())}};
 }

@@ -15,18 +15,19 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/enterprise/connectors/connectors_service.h"
-#include "chrome/browser/enterprise/connectors/reporting/metrics_utils.h"
 #include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client.h"
 #include "chrome/browser/enterprise/connectors/reporting/realtime_reporting_client_factory.h"
-#include "chrome/browser/enterprise/connectors/reporting/reporting_service_settings.h"
 #include "chrome/browser/policy/dm_token_utils.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/enterprise/common/proto/connectors.pb.h"
+#include "components/enterprise/connectors/core/common.h"
+#include "components/enterprise/connectors/core/reporting_service_settings.h"
 #include "components/policy/core/common/cloud/mock_cloud_policy_client.h"
 #include "content/public/test/browser_task_environment.h"
 #include "extensions/browser/test_event_router.h"
+#include "net/base/network_interfaces.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -51,12 +52,16 @@
 #endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+#include "chrome/browser/enterprise/profile_management/profile_management_features.h"
+#include "chrome/browser/enterprise/signin/enterprise_signin_prefs.h"
 #include "components/device_signals/core/browser/signals_types.h"
 #endif
 
 using testing::_;
 
 namespace enterprise_connectors {
+
+namespace {
 
 std::unique_ptr<KeyedService> BuildRealtimeReportingClient(
     content::BrowserContext* context) {
@@ -99,6 +104,7 @@ class RealtimeReportingClientTestBase : public testing::Test {
   raw_ptr<TestingProfile> profile_ = nullptr;
   raw_ptr<extensions::TestEventRouter> event_router_ = nullptr;
 };
+}  // namespace
 
 // Tests to make sure the feature flag and policy control real-time reporting
 // as expected.  The parameter for these tests is a tuple of bools:
@@ -129,6 +135,9 @@ class RealtimeReportingClientIsRealtimeReportingEnabledTest
 
   void SetUp() override {
     RealtimeReportingClientTestBase::SetUp();
+    reporting_client_ =
+        enterprise_connectors::RealtimeReportingClientFactory::GetForProfile(
+            profile_);
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
     auto user_manager = std::make_unique<ash::FakeChromeUserManager>();
@@ -164,6 +173,7 @@ class RealtimeReportingClientIsRealtimeReportingEnabledTest
 
  protected:
   base::test::ScopedFeatureList scoped_feature_list_;
+  raw_ptr<RealtimeReportingClient> reporting_client_ = nullptr;
   const bool is_feature_flag_enabled_;
   const bool is_public_session_;
 
@@ -173,24 +183,46 @@ class RealtimeReportingClientIsRealtimeReportingEnabledTest
 #endif
 };
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+class RealtimeReportingClientOidcTest : public RealtimeReportingClientTestBase {
+ public:
+  RealtimeReportingClientOidcTest() {
+    scoped_feature_list_.InitAndEnableFeature(
+        profile_management::features::kOidcAuthProfileManagement);
+  }
+
+  void SetUp() override {
+    RealtimeReportingClientTestBase::SetUp();
+    profile_->GetPrefs()->SetString(enterprise_signin::prefs::kProfileUserEmail,
+                                    "oidc@user.email");
+  }
+
+ protected:
+  base::test::ScopedFeatureList scoped_feature_list_;
+};
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+
 TEST_P(RealtimeReportingClientIsRealtimeReportingEnabledTest,
        ShouldInitRealtimeReportingClient) {
   EXPECT_EQ(should_init(),
-            RealtimeReportingClient::ShouldInitRealtimeReportingClient());
+            reporting_client_->ShouldInitRealtimeReportingClient());
 }
 
 INSTANTIATE_TEST_SUITE_P(All,
                          RealtimeReportingClientIsRealtimeReportingEnabledTest,
                          testing::Combine(testing::Bool(), testing::Bool()));
 
-class RealtimeReportingClientUmaTest : public RealtimeReportingClientTestBase {
+class RealtimeReportingClientUmaTest
+    : public RealtimeReportingClientTestBase,
+      public testing::WithParamInterface<bool> {
  public:
+  bool is_profile_reporting() { return GetParam(); }
+
   void SetUp() override {
     RealtimeReportingClientTestBase::SetUp();
     reporting_client_ =
         enterprise_connectors::RealtimeReportingClientFactory::GetForProfile(
             profile_);
-    reporting_client_->SetBrowserCloudPolicyClientForTesting(client_.get());
   }
 
  protected:
@@ -199,16 +231,27 @@ class RealtimeReportingClientUmaTest : public RealtimeReportingClientTestBase {
   policy::CloudPolicyClient::ResultCallback upload_callback;
 };
 
-TEST_F(RealtimeReportingClientUmaTest, TestUmaEventUploadSucceeds) {
+TEST_P(RealtimeReportingClientUmaTest, TestUmaEventUploadSucceeds) {
+// Profile reporting is not supported on Ash.
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  if (is_profile_reporting()) {
+    return;
+  }
+#endif
+
+  is_profile_reporting()
+      ? reporting_client_->SetProfileCloudPolicyClientForTesting(client_.get())
+      : reporting_client_->SetBrowserCloudPolicyClientForTesting(client_.get());
+
   ReportingSettings settings;
+  settings.per_profile = is_profile_reporting();
   base::Value::Dict event;
 
-  EXPECT_CALL(*client_.get(), UploadSecurityEventReport(_, _, _, _))
-      .WillOnce(MoveArg<3>(&upload_callback));
+  EXPECT_CALL(*client_.get(), UploadSecurityEventReport(_, _, _))
+      .WillOnce(MoveArg<2>(&upload_callback));
 
-  reporting_client_->ReportRealtimeEvent(
-      ReportingServiceSettings::kExtensionInstallEvent, std::move(settings),
-      std::move(event));
+  reporting_client_->ReportRealtimeEvent(kExtensionInstallEvent,
+                                         std::move(settings), std::move(event));
 
   std::move(upload_callback)
       .Run(policy::CloudPolicyClient::Result(policy::DM_STATUS_SUCCESS));
@@ -219,16 +262,27 @@ TEST_F(RealtimeReportingClientUmaTest, TestUmaEventUploadSucceeds) {
   histogram_.ExpectTotalCount("Enterprise.ReportingEventUploadFailure", 0);
 }
 
-TEST_F(RealtimeReportingClientUmaTest, TestUmaEventUploadFails) {
+TEST_P(RealtimeReportingClientUmaTest, TestUmaEventUploadFails) {
+// Profile reporting is not supported on Ash.
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  if (is_profile_reporting()) {
+    return;
+  }
+#endif
+
+  is_profile_reporting()
+      ? reporting_client_->SetProfileCloudPolicyClientForTesting(client_.get())
+      : reporting_client_->SetBrowserCloudPolicyClientForTesting(client_.get());
+
   ReportingSettings settings;
+  settings.per_profile = is_profile_reporting();
   base::Value::Dict event;
 
-  EXPECT_CALL(*client_.get(), UploadSecurityEventReport(_, _, _, _))
-      .WillOnce(MoveArg<3>(&upload_callback));
+  EXPECT_CALL(*client_.get(), UploadSecurityEventReport(_, _, _))
+      .WillOnce(MoveArg<2>(&upload_callback));
 
-  reporting_client_->ReportRealtimeEvent(
-      ReportingServiceSettings::kExtensionInstallEvent, std::move(settings),
-      std::move(event));
+  reporting_client_->ReportRealtimeEvent(kExtensionInstallEvent,
+                                         std::move(settings), std::move(event));
 
   std::move(upload_callback)
       .Run(policy::CloudPolicyClient::Result(policy::DM_STATUS_REQUEST_FAILED));
@@ -239,12 +293,25 @@ TEST_F(RealtimeReportingClientUmaTest, TestUmaEventUploadFails) {
   histogram_.ExpectTotalCount("Enterprise.ReportingEventUploadSuccess", 0);
 }
 
+TEST_F(RealtimeReportingClientUmaTest, TestEventLocalIp) {
+  base::Value::List local_ips = reporting_client_->GetLocalIpAddresses();
+  EXPECT_FALSE(local_ips.empty());
+  for (const auto& ip_address : local_ips) {
+    std::string_view str_view(ip_address.GetString());
+    std::optional<net::IPAddress> local_ip =
+        net::IPAddress::FromIPLiteral(str_view);
+    EXPECT_TRUE(local_ip->IsValid());
+    EXPECT_FALSE(local_ip->IsZero());
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(All, RealtimeReportingClientUmaTest, testing::Bool());
+
 TEST_F(RealtimeReportingClientTestBase,
        TestEventNameToUmaEnumMapIncludesAllEvents) {
-  EXPECT_EQ(sizeof(ReportingServiceSettings::kAllReportingEvents) /
-                sizeof(ReportingServiceSettings::kAllReportingEvents[0]),
+  EXPECT_EQ(sizeof(kAllReportingEvents) / sizeof(kAllReportingEvents[0]),
             kEventNameToUmaEnumMap.size());
-  for (const char* eventName : ReportingServiceSettings::kAllReportingEvents) {
+  for (const char* eventName : kAllReportingEvents) {
     EXPECT_TRUE(kEventNameToUmaEnumMap.contains(eventName));
   }
 }
@@ -283,6 +350,14 @@ TEST_F(RealtimeReportingClientTestBase,
   AddCrowdstrikeSignalsToEvent(event, response);
   EXPECT_EQ(event.Find("securityAgents"), nullptr);
 }
+
+TEST_F(RealtimeReportingClientOidcTest, Username) {
+  RealtimeReportingClient client(profile_);
+  ASSERT_EQ(client.GetProfileUserName(), "oidc@user.email");
+}
+
+// TODO(b/342232001): Add more tests for the `RealtimeReportingClientOidcTest`
+// fixture to cover key use cases.
 
 #endif
 }  // namespace enterprise_connectors

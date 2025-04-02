@@ -2,8 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "gpu/vulkan/vulkan_device_queue.h"
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cstring>
 #include <unordered_set>
@@ -12,7 +19,6 @@
 
 #include "base/feature_list.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/memory_dump_manager.h"
@@ -53,6 +59,30 @@ VkDeviceSize GetPreferredVMALargeHeapBlockSize() {
   DCHECK(std::has_single_bit(block_size));
   return block_size;
 }
+
+#if BUILDFLAG(IS_ANDROID)
+class VulkanMetric final
+    : public base::android::PreFreezeBackgroundMemoryTrimmer::PreFreezeMetric {
+ public:
+  explicit VulkanMetric(VmaAllocator vma_allocator)
+      : PreFreezeMetric("Vulkan"), vma_allocator_(vma_allocator) {
+    base::android::PreFreezeBackgroundMemoryTrimmer::RegisterMemoryMetric(this);
+  }
+
+  ~VulkanMetric() override {
+    base::android::PreFreezeBackgroundMemoryTrimmer::UnregisterMemoryMetric(
+        this);
+  }
+
+ private:
+  std::optional<uint64_t> Measure() const override {
+    auto allocated_used = vma::GetTotalAllocatedAndUsedMemory(vma_allocator_);
+    return allocated_used.first;
+  }
+  VmaAllocator vma_allocator_;
+};
+#endif  // BUILDFLAG(IS_ANDROID)
+
 }  // anonymous namespace
 
 VulkanDeviceQueue::VulkanDeviceQueue(VkInstance vk_instance)
@@ -83,6 +113,7 @@ bool VulkanDeviceQueue::Initialize(
   DCHECK_EQ(static_cast<VkQueue>(VK_NULL_HANDLE), vk_queue_);
   DCHECK_EQ(static_cast<VmaAllocator>(VK_NULL_HANDLE), owned_vma_allocator_);
   DCHECK_EQ(static_cast<VmaAllocator>(VK_NULL_HANDLE), vma_allocator_);
+  DCHECK_EQ(nullptr, angle_display_);
 
   if (VK_NULL_HANDLE == vk_instance_)
     return false;
@@ -92,18 +123,22 @@ bool VulkanDeviceQueue::Initialize(
   VkResult result = VK_SUCCESS;
 
   VkQueueFlags queue_flags = 0;
-  if (options & DeviceQueueOption::GRAPHICS_QUEUE_FLAG)
+  if (options & DeviceQueueOption::GRAPHICS_QUEUE_FLAG) {
     queue_flags |= VK_QUEUE_GRAPHICS_BIT;
+  }
+  if (allow_protected_memory) {
+    queue_flags |= VK_QUEUE_PROTECTED_BIT;
+  }
 
   // We prefer to use discrete GPU, integrated GPU is the second, and then
   // others.
-  static constexpr int kDeviceTypeScores[] = {
+  static constexpr auto kDeviceTypeScores = std::to_array<int>({
       0,  // VK_PHYSICAL_DEVICE_TYPE_OTHER
       3,  // VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
       4,  // VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
       2,  // VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU
       1,  // VK_PHYSICAL_DEVICE_TYPE_CPU
-  };
+  });
   static_assert(VK_PHYSICAL_DEVICE_TYPE_OTHER == 0, "");
   static_assert(VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU == 1, "");
   static_assert(VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU == 2, "");
@@ -196,11 +231,11 @@ bool VulkanDeviceQueue::Initialize(
 
   std::vector<const char*> enabled_extensions;
   for (const char* extension : required_extensions) {
-    if (base::ranges::none_of(physical_device_info.extensions,
-                              [extension](const VkExtensionProperties& p) {
-                                return std::strcmp(extension,
-                                                   p.extensionName) == 0;
-                              })) {
+    if (std::ranges::none_of(physical_device_info.extensions,
+                             [extension](const VkExtensionProperties& p) {
+                               return std::strcmp(extension, p.extensionName) ==
+                                      0;
+                             })) {
       // On Fuchsia, some device extensions are provided by layers.
       // TODO(penghuang): checking extensions against layer device extensions
       // too.
@@ -214,11 +249,11 @@ bool VulkanDeviceQueue::Initialize(
   }
 
   for (const char* extension : optional_extensions) {
-    if (base::ranges::none_of(physical_device_info.extensions,
-                              [extension](const VkExtensionProperties& p) {
-                                return std::strcmp(extension,
-                                                   p.extensionName) == 0;
-                              })) {
+    if (std::ranges::none_of(physical_device_info.extensions,
+                             [extension](const VkExtensionProperties& p) {
+                               return std::strcmp(extension, p.extensionName) ==
+                                      0;
+                             })) {
       DLOG(ERROR) << "Optional Vulkan extension " << extension
                   << " is not supported.";
     } else {
@@ -249,9 +284,13 @@ bool VulkanDeviceQueue::Initialize(
       base::StringPrintf("0x%04x", vk_physical_device_properties_.vendorID));
   crash_keys::vulkan_device_id.Set(
       base::StringPrintf("0x%04x", vk_physical_device_properties_.deviceID));
-  static const char* kDeviceTypeNames[] = {
-      "other", "integrated", "discrete", "virtual", "cpu",
-  };
+  static auto kDeviceTypeNames = std::to_array<const char*>({
+      "other",
+      "integrated",
+      "discrete",
+      "virtual",
+      "cpu",
+  });
   uint32_t gpu_type = vk_physical_device_properties_.deviceType;
   if (gpu_type >= std::size(kDeviceTypeNames))
     gpu_type = 0;
@@ -348,6 +387,12 @@ bool VulkanDeviceQueue::Initialize(
 
   allow_protected_memory_ = allow_protected_memory;
 
+#if BUILDFLAG(IS_ANDROID)
+  if (!metric_) {
+    metric_ = std::make_unique<VulkanMetric>(vma_allocator());
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
+
   if (base::SingleThreadTaskRunner::HasCurrentDefault()) {
     base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
         this, "vulkan", base::SingleThreadTaskRunner::GetCurrentDefault());
@@ -380,6 +425,11 @@ bool VulkanDeviceQueue::InitCommon(VkPhysicalDevice vk_physical_device,
                          /*heap_size_limit=*/nullptr,
                          /*is_thread_safe =*/false, &owned_vma_allocator_);
     vma_allocator_ = owned_vma_allocator_;
+#if BUILDFLAG(IS_ANDROID)
+    if (!metric_) {
+      metric_ = std::make_unique<VulkanMetric>(vma_allocator());
+    }
+#endif  // BUILDFLAG(IS_ANDROID)
   }
 
   cleanup_helper_ = std::make_unique<VulkanFenceHelper>(this);
@@ -430,6 +480,7 @@ bool VulkanDeviceQueue::InitializeFromANGLE() {
   if (!enabled_device_features_2_from_angle_)
     return false;
 
+  angle_display_ = gl::QueryDisplayFromANGLE();
   return InitCommon(vk_physical_device, vk_device, vk_queue, vk_queue_index,
                     enabled_extensions);
 }
@@ -448,6 +499,7 @@ bool VulkanDeviceQueue::InitializeForCompositorGpuThread(
     VkPhysicalDevice vk_physical_device,
     VkDevice vk_device,
     VkQueue vk_queue,
+    void* vk_queue_lock_context,
     uint32_t vk_queue_index,
     gfx::ExtensionSet enabled_extensions,
     const VkPhysicalDeviceFeatures2& vk_physical_device_features2,
@@ -464,8 +516,10 @@ bool VulkanDeviceQueue::InitializeForCompositorGpuThread(
   // during GpuServiceImpl init. At this point none of the gpu threads would be
   // doing read access until GpuServiceImpl init completed. Hence its safe to
   // access map here.
+  // If the Vulkan queue is queried from ANGLE, ANGLE's internal locking needs
+  // to be used.
   GetVulkanFunctionPointers()->per_queue_lock_map[vk_queue] =
-      std::make_unique<base::Lock>();
+      std::make_unique<gpu::VulkanQueueLock>(vk_queue_lock_context);
   enabled_device_features_2_ = vk_physical_device_features2;
 
   // Note that CompositorGpuThread uses same vma allocator as gpu main thread.
@@ -477,6 +531,9 @@ bool VulkanDeviceQueue::InitializeForCompositorGpuThread(
 void VulkanDeviceQueue::Destroy() {
   base::trace_event::MemoryDumpManager::GetInstance()->UnregisterDumpProvider(
       this);
+#if BUILDFLAG(IS_ANDROID)
+  metric_ = nullptr;
+#endif
 
   if (cleanup_helper_) {
     cleanup_helper_->Destroy();

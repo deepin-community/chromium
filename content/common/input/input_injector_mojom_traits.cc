@@ -30,7 +30,6 @@ EnumTraits<content::mojom::PointerActionType,
   }
 
   NOTREACHED();
-  return content::mojom::PointerActionType::kMaxValue;
 }
 
 // static
@@ -67,7 +66,6 @@ bool EnumTraits<content::mojom::PointerActionType,
   }
 
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -91,7 +89,6 @@ EnumTraits<content::mojom::SyntheticButton,
   }
 
   NOTREACHED();
-  return content::mojom::SyntheticButton::kMaxValue;
 }
 
 // static
@@ -121,7 +118,6 @@ bool EnumTraits<content::mojom::SyntheticButton,
   }
 
   NOTREACHED();
-  return false;
 }
 
 // static

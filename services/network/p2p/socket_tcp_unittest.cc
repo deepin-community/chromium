@@ -7,13 +7,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <array>
 #include <memory>
 #include <string_view>
 
+#include "base/containers/span.h"
 #include "base/memory/raw_ptr.h"
+#include "base/numerics/byte_conversions.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
-#include "base/sys_byteorder.h"
 #include "base/test/bind.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/task_environment.h"
@@ -100,11 +103,8 @@ class P2PSocketTcpTestBase : public testing::Test {
   }
 
   std::string IntToSize(int size) {
-    std::string result;
-    uint16_t size16 = base::HostToNet16(size);
-    result.resize(sizeof(size16));
-    memcpy(&result[0], &size16, sizeof(size16));
-    return result;
+    return std::string(base::as_string_view(
+        base::U16ToBigEndian(base::checked_cast<uint16_t>(size))));
   }
 
   base::test::TaskEnvironment task_environment_;
@@ -192,7 +192,7 @@ TEST_F(P2PSocketTcpTest, ReceiveStun) {
   EXPECT_CALL(*this, SinglePacketReceptionHelper(_, SpanEq(packet3), _));
 
   size_t pos = 0;
-  size_t step_sizes[] = {3, 2, 1};
+  auto step_sizes = std::to_array<size_t>({3, 2, 1});
   size_t step = 0;
   while (pos < received_data.size()) {
     size_t step_size = std::min(step_sizes[step], received_data.size() - pos);
@@ -331,7 +331,8 @@ TEST_F(P2PSocketTcpTest, SendDataWithPacketOptions) {
   std::vector<uint8_t> packet;
   CreateRandomPacket(&packet);
   // Make it a RTP packet.
-  *reinterpret_cast<uint16_t*>(&*packet.begin()) = base::HostToNet16(0x8000);
+  base::span(packet).first<2>().copy_from(
+      base::U16ToBigEndian(uint16_t{0x8000}));
   socket_impl_->Send(packet, P2PPacketInfo(dest_.ip_address, options, 0));
 
   std::string expected_data;
@@ -419,7 +420,7 @@ TEST_F(P2PSocketStunTcpTest, ReceiveStun) {
   EXPECT_CALL(*this, SinglePacketReceptionHelper(_, SpanEq(packet3), _));
 
   size_t pos = 0;
-  size_t step_sizes[] = {3, 2, 1};
+  auto step_sizes = std::to_array<size_t>({3, 2, 1});
   size_t step = 0;
   while (pos < received_data.size()) {
     size_t step_size = std::min(step_sizes[step], received_data.size() - pos);
@@ -531,7 +532,7 @@ TEST(P2PSocketTcpWithPseudoTlsTest, Basic) {
 TEST(P2PSocketTcpWithPseudoTlsTest, Hostname) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(
-      net::features::kSplitHostCacheByNetworkIsolationKey);
+      net::features::kPartitionConnectionsByNetworkIsolationKey);
 
   const char kHostname[] = "foo.test";
   base::test::TaskEnvironment task_environment(

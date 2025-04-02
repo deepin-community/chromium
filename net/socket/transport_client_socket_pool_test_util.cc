@@ -50,10 +50,7 @@ class MockConnectClientSocket : public TransportClientSocket {
   MockConnectClientSocket& operator=(const MockConnectClientSocket&) = delete;
 
   // TransportClientSocket implementation.
-  int Bind(const net::IPEndPoint& local_addr) override {
-    NOTREACHED();
-    return ERR_FAILED;
-  }
+  int Bind(const net::IPEndPoint& local_addr) override { NOTREACHED(); }
   // StreamSocket implementation.
   int Connect(CompletionOnceCallback callback) override {
     connected_ = true;
@@ -79,7 +76,9 @@ class MockConnectClientSocket : public TransportClientSocket {
   const NetLogWithSource& NetLog() const override { return net_log_; }
 
   bool WasEverUsed() const override { return false; }
-  NextProto GetNegotiatedProtocol() const override { return kProtoUnknown; }
+  NextProto GetNegotiatedProtocol() const override {
+    return NextProto::kProtoUnknown;
+  }
   bool GetSSLInfo(SSLInfo* ssl_info) override { return false; }
   int64_t GetTotalReceivedBytes() const override {
     NOTIMPLEMENTED();
@@ -121,10 +120,7 @@ class MockFailingClientSocket : public TransportClientSocket {
   MockFailingClientSocket& operator=(const MockFailingClientSocket&) = delete;
 
   // TransportClientSocket implementation.
-  int Bind(const net::IPEndPoint& local_addr) override {
-    NOTREACHED();
-    return ERR_FAILED;
-  }
+  int Bind(const net::IPEndPoint& local_addr) override { NOTREACHED(); }
 
   // StreamSocket implementation.
   int Connect(CompletionOnceCallback callback) override {
@@ -144,7 +140,9 @@ class MockFailingClientSocket : public TransportClientSocket {
   const NetLogWithSource& NetLog() const override { return net_log_; }
 
   bool WasEverUsed() const override { return false; }
-  NextProto GetNegotiatedProtocol() const override { return kProtoUnknown; }
+  NextProto GetNegotiatedProtocol() const override {
+    return NextProto::kProtoUnknown;
+  }
   bool GetSSLInfo(SSLInfo* ssl_info) override { return false; }
   int64_t GetTotalReceivedBytes() const override {
     NOTIMPLEMENTED();
@@ -230,10 +228,7 @@ class MockTriggerableClientSocket : public TransportClientSocket {
   }
 
   // TransportClientSocket implementation.
-  int Bind(const net::IPEndPoint& local_addr) override {
-    NOTREACHED();
-    return ERR_FAILED;
-  }
+  int Bind(const net::IPEndPoint& local_addr) override { NOTREACHED(); }
 
   // StreamSocket implementation.
   int Connect(CompletionOnceCallback callback) override {
@@ -262,7 +257,9 @@ class MockTriggerableClientSocket : public TransportClientSocket {
   const NetLogWithSource& NetLog() const override { return net_log_; }
 
   bool WasEverUsed() const override { return false; }
-  NextProto GetNegotiatedProtocol() const override { return kProtoUnknown; }
+  NextProto GetNegotiatedProtocol() const override {
+    return NextProto::kProtoUnknown;
+  }
   bool GetSSLInfo(SSLInfo* ssl_info) override { return false; }
   int64_t GetTotalReceivedBytes() const override {
     NOTIMPLEMENTED();
@@ -369,7 +366,6 @@ MockTransportClientSocketFactory::CreateDatagramClientSocket(
     NetLog* net_log,
     const NetLogSource& source) {
   NOTREACHED();
-  return nullptr;
 }
 
 std::unique_ptr<TransportClientSocket>
@@ -384,7 +380,7 @@ MockTransportClientSocketFactory::CreateTransportClientSocket(
   Rule rule(client_socket_type_);
   if (!rules_.empty()) {
     rule = rules_.front();
-    rules_ = rules_.subspan(1);
+    rules_ = rules_.subspan<1>();
   }
 
   if (rule.expected_addresses) {
@@ -430,7 +426,6 @@ MockTransportClientSocketFactory::CreateTransportClientSocket(
     }
     default:
       NOTREACHED();
-      return std::make_unique<MockConnectClientSocket>(addresses, net_log_);
   }
 }
 

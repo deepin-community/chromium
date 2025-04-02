@@ -3,26 +3,25 @@
 // This source code is licensed under the BSD-style license found in the
 // LICENSE file in the root directory of this source tree.
 
-#include <stdio.h>
 #include <assert.h>
-#include <math.h>
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include <xnnpack.h>
-#include <xnnpack/allocator.h>
-#include <xnnpack/config.h>
-#include <xnnpack/operator.h>
-#include <xnnpack/operator-type.h>
-#include <xnnpack/log.h>
-#include <xnnpack/common.h>
-#include <xnnpack/math.h>
-#include <xnnpack/params.h>
-#include <xnnpack/indirection.h>
-
+#include "xnnpack.h"
+#include "xnnpack/allocator.h"
+#include "xnnpack/common.h"
+#include "xnnpack/compute.h"
+#include "xnnpack/config-types.h"
+#include "xnnpack/config.h"
+#include "xnnpack/indirection.h"
+#include "xnnpack/log.h"
+#include "xnnpack/math.h"
+#include "xnnpack/operator-type.h"
+#include "xnnpack/operator.h"
+#include "xnnpack/params.h"
+#include "pthreadpool.h"
 
 enum xnn_status create_resize_bilinear2d_nchw(
     size_t output_height,
@@ -92,7 +91,7 @@ enum xnn_status xnn_create_resize_bilinear2d_nchw_f16(
 {
   const struct xnn_ibilinear_chw_config* ibilinear_chw_config = xnn_init_f16_ibilinear_chw_config();
   if (ibilinear_chw_config == NULL) {
-    printf("failed to create %s operator: unsupported hardware configuration",
+    xnn_log_error("failed to create %s operator: unsupported hardware configuration",
                   xnn_operator_type_to_string(xnn_operator_type_resize_bilinear_nchw_f16));
     return xnn_status_unsupported_hardware;
   }
@@ -114,7 +113,7 @@ enum xnn_status xnn_create_resize_bilinear2d_nchw_f32(
 {
   const struct xnn_ibilinear_chw_config* ibilinear_chw_config = xnn_init_f32_ibilinear_chw_config();
   if (ibilinear_chw_config == NULL) {
-    printf("QQQfailed to create %s operator: unsupported hardware configuration",
+    xnn_log_error("failed to create %s operator: unsupported hardware configuration",
                   xnn_operator_type_to_string(xnn_operator_type_resize_bilinear_nchw_f32));
     return xnn_status_unsupported_hardware;
   }
@@ -265,22 +264,19 @@ static enum xnn_status reshape_resize_bilinear2d_nchw(
     .ukernel = ibilinear_chw->ukernel,
   };
 
-  #if XNN_TEST_MODE
-    const size_t output_channel_tile = ibilinear_chw->channel_tile;
-  #else
-    size_t output_channel_tile = channels;
-    const size_t num_threads = pthreadpool_get_threads_count(threadpool);
-    if (num_threads > 1) {
-      const size_t target_tiles_per_thread = 4;
-      const size_t max_channel_tile = divide_round_up(output_channel_tile, num_threads * target_tiles_per_thread);
-      if (max_channel_tile < output_channel_tile) {
-        const uint32_t output_channel_subtile = ibilinear_chw->channel_tile;
-        output_channel_tile =
-          min(output_channel_tile,
-            divide_round_up(output_channel_tile, max_channel_tile * output_channel_subtile) * output_channel_subtile);
-      }
+  size_t output_channel_tile = channels;
+  const size_t num_threads = pthreadpool_get_threads_count(threadpool);
+  if (num_threads > 1) {
+    const size_t target_tiles_per_thread = 4;
+    const size_t max_channel_tile = divide_round_up(output_channel_tile, num_threads * target_tiles_per_thread);
+    if (max_channel_tile < output_channel_tile) {
+      const uint32_t output_channel_subtile = ibilinear_chw->channel_tile;
+      output_channel_tile =
+        min(output_channel_tile,
+          divide_round_up(output_channel_tile, max_channel_tile * output_channel_subtile) * output_channel_subtile);
     }
-  #endif
+  }
+
   resize_op->compute[0].type = xnn_parallelization_type_2d_tile_1d;
   resize_op->compute[0].task_2d_tile_1d = (pthreadpool_task_2d_tile_1d_t) xnn_compute_resize_bilinear_chw;
   resize_op->compute[0].range[0] = batch_size;

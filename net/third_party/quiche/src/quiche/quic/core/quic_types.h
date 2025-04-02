@@ -275,6 +275,7 @@ enum QuicFrameType : uint8_t {
   NEW_TOKEN_FRAME,
   RETIRE_CONNECTION_ID_FRAME,
   ACK_FREQUENCY_FRAME,
+  IMMEDIATE_ACK_FRAME,
   RESET_STREAM_AT_FRAME,
 
   NUM_FRAME_TYPES
@@ -332,6 +333,8 @@ enum QuicIetfFrameType : uint64_t {
   IETF_APPLICATION_CLOSE = 0x1d,
 
   IETF_HANDSHAKE_DONE = 0x1e,
+  // See draft-ietf-quic-ack-frequency.
+  IETF_IMMEDIATE_ACK = 0x1f,
 
   // The MESSAGE frame type has not yet been fully standardized.
   // QUIC versions starting with 46 and before 99 use 0x20-0x21.
@@ -453,6 +456,7 @@ enum CongestionControlType {
   kGoogCC,
   kBBRv2,  // TODO(rch): This is effectively BBRv3. We should finish the
            // implementation and rename this enum.
+  kPragueCubic,
 };
 
 QUICHE_EXPORT std::string CongestionControlTypeToString(
@@ -645,6 +649,9 @@ enum MessageStatus {
                            // write blocked.
   MESSAGE_STATUS_TOO_LARGE,  // Failed to send message because the message is
                              // too large to fit into a single packet.
+  MESSAGE_STATUS_SETTINGS_NOT_RECEIVED,  // Failed to send message because
+                                         // SETTINGS frame has not been received
+                                         // yet.
   MESSAGE_STATUS_INTERNAL_ERROR,  // Failed to send message because connection
                                   // reaches an invalid state.
 };
@@ -855,6 +862,9 @@ struct QUICHE_EXPORT QuicSSLConfig {
   bool ech_grease_enabled = false;
 };
 
+QUICHE_EXPORT bool operator==(const QuicSSLConfig& lhs,
+                              const QuicSSLConfig& rhs);
+
 // QuicDelayedSSLConfig contains a subset of SSL config that can be applied
 // after BoringSSL's early select certificate callback. This overwrites all SSL
 // configs applied before cert selection.
@@ -869,15 +879,18 @@ struct QUICHE_EXPORT QuicDelayedSSLConfig {
 // ParsedClientHello contains client hello information extracted from a fully
 // received client hello.
 struct QUICHE_EXPORT ParsedClientHello {
-  std::string sni;                         // QUIC crypto and TLS.
-  std::string uaid;                        // QUIC crypto only.
-  std::vector<uint16_t> supported_groups;  // TLS only.
-  std::vector<std::string> alpns;          // QUIC crypto and TLS.
+  std::string sni;                               // QUIC crypto and TLS.
+  std::string uaid;                              // QUIC crypto only.
+  std::vector<uint16_t> supported_groups;        // TLS only.
+  std::vector<uint16_t> cert_compression_algos;  // TLS only.
+  std::vector<std::string> alpns;                // QUIC crypto and TLS.
   // The unvalidated retry token from the last received packet of a potentially
   // multi-packet client hello. TLS only.
   std::string retry_token;
   bool resumption_attempted = false;  // TLS only.
   bool early_data_attempted = false;  // TLS only.
+
+  std::string ToString() const;
 };
 
 QUICHE_EXPORT bool operator==(const ParsedClientHello& a,

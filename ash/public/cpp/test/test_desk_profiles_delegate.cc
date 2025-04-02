@@ -4,8 +4,8 @@
 
 #include "ash/public/cpp/test/test_desk_profiles_delegate.h"
 
-#include "base/containers/cxx20_erase_vector.h"
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+#include <vector>
 
 namespace ash {
 
@@ -28,7 +28,7 @@ void TestDeskProfilesDelegate::UpdateTestProfile(LacrosProfileSummary profile) {
 bool TestDeskProfilesDelegate::RemoveTestProfile(uint64_t profile_id) {
   CHECK(profile_id != primary_user_profile_id_);
 
-  if (base::EraseIf(profiles_, [&](const auto& profile) {
+  if (std::erase_if(profiles_, [&](const auto& profile) {
         return profile.profile_id == profile_id;
       })) {
     for (auto& observer : observers_) {
@@ -61,8 +61,8 @@ TestDeskProfilesDelegate::GetProfilesSnapshotByProfileId(
     profile_id = primary_user_profile_id_;
   }
 
-  const auto iter = base::ranges::find(profiles_, profile_id,
-                                       &LacrosProfileSummary::profile_id);
+  const auto iter = std::ranges::find(profiles_, profile_id,
+                                      &LacrosProfileSummary::profile_id);
   return iter == profiles_.end() ? nullptr : &(*iter);
 }
 

@@ -2,25 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/memory/raw_ptr.h"
-#include "chrome/browser/ash/extensions/autotest_private/autotest_private_api.h"
-
 #include <memory>
 
 #include "ash/ambient/ambient_ui_settings.h"
 #include "ash/app_list/app_list_public_test_util.h"
 #include "ash/app_list/views/search_box_view.h"
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/session/connection_holder.h"
-#include "ash/components/arc/test/arc_task_window_builder.h"
-#include "ash/components/arc/test/arc_util_test_support.h"
-#include "ash/components/arc/test/connection_holder_util.h"
-#include "ash/components/arc/test/fake_app_instance.h"
-#include "ash/components/arc/test/fake_arc_session.h"
-#include "ash/components/arc/test/fake_process_instance.h"
-#include "ash/constants/ash_features.h"
 #include "ash/public/cpp/ambient/ambient_prefs.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
 #include "ash/public/cpp/holding_space/holding_space_prefs.h"
@@ -28,8 +14,10 @@
 #include "ash/public/cpp/test/app_list_test_api.h"
 #include "ash/public/cpp/test/shell_test_api.h"
 #include "base/json/json_writer.h"
+#include "base/memory/raw_ptr.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -43,6 +31,7 @@
 #include "chrome/browser/ash/arc/tracing/arc_app_performance_tracing.h"
 #include "chrome/browser/ash/arc/tracing/arc_app_performance_tracing_session.h"
 #include "chrome/browser/ash/arc/tracing/test/arc_app_performance_tracing_test_helper.h"
+#include "chrome/browser/ash/extensions/autotest_private/autotest_private_api.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/ash/system_web_apps/test_support/test_system_web_app_installation.h"
 #include "chrome/browser/browser_process.h"
@@ -50,7 +39,17 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_prefs.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chromeos/ash/components/standalone_browser/feature_refs.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/session/connection_holder.h"
+#include "chromeos/ash/experiences/arc/test/arc_task_window_builder.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
+#include "chromeos/ash/experiences/arc/test/connection_holder_util.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
+#include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
+#include "chromeos/ash/experiences/arc/test/fake_process_instance.h"
+#include "components/device_event_log/device_event_log.h"
 #include "components/feature_engagement/public/feature_constants.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
@@ -64,6 +63,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
+#include "services/viz/privileged/mojom/compositing/features.mojom-features.h"
 #include "ui/aura/window.h"
 #include "ui/events/event_utils.h"
 #include "ui/events/test/event_generator.h"
@@ -117,19 +117,13 @@ class TestSearchProvider : public app_list::SearchProvider {
 class AutotestPrivateApiTest : public ExtensionApiTest {
  public:
   AutotestPrivateApiTest() {
-    // App pin syncing code makes an untitled Play Store icon appear in the
-    // shelf. Sync isn't relevant to this test, so skip pinned app sync.
-    // https://crbug.com/1085597
-    ChromeShelfPrefs::SetSkipPinnedAppsFromSyncForTest(true);
+    feature_list_.InitAndEnableFeature(viz::mojom::EnableVizTestApis);
   }
 
   AutotestPrivateApiTest(const AutotestPrivateApiTest&) = delete;
   AutotestPrivateApiTest& operator=(const AutotestPrivateApiTest&) = delete;
 
-  ~AutotestPrivateApiTest() override {
-    ChromeShelfPrefs::SetSkipPinnedAppsFromSyncForTest(false);
-  }
-
+  ~AutotestPrivateApiTest() override = default;
   void SetUpCommandLine(base::CommandLine* command_line) override {
     ExtensionApiTest::SetUpCommandLine(command_line);
     // Make ARC enabled for tests.
@@ -167,14 +161,23 @@ class AutotestPrivateApiTest : public ExtensionApiTest {
   }
 
   ash::ScopedTestingCrosSettings scoped_testing_cros_settings_;
+  base::test::ScopedFeatureList feature_list_;
 };
 
-IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest, AutotestPrivate) {
+// TODO(crbug.com/356369542): Fix flakiness on sanitizer bots.
+
+#if defined(ADDRESS_SANITIZER) || defined(LEAK_SANITIZER) ||  \
+    BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+#define MAYBE_AutotestPrivate DISABLED_AutotestPrivate
+#else
+#define MAYBE_AutotestPrivate AutotestPrivate
+#endif
+IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest, MAYBE_AutotestPrivate) {
   ASSERT_TRUE(RunAutotestPrivateExtensionTest("default")) << message_;
 }
 
 // Set of tests where ARC is enabled and test apps and packages are registered.
-// TODO(https://crbug.com/1514431): re-enable the following test.
+// TODO(crbug.com/41486987): re-enable the following test.
 #if defined(ADDRESS_SANITIZER) || defined(LEAK_SANITIZER)
 #define MAYBE_AutotestPrivateArcEnabled DISABLED_AutotestPrivateArcEnabled
 #else
@@ -235,7 +238,14 @@ IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest,
   arc::SetArcPlayStoreEnabledForProfile(profile(), false);
 }
 
-IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest, AutotestPrivateArcProcess) {
+// TODO(crbug.com/331532893): Flaky on ASan/LSan.
+#if defined(ADDRESS_SANITIZER) || defined(LEAK_SANITIZER)
+#define MAYBE_AutotestPrivateArcProcess DISABLED_AutotestPrivateArcProcess
+#else
+#define MAYBE_AutotestPrivateArcProcess AutotestPrivateArcProcess
+#endif
+IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest,
+                       MAYBE_AutotestPrivateArcProcess) {
   arc::FakeProcessInstance fake_process_instance;
   arc::ArcServiceManager::Get()->arc_bridge_service()->process()->SetInstance(
       &fake_process_instance);
@@ -266,15 +276,6 @@ IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest, IsFeatureEnabled) {
 class AutotestPrivateHoldingSpaceApiTest
     : public AutotestPrivateApiTest,
       public ::testing::WithParamInterface<bool /* mark_time_of_first_add */> {
- public:
-  AutotestPrivateHoldingSpaceApiTest() {
-    // TODO(crbug.com/1382945): Parameterize.
-    scoped_feature_list_.InitAndDisableFeature(
-        ash::features::kHoldingSpacePredictability);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 INSTANTIATE_TEST_SUITE_P(All,
@@ -371,7 +372,7 @@ IN_PROC_BROWSER_TEST_F(AutotestPrivateApiOverviewTest, Drag) {
 
   ui::GestureEvent long_press(
       start_point.x(), start_point.y(), 0, ui::EventTimeForNow(),
-      ui::GestureEventDetails(ui::ET_GESTURE_LONG_PRESS));
+      ui::GestureEventDetails(ui::EventType::kGestureLongPress));
   generator.Dispatch(&long_press);
 
   // 50 is arbitrary number of dip to move a bit to ensure the item is being
@@ -398,7 +399,7 @@ IN_PROC_BROWSER_TEST_F(AutotestPrivateApiOverviewTest, PrimarySnapped) {
 
   ui::GestureEvent long_press(
       start_point.x(), start_point.y(), 0, ui::EventTimeForNow(),
-      ui::GestureEventDetails(ui::ET_GESTURE_LONG_PRESS));
+      ui::GestureEventDetails(ui::EventType::kGestureLongPress));
   generator.Dispatch(&long_press);
 
   generator.MoveTouch(end_point);
@@ -410,7 +411,7 @@ IN_PROC_BROWSER_TEST_F(AutotestPrivateApiOverviewTest, PrimarySnapped) {
 
 class AutotestPrivateWithPolicyApiTest : public AutotestPrivateApiTest {
  public:
-  AutotestPrivateWithPolicyApiTest() {}
+  AutotestPrivateWithPolicyApiTest() = default;
 
   AutotestPrivateWithPolicyApiTest(const AutotestPrivateWithPolicyApiTest&) =
       delete;
@@ -524,42 +525,6 @@ class AutotestPrivateSystemWebAppsTest : public AutotestPrivateApiTest {
 
 IN_PROC_BROWSER_TEST_F(AutotestPrivateSystemWebAppsTest, SystemWebApps) {
   ASSERT_TRUE(RunAutotestPrivateExtensionTest("systemWebApps")) << message_;
-}
-
-class AutotestPrivateLacrosTest : public AutotestPrivateApiTest {
- public:
-  AutotestPrivateLacrosTest(const AutotestPrivateLacrosTest&) = delete;
-  AutotestPrivateLacrosTest& operator=(const AutotestPrivateLacrosTest&) =
-      delete;
-
- protected:
-  AutotestPrivateLacrosTest() {
-    feature_list_.InitWithFeatures(
-        ash::standalone_browser::GetFeatureRefs(),
-        // Disable ash extension keeplist so that the test extension will not
-        // be blocked in Ash.
-        {ash::features::kEnforceAshExtensionKeeplist});
-    crosapi::BrowserManager::DisableForTesting();
-  }
-  ~AutotestPrivateLacrosTest() override {
-    crosapi::BrowserManager::EnableForTesting();
-  }
-
-  void SetUpOnMainThread() override {
-    // For testing APIs, we need web browser instance as JS runtime.
-    Browser::CreateParams params(ProfileManager::GetLastUsedProfile(), false);
-    Browser::Create(params);
-    SelectFirstBrowser();
-
-    AutotestPrivateApiTest::SetUpOnMainThread();
-  }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
-};
-
-IN_PROC_BROWSER_TEST_F(AutotestPrivateLacrosTest, Lacros) {
-  ASSERT_TRUE(RunAutotestPrivateExtensionTest("lacrosEnabled")) << message_;
 }
 
 class AutotestPrivateSearchTest
@@ -717,6 +682,14 @@ IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest, SetDeviceLanguage) {
   std::string cur_locale = browser()->profile()->GetPrefs()->GetString(
       language::prefs::kApplicationLocale);
   EXPECT_EQ(cur_locale, target_locale);
+}
+
+IN_PROC_BROWSER_TEST_F(AutotestPrivateApiTest, GetDeviceEventLog) {
+  device_event_log::ClearAll();
+  PRINTER_LOG(DEBUG) << "PrinterTestLog";
+  NET_LOG(DEBUG) << "NetworkTestLog";
+  USB_LOG(DEBUG) << "USBTestLog";
+  ASSERT_TRUE(RunAutotestPrivateExtensionTest("getDeviceEventLog")) << message_;
 }
 
 }  // namespace extensions

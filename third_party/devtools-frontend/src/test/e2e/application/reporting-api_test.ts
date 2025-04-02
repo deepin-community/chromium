@@ -12,13 +12,12 @@ import {
   goToResource,
   waitFor,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {navigateToApplicationTab} from '../helpers/application-helpers.js';
 import {getDataGrid, getDataGridRows, getInnerTextOfDataGridCells} from '../helpers/datagrid-helpers.js';
 
 const REPORTING_API_SELECTOR = '[aria-label="Reporting API"]';
 
-describe('The Reporting API Page', async () => {
+describe('The Reporting API Page', () => {
   beforeEach(async () => {
     const {target} = getBrowserAndPages();
     await navigateToApplicationTab(target, 'empty');
@@ -60,8 +59,7 @@ describe('The Reporting API Page', async () => {
     if (!endpointsGrid) {
       assert.fail('Could not find data-grid');
     }
-    const dataGrid = await getDataGrid(endpointsGrid);
-    const innerText = await getInnerTextOfDataGridCells(dataGrid, 2, true);
+    const innerText = await getInnerTextOfDataGridCells(endpointsGrid, 2, true);
     assert.strictEqual(innerText[0][0], `https://localhost:${getTestServerPort()}`);
     assert.strictEqual(innerText[0][1], 'default');
     assert.strictEqual(innerText[0][2], 'https://reports.example/default');

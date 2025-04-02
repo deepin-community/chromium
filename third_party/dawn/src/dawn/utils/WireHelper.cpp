@@ -86,10 +86,7 @@ class WireServerTraceLayer : public dawn::wire::CommandHandler {
 
   private:
     std::string mDir;
-    // TODO(https://crbug.com/2345): Investigate `DanglingUntriaged` in DawnWire. To reproduce:
-    // dawn_unittests --use-wire --wire-trace-dir={} \
-    //   --gtest_filter=CountUTF16CodeUnitsFromUTF8StringTest.ValidUnicodeString
-    raw_ptr<dawn::wire::CommandHandler, DanglingUntriaged> mHandler;
+    raw_ptr<dawn::wire::CommandHandler> mHandler;
     std::ofstream mFile;
 };
 
@@ -108,6 +105,8 @@ class WireHelperDirect : public WireHelper {
     bool FlushClient() override { return true; }
 
     bool FlushServer() override { return true; }
+
+    bool IsIdle() override { return true; }
 };
 
 class WireHelperProxy : public WireHelper {
@@ -136,12 +135,17 @@ class WireHelperProxy : public WireHelper {
         dawnProcSetProcs(&dawn::wire::client::GetProcs());
     }
 
+    ~WireHelperProxy() override {
+        mC2sBuf->SetHandler(nullptr);
+        mS2cBuf->SetHandler(nullptr);
+    }
+
     wgpu::Instance RegisterInstance(WGPUInstance backendInstance,
                                     const WGPUInstanceDescriptor* wireDesc) override {
         DAWN_ASSERT(backendInstance != nullptr);
 
         auto reserved = mWireClient->ReserveInstance(wireDesc);
-        mWireServer->InjectInstance(backendInstance, reserved.reservation);
+        mWireServer->InjectInstance(backendInstance, reserved.handle);
 
         return wgpu::Instance::Acquire(reserved.instance);
     }
@@ -156,12 +160,14 @@ class WireHelperProxy : public WireHelper {
 
     bool FlushServer() override { return mS2cBuf->Flush(); }
 
+    bool IsIdle() override { return mC2sBuf->Empty() && mS2cBuf->Empty(); }
+
   private:
     std::unique_ptr<dawn::utils::TerribleCommandBuffer> mC2sBuf;
     std::unique_ptr<dawn::utils::TerribleCommandBuffer> mS2cBuf;
-    std::unique_ptr<WireServerTraceLayer> mWireServerTraceLayer;
     std::unique_ptr<dawn::wire::WireServer> mWireServer;
     std::unique_ptr<dawn::wire::WireClient> mWireClient;
+    std::unique_ptr<WireServerTraceLayer> mWireServerTraceLayer;
 };
 
 }  // anonymous namespace

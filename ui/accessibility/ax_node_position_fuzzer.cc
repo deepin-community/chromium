@@ -116,16 +116,17 @@ TestPositionType AXNodePositionFuzzerGenerator::CreateNewPosition(
           *anchor, child_index_or_text_offset, affinity);
       case ui::AXPositionKind::NULL_POSITION:
         NOTREACHED();
-        return ui::AXNodePosition::CreateNullPosition();
     }
   }
 }
 
 ax::mojom::MoveDirection AXNodePositionFuzzerGenerator::GenerateMoveDirection(
     unsigned char byte) {
-  constexpr unsigned char max_value =
-      static_cast<unsigned char>(ax::mojom::MoveDirection::kMaxValue);
-  return static_cast<ax::mojom::MoveDirection>(byte % max_value);
+  // Read one bit to determine if the direction is forward or backward.
+  if (1 & byte) {
+    return ax::mojom::MoveDirection::kBackward;
+  }
+  return ax::mojom::MoveDirection::kForward;
 }
 
 ax::mojom::TextAffinity AXNodePositionFuzzerGenerator::GenerateTextAffinity(

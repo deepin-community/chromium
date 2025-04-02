@@ -13,7 +13,7 @@
 #include "ash/constants/ash_features.h"
 #include "ash/public/cpp/network_config_service.h"
 #include "ash/system/diagnostics/diagnostics_log_controller.h"
-#include "ash/webui/shimless_rma/3p_diagnostics/external_app_dialog.h"
+#include "ash/webui/shimless_rma/backend/external_app_dialog.h"
 #include "ash/webui/shimless_rma/backend/shimless_rma_delegate.h"
 #include "ash/webui/shimless_rma/backend/version_updater.h"
 #include "ash/webui/shimless_rma/mojom/shimless_rma.mojom.h"
@@ -447,12 +447,11 @@ void ShimlessRmaService::SetWipeDevice(bool should_wipe_device,
   TransitionNextStateGeneric(std::move(callback));
 }
 
-void ShimlessRmaService::ChooseManuallyDisableWriteProtect(
-    ChooseManuallyDisableWriteProtectCallback callback) {
+void ShimlessRmaService::SetManuallyDisableWriteProtect(
+    SetManuallyDisableWriteProtectCallback callback) {
   if (state_proto_.state_case() != rmad::RmadState::kWpDisableMethod) {
-    LOG(ERROR)
-        << "ChooseManuallyDisableWriteProtect called from incorrect state "
-        << state_proto_.state_case();
+    LOG(ERROR) << "SetManuallyDisableWriteProtect called from incorrect state "
+               << state_proto_.state_case();
     std::move(callback).Run(CreateStateResultForInvalidRequest());
     return;
   }
@@ -461,10 +460,10 @@ void ShimlessRmaService::ChooseManuallyDisableWriteProtect(
   TransitionNextStateGeneric(std::move(callback));
 }
 
-void ShimlessRmaService::ChooseRsuDisableWriteProtect(
-    ChooseRsuDisableWriteProtectCallback callback) {
+void ShimlessRmaService::SetRsuDisableWriteProtect(
+    SetRsuDisableWriteProtectCallback callback) {
   if (state_proto_.state_case() != rmad::RmadState::kWpDisableMethod) {
-    LOG(ERROR) << "ChooseRsuDisableWriteProtect called from incorrect state "
+    LOG(ERROR) << "SetRsuDisableWriteProtect called from incorrect state "
                << state_proto_.state_case();
     std::move(callback).Run(CreateStateResultForInvalidRequest());
     return;
@@ -1467,7 +1466,6 @@ void ShimlessRmaService::OnOsUpdateStatusCallback(
       case update_engine::Operation::Operation_INT_MIN_SENTINEL_DO_NOT_USE_:
       case update_engine::Operation::Operation_INT_MAX_SENTINEL_DO_NOT_USE_:
         NOTREACHED();
-        break;
     }
   }
   OsUpdateProgress(operation, progress, error_code);
@@ -1633,6 +1631,7 @@ void ShimlessRmaService::Show3pDiagnosticsApp(
   params.context = shimless_app_browser_context_;
   params.app_name = shimless_3p_diag_app_name_;
   params.content_url = GURL("isolated-app://" + shimless_3p_diag_iwa_id_->id());
+  params.shimless_rma_delegate = shimless_rma_delegate_->GetWeakPtr();
   ExternalAppDialog::Show(params);
   std::move(callback).Run(
       ash::shimless_rma::mojom::Show3pDiagnosticsAppResult::kOk);

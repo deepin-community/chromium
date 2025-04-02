@@ -32,6 +32,17 @@
 
 namespace media {
 
+#if BUILDFLAG(USE_V4L2_CODEC)
+// Some architectures have separate image processor hardware that
+// can be used by Chromium's ImageProcessor to color convert/crop/etc.
+// video buffers. In many cases it is more efficient/performant/correct
+// to use libYUV instead of the hardware to do this processing which is thus
+// preferred, see crrev.com/c/4111326.
+BASE_FEATURE(kLibyuvImageProcessor,
+             "LibYuvImageProcessor",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif
+
 namespace {
 
 using PixelLayoutCandidate = ImageProcessor::PixelLayoutCandidate;
@@ -70,13 +81,16 @@ std::unique_ptr<ImageProcessor> CreateVaapiImageProcessorWithInputCandidates(
 
   // Note: the VaapiImageProcessorBackend doesn't use the ColorPlaneLayouts in
   // the PortConfigs, so we just pass an empty list of plane layouts.
+  // This factory is only used by VideoDecoderPipeline. If the VAAPI
+  // ImageProcessor is in use, then the input frames are being created by the
+  // auxiliary video frame pool. The input VideoFrame::StorageType needs to
+  // match that type.
   ImageProcessor::PortConfig input_config(
       chosen_input_candidate->fourcc, chosen_input_candidate->size,
-      /*planes=*/{}, input_visible_rect,
-      {VideoFrame::STORAGE_GPU_MEMORY_BUFFER});
+      /*planes=*/{}, input_visible_rect, VideoFrame::STORAGE_DMABUFS);
   ImageProcessor::PortConfig output_config(
       /*fourcc=*/*chosen_output_format, /*size=*/output_size, /*planes=*/{},
-      /*visible_rect=*/gfx::Rect(output_size), {output_storage_type});
+      /*visible_rect=*/gfx::Rect(output_size), output_storage_type);
   return ImageProcessor::Create(
       base::BindRepeating(&VaapiImageProcessorBackend::Create), input_config,
       output_config, ImageProcessor::OutputMode::IMPORT, std::move(error_cb),
@@ -175,12 +189,12 @@ std::unique_ptr<ImageProcessor> CreateLibYUVImageProcessorWithInputCandidates(
   if (input_candidates.empty())
     return nullptr;
 
-  auto iter = base::ranges::find_if(
-    input_candidates,
-    [](const PixelLayoutCandidate& candidate) {
-      return !LibYUVImageProcessorBackend::GetSupportedOutputFormats(
-          candidate.fourcc).empty();
-    });
+  auto iter = std::ranges::find_if(
+      input_candidates, [](const PixelLayoutCandidate& candidate) {
+        return !LibYUVImageProcessorBackend::GetSupportedOutputFormats(
+                    candidate.fourcc)
+                    .empty();
+      });
 
   if (iter == input_candidates.end())
     return nullptr;
@@ -199,10 +213,10 @@ std::unique_ptr<ImageProcessor> CreateLibYUVImageProcessorWithInputCandidates(
 
   ImageProcessor::PortConfig input_config(
       matched_candidate.fourcc, matched_candidate.size, /*planes=*/{},
-      input_visible_rect, {VideoFrame::STORAGE_DMABUFS});
+      input_visible_rect, VideoFrame::STORAGE_DMABUFS);
   ImageProcessor::PortConfig output_config(
       *output_format, output_size, /*planes=*/{}, gfx::Rect(output_size),
-      {output_storage_type});
+      output_storage_type);
   return ImageProcessor::Create(
       base::BindRepeating(&LibYUVImageProcessorBackend::Create), input_config,
       output_config, ImageProcessor::OutputMode::IMPORT, std::move(error_cb),
@@ -228,10 +242,10 @@ std::unique_ptr<ImageProcessor> CreateGLImageProcessorWithInputCandidates(
 
   ImageProcessor::PortConfig input_config(
       input_candidates[0].fourcc, input_candidates[0].size, /*planes=*/{},
-      input_visible_rect, {VideoFrame::STORAGE_DMABUFS});
+      input_visible_rect, VideoFrame::STORAGE_DMABUFS);
   ImageProcessor::PortConfig output_config(
       Fourcc(Fourcc::NV12), output_size, /*planes=*/{}, gfx::Rect(output_size),
-      {output_storage_type});
+      output_storage_type);
 
   if (!GLImageProcessorBackend::IsSupported(input_config, output_config)) {
     return nullptr;
@@ -267,11 +281,14 @@ std::unique_ptr<ImageProcessor> ImageProcessorFactory::Create(
       base::BindRepeating(&LibYUVImageProcessorBackend::Create)};
 
 #if defined(ARCH_CPU_ARM_FAMILY)
-    if (base::FeatureList::IsEnabled(media::kUseGLForScaling)) {
-      create_funcs.insert(
-          create_funcs.begin(),
-          base::BindRepeating(&GLImageProcessorBackend::Create));
-    }
+  const bool use_gl_scaling =
+      (base::FeatureList::IsEnabled(media::kUseGLForScaling) &&
+       (input_config.fourcc == Fourcc(Fourcc::NV12) ||
+        input_config.fourcc == Fourcc(Fourcc::NM12)));
+  if (use_gl_scaling) {
+    create_funcs.insert(create_funcs.begin(),
+                        base::BindRepeating(&GLImageProcessorBackend::Create));
+  }
 #endif  // defined(ARCH_CPU_ARM_FAMILY)
 
     for (auto& create_func : create_funcs) {
@@ -304,9 +321,14 @@ ImageProcessorFactory::CreateWithInputCandidates(
     return processor;
 #elif BUILDFLAG(USE_V4L2_CODEC)
 #if defined(ARCH_CPU_ARM_FAMILY)
-
-  if (base::FeatureList::IsEnabled(media::kPreferGLImageProcessor) ||
-      base::FeatureList::IsEnabled(media::kUseGLForScaling)) {
+  const bool use_gl_scaling =
+      (base::FeatureList::IsEnabled(media::kUseGLForScaling) &&
+       (input_candidates[0].fourcc == Fourcc(Fourcc::NV12) ||
+        input_candidates[0].fourcc == Fourcc(Fourcc::NM12)));
+  const bool use_gl_detiling =
+      (base::FeatureList::IsEnabled(media::kPreferGLImageProcessor) &&
+       input_candidates[0].fourcc == Fourcc(Fourcc::MM21));
+  if (use_gl_scaling || use_gl_detiling) {
     auto processor = CreateGLImageProcessorWithInputCandidates(
         input_candidates, input_visible_rect, output_size, output_storage_type,
         client_task_runner, out_format_picker, error_cb);
@@ -315,14 +337,16 @@ ImageProcessorFactory::CreateWithInputCandidates(
   }
 #endif  // defined(ARCH_CPU_ARM_FAMILY)
 
-  auto processor = CreateLibYUVImageProcessorWithInputCandidates(
-      input_candidates, input_visible_rect, output_size, output_storage_type,
-      client_task_runner, out_format_picker, error_cb);
-  if (processor) {
-    return processor;
+  if (base::FeatureList::IsEnabled(kLibyuvImageProcessor)) {
+    auto processor = CreateLibYUVImageProcessorWithInputCandidates(
+        input_candidates, input_visible_rect, output_size, output_storage_type,
+        client_task_runner, out_format_picker, error_cb);
+    if (processor) {
+      return processor;
+    }
   }
 
-  processor = CreateV4L2ImageProcessorWithInputCandidates(
+  auto processor = CreateV4L2ImageProcessorWithInputCandidates(
       input_candidates, input_visible_rect, output_storage_type, num_buffers,
       client_task_runner, out_format_picker, error_cb);
   if (processor) {

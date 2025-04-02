@@ -12,8 +12,8 @@
 #include "ash/style/typography.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/wm/collision_detection/collision_detection_utils.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "ui/aura/window.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/scoped_layer_animation_settings.h"
@@ -56,7 +56,7 @@ ContextualNudge::ContextualNudge(views::View* anchor,
   set_accept_events(!tap_callback.is_null());
   SetCanActivate(false);
   set_shadow(views::BubbleBorder::NO_SHADOW);
-  SetButtons(ui::DIALOG_BUTTON_NONE);
+  SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
 
   if (parent_window) {
     set_parent_window(parent_window);
@@ -74,13 +74,9 @@ ContextualNudge::ContextualNudge(views::View* anchor,
   label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
   label_->SetBackgroundColor(SK_ColorTRANSPARENT);
   label_->SetBorder(views::CreateEmptyBorder(margins));
-  if (chromeos::features::IsJellyEnabled()) {
-    label_->SetEnabledColorId(cros_tokens::kCrosSysSecondary);
-    TypographyProvider::Get()->StyleLabel(TypographyToken::kCrosAnnotation1,
-                                          *label_);
-  } else {
-    label_->SetEnabledColorId(kColorAshTextColorPrimary);
-  }
+  label_->SetEnabledColorId(cros_tokens::kCrosSysSecondary);
+  TypographyProvider::Get()->StyleLabel(TypographyToken::kCrosAnnotation1,
+                                        *label_);
 
   views::BubbleDialogDelegateView::CreateBubble(this);
 
@@ -106,7 +102,7 @@ ui::LayerType ContextualNudge::GetLayerType() const {
 }
 
 void ContextualNudge::OnGestureEvent(ui::GestureEvent* event) {
-  if (event->type() == ui::ET_GESTURE_TAP && tap_callback_) {
+  if (event->type() == ui::EventType::kGestureTap && tap_callback_) {
     event->StopPropagation();
     tap_callback_.Run();
     return;

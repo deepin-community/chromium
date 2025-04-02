@@ -4,9 +4,10 @@
 
 import {getPluralString, str, strf} from '../../common/js/translations.js';
 
-import {PanelButton} from './xf_button.js';
+import type {PanelButton} from './xf_button.js';
 import {getTemplate} from './xf_display_panel.html.js';
-import {PanelItem, PanelType} from './xf_panel_item.js';
+import type {PanelItem} from './xf_panel_item.js';
+import {PanelType} from './xf_panel_item.js';
 
 /**
  * A panel to display a collection of PanelItem.
@@ -25,19 +26,19 @@ export class DisplayPanel extends HTMLElement {
    * Collection of PanelItems hosted in this DisplayPanel.
    */
   private items_: PanelItem[] = [];
-  private summary_: HTMLDivElement;
-  private separator_: HTMLDivElement;
-  private panels_: HTMLDivElement;
+  private summary_: HTMLElement;
+  private separator_: HTMLElement;
+  private panels_: HTMLElement;
 
   private toggleSummaryBound_ = this.toggleSummary_.bind(this);
 
   constructor() {
     super();
     this.createElement_();
-    this.summary_ = this.shadowRoot!.querySelector<HTMLDivElement>('#summary')!;
+    this.summary_ = this.shadowRoot!.querySelector<HTMLElement>('#summary')!;
     this.separator_ =
-        this.shadowRoot!.querySelector<HTMLDivElement>('#separator')!;
-    this.panels_ = this.shadowRoot!.querySelector<HTMLDivElement>('#panels')!;
+        this.shadowRoot!.querySelector<HTMLElement>('#separator')!;
+    this.panels_ = this.shadowRoot!.querySelector<HTMLElement>('#panels')!;
   }
 
   /**

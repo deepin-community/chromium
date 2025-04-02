@@ -8,7 +8,6 @@
 
 #include <map>
 #include <numeric>
-#include <set>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -21,11 +20,11 @@
 #include "core/fpdfapi/parser/cpdf_reference.h"
 #include "core/fpdfapi/parser/cpdf_stream.h"
 #include "core/fpdfapi/parser/object_tree_traversal_util.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/containers/adapters.h"
+#include "core/fxcrt/containers/contains.h"
+#include "core/fxcrt/numerics/safe_conversions.h"
 #include "third_party/abseil-cpp/absl/types/variant.h"
-#include "third_party/base/check.h"
-#include "third_party/base/containers/adapters.h"
-#include "third_party/base/containers/contains.h"
-#include "third_party/base/numerics/safe_conversions.h"
 
 CPDF_PageContentManager::CPDF_PageContentManager(
     CPDF_PageObjectHolder* page_obj_holder,
@@ -69,6 +68,10 @@ CPDF_PageContentManager::CPDF_PageContentManager(
 
 CPDF_PageContentManager::~CPDF_PageContentManager() {
   ExecuteScheduledRemovals();
+}
+
+bool CPDF_PageContentManager::HasStreamAtIndex(size_t stream_index) {
+  return !!GetStreamByIndex(stream_index);
 }
 
 RetainPtr<CPDF_Stream> CPDF_PageContentManager::GetStreamByIndex(
@@ -177,6 +180,9 @@ void CPDF_PageContentManager::ExecuteScheduledRemovals() {
   // Since CPDF_PageContentManager is only instantiated in
   // CPDF_PageContentGenerator::GenerateContent(), which cleans up the dirty
   // streams first, this should always be true.
+  // This method does not bother to inspect IsActive() for page objects; it will
+  // remove any object that has been scheduled for removal, regardless of active
+  // status.
   DCHECK(!page_obj_holder_->HasDirtyStreams());
 
   if (streams_to_remove_.empty()) {
@@ -205,7 +211,7 @@ void CPDF_PageContentManager::ExecuteScheduledRemovals() {
 
   // In reverse order so as to not change the indexes in the middle of the loop,
   // remove the streams.
-  for (size_t stream_index : pdfium::base::Reversed(streams_to_remove_)) {
+  for (size_t stream_index : pdfium::Reversed(streams_to_remove_)) {
     contents_array->RemoveAt(stream_index);
     streams_left.erase(streams_left.begin() + stream_index);
   }
@@ -220,8 +226,8 @@ void CPDF_PageContentManager::ExecuteScheduledRemovals() {
   // Update the page objects' content stream indexes.
   for (const auto& obj : *page_obj_holder_) {
     int32_t old_stream_index = obj->GetContentStream();
-    int32_t new_stream_index = pdfium::base::checked_cast<int32_t>(
-        stream_index_mapping[old_stream_index]);
+    int32_t new_stream_index =
+        pdfium::checked_cast<int32_t>(stream_index_mapping[old_stream_index]);
     obj->SetContentStream(new_stream_index);
   }
 

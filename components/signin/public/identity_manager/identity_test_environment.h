@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/functional/callback.h"
@@ -15,12 +16,12 @@
 #include "base/scoped_observation.h"
 #include "base/strings/string_util.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/account_manager_core/account_manager_facade.h"
 #include "components/signin/public/base/signin_client.h"
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "components/signin/public/identity_manager/scope_set.h"
+#include "google_apis/gaia/gaia_id.h"
 
 class FakeProfileOAuth2TokenService;
 class IdentityTestEnvironmentBrowserStateAdaptor;
@@ -28,7 +29,7 @@ class IdentityTestEnvironmentProfileAdaptor;
 class PrefService;
 class TestSigninClient;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 namespace account_manager {
 class AccountManagerFacade;
 }
@@ -36,7 +37,7 @@ class AccountManagerFacade;
 namespace ash {
 class AccountManagerFactory;
 }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 namespace sync_preferences {
 class TestingPrefServiceSyncable;
@@ -64,7 +65,7 @@ struct SimpleAccountAvailabilityOptions {
   bool set_cookie = false;
 
   // If non-empty, the Gaia ID to use when adding the account.
-  base::StringPiece gaia_id;
+  GaiaId gaia_id;
 };
 
 // Class that creates an IdentityManager for use in testing contexts and
@@ -125,6 +126,7 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
 
   // The IdentityManager instance associated with this instance.
   IdentityManager* identity_manager();
+  const IdentityManager* identity_manager() const;
 
   SigninClient* signin_client();
 
@@ -176,11 +178,11 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   AccountInfo MakePrimaryAccountAvailable(const std::string& email,
                                           ConsentLevel consent_level);
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   // Revokes sync consent from the primary account: the primary account is left
   // at ConsentLevel::kSignin.
   void RevokeSyncConsent();
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
   // Clears the primary account, removes all accounts and revokes the sync
   // consent. Blocks until the primary account is cleared.
@@ -199,7 +201,7 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   //   configuration options and requires obtaining a builder to construct the
   //   options object. See `CreateAccountAvailabilityOptionsBuilder()`.
   AccountInfo MakeAccountAvailable(
-      base::StringPiece email,
+      std::string_view email,
       SimpleAccountAvailabilityOptions options = {});
 
   AccountInfo MakeAccountAvailable(const AccountAvailabilityOptions& options);
@@ -237,6 +239,10 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // accounts. Blocks until the accounts have been set.
   void SetCookieAccounts(
       const std::vector<CookieParamsForTest>& cookie_accounts);
+
+  // Triggers a fake /ListAccount call with the current accounts in the cookie
+  // jar. It will notify all observers.
+  void TriggerListAccount();
 
   // When this is set, access token requests will be automatically granted with
   // an access token value of "access_token".
@@ -341,14 +347,14 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
   // By default, extended account info removal is disabled in testing
   // contexts. This call enables it for tests that require
   // IdentityManager::Observer::OnExtendedAccountInfoRemoved() to fire as
-  // expected. TODO(https://crbug.com/927687): Enable this unconditionally.
+  // expected. TODO(crbug.com/40612138): Enable this unconditionally.
   void EnableRemovalOfExtendedAccountInfo();
 
   // Simulate account fetching using AccountTrackerService without sending
   // network requests.
   void SimulateSuccessfulFetchOfAccountInfo(const CoreAccountId& account_id,
                                             const std::string& email,
-                                            const std::string& gaia,
+                                            const GaiaId& gaia,
                                             const std::string& hosted_domain,
                                             const std::string& full_name,
                                             const std::string& given_name,
@@ -412,7 +418,7 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
       SigninClient* signin_client,
       PrefService* pref_service,
       base::FilePath user_data_dir
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       ,
       ash::AccountManagerFactory* account_manager_factory,
       account_manager::AccountManagerFacade* account_manager_facade
@@ -425,7 +431,7 @@ class IdentityTestEnvironment : public IdentityManager::DiagnosticsObserver,
       SigninClient* signin_client,
       PrefService* pref_service,
       base::FilePath user_data_dir
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       ,
       account_manager::AccountManagerFacade* account_manager_facade
 #endif

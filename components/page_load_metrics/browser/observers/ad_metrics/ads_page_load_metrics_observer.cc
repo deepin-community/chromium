@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/check_op.h"
@@ -15,7 +16,6 @@
 #include "base/notreached.h"
 #include "base/rand_util.h"
 #include "base/strings/strcat.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/time/default_tick_clock.h"
 #include "base/time/time.h"
@@ -59,24 +59,6 @@
 
 namespace page_load_metrics {
 
-namespace features {
-
-// Enables or disables the restricted navigation ad tagging feature. When
-// enabled, the AdTagging heuristic is modified to additional information to
-// determine if a frame is an ad. If the frame's navigation url matches an allow
-// list rule, it is not an ad.
-//
-// If a frame's navigation url does not match a blocked rule, but was created by
-// ad script and is same domain to the top-level frame, it is not an ad.
-//
-// Currently this feature only changes AdTagging behavior for metrics recorded
-// in AdsPageLoadMetricsObserver, and for triggering the Heavy Ad Intervention.
-BASE_FEATURE(kRestrictedNavigationAdTagging,
-             "RestrictedNavigationAdTagging",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-}  // namespace features
-
 namespace {
 
 using RectId = PageAdDensityTracker::RectId;
@@ -105,7 +87,7 @@ std::string GetHeavyAdReportMessage(const FrameTreeData& frame_data,
       "A future version of Chrome may remove this ad";
   const char kInterventionMessage[] = "Ad was removed";
 
-  base::StringPiece intervention_mode =
+  std::string_view intervention_mode =
       will_unload_adframe ? kInterventionMessage : kReportingOnlyMessage;
 
   switch (frame_data.heavy_ad_status_with_noise()) {
@@ -123,7 +105,6 @@ std::string GetHeavyAdReportMessage(const FrameTreeData& frame_data,
                            kChromeStatusMessage});
     case HeavyAdStatus::kNone:
       NOTREACHED();
-      return "";
   }
 }
 
@@ -146,7 +127,6 @@ blink::mojom::HeavyAdReason GetHeavyAdReason(HeavyAdStatus status) {
       return blink::mojom::HeavyAdReason::kCpuPeakLimit;
     case HeavyAdStatus::kNone:
       NOTREACHED();
-      return blink::mojom::HeavyAdReason::kNetworkTotalLimit;
   }
 }
 
@@ -191,7 +171,8 @@ std::unique_ptr<AdsPageLoadMetricsObserver>
 AdsPageLoadMetricsObserver::CreateIfNeeded(
     content::WebContents* web_contents,
     heavy_ad_intervention::HeavyAdService* heavy_ad_service,
-    const ApplicationLocaleGetter& application_locale_getter) {
+    const ApplicationLocaleGetter& application_locale_getter,
+    bool is_incognito) {
   // TODO(bokan): ContentSubresourceFilterThrottleManager is now associated
   // with a FrameTree. When AdsPageLoadMetricsObserver becomes aware of MPArch
   // this should use the associated page rather than the primary page.
@@ -199,8 +180,9 @@ AdsPageLoadMetricsObserver::CreateIfNeeded(
       !subresource_filter::ContentSubresourceFilterWebContentsHelper::
           FromWebContents(web_contents))
     return nullptr;
+
   return std::make_unique<AdsPageLoadMetricsObserver>(
-      heavy_ad_service, application_locale_getter);
+      heavy_ad_service, application_locale_getter, is_incognito);
 }
 
 // static
@@ -209,7 +191,7 @@ bool AdsPageLoadMetricsObserver::IsFrameSameOriginToOutermostMainFrame(
   DCHECK(host);
   // In navigation for prerendering, `AdsPageLoadMetricsObserver` is removed
   // from PageLoadTracker.
-  // TODO(https://crbug.com/1317494): Enable it if possible.
+  // TODO(crbug.com/40222513): Enable it if possible.
   DCHECK_NE(content::RenderFrameHost::LifecycleState::kPrerendering,
             host->GetLifecycleState());
   content::RenderFrameHost* outermost_main_host = host->GetOutermostMainFrame();
@@ -260,11 +242,10 @@ int AdsPageLoadMetricsObserver::HeavyAdThresholdNoiseProvider::
 AdsPageLoadMetricsObserver::AdsPageLoadMetricsObserver(
     heavy_ad_intervention::HeavyAdService* heavy_ad_service,
     const ApplicationLocaleGetter& application_locale_getter,
+    bool is_incognito,
     base::TickClock* clock,
     heavy_ad_intervention::HeavyAdBlocklist* blocklist)
     : clock_(clock ? clock : base::DefaultTickClock::GetInstance()),
-      restricted_navigation_ad_tagging_enabled_(base::FeatureList::IsEnabled(
-          features::kRestrictedNavigationAdTagging)),
       heavy_ad_service_(heavy_ad_service),
       application_locale_getter_(application_locale_getter),
       heavy_ad_blocklist_(blocklist),
@@ -273,7 +254,8 @@ AdsPageLoadMetricsObserver::AdsPageLoadMetricsObserver(
       heavy_ad_threshold_noise_provider_(
           std::make_unique<HeavyAdThresholdNoiseProvider>(
               heavy_ad_privacy_mitigations_enabled_ /* use_noise */)),
-      page_ad_density_tracker_(clock) {
+      page_ad_density_tracker_(clock),
+      is_incognito_(is_incognito) {
   // Manual setting of the heavy ad blocklist should be used only as a
   // convenience for tests that don't create HeavyAdService.
   DCHECK(!heavy_ad_service_ || !heavy_ad_blocklist_);
@@ -306,7 +288,7 @@ PageLoadMetricsObserver::ObservePolicy
 AdsPageLoadMetricsObserver::OnPrerenderStart(
     content::NavigationHandle* navigation_handle,
     const GURL& currently_committed_url) {
-  // TODO(https://crbug.com/1317494): Handle Prerendering cases.
+  // TODO(crbug.com/40222513): Handle Prerendering cases.
   return STOP_OBSERVING;
 }
 
@@ -415,7 +397,8 @@ void AdsPageLoadMetricsObserver::UpdateAdFrameData(
     content::NavigationHandle* navigation_handle,
     bool is_adframe,
     bool should_ignore_detected_ad) {
-  const FrameTreeNodeId ad_id = navigation_handle->GetFrameTreeNodeId();
+  const content::FrameTreeNodeId ad_id =
+      navigation_handle->GetFrameTreeNodeId();
   // If an existing subframe is navigating and it was an ad previously that
   // hasn't navigated yet, then we need to update it.
   const auto& id_and_data = ad_frames_data_.find(ad_id);
@@ -426,7 +409,7 @@ void AdsPageLoadMetricsObserver::UpdateAdFrameData(
   if (previous_data) {
     // Frames that are no longer ad frames or are ignored as ad frames due to
     // restricted navigation ad tagging should have their tracked data reset.
-    // TODO(crbug.com/1101584): Simplify the condition when restricted
+    // TODO(crbug.com/40138413): Simplify the condition when restricted
     // navigation ad tagging is moved to subresource_filter/.
     if (!is_adframe || (should_ignore_detected_ad &&
                         (ad_id == previous_data->root_frame_tree_node_id()))) {
@@ -520,7 +503,7 @@ void AdsPageLoadMetricsObserver::ReadyToCommitNextNavigation(
     return;
   // Prerendering navigation doesn't get here since this observer in
   // prerendering is removed from PageLoadTracker.
-  // TODO(https://crbug.com/1317494): Consider enabling this observer for
+  // TODO(crbug.com/40222513): Consider enabling this observer for
   // prerendering.
   DCHECK(!navigation_handle->IsInPrerenderedMainFrame());
   process_display_state_updates_ = false;
@@ -544,7 +527,7 @@ void AdsPageLoadMetricsObserver::OnDidFinishSubFrameNavigation(
   const bool is_adframe = throttle_manager->IsFrameTaggedAsAd(
       navigation_handle->GetFrameTreeNodeId());
 
-  // TODO(https://crbug.com/1030325): The following block is a hack to ignore
+  // TODO(crbug.com/40109934): The following block is a hack to ignore
   // certain frames that are detected by AdTagging. These frames are ignored
   // specifically for ad metrics and for the heavy ad intervention. The frames
   // ignored here are still considered ads by the heavy ad intervention. This
@@ -558,8 +541,7 @@ void AdsPageLoadMetricsObserver::OnDidFinishSubFrameNavigation(
   // Only un-tag frames as ads if the navigation has committed. This prevents
   // frames from being untagged that have an aborted navigation to allowlist
   // urls.
-  if (restricted_navigation_ad_tagging_enabled_ && load_policy &&
-      navigation_handle->GetNetErrorCode() == net::OK &&
+  if (load_policy && navigation_handle->GetNetErrorCode() == net::OK &&
       navigation_handle->HasCommitted()) {
     // If a filter list explicitly allows the rule, we should ignore a detected
     // ad.
@@ -675,7 +657,8 @@ void AdsPageLoadMetricsObserver::MediaStartedPlaying(
 void AdsPageLoadMetricsObserver::OnMainFrameIntersectionRectChanged(
     content::RenderFrameHost* render_frame_host,
     const gfx::Rect& main_frame_intersection_rect) {
-  int frame_tree_node_id = render_frame_host->GetFrameTreeNodeId();
+  content::FrameTreeNodeId frame_tree_node_id =
+      render_frame_host->GetFrameTreeNodeId();
   if (render_frame_host->IsInPrimaryMainFrame()) {
     page_ad_density_tracker_.UpdateMainFrameRect(main_frame_intersection_rect);
     return;
@@ -686,7 +669,7 @@ void AdsPageLoadMetricsObserver::OnMainFrameIntersectionRectChanged(
   FrameTreeData* ancestor_data = FindFrameData(frame_tree_node_id);
   if (ancestor_data &&
       frame_tree_node_id == ancestor_data->root_frame_tree_node_id()) {
-    RectId rect_id = RectId(RectType::kIFrame, frame_tree_node_id);
+    RectId rect_id = RectId(RectType::kIFrame, frame_tree_node_id.value());
 
     // Only add frames if they are visible.
     if (!ancestor_data->is_display_none()) {
@@ -717,7 +700,7 @@ void AdsPageLoadMetricsObserver::OnMainFrameImageAdRectsChanged(
       main_frame_image_ad_rects);
 }
 
-// TODO(https://crbug.com/1142669): Evaluate imposing width requirements
+// TODO(crbug.com/40727873): Evaluate imposing width requirements
 // for ad density violations.
 void AdsPageLoadMetricsObserver::CheckForAdDensityViolation() {
 #if BUILDFLAG(IS_ANDROID)
@@ -745,7 +728,8 @@ void AdsPageLoadMetricsObserver::CheckForAdDensityViolation() {
 #endif
 }
 
-void AdsPageLoadMetricsObserver::OnSubFrameDeleted(int frame_tree_node_id) {
+void AdsPageLoadMetricsObserver::OnSubFrameDeleted(
+    content::FrameTreeNodeId frame_tree_node_id) {
   frame_navigation_starts_.erase(frame_tree_node_id);
 
   const auto& id_and_data = ad_frames_data_.find(frame_tree_node_id);
@@ -785,7 +769,8 @@ void AdsPageLoadMetricsObserver::OnV8MemoryChanged(
     if (!render_frame_host)
       continue;
 
-    FrameTreeNodeId frame_node_id = render_frame_host->GetFrameTreeNodeId();
+    content::FrameTreeNodeId frame_node_id =
+        render_frame_host->GetFrameTreeNodeId();
     FrameTreeData* ad_frame_data = FindFrameData(frame_node_id);
 
     if (ad_frame_data) {
@@ -798,6 +783,14 @@ void AdsPageLoadMetricsObserver::OnV8MemoryChanged(
           update.delta_bytes);
     }
   }
+}
+
+void AdsPageLoadMetricsObserver::OnAdAuctionComplete(
+    bool is_server_auction,
+    bool is_on_device_auction,
+    content::AuctionResult result) {
+  aggregate_frame_data_->OnAdAuctionComplete(is_server_auction,
+                                             is_on_device_auction, result);
 }
 
 void AdsPageLoadMetricsObserver::OnSubresourceFilterGoingAway() {
@@ -817,7 +810,7 @@ void AdsPageLoadMetricsObserver::OnPageActivationComputed(
       activation_state.activation_level ==
           subresource_filter::mojom::ActivationLevel::kEnabled) {
     // Prerendering navigation is filtered out by checking `navigation_id_`.
-    // TODO(https://crbug.com/1317494): Consider enabling this observer for
+    // TODO(crbug.com/40222513): Consider enabling this observer for
     // prerendering.
     DCHECK(!navigation_handle->IsInPrerenderedMainFrame());
     DCHECK(!subresource_filter_is_enabled_);
@@ -850,7 +843,7 @@ int AdsPageLoadMetricsObserver::GetUnaccountedAdBytes(
 void AdsPageLoadMetricsObserver::ProcessResourceForPage(
     content::RenderFrameHost* render_frame_host,
     const mojom::ResourceDataUpdatePtr& resource) {
-  int process_id = render_frame_host->GetProcess()->GetID();
+  int process_id = render_frame_host->GetProcess()->GetDeprecatedID();
   auto mime_type = ResourceLoadAggregator::GetResourceMimeType(resource);
   int unaccounted_ad_bytes = GetUnaccountedAdBytes(process_id, resource);
   bool is_outermost_main_frame = !render_frame_host->GetParentOrOuterDocument();
@@ -897,12 +890,12 @@ void AdsPageLoadMetricsObserver::ProcessResourceForFrame(
     return;
 
   auto mime_type = ResourceLoadAggregator::GetResourceMimeType(resource);
-  int unaccounted_ad_bytes =
-      GetUnaccountedAdBytes(render_frame_host->GetProcess()->GetID(), resource);
+  int unaccounted_ad_bytes = GetUnaccountedAdBytes(
+      render_frame_host->GetProcess()->GetDeprecatedID(), resource);
   if (unaccounted_ad_bytes)
     ancestor_data->AdjustAdBytes(unaccounted_ad_bytes, mime_type);
   ancestor_data->ProcessResourceLoadInFrame(
-      resource, render_frame_host->GetProcess()->GetID(),
+      resource, render_frame_host->GetProcess()->GetDeprecatedID(),
       GetDelegate().GetResourceTracker());
   MaybeTriggerHeavyAdIntervention(render_frame_host, ancestor_data);
 }
@@ -980,6 +973,46 @@ void AdsPageLoadMetricsObserver::RecordHistograms(ukm::SourceId source_id) {
         "PageLoad.Clients.Ads.AdPaintTiming."
         "TopFrameNavigationToFirstAdFirstContentfulPaint",
         first_ad_fcp_after_main_nav_start.value());
+
+    std::string fcp_after_auction_metric_name;
+    if (aggregate_frame_data_->completed_fledge_server_auction_before_fcp()) {
+      if (aggregate_frame_data_
+              ->completed_fledge_on_device_auction_before_fcp()) {
+        fcp_after_auction_metric_name =
+            "PageLoad.Clients.Ads.AdPaintTiming."
+            "TopFrameNavigationToFirstAdFirstContentfulPaintAfter"
+            "ServerAndDeviceAuctions";
+      } else {
+        fcp_after_auction_metric_name =
+            "PageLoad.Clients.Ads.AdPaintTiming."
+            "TopFrameNavigationToFirstAdFirstContentfulPaintAfterServerAuction";
+        if (aggregate_frame_data_->completed_only_winning_fledge_auctions()) {
+          PAGE_LOAD_HISTOGRAM(
+              "PageLoad.Clients.Ads.AdPaintTiming."
+              "TopFrameNavigationToFirstAdFirstContentfulPaintAfterWinning"
+              "ServerAuction",
+              first_ad_fcp_after_main_nav_start.value());
+        }
+      }
+    } else if (aggregate_frame_data_
+                   ->completed_fledge_on_device_auction_before_fcp()) {
+      fcp_after_auction_metric_name =
+          "PageLoad.Clients.Ads.AdPaintTiming."
+          "TopFrameNavigationToFirstAdFirstContentfulPaintAfterDeviceAuction";
+      if (aggregate_frame_data_->completed_only_winning_fledge_auctions()) {
+        PAGE_LOAD_HISTOGRAM(
+            "PageLoad.Clients.Ads.AdPaintTiming."
+            "TopFrameNavigationToFirstAdFirstContentfulPaintAfter"
+            "WinningDeviceAuction",
+            first_ad_fcp_after_main_nav_start.value());
+      }
+    } else {
+      fcp_after_auction_metric_name =
+          "PageLoad.Clients.Ads.AdPaintTiming."
+          "TopFrameNavigationToFirstAdFirstContentfulPaintAfterNoAuction";
+    }
+    PAGE_LOAD_HISTOGRAM(fcp_after_auction_metric_name,
+                        first_ad_fcp_after_main_nav_start.value());
   }
 
   RecordAggregateHistogramsForAdTagging(FrameVisibility::kNonVisible);
@@ -1002,7 +1035,7 @@ void AdsPageLoadMetricsObserver::RecordAggregateHistogramsForCpuUsage() {
   FrameVisibility visibility = FrameVisibility::kAnyVisibility;
 
   // Record the aggregate data, which is never considered activated.
-  // TODO(crbug/1109754): Does it make sense to include an aggregate peak
+  // TODO(crbug.com/40141881): Does it make sense to include an aggregate peak
   // windowed percent?  Obviously this would be a max of maxes, but might be
   // useful to have that for comparisons as well.
   ADS_HISTOGRAM("Cpu.AdFrames.Aggregate.TotalUsage2", PAGE_LOAD_HISTOGRAM,
@@ -1208,6 +1241,15 @@ void AdsPageLoadMetricsObserver::RecordPerFrameHistogramsForAdTagging(
                     earliest_fcp_since_top_nav_start.value());
     }
   }
+
+  if (is_incognito_) {
+    if (auto first_contentful_paint =
+            ad_frame_data.earliest_first_contentful_paint()) {
+      ADS_HISTOGRAM("AdPaintTiming.NavigationToFirstContentfulPaint3.Incognito",
+                    PAGE_LOAD_LONG_HISTOGRAM, FrameVisibility::kAnyVisibility,
+                    first_contentful_paint.value());
+    }
+  }
 }
 
 void AdsPageLoadMetricsObserver::RecordPerFrameHistogramsForHeavyAds(
@@ -1243,7 +1285,8 @@ void AdsPageLoadMetricsObserver::ProcessOngoingNavigationResource(
   ongoing_navigation_resources_.erase(frame_id_and_request);
 }
 
-FrameTreeData* AdsPageLoadMetricsObserver::FindFrameData(FrameTreeNodeId id) {
+FrameTreeData* AdsPageLoadMetricsObserver::FindFrameData(
+    content::FrameTreeNodeId id) {
   const auto& id_and_data = ad_frames_data_.find(id);
   if (id_and_data == ad_frames_data_.end())
     return nullptr;
@@ -1468,7 +1511,7 @@ void AdsPageLoadMetricsObserver::UpdateAggregateMemoryUsage(
 }
 
 void AdsPageLoadMetricsObserver::CleanupDeletedFrame(
-    FrameTreeNodeId id,
+    content::FrameTreeNodeId id,
     FrameTreeData* frame_data,
     bool update_density_tracker,
     bool record_metrics) {
@@ -1479,7 +1522,7 @@ void AdsPageLoadMetricsObserver::CleanupDeletedFrame(
     RecordPerFrameMetrics(*frame_data, GetDelegate().GetPageUkmSourceId());
 
   if (update_density_tracker) {
-    page_ad_density_tracker_.RemoveRect(RectId(RectType::kIFrame, id),
+    page_ad_density_tracker_.RemoveRect(RectId(RectType::kIFrame, id.value()),
                                         /*recalculate_viewport_density=*/true);
   }
 }

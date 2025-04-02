@@ -6,6 +6,7 @@
 
 #include "third_party/blink/public/mojom/devtools/console_message.mojom-shared.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
+#include "third_party/blink/renderer/bindings/core/v8/promise_all.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_function.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_navigate_event_init.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_navigation_intercept_handler.h"
@@ -32,23 +33,38 @@
 
 namespace blink {
 
-enum class ResolveType { kFulfill, kReject };
-class NavigateEvent::Reaction final : public ScriptFunction::Callable {
+class NavigateEvent::FulfillReaction final
+    : public ThenCallable<IDLUndefined, FulfillReaction> {
  public:
-  Reaction(NavigateEvent* navigate_event, ResolveType resolve_type)
-      : navigate_event_(navigate_event), resolve_type_(resolve_type) {}
+  explicit FulfillReaction(NavigateEvent* navigate_event)
+      : navigate_event_(navigate_event) {}
   void Trace(Visitor* visitor) const final {
-    ScriptFunction::Callable::Trace(visitor);
+    ThenCallable<IDLUndefined, FulfillReaction>::Trace(visitor);
     visitor->Trace(navigate_event_);
   }
-  ScriptValue Call(ScriptState*, ScriptValue value) final {
-    navigate_event_->ReactDone(value, resolve_type_ == ResolveType::kFulfill);
-    return ScriptValue();
+  void React(ScriptState*) {
+    navigate_event_->ReactDone(ScriptValue(), /*did_fulfill=*/true);
   }
 
  private:
   Member<NavigateEvent> navigate_event_;
-  ResolveType resolve_type_;
+};
+
+class NavigateEvent::RejectReaction final
+    : public ThenCallable<IDLAny, RejectReaction> {
+ public:
+  explicit RejectReaction(NavigateEvent* navigate_event)
+      : navigate_event_(navigate_event) {}
+  void Trace(Visitor* visitor) const final {
+    ThenCallable<IDLAny, RejectReaction>::Trace(visitor);
+    visitor->Trace(navigate_event_);
+  }
+  void React(ScriptState*, ScriptValue value) {
+    navigate_event_->ReactDone(value, /*did_fulfill=*/false);
+  }
+
+ private:
+  Member<NavigateEvent> navigate_event_;
 };
 
 NavigateEvent::NavigateEvent(ExecutionContext* context,
@@ -57,7 +73,7 @@ NavigateEvent::NavigateEvent(ExecutionContext* context,
                              AbortController* controller)
     : Event(type, init),
       ExecutionContextClient(context),
-      navigation_type_(init->navigationType()),
+      navigation_type_(init->navigationType().AsEnum()),
       destination_(init->destination()),
       can_intercept_(init->canIntercept()),
       user_initiated_(init->userInitiated()),
@@ -205,6 +221,7 @@ void NavigateEvent::commit(ExceptionState& exception_state) {
     exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
                                       "commit() may only be used if { commit: "
                                       "'after-transition' } was specified.");
+    return;
   }
   if (IsBeingDispatched()) {
     exception_state.ThrowDOMException(
@@ -266,37 +283,35 @@ void NavigateEvent::CommitNow() {
       dispatch_params_->url, dispatch_params_->destination_item,
       mojom::blink::SameDocumentNavigationType::kNavigationApiIntercept,
       state_object, dispatch_params_->frame_load_type,
+      dispatch_params_->event_type == NavigateEventType::kHistoryApi
+          ? FirePopstate::kNo
+          : FirePopstate::kYes,
+      dispatch_params_->should_skip_screenshot,
       dispatch_params_->is_browser_initiated,
-      dispatch_params_->is_synchronously_committed_same_document);
+      dispatch_params_->is_synchronously_committed_same_document,
+      dispatch_params_->soft_navigation_heuristics_task_id);
 }
 
 void NavigateEvent::React(ScriptState* script_state) {
   CHECK(navigation_action_handlers_list_.empty());
 
-  ScriptPromise promise;
-  if (!navigation_action_promises_list_.empty()) {
-    promise =
-        ScriptPromise::All(script_state, navigation_action_promises_list_);
-  } else {
+  if (navigation_action_promises_list_.empty()) {
     // There is a subtle timing difference between the fast-path for zero
     // promises and the path for 1+ promises, in both spec and implementation.
-    // In most uses of ScriptPromise::All / the Web IDL spec's "wait for all",
-    // this does not matter. However for us there are so many events and promise
-    // handlers firing around the same time (navigatesuccess, committed promise,
-    // finished promise, ...) that the difference is pretty easily observable by
-    // web developers and web platform tests. So, let's make sure we always go
-    // down the 1+ promises path.
-    promise = ScriptPromise::All(
-        script_state, HeapVector<ScriptPromise>(
-                          {ScriptPromise::CastUndefined(script_state)}));
+    // In most uses of Promise.all() / the Web IDL spec's "wait for
+    // all", this does not matter. However for us there are so many events and
+    // promise handlers firing around the same time (navigatesuccess, committed
+    // promise, finished promise, ...) that the difference is pretty easily
+    // observable by web developers and web platform tests. So, let's make sure
+    // we always go down the 1+ promises path.
+    navigation_action_promises_list_.push_back(
+        ToResolvedUndefinedPromise(script_state));
   }
 
-  promise.Then(MakeGarbageCollected<ScriptFunction>(
-                   script_state,
-                   MakeGarbageCollected<Reaction>(this, ResolveType::kFulfill)),
-               MakeGarbageCollected<ScriptFunction>(
-                   script_state,
-                   MakeGarbageCollected<Reaction>(this, ResolveType::kReject)));
+  auto promise = PromiseAll<IDLUndefined>::Create(
+      script_state, navigation_action_promises_list_);
+  promise.Then(script_state, MakeGarbageCollected<FulfillReaction>(this),
+               MakeGarbageCollected<RejectReaction>(this));
 
   if (HasNavigationActions() && DomWindow()) {
     if (AXObjectCache* cache =
@@ -376,7 +391,7 @@ void NavigateEvent::FinalizeNavigationActionPromisesList() {
   handlers_list.swap(navigation_action_handlers_list_);
 
   for (auto& function : handlers_list) {
-    ScriptPromise result;
+    ScriptPromise<IDLUndefined> result;
     if (function->Invoke(this).To(&result))
       navigation_action_promises_list_.push_back(result);
   }
@@ -460,16 +475,19 @@ void NavigateEvent::PotentiallyProcessScrollBehavior() {
   ProcessScrollBehavior();
 }
 
-WebFrameLoadType LoadTypeFromNavigation(const String& navigation_type) {
-  if (navigation_type == "push")
-    return WebFrameLoadType::kStandard;
-  if (navigation_type == "replace")
-    return WebFrameLoadType::kReplaceCurrentItem;
-  if (navigation_type == "traverse")
-    return WebFrameLoadType::kBackForward;
-  if (navigation_type == "reload")
-    return WebFrameLoadType::kReload;
-  NOTREACHED_NORETURN();
+WebFrameLoadType LoadTypeFromNavigation(
+    V8NavigationType::Enum navigation_type) {
+  switch (navigation_type) {
+    case V8NavigationType::Enum::kPush:
+      return WebFrameLoadType::kStandard;
+    case V8NavigationType::Enum::kReplace:
+      return WebFrameLoadType::kReplaceCurrentItem;
+    case V8NavigationType::Enum::kTraverse:
+      return WebFrameLoadType::kBackForward;
+    case V8NavigationType::Enum::kReload:
+      return WebFrameLoadType::kReload;
+  }
+  NOTREACHED();
 }
 
 void NavigateEvent::ProcessScrollBehavior() {
@@ -480,13 +498,16 @@ void NavigateEvent::ProcessScrollBehavior() {
       dispatch_params_->destination_item
           ? dispatch_params_->destination_item->GetViewState()
           : std::nullopt;
+  auto scroll_behavior = has_ua_visual_transition_
+                             ? mojom::blink::ScrollBehavior::kInstant
+                             : mojom::blink::ScrollBehavior::kAuto;
   // Use mojom::blink::ScrollRestorationType::kAuto unconditionally here
   // because we are certain that we want to actually scroll if we reach this
   // point. Using mojom::blink::ScrollRestorationType::kManual would block the
   // scroll.
   DomWindow()->GetFrame()->Loader().ProcessScrollForSameDocumentNavigation(
       dispatch_params_->url, LoadTypeFromNavigation(navigation_type_),
-      view_state, mojom::blink::ScrollRestorationType::kAuto);
+      view_state, mojom::blink::ScrollRestorationType::kAuto, scroll_behavior);
 }
 
 const AtomicString& NavigateEvent::InterfaceName() const {

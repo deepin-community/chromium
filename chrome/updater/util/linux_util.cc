@@ -11,6 +11,7 @@
 #include "base/functional/callback.h"
 #include "base/path_service.h"
 #include "base/strings/strcat.h"
+#include "chrome/enterprise_companion/installer_paths.h"
 #include "chrome/updater/constants.h"
 #include "chrome/updater/registration_data.h"
 #include "chrome/updater/updater_branding.h"
@@ -25,6 +26,11 @@ constexpr base::FilePath::CharType kSystemDataPath[] =
     FILE_PATH_LITERAL("/opt/");
 constexpr base::FilePath::CharType kUserRelativeDataPath[] =
     FILE_PATH_LITERAL(".local/");
+
+base::FilePath GetUpdaterFolderName() {
+  return base::FilePath(COMPANY_SHORTNAME_LOWERCASE_STRING)
+      .Append(PRODUCT_FULLNAME_DASHED_LOWERCASE_STRING);
+}
 
 }  // namespace
 
@@ -61,6 +67,18 @@ bool MigrateLegacyUpdaters(
         register_callback) {
   // There is no legacy update client for Linux.
   return true;
+}
+
+std::optional<base::FilePath> GetBundledEnterpriseCompanionExecutablePath(
+    UpdaterScope scope) {
+  std::optional<base::FilePath> install_dir =
+      GetVersionedInstallDirectory(scope);
+  if (!install_dir) {
+    return std::nullopt;
+  }
+
+  return install_dir->AppendASCII(
+      base::StrCat({enterprise_companion::kExecutableName, kExecutableSuffix}));
 }
 
 }  // namespace updater

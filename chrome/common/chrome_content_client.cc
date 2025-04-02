@@ -8,8 +8,10 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
+#include "base/check.h"
 #include "base/containers/flat_set.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -25,7 +27,6 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/common/channel_info.h"
-#include "chrome/common/child_process_logging.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -38,6 +39,9 @@
 #include "components/crash/core/common/crash_key.h"
 #include "components/dom_distiller/core/url_constants.h"
 #include "components/embedder_support/origin_trials/origin_trial_policy_impl.h"
+#include "components/heap_profiling/in_process/child_process_snapshot_controller.h"
+#include "components/heap_profiling/in_process/heap_profiler_controller.h"
+#include "components/heap_profiling/in_process/mojom/snapshot_controller.mojom.h"
 #include "components/services/heap_profiling/public/cpp/profiling_client.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/common/cdm_info.h"
@@ -68,7 +72,7 @@
 #include "base/win/windows_version.h"
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/common/constants.h"
 #endif
 
@@ -84,6 +88,7 @@
 
 #if BUILDFLAG(ENABLE_PDF)
 #include "components/pdf/common/constants.h"
+#include "components/pdf/common/pdf_util.h"
 #endif
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
@@ -218,8 +223,15 @@ void ChromeContentClient::AddContentDecryptionModules(
 //
 // Example standard schemes: https://, chrome-extension://, chrome://, file://
 // Example nonstandard schemes: mailto:, data:, javascript:, about:
+//
+// Warning: Adding a scheme here will make URLs with that scheme incompatible
+// with other parts of the web. If you just need the URL parser to handle the
+// hostname or path correctly, you don't need to add a scheme here since
+// non-special scheme URLs are now supported (see http://crbug.com/40063064 for
+// details). If you add a new scheme, please also add WPT tests for it like
+// https://crrev.com/c/5790445.
 static const char* const kChromeStandardURLSchemes[] = {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     extensions::kExtensionScheme,
 #endif
     chrome::kIsolatedAppScheme,   chrome::kChromeNativeScheme,
@@ -237,11 +249,11 @@ void ChromeContentClient::AddAdditionalSchemes(Schemes* schemes) {
   schemes->referrer_schemes.push_back(content::kAndroidAppScheme);
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   schemes->extension_schemes.push_back(extensions::kExtensionScheme);
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   schemes->savable_schemes.push_back(extensions::kExtensionScheme);
 #endif
   schemes->savable_schemes.push_back(chrome::kChromeSearchScheme);
@@ -250,7 +262,7 @@ void ChromeContentClient::AddAdditionalSchemes(Schemes* schemes) {
   // chrome-search: resources shouldn't trigger insecure content warnings.
   schemes->secure_schemes.push_back(chrome::kChromeSearchScheme);
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   // Treat extensions as secure because communication with them is entirely in
   // the browser, so there is no danger of manipulation or eavesdropping on
   // communication with them by third parties.
@@ -264,7 +276,7 @@ void ChromeContentClient::AddAdditionalSchemes(Schemes* schemes) {
   schemes->no_access_schemes.push_back(chrome::kChromeNativeScheme);
   schemes->secure_schemes.push_back(chrome::kChromeNativeScheme);
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   schemes->service_worker_schemes.push_back(extensions::kExtensionScheme);
   schemes->service_worker_schemes.push_back(url::kFileScheme);
 
@@ -308,7 +320,11 @@ std::u16string ChromeContentClient::GetLocalizedString(
   return l10n_util::GetStringFUTF16(message_id, replacement);
 }
 
-base::StringPiece ChromeContentClient::GetDataResource(
+bool ChromeContentClient::HasDataResource(int resource_id) const {
+  return ui::ResourceBundle::GetSharedInstance().HasDataResource(resource_id);
+}
+
+std::string_view ChromeContentClient::GetDataResource(
     int resource_id,
     ui::ResourceScaleFactor scale_factor) {
   return ui::ResourceBundle::GetSharedInstance().GetRawDataResourceForScale(
@@ -342,7 +358,6 @@ std::string ChromeContentClient::GetProcessTypeNameInEnglish(int type) {
 #endif
 
   NOTREACHED() << "Unknown child process type!";
-  return "Unknown";
 }
 
 blink::OriginTrialPolicy* ChromeContentClient::GetOriginTrialPolicy() {
@@ -365,6 +380,9 @@ media::MediaDrmBridgeClient* ChromeContentClient::GetMediaDrmBridgeClient() {
 void ChromeContentClient::ExposeInterfacesToBrowser(
     scoped_refptr<base::SequencedTaskRunner> io_task_runner,
     mojo::BinderMap* binders) {
+  // Sets up the client side of the multi-process heap profiler service.
+  // TODO(crbug.com/40915258): Hook up chrome://memory-internals to the
+  // in-process heap profiler, and delete this service.
   binders->Add<heap_profiling::mojom::ProfilingClient>(
       base::BindRepeating(
           [](mojo::PendingReceiver<heap_profiling::mojom::ProfilingClient>
@@ -374,4 +392,25 @@ void ChromeContentClient::ExposeInterfacesToBrowser(
             profiling_client->BindToInterface(std::move(receiver));
           }),
       io_task_runner);
+
+  // Sets up the simplified in-process heap profiler, if it's enabled.
+  const auto* heap_profiler_controller =
+      heap_profiling::HeapProfilerController::GetInstance();
+  if (heap_profiler_controller && heap_profiler_controller->IsEnabled()) {
+    binders->Add<heap_profiling::mojom::SnapshotController>(
+        base::BindRepeating(&heap_profiling::ChildProcessSnapshotController::
+                                CreateSelfOwnedReceiver),
+        // ChildProcessSnapshotController calls into HeapProfilerController,
+        // which can only be accessed on this sequence.
+        base::SequencedTaskRunner::GetCurrentDefault());
+  }
+}
+
+bool ChromeContentClient::IsFilePickerAllowedForCrossOriginSubframe(
+    const url::Origin& origin) {
+#if BUILDFLAG(ENABLE_PDF)
+  return IsPdfExtensionOrigin(origin);
+#else
+  return false;
+#endif
 }

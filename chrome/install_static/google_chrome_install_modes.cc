@@ -60,16 +60,32 @@ const InstallConstants kInstallModes[] = {
                          0x410d,
                          0x407f,
                          {0x8a, 0xf5, 0xd, 0xf3, 0x5a, 0x0, 0x5c,
-                          0xc8}},     // IElevator IID and TypeLib
-                                      // {463ABECF-410D-407F-8AF5-0DF35A005CC8}.
-        .default_channel_name = L"",  // The empty string means "stable".
+                          0xc8}},  // IElevator IID and TypeLib
+                                   // {463ABECF-410D-407F-8AF5-0DF35A005CC8}.
+        .tracing_service_clsid = {0x70457024,
+                                  0xd309,
+                                  0x462c,
+                                  {0xb2, 0xe0, 0x49, 0xa7, 0x71, 0x48, 0x7e,
+                                   0x46}},  // SystemTraceSession CLSID.
+        .tracing_service_iid = {0x056b3371,
+                                0x1c09,
+                                0x475b,
+                                {0xa8, 0xd7, 0x9e, 0x58, 0xbf, 0x45, 0x53,
+                                 0x3e}},  // ISystemTraceSessionChromium IID and
+                                          // TypeLib
+        .default_channel_name = L"",      // The empty string means "stable".
         .channel_strategy = ChannelStrategy::FLOATING,
         .supports_system_level = true,  // Supports system-level installs.
         .supports_set_as_default_browser =
             true,  // Supports in-product set as default browser UX.
+        .registers_tracing_service = false,  // Does not register the service.
         .app_icon_resource_index =
             icon_resources::kApplicationIndex,  // App icon resource index.
         .app_icon_resource_id = IDR_MAINFRAME,  // App icon resource id.
+        .html_doc_icon_resource_index =
+            icon_resources::kHtmlDocIndex,  // HTML doc icon resource index.
+        .pdf_doc_icon_resource_index =
+            icon_resources::kPDFDocIndex,  // PDF doc icon resource index.
         .sandbox_sid_prefix =
             L"S-1-15-2-3251537155-1984446955-2931258699-841473695-1938553385-"
             L"924012149-",  // App container sid prefix for sandbox.
@@ -110,14 +126,34 @@ const InstallConstants kInstallModes[] = {
                          {0x9f, 0xf, 0x90, 0x70, 0xe9, 0xa4, 0x2b,
                           0x5f}},  // IElevator IID and TypeLib
                                    // {A2721D66-376E-4D2F-9F0F-9070E9A42B5F}.
+        .tracing_service_clsid = {0xe64e8e46,
+                                  0x6756,
+                                  0x467e,
+                                  {0x9f, 0x61, 0x86, 0x16, 0xac, 0x13, 0xd1,
+                                   0xef}},  // SystemTraceSession CLSID.
+        .tracing_service_iid = {0xa69d7d7d,
+                                0x9a08,
+                                0x422a,
+                                {0xb6, 0xc6, 0xb7, 0xb8, 0xd3, 0x76, 0xa1,
+                                 0x2c}},  // ISystemTraceSessionChromium IID and
+                                          // TypeLib
         .default_channel_name = L"beta",  // Forced channel name.
         .channel_strategy = ChannelStrategy::FIXED,
         .supports_system_level = true,  // Supports system-level installs.
         .supports_set_as_default_browser =
             true,  // Supports in-product set as default browser UX.
+        .registers_tracing_service = false,  // Does not register the service.
         .app_icon_resource_index =
             icon_resources::kBetaApplicationIndex,  // App icon resource index.
         .app_icon_resource_id = IDR_X005_BETA,      // App icon resource id.
+        // Using Beta icon instead of html/pdf-specific icons. The PDF bar would
+        // interfere with the 'B' on the icon.
+        .html_doc_icon_resource_index =
+            icon_resources::kBetaApplicationIndex,  // HTML doc icon resource
+                                                    // index.
+        .pdf_doc_icon_resource_index =
+            icon_resources::kBetaApplicationIndex,  // PDF doc icon resource
+                                                    // index.
         .sandbox_sid_prefix =
             L"S-1-15-2-3251537155-1984446955-2931258699-841473695-1938553385-"
             L"924012151-",  // App container sid prefix for sandbox.
@@ -158,14 +194,34 @@ const InstallConstants kInstallModes[] = {
                          {0x8b, 0x6f, 0x80, 0x55, 0x7b, 0x8c, 0xe5,
                           0x71}},  // IElevator IID and TypeLib
                                    // {BB2AA26B-343A-4072-8B6F-80557B8CE571}.
-        .default_channel_name = L"dev",  // Forced channel name.
+        .tracing_service_clsid = {0x48c5c553,
+                                  0x20f9,
+                                  0x4cdc,
+                                  {0x83, 0x40, 0x85, 0x29, 0xab, 0x83, 0xc5,
+                                   0x52}},  // SystemTraceSession CLSID.
+        .tracing_service_iid = {0xe08adae8,
+                                0x9334,
+                                0x46ed,
+                                {0xb0, 0xcf, 0xdd, 0x17, 0x80, 0x15, 0x8d,
+                                 0x55}},  // ISystemTraceSessionChromium IID and
+                                          // TypeLib
+        .default_channel_name = L"dev",   // Forced channel name.
         .channel_strategy = ChannelStrategy::FIXED,
         .supports_system_level = true,  // Supports system-level installs.
         .supports_set_as_default_browser =
             true,  // Supports in-product set as default browser UX.
+        .registers_tracing_service = true,  // Registers the tracing service.
         .app_icon_resource_index =
             icon_resources::kDevApplicationIndex,  // App icon resource index.
         .app_icon_resource_id = IDR_X004_DEV,      // App icon resource id.
+        // Using Dev icon instead of html/pdf-specific icons. The PDF bar would
+        // interfere with the 'D' on the icon.
+        .html_doc_icon_resource_index =
+            icon_resources::kDevApplicationIndex,  // HTML doc icon resource
+                                                   // index.
+        .pdf_doc_icon_resource_index =
+            icon_resources::kDevApplicationIndex,  // PDF doc icon resource
+                                                   // index.
         .sandbox_sid_prefix =
             L"S-1-15-2-3251537155-1984446955-2931258699-841473695-1938553385-"
             L"924012152-",  // App container sid prefix for sandbox.
@@ -208,15 +264,34 @@ const InstallConstants kInstallModes[] = {
                          {0x9d, 0xd0, 0x61, 0xa8, 0xca, 0xce, 0xfe,
                           0xe4}},  // IElevator IID and TypeLib
                                    // {4F7CE041-28E9-484F-9DD0-61A8CACEFEE4}.
+        .tracing_service_clsid = {0x48c5c553,
+                                  0x20f9,
+                                  0x4cdc,
+                                  {0x83, 0x40, 0x85, 0x29, 0xab, 0x83, 0xc5,
+                                   0x52}},  // SystemTraceSession CLSID.
+        .tracing_service_iid = {0x6efb8558,
+                                0x68d1,
+                                0x4826,
+                                {0xa6, 0x12, 0xa1, 0x80, 0xb3, 0x57, 0x03,
+                                 0x75}},  // ISystemTraceSessionChromium IID and
+                                          // TypeLib
         .default_channel_name = L"canary",  // Forced channel name.
         .channel_strategy = ChannelStrategy::FIXED,
         .supports_system_level =
             false,  // Does not support system-level installs.
         .supports_set_as_default_browser =
             false,  // Does not support in-product set as default browser UX.
+        .registers_tracing_service = false,  // Does not register the service.
         .app_icon_resource_index =
             icon_resources::kSxSApplicationIndex,  // App icon resource index.
         .app_icon_resource_id = IDR_SXS,           // App icon resource id.
+        // Using Canary icon instead of html/pdf-specific icons.
+        .html_doc_icon_resource_index =
+            icon_resources::kSxSApplicationIndex,  // HTML doc icon resource
+                                                   // index.
+        .pdf_doc_icon_resource_index =
+            icon_resources::kSxSApplicationIndex,  // PDF doc icon resource
+                                                   // index.
         .sandbox_sid_prefix =
             L"S-1-15-2-3251537155-1984446955-2931258699-841473695-1938553385-"
             L"924012150-",  // App container sid prefix for sandbox.

@@ -97,7 +97,6 @@ bool MockExtensionSystem::FinishDelayedInstallationIfReady(
     const ExtensionId& extension_id,
     bool install_immediately) {
   NOTREACHED();
-  return false;
 }
 
 }  // namespace extensions

@@ -18,8 +18,7 @@
 #include "components/prefs/pref_service.h"
 #include "pref_names.h"
 
-namespace ash {
-namespace phonehub {
+namespace ash::phonehub {
 
 namespace {
 
@@ -264,7 +263,6 @@ void MultideviceFeatureAccessManagerImpl::OnNotificationSetupRequested() {
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -296,7 +294,6 @@ void MultideviceFeatureAccessManagerImpl::OnCombinedSetupRequested(
       break;
     default:
       NOTREACHED();
-      break;
   }
 }
 
@@ -320,7 +317,7 @@ void MultideviceFeatureAccessManagerImpl::OnFeatureSetupConnectionRequested() {
           DiscoveryEntryPoint::kMultiDeviceFeatureSetup);
       break;
     default:
-      DUMP_WILL_BE_NOTREACHED_NORETURN();
+      DUMP_WILL_BE_NOTREACHED();
       break;
   }
 }
@@ -478,5 +475,4 @@ bool MultideviceFeatureAccessManagerImpl::HasAccessStatusChanged(
   return false;
 }
 
-}  // namespace phonehub
-}  // namespace ash
+}  // namespace ash::phonehub

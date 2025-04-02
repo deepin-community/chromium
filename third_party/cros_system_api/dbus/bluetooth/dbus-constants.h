@@ -549,10 +549,16 @@ constexpr char kSolicitUUIDsProperty[] = "SolicitUUIDs";
 constexpr char kTypeProperty[] = "Type";
 constexpr char kIncludeTxPowerProperty[] = "IncludeTxPower";
 constexpr char kScanResponseDataProperty[] = "ScanResponseData";
+constexpr char kSecondaryChannelProperty[] = "SecondaryChannel";
 
 // Possible values for the "Type" property.
 constexpr char kTypeBroadcast[] = "broadcast";
 constexpr char kTypePeripheral[] = "peripheral";
+
+// Possible values for the "SecondaryChannel"
+constexpr char kPhy1M[] = "1M";
+constexpr char kPhy2M[] = "2M";
+constexpr char kPhyCodec[] = "Codec";
 }  // namespace bluetooth_advertisement
 
 // https://chromium.googlesource.com/chromiumos/third_party/bluez/+/refs/heads/chromeos-5.54/doc/advertisement-monitor-api.txt
@@ -659,6 +665,24 @@ constexpr char kBluetoothManagerServiceName[] =
     "org.chromium.bluetooth.Manager";
 constexpr char kBluetoothManagerCallbackInterface[] =
     "org.chromium.bluetooth.ManagerCallback";
+
+// Methods.
+constexpr char kBluetoothManagerRegisterCallback[] = "RegisterCallback";
+
+// Callback Methods.
+constexpr char kBluetoothManagerOnHciEnabledChanged[] = "OnHciEnabledChanged";
 }  // namespace bluetooth_manager
+
+// Floss's battery manager.
+namespace battery_manager {
+constexpr char kFlossBatteryProviderManagerInterface[] =
+    "org.chromium.bluetooth.BatteryProviderManager";
+constexpr char kFlossBatteryProviderManagerServicePath[] =
+    "/org/chromium/bluetooth/hci0/battery_provider_manager";
+constexpr char kFlossBatteryProviderManagerServiceName[] =
+    "org.chromium.bluetooth";
+constexpr char kFlossBatteryProviderManagerCallbackInterface[] =
+    "org.chromium.bluetooth.BatteryProviderCallback";
+}  // namespace battery_manager
 
 #endif  // SYSTEM_API_DBUS_BLUETOOTH_DBUS_CONSTANTS_H_

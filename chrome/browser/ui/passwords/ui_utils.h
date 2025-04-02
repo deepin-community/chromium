@@ -37,13 +37,10 @@ enum class PasswordTitleType {
 
 class Browser;
 class Profile;
+struct AccountInfo;
 
 // The desired width and height in pixels for an account avatar.
 constexpr int kAvatarImageSize = 32;
-
-// The desired width and height for the 'i' icon used for the PSL matches in the
-// account chooser.
-constexpr int kInfoIconSize = 16;
 
 // Crops and scales |image_skia| to the desired size for an account avatar.
 gfx::ImageSkia ScaleImageForAccountAvatar(gfx::ImageSkia image_skia);
@@ -101,25 +98,22 @@ std::u16string GetDisplayPassword(const password_manager::PasswordForm& form);
 // syncs the PRIORITY_PREFERENCE). The view appearance might depend on it.
 bool IsSyncingAutosignSetting(Profile* profile);
 
-// Constructs a URL to the Google Password Manager with the specified
-// |referrer|.
-GURL GetGooglePasswordManagerURL(
-    password_manager::ManagePasswordsReferrer referrer);
+// Returns a string URL to the Google Password Manager's passwords subpage
+std::string GetGooglePasswordManagerSubPageURLStr();
 
 #if !BUILDFLAG(IS_ANDROID)
-// Navigates to either the Google Password Manager or the Chrome Password
-// Settings page, depending on the user's password syncing state and whether the
-// corresponding feature flag is enabled.
+// Navigates to the Google Password Manager page.
 void NavigateToManagePasswordsPage(
     Browser* browser,
     password_manager::ManagePasswordsReferrer referrer);
 
-// Navigates to the Password Manager settings page and focuses the account store
-// toggle.
-void NavigateToManagePasswordsSettingsAccountStoreToggle(Browser* browser);
+// Navigates to the Google Password Manager subpage to show the credential
+// details for the `password_domain_name`.
+void NavigateToPasswordDetailsPage(
+    Browser* browser,
+    const std::string& password_domain_name,
+    password_manager::ManagePasswordsReferrer referrer);
 
-// Navigates to Passwords Checkup page.
-void NavigateToPasswordCheckupPage(Profile* profile);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 mojo::Remote<network::mojom::URLLoaderFactory> GetURLLoaderForMainFrame(
@@ -128,5 +122,14 @@ mojo::Remote<network::mojom::URLLoaderFactory> GetURLLoaderForMainFrame(
 // Returns that vector icon to represent Google Password Manager in Desktop UI.
 // Returns different version for branded builds.
 const gfx::VectorIcon& GooglePasswordManagerVectorIcon();
+
+std::optional<AccountInfo> GetAccountInfoForPasswordMessages(
+    syncer::SyncService* sync_service,
+    signin::IdentityManager* identity_manager);
+
+// Returns the user account name to be displayed in dialogs, bubbles, etc.
+std::string GetDisplayableAccountName(
+    syncer::SyncService* sync_service,
+    signin::IdentityManager* identity_manager);
 
 #endif  // CHROME_BROWSER_UI_PASSWORDS_UI_UTILS_H_

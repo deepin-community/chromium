@@ -41,9 +41,12 @@ SendTabToSelfClientServiceFactory::SendTabToSelfClientServiceFactory()
           "SendTabToSelfClientService",
           ProfileSelections::Builder()
               .WithRegular(ProfileSelection::kOriginalOnly)
-              // TODO(crbug.com/1418376): Check if this service is needed in
+              // TODO(crbug.com/40257657): Check if this service is needed in
               // Guest mode.
               .WithGuest(ProfileSelection::kOriginalOnly)
+              // TODO(crbug.com/41488885): Check if this service is needed for
+              // Ash Internals.
+              .WithAshInternals(ProfileSelection::kOriginalOnly)
               .Build()) {
   DependsOn(NotificationDisplayServiceFactory::GetInstance());
   DependsOn(SendTabToSelfSyncServiceFactory::GetInstance());
@@ -68,15 +71,17 @@ SendTabToSelfClientServiceFactory::BuildServiceInstanceForBrowserContext(
   user_manager::User* user =
       ash::ProfileHelper::Get()->GetUserByProfile(profile);
   // Ensure that the profile is a user profile.
-  if (!user)
+  if (!user) {
     return nullptr;
+  }
   // Ensure that the user is a Gaia user, since other types of user should not
   // have access to the service.
-  if (!user->HasGaiaAccount())
+  if (!user->HasGaiaAccount()) {
     return nullptr;
+  }
 #endif
 
-  // TODO(crbug.com/976741) refactor profile out of STTSClient constructor.
+  // TODO(crbug.com/40632832) refactor profile out of STTSClient constructor.
   return std::make_unique<SendTabToSelfClientService>(
       profile, sync_service->GetSendTabToSelfModel());
 }

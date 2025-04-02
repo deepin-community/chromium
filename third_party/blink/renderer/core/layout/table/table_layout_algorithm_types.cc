@@ -6,6 +6,7 @@
 
 #include "third_party/blink/renderer/core/layout/block_node.h"
 #include "third_party/blink/renderer/core/layout/constraint_space_builder.h"
+#include "third_party/blink/renderer/core/layout/length_utils.h"
 #include "third_party/blink/renderer/core/layout/table/layout_table_caption.h"
 #include "third_party/blink/renderer/core/layout/table/layout_table_cell.h"
 #include "third_party/blink/renderer/core/layout/table/layout_table_column.h"
@@ -156,8 +157,8 @@ TableTypes::CellInlineConstraint TableTypes::CreateCellInlineConstraint(
       const auto space = builder.ToConstraintSpace();
 
       cached_min_max_sizes =
-          node.ComputeMinMaxSizes(table_writing_mode,
-                                  MinMaxSizesType::kIntrinsic, space)
+          node.ComputeMinMaxSizes(table_writing_mode, SizeType::kIntrinsic,
+                                  space)
               .sizes;
     }
 
@@ -364,14 +365,16 @@ TableGroupedChildrenIterator& TableGroupedChildrenIterator::operator++() {
       break;
     case kBody:
       ++position_;
-      if (body_vector_->begin() + position_ == grouped_children_.bodies.end())
+      // TODO(crbug.com/351564777): Resolve a buffer safety issue.
+      if (UNSAFE_TODO(body_vector_->begin() + position_) ==
+          grouped_children_.bodies.end()) {
         AdvanceForwardToNonEmptySection();
+      }
       break;
     case kEnd:
       break;
     case kNone:
       NOTREACHED();
-      break;
   }
   return *this;
 }
@@ -393,7 +396,6 @@ TableGroupedChildrenIterator& TableGroupedChildrenIterator::operator--() {
       break;
     case kNone:
       NOTREACHED();
-      break;
   }
   return *this;
 }
@@ -409,7 +411,6 @@ BlockNode TableGroupedChildrenIterator::operator*() const {
     case kEnd:
     case kNone:
       NOTREACHED();
-      return BlockNode(nullptr);
   }
 }
 
@@ -451,7 +452,6 @@ void TableGroupedChildrenIterator::AdvanceForwardToNonEmptySection() {
       break;
     case kEnd:
       NOTREACHED();
-      break;
   }
 }
 
@@ -459,7 +459,6 @@ void TableGroupedChildrenIterator::AdvanceBackwardToNonEmptySection() {
   switch (current_section_) {
     case kNone:
       NOTREACHED();
-      break;
     case kHead:
       current_section_ = kNone;
       break;

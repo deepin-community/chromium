@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "ash/session/session_controller_impl.h"
 #include "ash/shell.h"
 #include "base/check.h"
 #include "base/check_deref.h"
@@ -301,16 +302,17 @@ remoting::mojom::SupportSessionParamsPtr GetSessionParameters(
 
 remoting::ChromeOsEnterpriseParams GetEnterpriseParameters(
     const SessionParameters& parameters) {
-  return remoting::ChromeOsEnterpriseParams{
-      .suppress_user_dialogs = !parameters.show_confirmation_dialog,
-      .suppress_notifications = !parameters.show_confirmation_dialog,
-      .terminate_upon_input = parameters.terminate_upon_input,
-      .curtain_local_user_session = parameters.curtain_local_user_session,
-      .show_troubleshooting_tools = parameters.show_troubleshooting_tools,
-      .allow_troubleshooting_tools = parameters.allow_troubleshooting_tools,
-      .allow_reconnections = parameters.allow_reconnections,
-      .allow_file_transfer = parameters.allow_file_transfer,
-  };
+  remoting::ChromeOsEnterpriseParams params;
+  params.suppress_user_dialogs = !parameters.show_confirmation_dialog;
+  params.suppress_notifications = !parameters.show_confirmation_dialog;
+  params.terminate_upon_input = parameters.terminate_upon_input;
+  params.curtain_local_user_session = parameters.curtain_local_user_session;
+  params.show_troubleshooting_tools = parameters.show_troubleshooting_tools;
+  params.allow_troubleshooting_tools = parameters.allow_troubleshooting_tools;
+  params.allow_reconnections = parameters.allow_reconnections;
+  params.allow_file_transfer = parameters.allow_file_transfer;
+  // TODO: joedow - Add new enterprise fields.
+  return params;
 }
 
 DeviceOAuth2TokenService* GetOAuthService() {
@@ -723,6 +725,8 @@ void CrdAdminSessionController::RegisterLocalStatePrefs(
   registry->RegisterBooleanPref(prefs::kRemoteAdminWasPresent, false);
   registry->RegisterBooleanPref(
       prefs::kRemoteAccessHostAllowEnterpriseRemoteSupportConnections, true);
+  registry->RegisterBooleanPref(
+      prefs::kDeviceAllowEnterpriseRemoteAccessConnections, true);
 }
 
 }  // namespace policy

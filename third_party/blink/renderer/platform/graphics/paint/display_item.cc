@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/platform/graphics/paint/foreign_layer_display_item.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_artifact.h"
 #include "third_party/blink/renderer/platform/graphics/paint/scrollbar_display_item.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/size_assertions.h"
 
 namespace blink {
@@ -95,7 +96,6 @@ static WTF::String PaintPhaseAsDebugString(int paint_phase) {
       return "PaintPhaseMask";
     default:
       NOTREACHED();
-      return "Unknown";
   }
 }
 
@@ -111,8 +111,7 @@ static WTF::String PaintPhaseAsDebugString(int paint_phase) {
 
 #define DEFAULT_CASE \
   default:           \
-    NOTREACHED();    \
-    return "Unknown"
+    NOTREACHED();
 
 static WTF::String SpecialDrawingTypeAsDebugString(DisplayItem::Type type) {
   switch (type) {
@@ -185,7 +184,6 @@ WTF::String DisplayItem::TypeAsDebugString(Type type) {
     DEBUG_STRING_CASE(RegionCapture);
     DEBUG_STRING_CASE(ScrollHitTest);
     DEBUG_STRING_CASE(ResizerScrollHitTest);
-    DEBUG_STRING_CASE(PluginScrollHitTest);
     DEBUG_STRING_CASE(ScrollbarHitTest);
     DEBUG_STRING_CASE(LayerChunk);
     DEBUG_STRING_CASE(LayerChunkForeground);
@@ -211,16 +209,13 @@ String DisplayItem::IdAsString(const PaintArtifact& paint_artifact) const {
 }
 
 void DisplayItem::PropertiesAsJSON(JSONObject& json,
-                                   const PaintArtifact& paint_artifact,
-                                   bool client_known_to_be_alive) const {
+                                   const PaintArtifact& paint_artifact) const {
   json.SetString("id", IdAsString(paint_artifact));
   if (IsSubsequenceTombstone()) {
     return;
   }
-  if (client_known_to_be_alive) {
-    json.SetString("invalidation", PaintInvalidationReasonToString(
-                                       GetPaintInvalidationReason()));
-  }
+  json.SetString("invalidation",
+                 PaintInvalidationReasonToString(GetPaintInvalidationReason()));
   json.SetString("visualRect", String(VisualRect().ToString()));
   if (GetRasterEffectOutset() != RasterEffectOutset::kNone) {
     json.SetDouble(

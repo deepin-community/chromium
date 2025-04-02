@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/frame/webui_tab_strip_container_view.h"
+
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -100,4 +101,4 @@ TEST_F(WebUITabStripDevToolsTest, DevToolsWindowHasNoTabStrip) {
   EXPECT_EQ(nullptr, browser_view()->webui_tab_strip());
 }
 
-// TODO(crbug.com/1066624): add coverage of open and close gestures.
+// TODO(crbug.com/40124617): add coverage of open and close gestures.

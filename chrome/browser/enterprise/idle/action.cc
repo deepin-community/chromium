@@ -4,6 +4,7 @@
 
 #include "chrome/browser/enterprise/idle/action.h"
 
+#include <algorithm>
 #include <cstring>
 #include <utility>
 
@@ -12,7 +13,6 @@
 #include "base/containers/flat_map.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
-#include "base/ranges/algorithm.h"
 #include "base/scoped_observation.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_constants.h"
@@ -45,7 +45,7 @@ namespace {
 bool ProfileHasBrowsers(const Profile* profile) {
   DCHECK(profile);
   profile = profile->GetOriginalProfile();
-  return base::ranges::any_of(
+  return std::ranges::any_of(
       *BrowserList::GetInstance(), [profile](Browser* browser) {
         return browser->profile()->GetOriginalProfile() == profile;
       });
@@ -57,7 +57,7 @@ class ShowDialogAction : public Action {
  public:
   explicit ShowDialogAction(base::flat_set<ActionType> action_types)
       : Action(static_cast<int>(ActionType::kShowDialog)),
-        action_types_(action_types) {}
+        action_types_(std::move(action_types)) {}
 
   void Run(Profile* profile, Continuation continuation) override {
     base::TimeDelta timeout =
@@ -80,7 +80,6 @@ class ShowDialogAction : public Action {
 
   bool ShouldNotifyUserOfPendingDestructiveAction(Profile* profile) override {
     NOTREACHED();  // Should only be called in ActionFactory::Build().
-    return false;
   }
 
  private:
@@ -108,7 +107,7 @@ class CloseBrowsersAction : public Action {
     }
 
     continuation_ = std::move(continuation);
-    // TODO(crbug.com/1316551): Get customer feedback on whether
+    // TODO(crbug.com/40222234): Get customer feedback on whether
     // skip_beforeunload should be true or false.
     BrowserList::CloseAllBrowsersWithProfile(
         profile,
@@ -165,7 +164,7 @@ class ShowProfilePickerAction : public Action {
 // Multiple data types may be grouped into a single ClearBrowsingDataAction
 // object.
 //
-// TODO(crbug.com/1326685): Call ChromeBrowsingDataLifetimeManager, instead of
+// TODO(crbug.com/40840688): Call ChromeBrowsingDataLifetimeManager, instead of
 // BrowsingDataRemover directly? Especially if we add a keepalive, or use
 // kClearBrowsingDataOnExitDeletionPending...
 class ClearBrowsingDataAction : public Action,
@@ -175,7 +174,7 @@ class ClearBrowsingDataAction : public Action,
       base::flat_set<ActionType> action_types,
       content::BrowsingDataRemover* browsing_data_remover_for_testing)
       : Action(static_cast<int>(ActionType::kClearBrowsingHistory)),
-        action_types_(action_types),
+        action_types_(std::move(action_types)),
         browsing_data_remover_for_testing_(browsing_data_remover_for_testing) {}
 
   ~ClearBrowsingDataAction() override = default;
@@ -193,7 +192,7 @@ class ClearBrowsingDataAction : public Action,
     deletion_start_time_ = base::TimeTicks::Now();
     remover->RemoveAndReply(base::Time(), base::Time::Max(), GetRemoveMask(),
                             GetOriginTypeMask(), this);
-    // TODO(crbug.com/1326685): Add a pair of keepalives?
+    // TODO(crbug.com/40840688): Add a pair of keepalives?
   }
 
   bool ShouldNotifyUserOfPendingDestructiveAction(Profile* profile) override {
@@ -413,7 +412,7 @@ ActionFactory::ActionQueue ActionFactory::Build(
         break;
 
       default:
-        // TODO(crbug.com/1316551): Perform validation in the `PolicyHandler`.
+        // TODO(crbug.com/40222234): Perform validation in the `PolicyHandler`.
         NOTREACHED();
     }
   }
@@ -425,7 +424,7 @@ ActionFactory::ActionQueue ActionFactory::Build(
   }
 
 #if !BUILDFLAG(IS_ANDROID)
-  bool needs_dialog = base::ranges::any_of(actions, [profile](const auto& a) {
+  bool needs_dialog = std::ranges::any_of(actions, [profile](const auto& a) {
     return a->ShouldNotifyUserOfPendingDestructiveAction(profile);
   });
   if (needs_dialog) {

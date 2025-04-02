@@ -101,14 +101,16 @@ MTLTextureType MetalTextureViewType(wgpu::TextureViewDimension dimension,
     }
 }
 
-bool RequiresCreatingNewTextureView(const TextureBase* texture,
-                                    const TextureViewDescriptor* textureViewDescriptor) {
+bool RequiresCreatingNewTextureView(
+    const TextureBase* texture,
+    wgpu::TextureUsage internalViewUsage,
+    const UnpackedPtr<TextureViewDescriptor>& textureViewDescriptor) {
     constexpr wgpu::TextureUsage kShaderUsageNeedsView =
         wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::TextureBinding;
     constexpr wgpu::TextureUsage kUsageNeedsView = kShaderUsageNeedsView |
                                                    wgpu::TextureUsage::RenderAttachment |
                                                    wgpu::TextureUsage::StorageAttachment;
-    if ((texture->GetInternalUsage() & kUsageNeedsView) == 0) {
+    if ((internalViewUsage & kUsageNeedsView) == 0) {
         return false;
     }
 
@@ -190,31 +192,29 @@ bool AllowFormatReinterpretationWithoutFlag(MTLPixelFormat origin,
             SRGB_PAIR(MTLPixelFormatBC7_RGBAUnorm, MTLPixelFormatBC7_RGBAUnorm_sRGB);
 #endif
         default:
-            if (@available(macOS 11.0, iOS 8.0, *)) {
-                switch (origin) {
-                    SRGB_PAIR(MTLPixelFormatEAC_RGBA8, MTLPixelFormatEAC_RGBA8_sRGB);
+            switch (origin) {
+                SRGB_PAIR(MTLPixelFormatEAC_RGBA8, MTLPixelFormatEAC_RGBA8_sRGB);
 
-                    SRGB_PAIR(MTLPixelFormatETC2_RGB8, MTLPixelFormatETC2_RGB8_sRGB);
-                    SRGB_PAIR(MTLPixelFormatETC2_RGB8A1, MTLPixelFormatETC2_RGB8A1_sRGB);
+                SRGB_PAIR(MTLPixelFormatETC2_RGB8, MTLPixelFormatETC2_RGB8_sRGB);
+                SRGB_PAIR(MTLPixelFormatETC2_RGB8A1, MTLPixelFormatETC2_RGB8A1_sRGB);
 
-                    SRGB_PAIR(MTLPixelFormatASTC_4x4_LDR, MTLPixelFormatASTC_4x4_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_5x4_LDR, MTLPixelFormatASTC_5x4_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_5x5_LDR, MTLPixelFormatASTC_5x5_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_6x5_LDR, MTLPixelFormatASTC_6x5_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_6x6_LDR, MTLPixelFormatASTC_6x6_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_8x5_LDR, MTLPixelFormatASTC_8x5_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_8x6_LDR, MTLPixelFormatASTC_8x6_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_8x8_LDR, MTLPixelFormatASTC_8x8_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_10x5_LDR, MTLPixelFormatASTC_10x5_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_10x6_LDR, MTLPixelFormatASTC_10x6_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_10x8_LDR, MTLPixelFormatASTC_10x8_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_10x10_LDR, MTLPixelFormatASTC_10x10_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_12x10_LDR, MTLPixelFormatASTC_12x10_sRGB);
-                    SRGB_PAIR(MTLPixelFormatASTC_12x12_LDR, MTLPixelFormatASTC_12x12_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_4x4_LDR, MTLPixelFormatASTC_4x4_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_5x4_LDR, MTLPixelFormatASTC_5x4_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_5x5_LDR, MTLPixelFormatASTC_5x5_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_6x5_LDR, MTLPixelFormatASTC_6x5_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_6x6_LDR, MTLPixelFormatASTC_6x6_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_8x5_LDR, MTLPixelFormatASTC_8x5_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_8x6_LDR, MTLPixelFormatASTC_8x6_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_8x8_LDR, MTLPixelFormatASTC_8x8_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_10x5_LDR, MTLPixelFormatASTC_10x5_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_10x6_LDR, MTLPixelFormatASTC_10x6_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_10x8_LDR, MTLPixelFormatASTC_10x8_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_10x10_LDR, MTLPixelFormatASTC_10x10_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_12x10_LDR, MTLPixelFormatASTC_12x10_sRGB);
+                SRGB_PAIR(MTLPixelFormatASTC_12x12_LDR, MTLPixelFormatASTC_12x12_sRGB);
 
-                    default:
-                        break;
-                }
+                default:
+                    break;
             }
 
             return false;
@@ -248,10 +248,8 @@ NSRef<MTLTextureDescriptor> Texture::CreateMetalTextureDescriptor() const {
     // specified that this texture is for a transient attachment, in which case
     // the texture should be created in memoryless storage mode.
     mtlDesc.storageMode = MTLStorageModePrivate;
-    if (@available(macOS 11.0, iOS 10.0, *)) {
-        if (GetInternalUsage() & wgpu::TextureUsage::TransientAttachment) {
+    if (GetInternalUsage() & wgpu::TextureUsage::TransientAttachment) {
             mtlDesc.storageMode = MTLStorageModeMemoryless;
-        }
     }
 
     // Choose the correct MTLTextureType and paper over differences in how the array layer count
@@ -321,7 +319,7 @@ ResultOrError<Ref<Texture>> Texture::CreateFromSharedTextureMemory(
     Device* device = ToBackend(memory->GetDevice());
     Ref<Texture> texture = AcquireRef(new Texture(device, descriptor));
     DAWN_TRY(texture->InitializeFromSharedTextureMemory(memory, descriptor));
-    texture->mSharedTextureMemoryContents = memory->GetContents();
+    texture->mSharedResourceMemoryContents = memory->GetContents();
     return texture;
 }
 
@@ -341,7 +339,7 @@ MaybeError Texture::InitializeAsInternalTexture(const UnpackedPtr<TextureDescrip
         NSRef<MTLTextureDescriptor> mtlDesc = CreateMetalTextureDescriptor();
         mMtlUsage = [*mtlDesc usage];
         mMtlFormat = [*mtlDesc pixelFormat];
-        mMtlPlaneTextures->resize(1);
+        mMtlPlaneTextures.resize(1);
         mMtlPlaneTextures[0] =
             AcquireNSPRef([device->GetMTLDevice() newTextureWithDescriptor:mtlDesc.Get()]);
 
@@ -368,10 +366,10 @@ MaybeError Texture::InitializeAsInternalTexture(const UnpackedPtr<TextureDescrip
         // Multiplanar format doesn't have equivalent MTLPixelFormat so just set it to invalid.
         mMtlFormat = MTLPixelFormatInvalid;
         const size_t numPlanes = IOSurfaceGetPlaneCount(GetIOSurface());
-        mMtlPlaneTextures->resize(numPlanes);
+        mMtlPlaneTextures.resize(numPlanes);
         for (size_t plane = 0; plane < numPlanes; ++plane) {
-            mMtlPlaneTextures[plane] = AcquireNSPRef(CreateTextureMtlForPlane(
-                mMtlUsage, GetFormat(), plane, device, GetSampleCount(), GetIOSurface()));
+            mMtlPlaneTextures[plane] = AcquireNSPRef(
+                CreateTextureMtlForPlane(mMtlUsage, GetFormat(), plane, device, GetIOSurface()));
             if (mMtlPlaneTextures[plane] == nil) {
                 return DAWN_INTERNAL_ERROR("Failed to create MTLTexture plane view for IOSurface.");
             }
@@ -388,7 +386,7 @@ void Texture::InitializeAsWrapping(const UnpackedPtr<TextureDescriptor>& descrip
     NSRef<MTLTextureDescriptor> mtlDesc = CreateMetalTextureDescriptor();
     mMtlUsage = [*mtlDesc usage];
     mMtlFormat = [*mtlDesc pixelFormat];
-    mMtlPlaneTextures->resize(1);
+    mMtlPlaneTextures.resize(1);
     mMtlPlaneTextures[0] = std::move(wrapped);
     SetLabelImpl();
 }
@@ -412,40 +410,17 @@ MaybeError Texture::InitializeFromSharedTextureMemory(
 }
 
 void Texture::SynchronizeTextureBeforeUse(CommandRecordingContext* commandContext) {
-    if (@available(macOS 10.14, iOS 12.0, *)) {
         SharedTextureMemoryBase::PendingFenceList fences;
-        SharedTextureMemoryContents* contents = GetSharedTextureMemoryContents();
+        SharedResourceMemoryContents* contents = GetSharedResourceMemoryContents();
         if (contents != nullptr) {
             contents->AcquirePendingFences(&fences);
-            contents->SetLastUsageSerial(GetDevice()->GetQueue()->GetPendingCommandSerial());
         }
-
-        if (!mWaitEvents.empty() || !fences->empty()) {
-            // There may be an open blit encoder from a copy command or writeBuffer.
-            // Wait events are only allowed if there is no encoder open.
-            commandContext->EndBlit();
-        }
-        auto commandBuffer = commandContext->GetCommands();
-        // Consume the wait events on the texture. They will be empty after this loop.
-        for (auto waitEvent : std::move(mWaitEvents)) {
-            id rawEvent = *waitEvent.sharedEvent;
-            id<MTLSharedEvent> sharedEvent = static_cast<id<MTLSharedEvent>>(rawEvent);
-            [commandBuffer encodeWaitForEvent:sharedEvent value:waitEvent.signaledValue];
-        }
-
         for (const auto& fence : fences) {
-            [commandBuffer encodeWaitForEvent:ToBackend(fence.object)->GetMTLSharedEvent()
-                                        value:fence.signaledValue];
+            commandContext->WaitForSharedEvent(ToBackend(fence.object)->GetMTLSharedEvent(),
+                                               fence.signaledValue);
         }
-    }
-}
 
-void Texture::IOSurfaceEndAccess(ExternalImageIOSurfaceEndAccessDescriptor* descriptor) {
-    DAWN_ASSERT(descriptor);
-    ToBackend(GetDevice()->GetQueue())->ExportLastSignaledEvent(descriptor);
-    descriptor->isInitialized = IsSubresourceContentInitialized(GetAllSubresources());
-    // Destroy the texture as it should not longer be used after EndAccess.
-    Destroy();
+    mLastSharedTextureMemoryUsageSerial = GetDevice()->GetQueue()->GetPendingCommandSerial();
 }
 
 Texture::Texture(DeviceBase* dev, const UnpackedPtr<TextureDescriptor>& desc)
@@ -462,16 +437,16 @@ void Texture::DestroyImpl() {
     //   is implicitly destroyed. This case is thread-safe because there are no
     //   other threads using the texture since there are no other live refs.
     TextureBase::DestroyImpl();
-    mMtlPlaneTextures->clear();
+    mMtlPlaneTextures.clear();
     mIOSurface = nullptr;
 }
 
 void Texture::SetLabelImpl() {
     if (!GetFormat().IsMultiPlanar()) {
-        DAWN_ASSERT(mMtlPlaneTextures->size() == 1);
+        DAWN_ASSERT(mMtlPlaneTextures.size() == 1);
         SetDebugName(GetDevice(), mMtlPlaneTextures[0].Get(), "Dawn_Texture", GetLabel());
     } else {
-        for (size_t i = 0; i < mMtlPlaneTextures->size(); ++i) {
+        for (size_t i = 0; i < mMtlPlaneTextures.size(); ++i) {
             SetDebugName(GetDevice(), mMtlPlaneTextures[i].Get(),
                          absl::StrFormat("Dawn_Plane_Texture[%zu]", i).c_str(), GetLabel());
         }
@@ -481,16 +456,16 @@ void Texture::SetLabelImpl() {
 id<MTLTexture> Texture::GetMTLTexture(Aspect aspect) const {
     switch (aspect) {
         case Aspect::Plane0:
-            DAWN_ASSERT(mMtlPlaneTextures->size() > 1);
+            DAWN_ASSERT(mMtlPlaneTextures.size() > 1);
             return mMtlPlaneTextures[0].Get();
         case Aspect::Plane1:
-            DAWN_ASSERT(mMtlPlaneTextures->size() > 1);
+            DAWN_ASSERT(mMtlPlaneTextures.size() > 1);
             return mMtlPlaneTextures[1].Get();
         case Aspect::Plane2:
-            DAWN_ASSERT(mMtlPlaneTextures->size() > 2);
+            DAWN_ASSERT(mMtlPlaneTextures.size() > 2);
             return mMtlPlaneTextures[2].Get();
         default:
-            DAWN_ASSERT(mMtlPlaneTextures->size() == 1);
+            DAWN_ASSERT(mMtlPlaneTextures.size() == 1);
             return mMtlPlaneTextures[0].Get();
     }
 }
@@ -783,14 +758,15 @@ MaybeError Texture::EnsureSubresourceContentInitialized(CommandRecordingContext*
 }
 
 // static
-ResultOrError<Ref<TextureView>> TextureView::Create(TextureBase* texture,
-                                                    const TextureViewDescriptor* descriptor) {
+ResultOrError<Ref<TextureView>> TextureView::Create(
+    TextureBase* texture,
+    const UnpackedPtr<TextureViewDescriptor>& descriptor) {
     Ref<TextureView> view = AcquireRef(new TextureView(texture, descriptor));
     DAWN_TRY(view->Initialize(descriptor));
     return view;
 }
 
-MaybeError TextureView::Initialize(const TextureViewDescriptor* descriptor) {
+MaybeError TextureView::Initialize(const UnpackedPtr<TextureViewDescriptor>& descriptor) {
     DeviceBase* device = GetDevice();
     Texture* texture = ToBackend(GetTexture());
 
@@ -802,7 +778,7 @@ MaybeError TextureView::Initialize(const TextureViewDescriptor* descriptor) {
     Aspect aspect = SelectFormatAspects(texture->GetFormat(), descriptor->aspect);
     id<MTLTexture> mtlTexture = texture->GetMTLTexture(aspect);
 
-    bool needsNewView = RequiresCreatingNewTextureView(texture, descriptor);
+    bool needsNewView = RequiresCreatingNewTextureView(texture, GetInternalUsage(), descriptor);
     if (device->IsToggleEnabled(Toggle::MetalUseCombinedDepthStencilFormatForStencil8) &&
         GetTexture()->GetFormat().format == wgpu::TextureFormat::Stencil8) {
         // If MetalUseCombinedDepthStencilFormatForStencil8 is true and the format is Stencil8,
@@ -863,7 +839,7 @@ id<MTLTexture> TextureView::GetMTLTexture() const {
 }
 
 TextureView::AttachmentInfo TextureView::GetAttachmentInfo() const {
-    DAWN_ASSERT(GetTexture()->GetInternalUsage() &
+    DAWN_ASSERT(GetInternalUsage() &
                 (wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::StorageAttachment));
     // Use our own view if the formats do not match.
     // If the formats do not match, format reinterpretation will be required.

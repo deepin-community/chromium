@@ -4,13 +4,14 @@
 
 #include "third_party/blink/renderer/core/layout/inline/fragment_items.h"
 
-#include "base/ranges/algorithm.h"
+#include <algorithm>
+
 #include "third_party/blink/renderer/core/layout/inline/fragment_items_builder.h"
 #include "third_party/blink/renderer/core/layout/inline/inline_cursor.h"
 #include "third_party/blink/renderer/core/layout/layout_block.h"
 #include "third_party/blink/renderer/core/layout/physical_box_fragment.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/clear_collection_scope.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/gc_plugin.h"
 
 namespace blink {
 
@@ -61,19 +62,20 @@ FragmentItems::FragmentItems(const FragmentItems& other)
     // |FragmentItem|.
     if (auto* layout_text =
             DynamicTo<LayoutText>(other_item.GetMutableLayoutObject()))
-      layout_text->DetachAbstractInlineTextBoxesIfNeeded();
+      layout_text->DetachAxHooksIfNeeded();
   }
 }
 
 bool FragmentItems::IsSubSpan(const Span& span) const {
-  return span.empty() ||
-         (span.data() >= ItemsData() && &span.back() < ItemsData() + Size());
+  return span.empty() || (span.data() >= ItemsData() && !items_.empty() &&
+                          &span.back() <= &items_.back());
 }
 
 void FragmentItems::FinalizeAfterLayout(
     const HeapVector<Member<const LayoutResult>, 1>& results,
     LayoutBlockFlow& container) {
   struct LastItem {
+    GC_PLUGIN_IGNORE("GC API violation: https://crbug.com/389707047")
     const FragmentItem* item;
     wtf_size_t fragment_id;
     wtf_size_t item_index;
@@ -96,7 +98,7 @@ void FragmentItems::FinalizeAfterLayout(
     const auto& fragment =
         To<PhysicalBoxFragment>(result->GetPhysicalFragment());
     const FragmentItems* fragment_items = fragment.Items();
-    if (UNLIKELY(!fragment_items)) {
+    if (!fragment_items) [[unlikely]] {
       may_be_non_contiguous_ifc = true;
       continue;
     }
@@ -110,14 +112,25 @@ void FragmentItems::FinalizeAfterLayout(
         DCHECK_EQ(item.DeltaToNextForSameLayoutObject(), 0u);
         item.SetFragmentId(line_fragment_id++);
         continue;
+      } else if (item.IsEllipsis() &&
+                 item.GetLayoutObject() == fragment.GetLayoutObject()) {
+        DCHECK(
+            RuntimeEnabledFeatures::CSSLineClampLineBreakingEllipsisEnabled());
+        // Line-clamp ellipsis
+        continue;
       } else if (!found_inflow_content) {
         // Resumed floats may take up all the space in the containing block
         // fragment, leaving no room for actual content inside the inline
         // formatting context. The non-atomic inline boxes themselves also don't
         // contribute to having inflow content, as they may just be wrappers
         // around such floats. We need something "real", such as text or a
-        // non-atomic inline.
-        found_inflow_content = !item.IsFloating() && !item.IsInlineBox();
+        // non-atomic inline. Blocks in inlines cannot unconditionally count as
+        // "real" here, since it's possible that they only contain fragmented
+        // parallel flows (e.g. floats). We *could* examine this situation more
+        // closely, since there might indeed be real in-flow content in there,
+        // but let's keep this as simple as possible.
+        found_inflow_content = !item.IsFloating() && !item.IsInlineBox() &&
+                               !item.IsBlockInInline();
       }
       LayoutObject* const layout_object = item.GetMutableLayoutObject();
       DCHECK(!layout_object->IsOutOfFlowPositioned());
@@ -126,7 +139,7 @@ void FragmentItems::FinalizeAfterLayout(
       item.SetDeltaToNextForSameLayoutObject(0);
       const bool use_break_token =
           layout_object->IsFloating() || !layout_object->IsInline();
-      if (UNLIKELY(use_break_token)) {
+      if (use_break_token) [[unlikely]] {
         // Fragments that aren't really on a line, such as floats, will have
         // block break tokens if they continue in a subsequent fragmentainer, so
         // just check that. Floats in particular will continue as regular box
@@ -197,9 +210,10 @@ void FragmentItems::ClearAssociatedFragments(LayoutObject* container) {
   // number of |LayoutObject| is less than the number of |FragmentItem|.
   for (LayoutObject* child = container->SlowFirstChild(); child;
        child = child->NextSibling()) {
-    if (UNLIKELY(!child->IsInLayoutNGInlineFormattingContext() ||
-                 child->IsOutOfFlowPositioned()))
+    if (!child->IsInLayoutNGInlineFormattingContext() ||
+        child->IsOutOfFlowPositioned()) [[unlikely]] {
       continue;
+    }
     child->ClearFirstInlineFragmentItemIndex();
 
     // Children of |LayoutInline| are part of this inline formatting context,
@@ -221,6 +235,10 @@ void FragmentItems::ClearAssociatedFragments(LayoutObject* container) {
 bool FragmentItems::CanReuseAll(InlineCursor* cursor) {
   for (; *cursor; cursor->MoveToNext()) {
     const FragmentItem& item = *cursor->Current().Item();
+    // Ignore nested kLine items though their descendants affect the result.
+    if (item.Type() == FragmentItem::kLine) {
+      continue;
+    }
     if (!item.CanReuse())
       return false;
   }
@@ -262,8 +280,9 @@ const FragmentItem* FragmentItems::EndOfReusableItems(
 
     // Abort reusing block-in-inline because it may need to set
     // |PreviousInflowData|.
-    if (UNLIKELY(line_box_fragment.IsBlockInInline()))
+    if (line_box_fragment.IsBlockInInline()) [[unlikely]] {
       return &item;
+    }
 
     // TODO(kojii): Running the normal layout code at least once for this
     // child helps reducing the code to setup internal states after the
@@ -419,8 +438,9 @@ void FragmentItems::DirtyLinesFromChangedChild(
           break;
       }
       current = previous;
-      if (UNLIKELY(current->IsFloatingOrOutOfFlowPositioned()))
+      if (current->IsFloatingOrOutOfFlowPositioned()) [[unlikely]] {
         continue;
+      }
       if (current->IsInLayoutNGInlineFormattingContext()) {
         if (TryDirtyLastLineFor(*current, container))
           return;
@@ -454,7 +474,7 @@ void FragmentItems::DirtyFirstItem(const LayoutBlockFlow& container) {
 // static
 void FragmentItems::DirtyLinesFromNeedsLayout(
     const LayoutBlockFlow& container) {
-  DCHECK(base::ranges::any_of(
+  DCHECK(std::ranges::any_of(
       container.PhysicalFragments(),
       [](const PhysicalBoxFragment& fragment) { return fragment.HasItems(); }));
 

@@ -49,6 +49,7 @@
 <translation id="2295140143284145483">Survey</translation>
 <translation id="2297836609126180313"><ph name="QUANTITY" /> (na) TB/s</translation>
 <translation id="2353636109065292463">Sinusuri ang iyong koneksyon sa internet</translation>
+<translation id="2359808026110333948">Magpatuloy</translation>
 <translation id="2388990488038464401">Tawagan ang numerong ito mula sa iyong telepono?</translation>
 <translation id="2435457462613246316">Ipakita ang password</translation>
 <translation id="24452542372838207">Palawakin ang notification</translation>
@@ -65,7 +66,6 @@
 <translation id="2653844658857826081">BAGO</translation>
 <translation id="2666092431469916601">Tuktok</translation>
 <translation id="2701330563083355633">Ibinahagi mula kay <ph name="DEVICE_NAME" /></translation>
-<translation id="271033894570825754">Bago</translation>
 <translation id="2824719307700604149">{YEARS,plural, =1{1 taon ang nakalipas}one{# taon ang nakalipas}other{# na taon ang nakalipas}}</translation>
 <translation id="2878511608894704031">I-delete Lahat</translation>
 <translation id="2907671656515444832">{DAYS,plural, =1{sa loob ng 1 araw}one{sa loob ng # araw}other{sa loob ng # na araw}}</translation>
@@ -129,7 +129,9 @@
 <translation id="5528053674512161860">Hindi na-load ang page dahil hindi naka-install ang developer UI module (dev_ui)</translation>
 <translation id="5574202486608032840"><ph name="IDS_SHORT_PRODUCT_OS_NAME" /> system</translation>
 <translation id="5583640892426849032">Backspace</translation>
+<translation id="5606865426897221650">Tab</translation>
 <translation id="5613020302032141669">KAliwang  Arrow</translation>
+<translation id="5633029987065897167">Walang laman</translation>
 <translation id="5754277640426581776">{MINUTES,plural, =1{1 minuto}one{# minuto}other{# na minuto}}</translation>
 <translation id="5763338081255973061">{DAYS,plural, =0{Aktibo ngayong araw}=1{Aktibo 1 araw ang nakalipas}one{Aktibo # araw ang nakalipas}other{Aktibo # na araw ang nakalipas}}</translation>
 <translation id="5768079895599174203">{DAYS,plural, =1{1 araw at }one{# araw at }other{# na araw at }}</translation>
@@ -143,7 +145,7 @@
 <translation id="6007284015834422026">Na-pin ang extension</translation>
 <translation id="6040143037577758943">Isara</translation>
 <translation id="6117103120090651229">Gitnang button</translation>
-<translation id="6129953537138746214">Puwang</translation>
+<translation id="6129953537138746214">Space</translation>
 <translation id="6135826906199951471">Del</translation>
 <translation id="6142413573757616983"><ph name="QUANTITY" /> (na) B/s</translation>
 <translation id="6237461503717005873">Pinili ang <ph name="ROW_NAME" />.</translation>
@@ -158,7 +160,6 @@
 <translation id="6503257047630241175">Content na RTF</translation>
 <translation id="6539092367496845964">Nagkaproblema. Subukan ulit sa ibang pagkakataon.</translation>
 <translation id="654149438358937226">I-block ang lahat ng notification</translation>
-<translation id="6612467943526193239">Upang lumabas sa pag-calibrate pindutin ang Esc.</translation>
 <translation id="6620110761915583480">I-save ang File</translation>
 <translation id="6699343763173986273">Susunod na Track ng Media</translation>
 <translation id="6808150112686056157">Media Ihinto</translation>
@@ -200,7 +201,6 @@
 <translation id="8179976553408161302">Enter</translation>
 <translation id="8210608804940886430">Page Down</translation>
 <translation id="822964464349305906"><ph name="TYPE_1" />, <ph name="TYPE_2" /></translation>
-<translation id="8245914219290430011">Tab</translation>
 <translation id="8259556432390118667">Value ng kulay ng hex</translation>
 <translation id="8328145009876646418">Kalwang Edge</translation>
 <translation id="8331626408530291785">Mag-scroll Pataas</translation>
@@ -224,6 +224,8 @@
 <translation id="9044832324875206639">{SECONDS,plural, =1{1 segundo}one{# segundo}other{# na segundo}}</translation>
 <translation id="9059834730836941392">I-collapse ang notification</translation>
 <translation id="9170848237812810038">&amp;I-undo</translation>
+<translation id="9195990613383871904">Bukas</translation>
+<translation id="928628199082367701">Super</translation>
 <translation id="932327136139879170">Home</translation>
 <translation id="944069440740578670">Mga Hindi Pa Nababasang Notification</translation>
 <translation id="966963601246348639">{SECONDS,plural, =1{1 Segundo ang Nakalipas}one{# Segundo ang Nakalipas}other{# Segundo ang Nakalipas}}</translation>

@@ -38,7 +38,6 @@ VolumeType MountTypeToVolumeType(ash::MountType type) {
   }
 
   NOTREACHED();
-  return VOLUME_TYPE_DOWNLOADS_DIRECTORY;
 }
 
 // Returns a string representation of the given volume type.
@@ -78,7 +77,6 @@ std::string_view VolumeTypeToString(const VolumeType type) {
 
   NOTREACHED() << "Unexpected VolumeType value "
                << static_cast<std::underlying_type_t<VolumeType>>(type);
-  return "";
 }
 
 // Generates a unique volume ID for the given volume info.
@@ -108,7 +106,6 @@ std::string MediaViewRootIdToLabel(std::string_view root_id) {
   }
 
   NOTREACHED() << "Unexpected root ID: " << root_id;
-  return "";
 }
 
 }  // namespace
@@ -137,7 +134,8 @@ std::unique_ptr<Volume> Volume::CreateForDrive(base::FilePath drive_path) {
 std::unique_ptr<Volume> Volume::CreateForDownloads(
     base::FilePath downloads_path,
     base::FilePath optional_fusebox_path,
-    const char* optional_fusebox_volume_label) {
+    const char* optional_fusebox_volume_label,
+    bool read_only) {
   std::unique_ptr<Volume> volume(new Volume());
   volume->type_ = VOLUME_TYPE_DOWNLOADS_DIRECTORY;
   // Keep source_path empty.
@@ -146,6 +144,7 @@ std::unique_ptr<Volume> Volume::CreateForDownloads(
   volume->volume_id_ = GenerateVolumeId(*volume);
   volume->volume_label_ = GetStringUTF8(IDS_FILE_BROWSER_MY_FILES_ROOT_LABEL);
   volume->watchable_ = true;
+  volume->is_read_only_ = read_only;
 
   if (!optional_fusebox_path.empty()) {
     // Leaving the type_ as VOLUME_TYPE_DOWNLOADS_DIRECTORY means that, for
@@ -234,6 +233,8 @@ std::unique_ptr<Volume> Volume::CreateForProvidedFileSystem(
   volume->icon_set_ = file_system_info.icon_set();
 
   volume->volume_id_ = GenerateVolumeId(*volume);
+  volume->file_system_id_ = file_system_info.file_system_id();
+  volume->provider_id_ = file_system_info.provider_id();
 
   if (!optional_fusebox_path.empty()) {
     volume->file_system_type_ = util::kFuseBox;
@@ -248,10 +249,6 @@ std::unique_ptr<Volume> Volume::CreateForProvidedFileSystem(
     // "fusebox" prefix the original FSP volume id.
     volume->volume_id_ =
         base::StrCat({util::kFuseBox, GenerateVolumeId(*volume)});
-
-  } else {
-    volume->file_system_id_ = file_system_info.file_system_id();
-    volume->provider_id_ = file_system_info.provider_id();
   }
 
   return volume;

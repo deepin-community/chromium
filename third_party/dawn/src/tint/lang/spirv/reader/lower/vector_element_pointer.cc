@@ -62,10 +62,7 @@ struct State {
     void Process() {
         // Find the access instructions that need to be replaced.
         Vector<Access, 8> worklist;
-        for (auto* inst : ir.instructions.Objects()) {
-            if (!inst->Alive()) {
-                continue;
-            }
+        for (auto* inst : ir.Instructions()) {
             if (auto* access = inst->As<core::ir::Access>()) {
                 auto* source_ty = access->Object()->Type();
                 if (!source_ty->Is<core::type::Pointer>()) {
@@ -130,24 +127,18 @@ struct State {
                            core::ir::Value* object,
                            core::ir::Value* index) {
         Vector<core::ir::Instruction*, 4> to_destroy;
-        access->Result(0)->ForEachUse([&](core::ir::Usage use) {
+        access->Result(0)->ForEachUseUnsorted([&](core::ir::Usage use) {
             Switch(
                 use.instruction,
                 [&](core::ir::Load* load) {
-                    auto* lve = b.LoadVectorElement(object, index);
+                    auto* lve = b.LoadVectorElementWithResult(load->DetachResult(), object, index);
                     lve->InsertBefore(load);
-                    load->Result(0)->ReplaceAllUsesWith(lve->Result(0));
                     to_destroy.Push(load);
                 },
                 [&](core::ir::Store* store) {
                     auto* sve = b.StoreVectorElement(object, index, store->From());
                     sve->InsertBefore(store);
                     to_destroy.Push(store);
-                },
-                [&](core::ir::Access* noop_access) {
-                    TINT_ASSERT(noop_access->Indices().IsEmpty());
-                    ReplaceAccessUses(noop_access, object, index);
-                    to_destroy.Push(noop_access);
                 },
                 TINT_ICE_ON_NO_MATCH);
         });
@@ -162,8 +153,8 @@ struct State {
 }  // namespace
 
 Result<SuccessType> VectorElementPointer(core::ir::Module& ir) {
-    auto result = ValidateAndDumpIfNeeded(ir, "VectorElementPointer transform",
-                                          EnumSet<core::ir::Capability>{
+    auto result = ValidateAndDumpIfNeeded(ir, "spirv.VectorElementPointer",
+                                          core::ir::Capabilities{
                                               core::ir::Capability::kAllowVectorElementPointer,
                                           });
     if (result != Success) {

@@ -21,7 +21,7 @@ std::optional<bool> OptionalBoolFromMojo(network::mojom::OptionalBool v) {
     case network::mojom::OptionalBool::kUnset:
       return std::nullopt;
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 }  // namespace
 
@@ -33,7 +33,6 @@ int MojoSSLVersionToNetSSLVersion(network::mojom::SSLVersion mojo_version) {
       return net::SSL_PROTOCOL_VERSION_TLS1_3;
   }
   NOTREACHED();
-  return net::SSL_PROTOCOL_VERSION_TLS1_3;
 }
 
 net::SSLContextConfig MojoSSLConfigToSSLContextConfig(
@@ -50,10 +49,6 @@ net::SSLContextConfig MojoSSLConfigToSSLContextConfig(
   net_config.post_quantum_override =
       OptionalBoolFromMojo(mojo_config->post_quantum_override);
   net_config.ech_enabled = mojo_config->ech_enabled;
-  net_config.insecure_hash_override =
-      OptionalBoolFromMojo(mojo_config->insecure_hash_override);
-  net_config.rsa_key_usage_for_local_anchors_override = OptionalBoolFromMojo(
-      mojo_config->rsa_key_usage_for_local_anchors_override);
   return net_config;
 }
 

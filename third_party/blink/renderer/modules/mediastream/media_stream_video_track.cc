@@ -2,8 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/modules/mediastream/media_stream_video_track.h"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
@@ -12,7 +18,7 @@
 #include "base/location.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
+#include "base/not_fatal_until.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
@@ -447,7 +453,7 @@ void MediaStreamVideoTrack::FrameDeliverer::RemoveCallbackOnVideoTaskRunner(
     VideoSinkId id,
     const scoped_refptr<base::SingleThreadTaskRunner>& task_runner) {
   DCHECK(video_task_runner_->RunsTasksInCurrentSequence());
-  auto* it = callbacks_.begin();
+  auto it = callbacks_.begin();
   for (; it != callbacks_.end(); ++it) {
     if (it->id == id) {
       // Callback destruction needs to happen on the specified task runner.
@@ -749,10 +755,13 @@ scoped_refptr<media::VideoFrame>
 MediaStreamVideoTrack::FrameDeliverer::GetBlackFrame(
     const media::VideoFrame& reference_frame) {
   DCHECK(video_task_runner_->RunsTasksInCurrentSequence());
-  if (!black_frame_.get() ||
+  if (!black_frame_ ||
       black_frame_->natural_size() != reference_frame.natural_size()) {
     black_frame_ =
         media::VideoFrame::CreateBlackFrame(reference_frame.natural_size());
+    if (!black_frame_) {
+      return nullptr;
+    }
   }
 
   // Wrap |black_frame_| so we get a fresh timestamp we can modify. Frames
@@ -943,8 +952,8 @@ static void AddSinkInternal(Vector<WebMediaStreamSink*>* sinks,
 
 static void RemoveSinkInternal(Vector<WebMediaStreamSink*>* sinks,
                                WebMediaStreamSink* sink) {
-  auto** it = base::ranges::find(*sinks, sink);
-  DCHECK(it != sinks->end());
+  auto it = std::ranges::find(*sinks, sink);
+  CHECK(it != sinks->end(), base::NotFatalUntil::M130);
   sinks->erase(it);
 }
 

@@ -17,8 +17,8 @@ WakeLockPermissionContext::WakeLockPermissionContext(
           browser_context,
           content_settings_type,
           content_settings_type == ContentSettingsType::WAKE_LOCK_SCREEN
-              ? blink::mojom::PermissionsPolicyFeature::kScreenWakeLock
-              : blink::mojom::PermissionsPolicyFeature::kNotFound) {
+              ? network::mojom::PermissionsPolicyFeature::kScreenWakeLock
+              : network::mojom::PermissionsPolicyFeature::kNotFound) {
   DCHECK(content_settings_type == ContentSettingsType::WAKE_LOCK_SCREEN ||
          content_settings_type == ContentSettingsType::WAKE_LOCK_SYSTEM);
 }
@@ -36,7 +36,6 @@ ContentSetting WakeLockPermissionContext::GetPermissionStatusInternal(
       return CONTENT_SETTING_BLOCK;
     default:
       NOTREACHED();
-      return CONTENT_SETTING_BLOCK;
   }
 }
 

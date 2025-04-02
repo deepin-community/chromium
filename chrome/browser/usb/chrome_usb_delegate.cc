@@ -4,10 +4,11 @@
 
 #include "chrome/browser/usb/chrome_usb_delegate.h"
 
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/scoped_observation.h"
@@ -65,7 +66,7 @@ UsbConnectionTracker* GetConnectionTracker(
 // These extensions can claim the smart card USB class and automatically gain
 // permissions for devices that have an interface with this class.
 constexpr auto kSmartCardPrivilegedExtensionIds =
-    base::MakeFixedFlatSet<base::StringPiece>({
+    base::MakeFixedFlatSet<std::string_view>({
         // Smart Card Connector Extension and its Beta version, see
         // crbug.com/1233881.
         "khpfeaanjngmcnplbdlpegiifgpfgdco",
@@ -204,52 +205,52 @@ void ChromeUsbDelegate::AdjustProtectedInterfaceClasses(
 #if BUILDFLAG(IS_CHROMEOS)
   // These extensions can claim the protected HID interface class (example: used
   // as badge readers)
-  static constexpr auto kHidPrivilegedExtensionIds =
-      base::MakeFixedFlatSet<base::StringPiece>({
-          // Imprivata Extensions, see crbug.com/1065112 and crbug.com/995294.
-          "baobpecgllpajfeojepgedjdlnlfffde",
-          "bnfoibgpjolimhppjmligmcgklpboloj",
-          "cdgickkdpbekbnalbmpgochbninibkko",
-          "cjakdianfealdjlapagfagpdpemoppba",
-          "cokoeepjbmmnhgdhlkpahohdaiedfjgn",
-          "dahgfgiifpnaoajmloofonkndaaafacp",
-          "dbknmmkopacopifbkgookcdbhfnggjjh",
-          "ddcjglpbfbibgepfffpklmpihphbcdco",
-          "dhodapiemamlmhlhblgcibabhdkohlen",
-          "dlahpllbhpbkfnoiedkgombmegnnjopi",
-          "egfpnfjeaopimgpiioeedbpmojdapaip",
-          "fnbibocngjnefolmcodjkkghijpdlnfm",
-          "jcnflhjcfjkplgkcinikhbgbhfldkadl",
-          "jkfjfbelolphkjckiolfcakgalloegek",
-          "kmhpgpnbglclbaccjjgoioogjlnfgbne",
-          "lpimkpkllnkdlcigdbgmabfplniahkgm",
-          "odehonhhkcjnbeaomlodfkjaecbmhklm",
-          "olnmflhcfkifkgbiegcoabineoknmbjc",
-          "omificdfgpipkkpdhbjmefgfgbppehke",
-          "phjobickjiififdadeoepbdaciefacfj",
-          "pkeacbojooejnjolgjdecbpnloibpafm",
-          "pllbepacblmgialkkpcceohmjakafnbb",
-          "plpogimmgnkkiflhpidbibfmgpkaofec",
-          "pmhiabnkkchjeaehcodceadhdpfejmmd",
+    static constexpr auto kHidPrivilegedExtensionIds =
+        base::MakeFixedFlatSet<std::string_view>({
+            // Imprivata Extensions, see crbug.com/1065112 and crbug.com/995294.
+            "baobpecgllpajfeojepgedjdlnlfffde",
+            "bnfoibgpjolimhppjmligmcgklpboloj",
+            "cdgickkdpbekbnalbmpgochbninibkko",
+            "cjakdianfealdjlapagfagpdpemoppba",
+            "cokoeepjbmmnhgdhlkpahohdaiedfjgn",
+            "dahgfgiifpnaoajmloofonkndaaafacp",
+            "dbknmmkopacopifbkgookcdbhfnggjjh",
+            "ddcjglpbfbibgepfffpklmpihphbcdco",
+            "dhodapiemamlmhlhblgcibabhdkohlen",
+            "dlahpllbhpbkfnoiedkgombmegnnjopi",
+            "egfpnfjeaopimgpiioeedbpmojdapaip",
+            "fnbibocngjnefolmcodjkkghijpdlnfm",
+            "jcnflhjcfjkplgkcinikhbgbhfldkadl",
+            "jkfjfbelolphkjckiolfcakgalloegek",
+            "kmhpgpnbglclbaccjjgoioogjlnfgbne",
+            "lpimkpkllnkdlcigdbgmabfplniahkgm",
+            "odehonhhkcjnbeaomlodfkjaecbmhklm",
+            "olnmflhcfkifkgbiegcoabineoknmbjc",
+            "omificdfgpipkkpdhbjmefgfgbppehke",
+            "phjobickjiififdadeoepbdaciefacfj",
+            "pkeacbojooejnjolgjdecbpnloibpafm",
+            "pllbepacblmgialkkpcceohmjakafnbb",
+            "plpogimmgnkkiflhpidbibfmgpkaofec",
+            "pmhiabnkkchjeaehcodceadhdpfejmmd",
 
-          // Hotrod Extensions, see crbug.com/1220165
-          "acdafoiapclbpdkhnighhilgampkglpc",
-          "denipklgekfpcdmbahmbpnmokgajnhma",
-          "hkamnlhnogggfddmjomgbdokdkgfelgg",
-          "ikfcpmgefdpheiiomgmhlmmkihchmdlj",
-          "jlgegmdnodfhciolbdjciihnlaljdbjo",
-          "ldmpofkllgeicjiihkimgeccbhghhmfj",
-          "lkbhffjfgpmpeppncnimiiikojibkhnm",
-          "moklfjoegmpoolceggbebbmgbddlhdgp",
-      });
+            // Hotrod Extensions, see crbug.com/1220165
+            "acdafoiapclbpdkhnighhilgampkglpc",
+            "denipklgekfpcdmbahmbpnmokgajnhma",
+            "hkamnlhnogggfddmjomgbdokdkgfelgg",
+            "ikfcpmgefdpheiiomgmhlmmkihchmdlj",
+            "jlgegmdnodfhciolbdjciihnlaljdbjo",
+            "ldmpofkllgeicjiihkimgeccbhghhmfj",
+            "lkbhffjfgpmpeppncnimiiikojibkhnm",
+            "moklfjoegmpoolceggbebbmgbddlhdgp",
+        });
 
-  if (base::Contains(kHidPrivilegedExtensionIds, origin.host())) {
-    base::Erase(classes, device::mojom::kUsbHidClass);
+    if (base::Contains(kHidPrivilegedExtensionIds, origin.host())) {
+      std::erase(classes, device::mojom::kUsbHidClass);
   }
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   if (base::Contains(kSmartCardPrivilegedExtensionIds, origin.host())) {
-    base::Erase(classes, device::mojom::kUsbSmartCardClass);
+    std::erase(classes, device::mojom::kUsbSmartCardClass);
   }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 }
@@ -282,7 +283,7 @@ bool ChromeUsbDelegate::PageMayUseUsb(content::Page& page) {
   // strict as we'd like, as cases like extensions and Isolated Web Apps still
   // need USB access in non-default partitions, so we'll just guard against
   // HTTP(S) as that presents a clear risk for inappropriate sharing.
-  // TODO(crbug.com/1469672): USB permissions should be explicitly scoped to
+  // TODO(crbug.com/40068594): USB permissions should be explicitly scoped to
   // StoragePartitions.
   if (main_rfh.GetStoragePartition() !=
       main_rfh.GetBrowserContext()->GetDefaultStoragePartition()) {
@@ -335,7 +336,7 @@ bool ChromeUsbDelegate::HasDevicePermission(
     is_usb_unrestricted =
         frame &&
         frame->IsFeatureEnabled(
-            blink::mojom::PermissionsPolicyFeature::kUsbUnrestricted) &&
+            network::mojom::PermissionsPolicyFeature::kUsbUnrestricted) &&
         content::HasIsolatedContextCapability(frame);
   }
 
@@ -402,9 +403,7 @@ bool ChromeUsbDelegate::IsServiceWorkerAllowedForOrigin(
     const url::Origin& origin) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   // WebUSB is only available on extension service workers for now.
-  if (base::FeatureList::IsEnabled(
-          features::kEnableWebUsbOnExtensionServiceWorker) &&
-      origin.scheme() == extensions::kExtensionScheme) {
+  if (origin.scheme() == extensions::kExtensionScheme) {
     return true;
   }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
@@ -417,9 +416,7 @@ void ChromeUsbDelegate::IncrementConnectionCount(
 // Don't track connection when the feature isn't enabled or the connection
 // isn't made by an extension origin.
 #if !BUILDFLAG(IS_ANDROID)
-  if (!base::FeatureList::IsEnabled(
-          features::kEnableWebUsbOnExtensionServiceWorker) ||
-      origin.scheme() != extensions::kExtensionScheme) {
+  if (origin.scheme() != extensions::kExtensionScheme) {
     return;
   }
 
@@ -437,9 +434,7 @@ void ChromeUsbDelegate::DecrementConnectionCount(
   // Don't track connection when the feature isn't enabled or the connection
   // isn't made by an extension origin.
 #if !BUILDFLAG(IS_ANDROID)
-  if (!base::FeatureList::IsEnabled(
-          features::kEnableWebUsbOnExtensionServiceWorker) ||
-      origin.scheme() != extensions::kExtensionScheme) {
+  if (origin.scheme() != extensions::kExtensionScheme) {
     return;
   }
   auto* usb_connection_tracker =

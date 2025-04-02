@@ -23,7 +23,6 @@
 
 namespace tracing {
 
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
 // Set the track descriptor for the current process.
 void SetProcessTrackDescriptor(int64_t process_start_timestamp) {
   using perfetto::protos::gen::ChromeProcessDescriptor;
@@ -120,8 +119,6 @@ void SetThreadTrackDescriptors() {
 }
 }  // namespace
 
-#endif  // BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-
 std::optional<uint64_t> GetTraceCrashId() {
   static base::debug::CrashKeyString* key = base::debug::AllocateCrashKeyString(
       "chrome-trace-id", base::debug::CrashKeySize::Size32);
@@ -133,7 +130,6 @@ std::optional<uint64_t> GetTraceCrashId() {
   return id;
 }
 
-#if BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
 TrackNameRecorder::TrackNameRecorder()
     : process_start_timestamp_(
           TRACE_TIME_TICKS_NOW().since_origin().InNanoseconds()) {
@@ -161,10 +157,6 @@ void TrackNameRecorder::OnStop(const perfetto::DataSourceBase::StopArgs&) {
 void TrackNameRecorder::OnThreadNameChanged(const char* name) {
   // If tracing is not initialized, the thread name is lost, but this should
   // never happen outside of tests.
-  if (perfetto::Tracing::IsInitialized()) {
-    FillThreadTrack(perfetto::ThreadTrack::Current(), name);
-  }
+  FillThreadTrack(perfetto::ThreadTrack::Current(), name);
 }
-#endif  // BUILDFLAG(USE_PERFETTO_CLIENT_LIBRARY)
-
 }  // namespace tracing

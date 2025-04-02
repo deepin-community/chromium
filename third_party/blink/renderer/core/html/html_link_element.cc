@@ -47,22 +47,10 @@
 #include "third_party/blink/renderer/core/origin_trials/origin_trial_context.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 
 namespace blink {
-namespace {
-
-AtomicString ParseHrefAsId(const String& href) {
-  if (href.empty() || href[0] != '#') {
-    return AtomicString();
-  }
-  auto result = AtomicString(href.Substring(1));
-  return result;
-}
-
-}  // namespace
 
 HTMLLinkElement::HTMLLinkElement(Document& document,
                                  const CreateElementFlags flags)
@@ -109,6 +97,11 @@ void HTMLLinkElement::ParseAttribute(
     if (rel_attribute_.IsTermsOfService()) {
       UseCounter::Count(&GetDocument(), WebFeature::kLinkRelTermsOfService);
     }
+    if (rel_attribute_.IsFacilitatedPayment() &&
+        GetDocument().IsInOutermostMainFrame()) {
+      UseCounter::Count(&GetDocument(), WebFeature::kLinkRelFacilitatedPayment);
+      MaybeHandlePaymentLink();
+    }
     rel_list_->DidUpdateAttributeValue(params.old_value, value);
     Process();
   } else if (name == html_names::kBlockingAttr) {
@@ -122,6 +115,7 @@ void HTMLLinkElement::ParseAttribute(
     // Log href attribute before logging resource fetching in process().
     LogUpdateAttributeIfIsolatedWorldAndInDocument("link", params);
     HandleExpectHrefChanges(params.old_value, value);
+    MaybeHandlePaymentLink();
     Process();
   } else if (name == html_names::kTypeAttr) {
     type_ = value;
@@ -138,7 +132,7 @@ void HTMLLinkElement::ParseAttribute(
     }
   } else if (name == html_names::kSizesAttr) {
     sizes_->DidUpdateAttributeValue(params.old_value, value);
-    WebVector<gfx::Size> web_icon_sizes =
+    std::vector<gfx::Size> web_icon_sizes =
         WebIconSizesParser::ParseIconSizes(value);
     icon_sizes_.resize(base::checked_cast<wtf_size_t>(web_icon_sizes.size()));
     for (wtf_size_t i = 0; i < icon_sizes_.size(); ++i)
@@ -264,6 +258,8 @@ Node::InsertionNotificationRequest HTMLLinkElement::InsertedInto(
     return kInsertionDone;
   DCHECK(isConnected());
 
+  MaybeHandlePaymentLink();
+
   GetDocument().GetStyleEngine().AddStyleSheetCandidateNode(*this);
 
   if (!ShouldLoadLink() && IsInShadowTree()) {
@@ -288,8 +284,10 @@ void HTMLLinkElement::RemovedFrom(ContainerNode& insertion_point) {
   // the flags.
   bool was_connected = isConnected();
   HTMLElement::RemovedFrom(insertion_point);
-  if (!insertion_point.isConnected())
+  if (!insertion_point.isConnected() ||
+      GetDocument().StatePreservingAtomicMoveInProgress()) {
     return;
+  }
 
   link_loader_->Abort();
 
@@ -454,8 +452,9 @@ bool HTMLLinkElement::MediaQueryMatches() const {
   if (LocalFrame* frame = GetDocument().GetFrame(); frame && !media_.empty()) {
     auto* media_queries =
         MediaQuerySet::Create(media_, GetDocument().GetExecutionContext());
-    MediaQueryEvaluator evaluator(frame);
-    return evaluator.Eval(*media_queries);
+    MediaQueryEvaluator* evaluator =
+        MakeGarbageCollected<MediaQueryEvaluator>(frame);
+    return evaluator->Eval(*media_queries);
   }
   return true;
 }
@@ -481,10 +480,25 @@ void HTMLLinkElement::RemoveExpectRenderBlockingLink(const String& href) {
   if (auto* render_blocking_resource_manager =
           GetDocument().GetRenderBlockingResourceManager()) {
     render_blocking_resource_manager->RemovePendingParsingElementLink(
-        ParseHrefAsId(href.IsNull() ? FastGetAttribute(html_names::kHrefAttr)
-                                    : href),
-        this);
+        ParseSameDocumentIdFromHref(href), this);
   }
+}
+
+AtomicString HTMLLinkElement::ParseSameDocumentIdFromHref(const String& href) {
+  String actual_href =
+      href.IsNull() ? FastGetAttribute(html_names::kHrefAttr) : href;
+  if (actual_href.empty()) {
+    return WTF::g_null_atom;
+  }
+
+  KURL url = GetDocument().CompleteURL(actual_href);
+  if (!url.HasFragmentIdentifier()) {
+    return WTF::g_null_atom;
+  }
+
+  return EqualIgnoringFragmentIdentifier(url, GetDocument().Url())
+             ? AtomicString(url.FragmentIdentifier())
+             : g_null_atom;
 }
 
 void HTMLLinkElement::AddExpectRenderBlockingLinkIfNeeded(
@@ -503,10 +517,19 @@ void HTMLLinkElement::AddExpectRenderBlockingLinkIfNeeded(
   if (auto* render_blocking_resource_manager =
           GetDocument().GetRenderBlockingResourceManager()) {
     render_blocking_resource_manager->AddPendingParsingElementLink(
-        ParseHrefAsId(href.IsNull() ? FastGetAttribute(html_names::kHrefAttr)
-                                    : href),
-        this);
+        ParseSameDocumentIdFromHref(href), this);
   }
+}
+
+void HTMLLinkElement::MaybeHandlePaymentLink() {
+#if BUILDFLAG(IS_ANDROID)
+  KURL payment_link = GetNonEmptyURLAttribute(html_names::kHrefAttr);
+  if (rel_attribute_.IsFacilitatedPayment() && !payment_link.IsEmpty() &&
+      isConnected() && GetDocument().IsInOutermostMainFrame() &&
+      RuntimeEnabledFeatures::PaymentLinkDetectionEnabled()) {
+    GetDocument().HandlePaymentLink(payment_link);
+  }
+#endif
 }
 
 }  // namespace blink

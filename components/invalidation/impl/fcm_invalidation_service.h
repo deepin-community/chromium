@@ -6,6 +6,7 @@
 #define COMPONENTS_INVALIDATION_IMPL_FCM_INVALIDATION_SERVICE_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/functional/callback.h"
@@ -36,6 +37,8 @@ using FCMNetworkHandlerCallback =
 
 using PerUserTopicSubscriptionManagerCallback =
     base::RepeatingCallback<std::unique_ptr<PerUserTopicSubscriptionManager>(
+        IdentityProvider* identity_provider,
+        PrefService* pref_service,
         const std::string& project_id)>;
 
 using FCMInvalidationListenerCallback =
@@ -64,7 +67,6 @@ class FCMInvalidationService : public InvalidationService,
   void Init();
 
   static void RegisterPrefs(PrefRegistrySimple* registry);
-  static void ClearDeprecatedPrefs(PrefService* prefs);
 
   // InvalidationService implementation.
   // It is an error to have registered handlers when the service is destroyed.
@@ -82,7 +84,8 @@ class FCMInvalidationService : public InvalidationService,
   void OnActiveAccountLogout() override;
 
   // FCMInvalidationListener::Delegate implementation.
-  void OnInvalidate(const Invalidation& invalidation) override;
+  std::optional<Invalidation> OnInvalidate(
+      const Invalidation& invalidation) override;
   void OnInvalidatorStateChange(InvalidatorState state) override;
   void OnSuccessfullySubscribed(const Topic& topic) override;
 

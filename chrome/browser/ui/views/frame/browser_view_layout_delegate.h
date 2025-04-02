@@ -18,7 +18,7 @@ class Rect;
 // for testing.
 class BrowserViewLayoutDelegate {
  public:
-  virtual ~BrowserViewLayoutDelegate() {}
+  virtual ~BrowserViewLayoutDelegate() = default;
 
   virtual bool ShouldDrawTabStrip() const = 0;
   virtual bool GetBorderlessModeEnabled() const = 0;
@@ -45,7 +45,7 @@ class BrowserViewLayoutDelegate {
   virtual void MoveWindowForFindBarIfNecessary() const = 0;
   virtual bool IsWindowControlsOverlayEnabled() const = 0;
   virtual void UpdateWindowControlsOverlay(
-      const gfx::Rect& available_titlebar_area) const = 0;
+      const gfx::Rect& available_titlebar_area) = 0;
   virtual bool ShouldLayoutTabStrip() const = 0;
   virtual int GetExtraInfobarOffset() const = 0;
 };

@@ -56,7 +56,7 @@ const net::NetworkTrafficAnnotationTag traffic_annotation =
           user_data {
             type: DEVICE_ID
             type: HW_OS_INFO
-            type: SESSION_ID
+            type: ACCESS_TOKEN
           }
           last_reviewed: "2023-10-24"
         }
@@ -80,6 +80,7 @@ void ProvisioningConfigFetcherImpl::RequestConfig(
     const std::string& manufacturer,
     const std::string& model,
     const std::string& fcm_token,
+    const std::string& attested_id,
     Callback callback) {
   if (config_callback_) {
     LOG(ERROR)
@@ -110,7 +111,8 @@ void ProvisioningConfigFetcherImpl::RequestConfig(
   device.Set("manufacturer", manufacturer);
   device.Set("model", model);
   device.Set("serialNumber", serial);
-  device.Set("chromeOsAttestedDeviceId", serial);
+  device.Set("chromeOsAttestedDeviceId",
+             (!attested_id.empty() ? attested_id : serial));
   device.Set("imei", imei);
   request.Set("deviceIdentifier", std::move(device));
   base::JSONWriter::Write(request, &request_body);

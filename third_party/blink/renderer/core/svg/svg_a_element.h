@@ -37,6 +37,8 @@ class CORE_EXPORT SVGAElement final : public SVGGraphicsElement,
 
   explicit SVGAElement(Document&);
 
+  Element* interestTargetElement() override;
+
   void Trace(Visitor*) const override;
 
  private:
@@ -51,11 +53,11 @@ class CORE_EXPORT SVGAElement final : public SVGGraphicsElement,
 
   bool IsLiveLink() const override { return IsLink(); }
 
-  bool SupportsFocus(UpdateBehavior update_behavior =
-                         UpdateBehavior::kStyleAndLayout) const override;
+  FocusableState SupportsFocus(UpdateBehavior update_behavior) const override;
   bool ShouldHaveFocusAppearance() const final;
-  bool IsKeyboardFocusable(UpdateBehavior update_behavior =
-                               UpdateBehavior::kStyleAndLayout) const override;
+  bool IsKeyboardFocusableSlow(
+      UpdateBehavior update_behavior =
+          UpdateBehavior::kStyleAndLayout) const override;
   bool IsURLAttribute(const Attribute&) const override;
   bool CanStartSelection() const override;
   int DefaultTabIndex() const override;

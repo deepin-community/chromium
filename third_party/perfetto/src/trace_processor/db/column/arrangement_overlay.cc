@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -30,9 +32,16 @@
 #include "src/trace_processor/tp_metatrace.h"
 
 #include "protos/perfetto/trace_processor/metatrace_categories.pbzero.h"
-#include "protos/perfetto/trace_processor/serialization.pbzero.h"
 
 namespace perfetto::trace_processor::column {
+
+void ArrangementOverlay::Flatten(uint32_t* start,
+                                 const uint32_t* end,
+                                 uint32_t stride) {
+  for (uint32_t* it = start; it < end; it += stride) {
+    *it = (*arrangement_)[*it];
+  }
+}
 
 ArrangementOverlay::ChainImpl::ChainImpl(
     std::unique_ptr<DataLayerChain> inner,
@@ -42,23 +51,13 @@ ArrangementOverlay::ChainImpl::ChainImpl(
     : inner_(std::move(inner)),
       arrangement_(arrangement),
       arrangement_state_(arrangement_state),
-      does_arrangement_order_storage_(does_arrangement_order_storage) {
-  PERFETTO_DCHECK(*std::max_element(arrangement->begin(), arrangement->end()) <=
-                  inner_->size());
-}
+      does_arrangement_order_storage_(does_arrangement_order_storage) {}
 
 SingleSearchResult ArrangementOverlay::ChainImpl::SingleSearch(
     FilterOp op,
     SqlValue sql_val,
     uint32_t index) const {
   return inner_->SingleSearch(op, sql_val, (*arrangement_)[index]);
-}
-
-UniqueSearchResult ArrangementOverlay::ChainImpl::UniqueSearch(
-    FilterOp,
-    SqlValue,
-    uint32_t*) const {
-  return UniqueSearchResult::kNeedsFullSearch;
 }
 
 SearchValidationResult ArrangementOverlay::ChainImpl::ValidateSearchConstraints(
@@ -76,12 +75,21 @@ RangeOrBitVector ArrangementOverlay::ChainImpl::SearchValidated(
 
   if (does_arrangement_order_storage_ && op != FilterOp::kGlob &&
       op != FilterOp::kRegex) {
-    Range inner_res = inner_->OrderedIndexSearchValidated(
-        op, sql_val,
-        Indices{arrangement_->data() + in.start, in.size(),
-                arrangement_state_});
+    OrderedIndices indices{arrangement_->data() + in.start, in.size(),
+                           arrangement_state_};
+    if (op == FilterOp::kNe) {
+      // Do an equality search and "invert" the range.
+      Range inner_res =
+          inner_->OrderedIndexSearchValidated(FilterOp::kEq, sql_val, indices);
+      BitVector bv(in.start);
+      bv.Resize(in.start + inner_res.start, true);
+      bv.Resize(in.start + inner_res.end, false);
+      bv.Resize(in.end, true);
+      return RangeOrBitVector(std::move(bv));
+    }
+    Range inner_res = inner_->OrderedIndexSearchValidated(op, sql_val, indices);
     return RangeOrBitVector(
-        Range(inner_res.start + in.start, inner_res.end + in.start));
+        Range(in.start + inner_res.start, in.start + inner_res.end));
   }
 
   const auto& arrangement = *arrangement_;
@@ -129,48 +137,84 @@ RangeOrBitVector ArrangementOverlay::ChainImpl::SearchValidated(
   return RangeOrBitVector(std::move(builder).Build());
 }
 
-RangeOrBitVector ArrangementOverlay::ChainImpl::IndexSearchValidated(
+void ArrangementOverlay::ChainImpl::IndexSearchValidated(
     FilterOp op,
     SqlValue sql_val,
-    Indices indices) const {
+    Indices& indices) const {
   PERFETTO_TP_TRACE(metatrace::Category::DB,
                     "ArrangementOverlay::ChainImpl::IndexSearch");
 
-  std::vector<uint32_t> storage_iv(indices.size);
-  // Should be SIMD optimized.
-  for (uint32_t i = 0; i < indices.size; ++i) {
-    storage_iv[i] = (*arrangement_)[indices.data[i]];
+  for (auto& i : indices.tokens) {
+    i.index = (*arrangement_)[i.index];
   }
-
-  // If both the arrangment passed indices are monotonic, we know that this
-  // state was not lost.
-  if (indices.state == Indices::State::kMonotonic) {
-    return inner_->IndexSearchValidated(
-        op, sql_val,
-        Indices{storage_iv.data(), static_cast<uint32_t>(storage_iv.size()),
-                arrangement_state_});
-  }
-  return inner_->IndexSearchValidated(
-      op, sql_val,
-      Indices{storage_iv.data(), static_cast<uint32_t>(storage_iv.size()),
-              Indices::State::kNonmonotonic});
+  // If the indices state is monotonic, we can just pass the arrangement's
+  // state.
+  indices.state = indices.state == Indices::State::kMonotonic
+                      ? arrangement_state_
+                      : Indices::State::kNonmonotonic;
+  return inner_->IndexSearchValidated(op, sql_val, indices);
 }
 
-void ArrangementOverlay::ChainImpl::StableSort(SortToken* start,
-                                               SortToken* end,
+void ArrangementOverlay::ChainImpl::StableSort(Token* start,
+                                               Token* end,
                                                SortDirection direction) const {
-  for (SortToken* it = start; it != end; ++it) {
+  for (Token* it = start; it != end; ++it) {
     it->index = (*arrangement_)[it->index];
   }
   inner_->StableSort(start, end, direction);
 }
 
-void ArrangementOverlay::ChainImpl::Serialize(StorageProto* storage) const {
-  auto* arrangement_overlay = storage->set_arrangement_overlay();
-  arrangement_overlay->set_values(
-      reinterpret_cast<const uint8_t*>(arrangement_->data()),
-      sizeof(uint32_t) * arrangement_->size());
-  inner_->Serialize(arrangement_overlay->set_storage());
+void ArrangementOverlay::ChainImpl::Distinct(Indices& indices) const {
+  PERFETTO_TP_TRACE(metatrace::Category::DB,
+                    "ArrangementOverlay::ChainImpl::Distinct");
+  // TODO(mayzner): Utilize `does_arrangmeent_order_storage_`.
+  std::unordered_set<uint32_t> s;
+  indices.tokens.erase(
+      std::remove_if(indices.tokens.begin(), indices.tokens.end(),
+                     [this, &s](Token& idx) {
+                       if (s.insert(idx.index).second) {
+                         idx.index = (*arrangement_)[idx.index];
+                         return false;
+                       }
+                       return true;
+                     }),
+      indices.tokens.end());
+  inner_->Distinct(indices);
+}
+
+std::optional<Token> ArrangementOverlay::ChainImpl::MaxElement(
+    Indices& indices) const {
+  PERFETTO_TP_TRACE(metatrace::Category::DB,
+                    "ArrangementOverlay::ChainImpl::MaxElement");
+  for (auto& i : indices.tokens) {
+    i.index = (*arrangement_)[i.index];
+  }
+  // If the indices state is monotonic, we can just pass the arrangement's
+  // state.
+  indices.state = indices.state == Indices::State::kMonotonic
+                      ? arrangement_state_
+                      : Indices::State::kNonmonotonic;
+  return inner_->MaxElement(indices);
+}
+
+std::optional<Token> ArrangementOverlay::ChainImpl::MinElement(
+    Indices& indices) const {
+  PERFETTO_TP_TRACE(metatrace::Category::DB,
+                    "ArrangementOverlay::ChainImpl::MinElement");
+  for (auto& i : indices.tokens) {
+    i.index = (*arrangement_)[i.index];
+  }
+  // If the indices state is monotonic, we can just pass the arrangement's
+  // state.
+  indices.state = indices.state == Indices::State::kMonotonic
+                      ? arrangement_state_
+                      : Indices::State::kNonmonotonic;
+  return inner_->MinElement(indices);
+}
+
+SqlValue ArrangementOverlay::ChainImpl::Get_AvoidUsingBecauseSlow(
+    uint32_t index) const {
+  return inner_->Get_AvoidUsingBecauseSlow((*arrangement_)[index]);
 }
 
 }  // namespace perfetto::trace_processor::column

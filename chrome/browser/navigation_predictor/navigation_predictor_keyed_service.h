@@ -86,12 +86,11 @@ class NavigationPredictorKeyedService : public KeyedService {
   // notifications.
   class Observer {
    public:
-    virtual void OnPredictionUpdated(
-        const std::optional<Prediction> prediction) = 0;
+    virtual void OnPredictionUpdated(const Prediction& prediction) = 0;
 
    protected:
-    Observer() {}
-    virtual ~Observer() {}
+    Observer() = default;
+    virtual ~Observer() = default;
   };
 
   explicit NavigationPredictorKeyedService(
@@ -151,7 +150,8 @@ class NavigationPredictorKeyedService : public KeyedService {
   // Manages preconnecting to the user's default search engine.
   SearchEnginePreconnector search_engine_preconnector_;
 
-  std::unordered_set<content::WebContents*> visible_web_contents_;
+  std::unordered_set<raw_ptr<content::WebContents, CtnExperimental>>
+      visible_web_contents_;
 
   base::TimeTicks last_web_contents_state_change_time_;
 

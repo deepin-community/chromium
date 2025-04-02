@@ -24,11 +24,8 @@ sk_sp<VulkanDescriptorSet> VulkanDescriptorSet::Make(const VulkanSharedContext* 
     dsAllocateInfo.pSetLayouts = pool->descSetLayout();
 
     VkResult result;
-    VULKAN_CALL_RESULT(ctxt->interface(),
-                       result,
-                       AllocateDescriptorSets(ctxt->device(),
-                                              &dsAllocateInfo,
-                                              &descSet));
+    VULKAN_CALL_RESULT(
+            ctxt, result, AllocateDescriptorSets(ctxt->device(), &dsAllocateInfo, &descSet));
     if (result != VK_SUCCESS) {
         return nullptr;
     }
@@ -40,11 +37,9 @@ VulkanDescriptorSet::VulkanDescriptorSet(const VulkanSharedContext* ctxt,
                                          sk_sp<VulkanDescriptorPool> pool)
         : Resource(ctxt,
                    Ownership::kOwned,
-                   skgpu::Budgeted::kYes,
-                   /*gpuMemorySize=*/0,
-                   /*label=*/"VulkanDescriptorSet")
-        , fDescSet (set)
-        , fPool (pool) {
+                   /*gpuMemorySize=*/0)
+        , fDescSet(set)
+        , fPool(pool) {
     fPool->ref();
 }
 

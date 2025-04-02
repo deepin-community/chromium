@@ -7,6 +7,7 @@
 
 #include <climits>
 
+#include "third_party/blink/renderer/core/layout/gap_fragment_data.h"
 #include "third_party/blink/renderer/core/layout/geometry/logical_rect.h"
 #include "third_party/blink/renderer/core/layout/table/table_fragment_data.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
@@ -37,6 +38,7 @@ class PhysicalFragmentRareData
   explicit PhysicalFragmentRareData(wtf_size_t num_fields);
   PhysicalFragmentRareData(const PhysicalRect* scrollable_overflow,
                            const PhysicalBoxStrut* borders,
+                           const PhysicalBoxStrut* scrollbar,
                            const PhysicalBoxStrut* padding,
                            std::optional<PhysicalRect> inflow_bounds,
                            BoxFragmentBuilder& builder,
@@ -48,6 +50,8 @@ class PhysicalFragmentRareData
     visitor->Trace(table_collapsed_borders_);
     visitor->Trace(table_column_geometries_);
     visitor->Trace(mathml_paint_info_);
+    visitor->Trace(reading_flow_nodes_);
+    visitor->Trace(gap_geometry_);
   }
 
  private:
@@ -60,6 +64,7 @@ class PhysicalFragmentRareData
   enum class FieldId : RareBitFieldType {
     kScrollableOverflow = 0,
     kBorders,
+    kScrollbar,
     kPadding,
     kInflowBounds,
     kFrameSetLayoutData,
@@ -81,6 +86,7 @@ class PhysicalFragmentRareData
     union {
       PhysicalRect scrollable_overflow;
       PhysicalBoxStrut borders;
+      PhysicalBoxStrut scrollbar;
       PhysicalBoxStrut padding;
       PhysicalRect inflow_bounds;
       std::unique_ptr<const FrameSetLayoutData> frame_set_layout_data;
@@ -152,13 +158,15 @@ class PhysicalFragmentRareData
     bit_field_ = bit_field_ & ~FieldIdBit(field_id);
   }
 
-  Vector<RareField> field_list_;
+  Vector<RareField, 1> field_list_;
   RareBitFieldType bit_field_ = 0u;
   // A garbage-collected field is not stored in the Vector in order to avoid
   // troublesome conditional tracing.
   Member<const TableBorders> table_collapsed_borders_;
   Member<const TableFragmentData::ColumnGeometries> table_column_geometries_;
   Member<const MathMLPaintInfo> mathml_paint_info_;
+  Member<const HeapVector<Member<Node>>> reading_flow_nodes_;
+  Member<const GapFragmentData::GapGeometry> gap_geometry_;
 };
 
 }  // namespace blink

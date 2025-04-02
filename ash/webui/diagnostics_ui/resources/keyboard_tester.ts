@@ -6,21 +6,21 @@ import 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
 import 'chrome://resources/ash/common/cr_elements/cr_shared_vars.css.js';
 import 'chrome://resources/ash/common/cr_elements/cr_toast/cr_toast.js';
 import 'chrome://resources/polymer/v3_0/iron-icon/iron-icon.js';
-import './strings.m.js';
+import '/strings.m.js';
 
-import {KeyboardDiagramElement, MechanicalLayout as DiagramMechanicalLayout, PhysicalLayout as DiagramPhysicalLayout, TopRightKey as DiagramTopRightKey, TopRowKey as DiagramTopRowKey} from 'chrome://resources/ash/common/keyboard_diagram.js';
-import {KeyboardKeyState} from 'chrome://resources/ash/common/keyboard_key.js';
-import {loadTimeData} from 'chrome://resources/ash/common/load_time_data.m.js';
 import {getInstance} from 'chrome://resources/ash/common/cr_elements/cr_a11y_announcer/cr_a11y_announcer.js';
 import {CrDialogElement} from 'chrome://resources/ash/common/cr_elements/cr_dialog/cr_dialog.js';
 import {CrToastElement} from 'chrome://resources/ash/common/cr_elements/cr_toast/cr_toast.js';
 import {I18nMixin} from 'chrome://resources/ash/common/cr_elements/i18n_mixin.js';
+import {BottomLeftLayout as DiagramBottomLeftLayout, BottomRightLayout as DiagramBottomRightLayout, KeyboardDiagramElement, MechanicalLayout as DiagramMechanicalLayout, NumberPadLayout as DiagramNumberPadLayout, PhysicalLayout as DiagramPhysicalLayout, SplitModifierTopRowKey as DiagramSplitModifierTopRowKey, TopRightKey as DiagramTopRightKey, TopRowKey as DiagramTopRowKey} from 'chrome://resources/ash/common/keyboard_diagram.js';
+import {KeyboardKeyState} from 'chrome://resources/ash/common/keyboard_key.js';
+import {loadTimeData} from 'chrome://resources/ash/common/load_time_data.m.js';
 import {assert} from 'chrome://resources/js/assert.js';
 import {EventTracker} from 'chrome://resources/js/event_tracker.js';
 import {PolymerElementProperties} from 'chrome://resources/polymer/v3_0/polymer/interfaces.js';
 import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
 
-import {KeyboardInfo, MechanicalLayout, NumberPadPresence, PhysicalLayout, TopRightKey, TopRowKey} from './input.mojom-webui.js';
+import {BottomLeftLayout, BottomRightLayout, KeyboardInfo, MechanicalLayout, NumberPadPresence, NumpadLayout, PhysicalLayout, TopRightKey, TopRowKey} from './input.mojom-webui.js';
 import {InputDataProviderInterface, KeyboardObserverReceiver, KeyEvent, KeyEventType} from './input_data_provider.mojom-webui.js';
 import {getTemplate} from './keyboard_tester.html.js';
 import {getInputDataProvider} from './mojo_interface_provider.js';
@@ -79,8 +79,18 @@ const topRowKeyMap: {[index: number]: KeyboardDiagramTopRowKey} = {
   [TopRowKey.kPreviousTrack]: DiagramTopRowKey['kPreviousTrack'],
   [TopRowKey.kPlayPause]: DiagramTopRowKey['kPlayPause'],
   [TopRowKey.kScreenMirror]: DiagramTopRowKey['kScreenMirror'],
+  [TopRowKey.kAccessibility]: DiagramTopRowKey['kAccessibility'],
+  [TopRowKey.kDictation]: DiagramTopRowKey['kDictation'],
   [TopRowKey.kDelete]: DiagramTopRowKey['kDelete'],
   [TopRowKey.kUnknown]: DiagramTopRowKey['kUnknown'],
+};
+
+/**
+ * Map from Mojo TopRowKey constants to split modifier specific
+ * keyboard diagram top row key definitions.
+ */
+const splitModifierTopRowKeyMap: {[index: number]: KeyboardDiagramTopRowKey} = {
+  [TopRowKey.kOverview]: DiagramSplitModifierTopRowKey['kOverview'],
 };
 
 /** Maps top-right key evdev codes to the corresponding DiagramTopRightKey. */
@@ -142,11 +152,11 @@ export class KeyboardTesterElement extends KeyboardTesterElementBase {
        * The keyboard being tested, or null if none is being tested at the
        * moment.
        */
-      keyboard: KeyboardInfo,
+      keyboard: {type: Object},
 
-      layoutIsKnown: {
+      shouldDisplayDiagram: {
         type: Boolean,
-        computed: 'computeLayoutIsKnown(keyboard)',
+        computed: 'computeShouldDisplayDiagram(keyboard)',
       },
 
       diagramMechanicalLayout: {
@@ -169,9 +179,29 @@ export class KeyboardTesterElement extends KeyboardTesterElementBase {
         computed: 'computeShowNumberPad(keyboard)',
       },
 
+      showAssistantKey: {
+        type: Boolean,
+        computed: 'computeShowAssistantKey(keyboard)',
+      },
+
       topRowKeys: {
         type: Array,
         computed: 'computeTopRowKeys(keyboard)',
+      },
+
+      bottomLeftLayout: {
+        type: String,
+        computed: 'computeBottomLeftLayout(keyboard)',
+      },
+
+      bottomRightLayout: {
+        type: String,
+        computed: 'computeBottomRightLayout(keyboard)',
+      },
+
+      numberPadLayout: {
+        type: String,
+        computed: 'computeNumberPadLayout(keyboard)',
       },
 
       isLoggedIn: {
@@ -188,10 +218,10 @@ export class KeyboardTesterElement extends KeyboardTesterElementBase {
   }
 
   keyboard: KeyboardInfo;
-  protected isLoggedIn: boolean;
+  isLoggedIn: boolean;
   protected diagramTopRightKey: DiagramTopRightKey|null;
   private lostFocusToastLingerMs: number;
-  private layoutIsKnown: boolean;
+  private shouldDisplayDiagram: boolean;
   private diagramMechanicalLayout: DiagramMechanicalLayout|null;
   private diagramPhysicalLayout: DiagramPhysicalLayout|null;
   private showNumberPad: boolean;
@@ -216,7 +246,7 @@ export class KeyboardTesterElement extends KeyboardTesterElementBase {
     getInstance(this.$.dialog.getNative()).announce(e.detail.text);
   };
 
-  private computeLayoutIsKnown(keyboard?: KeyboardInfo): boolean {
+  private computeShouldDisplayDiagram(keyboard?: KeyboardInfo): boolean {
     if (!keyboard) {
       return false;
     }
@@ -232,6 +262,7 @@ export class KeyboardTesterElement extends KeyboardTesterElementBase {
       return null;
     }
     return {
+      [MechanicalLayout.kUnmappedEnumField]: null,
       [MechanicalLayout.kUnknown]: null,
       [MechanicalLayout.kAnsi]: DiagramMechanicalLayout.ANSI,
       [MechanicalLayout.kIso]: DiagramMechanicalLayout.ISO,
@@ -244,7 +275,12 @@ export class KeyboardTesterElement extends KeyboardTesterElementBase {
     if (!keyboardInfo) {
       return null;
     }
+    if (keyboardInfo.bottomLeftLayout !== BottomLeftLayout.kUnknown &&
+        keyboardInfo.bottomRightLayout !== BottomRightLayout.kUnknown) {
+      return DiagramPhysicalLayout.SPLIT_MODIFIER;
+    }
     return {
+      [PhysicalLayout.kUnmappedEnumField]: null,
       [PhysicalLayout.kUnknown]: null,
       [PhysicalLayout.kChromeOS]: DiagramPhysicalLayout.CHROME_OS,
       [PhysicalLayout.kChromeOSDellEnterpriseWilco]:
@@ -260,6 +296,7 @@ export class KeyboardTesterElement extends KeyboardTesterElementBase {
       return null;
     }
     return {
+      [TopRightKey.kUnmappedEnumField]: null,
       [TopRightKey.kUnknown]: null,
       [TopRightKey.kPower]: DiagramTopRightKey.POWER,
       [TopRightKey.kLock]: DiagramTopRightKey.LOCK,
@@ -269,16 +306,66 @@ export class KeyboardTesterElement extends KeyboardTesterElementBase {
 
   private computeShowNumberPad(keyboard?: KeyboardInfo): boolean {
     return !!keyboard &&
-        keyboard.numberPadPresent === NumberPadPresence.kPresent;
+        (keyboard.numberPadPresent === NumberPadPresence.kPresent ||
+         !!keyboard.numpadLayout);
   }
 
+  private computeShowAssistantKey(keyboard?: KeyboardInfo): boolean {
+    return !!keyboard && keyboard.hasAssistantKey &&
+        this.computeDiagramPhysicalLayout(keyboard) !==
+        DiagramPhysicalLayout.SPLIT_MODIFIER;
+  }
 
   private computeTopRowKeys(keyboard?: KeyboardInfo):
       KeyboardDiagramTopRowKey[] {
     if (!keyboard) {
       return [];
     }
+    if (this.computeDiagramPhysicalLayout(keyboard) ===
+        DiagramPhysicalLayout.SPLIT_MODIFIER) {
+      return keyboard.topRowKeys.map(
+          (keyId: TopRowKey) =>
+              splitModifierTopRowKeyMap[keyId] ?? topRowKeyMap[keyId]);
+    }
     return keyboard.topRowKeys.map((keyId: TopRowKey) => topRowKeyMap[keyId]);
+  }
+
+  private computeBottomLeftLayout(keyboardInfo?: KeyboardInfo):
+      DiagramBottomLeftLayout|null {
+    if (!keyboardInfo) {
+      return null;
+    }
+    return {
+      [BottomLeftLayout.kUnknown]: null,
+      [BottomLeftLayout.kBottomLeft3Keys]: DiagramBottomLeftLayout.THREE_KEYS,
+      [BottomLeftLayout.kBottomLeft4Keys]: DiagramBottomLeftLayout.FOUR_KEYS,
+    }[keyboardInfo.bottomLeftLayout];
+  }
+
+  private computeBottomRightLayout(keyboardInfo?: KeyboardInfo):
+      DiagramBottomRightLayout|null {
+    if (!keyboardInfo) {
+      return null;
+    }
+    return {
+      [BottomRightLayout.kUnknown]: null,
+      [BottomRightLayout.kBottomRight2Keys]: DiagramBottomRightLayout.TWO_KEYS,
+      [BottomRightLayout.kBottomRight3Keys]:
+          DiagramBottomRightLayout.THREE_KEYS,
+      [BottomRightLayout.kBottomRight4Keys]: DiagramBottomRightLayout.FOUR_KEYS,
+    }[keyboardInfo.bottomRightLayout];
+  }
+
+  private computeNumberPadLayout(keyboardInfo?: KeyboardInfo):
+      DiagramNumberPadLayout|null {
+    if (!keyboardInfo) {
+      return null;
+    }
+    return {
+      [NumpadLayout.kUnknown]: null,
+      [NumpadLayout.kNumpad3Column]: DiagramNumberPadLayout.THREE_COLUMN,
+      [NumpadLayout.kNumpad4Column]: DiagramNumberPadLayout.FOUR_COLUMN,
+    }[keyboardInfo.numpadLayout];
   }
 
   protected getDescriptionLabel(): string {
@@ -337,11 +424,17 @@ export class KeyboardTesterElement extends KeyboardTesterElementBase {
   }
 
   close(): void {
-    const diagram: KeyboardDiagramElement|null =
-        this.shadowRoot!.querySelector('#diagram');
-    assert(diagram);
-    diagram.resetAllKeys();
+    if (this.shouldDisplayDiagram) {
+      const diagram: KeyboardDiagramElement|null =
+          this.shadowRoot!.querySelector('#diagram');
+      assert(diagram);
+      diagram.resetAllKeys();
+    }
     this.$.dialog.close();
+
+    const url = new URL(window.location.href);
+    url.searchParams.delete('showDefaultKeyboardTester');
+    history.pushState(null, '', url);
   }
 
   handleClose(): void {

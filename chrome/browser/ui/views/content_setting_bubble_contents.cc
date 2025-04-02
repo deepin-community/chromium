@@ -10,11 +10,11 @@
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/color/chrome_color_id.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
@@ -29,12 +29,13 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/ui_base_features.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/paint_vector_icon.h"
+#include "ui/gfx/vector_icon_types.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/button/radio_button.h"
@@ -68,18 +69,14 @@ std::u16string GetCancelButtonText(
 
 ui::ImageModel GetSiteSettingsIcon() {
   return ui::ImageModel::FromVectorIcon(
-      features::IsChromeRefresh2023() ? vector_icons::kSettingsChromeRefreshIcon
-                                      : vector_icons::kSettingsIcon,
-      ui::kColorIcon, GetLayoutConstant(PAGE_INFO_ICON_SIZE));
+      vector_icons::kSettingsChromeRefreshIcon, ui::kColorIcon,
+      GetLayoutConstant(PAGE_INFO_ICON_SIZE));
 }
 
 ui::ImageModel GetLaunchIcon() {
-  return ui::ImageModel::FromVectorIcon(
-      features::IsChromeRefresh2023() ? vector_icons::kLaunchChromeRefreshIcon
-                                      : vector_icons::kLaunchIcon,
-      features::IsChromeRefresh2023() ? ui::kColorIcon
-                                      : ui::kColorIconSecondary,
-      GetLayoutConstant(PAGE_INFO_ICON_SIZE));
+  return ui::ImageModel::FromVectorIcon(vector_icons::kLaunchChromeRefreshIcon,
+                                        ui::kColorIcon,
+                                        GetLayoutConstant(PAGE_INFO_ICON_SIZE));
 }
 
 bool ShouldShowManageButton(
@@ -157,7 +154,7 @@ void ContentSettingBubbleContents::ListItemContainer::AddItem(
         *item.image, ui::kColorLabelForeground,
         GetLayoutConstant(LOCATION_BAR_ICON_SIZE),
         item.has_blocked_badge ? &vector_icons::kBlockedBadgeIcon
-                               : &gfx::kNoneIcon));
+                               : &gfx::VectorIcon::EmptyIcon()));
   }
 
   std::unique_ptr<views::View> item_contents;
@@ -168,7 +165,7 @@ void ContentSettingBubbleContents::ListItemContainer::AddItem(
     link->SetCallback(base::BindRepeating(
         [](const std::vector<Row>* items, const views::Link* link,
            ContentSettingBubbleContents* parent, const ui::Event& event) {
-          const auto it = base::ranges::find(*items, link, &Row::second);
+          const auto it = std::ranges::find(*items, link, &Row::second);
           DCHECK(it != items->cend());
           parent->LinkClicked(std::distance(items->cbegin(), it), event);
         },
@@ -208,8 +205,9 @@ void ContentSettingBubbleContents::ListItemContainer::RemoveRowAtIndex(
 
   // As TableLayout can't remove rows, we have to rebuild it entirely.
   ResetLayout();
-  for (auto& row : list_item_views_)
+  for (auto& row : list_item_views_) {
     AddRowToLayout(row);
+  }
 }
 
 void ContentSettingBubbleContents::ListItemContainer::ResetLayout() {
@@ -227,8 +225,9 @@ void ContentSettingBubbleContents::ListItemContainer::ResetLayout() {
   auto* scroll_view = views::ScrollView::GetScrollViewForContents(this);
   // When this function is called from the constructor, the view has not yet
   // been placed into a ScrollView.
-  if (scroll_view)
+  if (scroll_view) {
     scroll_view->ClipHeightTo(-1, -1);
+  }
 }
 
 void ContentSettingBubbleContents::ListItemContainer::AddRowToLayout(
@@ -277,7 +276,10 @@ ContentSettingBubbleContents::ContentSettingBubbleContents(
     views::View* anchor_view,
     views::BubbleBorder::Arrow arrow)
     : content::WebContentsObserver(web_contents),
-      BubbleDialogDelegateView(anchor_view, arrow),
+      BubbleDialogDelegateView(anchor_view,
+                               arrow,
+                               views::BubbleBorder::DIALOG_SHADOW,
+                               true),
       content_setting_bubble_model_(std::move(content_setting_bubble_model)) {
   // Although other code in this class treats content_setting_bubble_model_ as
   // though it's optional, in fact it can only become null if
@@ -289,18 +291,19 @@ ContentSettingBubbleContents::ContentSettingBubbleContents(
   const std::u16string& cancel_text =
       GetCancelButtonText(content_setting_bubble_model_->bubble_content());
   SetButtons(cancel_text.empty()
-                 ? ui::DIALOG_BUTTON_OK
-                 : (ui::DIALOG_BUTTON_OK | ui::DIALOG_BUTTON_CANCEL));
-  SetButtonLabel(ui::DIALOG_BUTTON_OK, done_text.empty()
-                                           ? l10n_util::GetStringUTF16(IDS_DONE)
-                                           : done_text);
+                 ? static_cast<int>(ui::mojom::DialogButton::kOk)
+                 : static_cast<int>(ui::mojom::DialogButton::kOk) |
+                       static_cast<int>(ui::mojom::DialogButton::kCancel));
+  SetButtonLabel(
+      ui::mojom::DialogButton::kOk,
+      done_text.empty() ? l10n_util::GetStringUTF16(IDS_DONE) : done_text);
   SetExtraView(CreateHelpAndManageView());
   SetAcceptCallback(
       base::BindOnce(&ContentSettingBubbleModel::OnDoneButtonClicked,
                      base::Unretained(content_setting_bubble_model_.get())));
 
   if (!cancel_text.empty()) {
-    SetButtonLabel(ui::DIALOG_BUTTON_CANCEL, cancel_text);
+    SetButtonLabel(ui::mojom::DialogButton::kCancel, cancel_text);
     SetCancelCallback(
         base::BindOnce(&ContentSettingBubbleModel::OnCancelButtonClicked,
                        base::Unretained(content_setting_bubble_model_.get())));
@@ -328,33 +331,27 @@ void ContentSettingBubbleContents::OnListItemAdded(
     const ContentSettingBubbleModel::ListItem& item) {
   DCHECK(list_item_container_);
   list_item_container_->AddItem(item);
-  SizeToContents();
 }
 
 void ContentSettingBubbleContents::OnListItemRemovedAt(int index) {
   DCHECK(list_item_container_);
   list_item_container_->RemoveRowAtIndex(index);
-  SizeToContents();
 }
 
 int ContentSettingBubbleContents::GetSelectedRadioOption() {
   for (RadioGroup::const_iterator i(radio_group_.begin());
        i != radio_group_.end(); ++i) {
-    if ((*i)->GetChecked())
+    if ((*i)->GetChecked()) {
       return i - radio_group_.begin();
+    }
   }
-  NOTREACHED_NORETURN();
-}
-
-void ContentSettingBubbleContents::OnThemeChanged() {
-  views::BubbleDialogDelegateView::OnThemeChanged();
-  if (learn_more_button_)
-    StyleLearnMoreButton();
+  NOTREACHED();
 }
 
 std::u16string ContentSettingBubbleContents::GetWindowTitle() const {
-  if (!content_setting_bubble_model_)
+  if (!content_setting_bubble_model_) {
     return std::u16string();
+  }
   return content_setting_bubble_model_->bubble_content().title;
 }
 
@@ -386,7 +383,8 @@ void ContentSettingBubbleContents::Init() {
   if (!bubble_content.message.empty()) {
     auto message_label = std::make_unique<views::Label>(
         bubble_content.message, views::style::CONTEXT_LABEL,
-        views::style::STYLE_SECONDARY);
+        views::style::STYLE_BODY_3);
+    message_label->SetEnabledColorId(kColorActivityIndicatorForeground);
     message_label->SetMultiLine(true);
     message_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     rows.push_back({std::move(message_label), LayoutRowType::DEFAULT});
@@ -413,6 +411,8 @@ void ContentSettingBubbleContents::Init() {
   if (!radio_group.radio_items.empty()) {
     for (const auto& radio_item : radio_group.radio_items) {
       auto radio = std::make_unique<views::RadioButton>(radio_item, 0);
+      radio->SetLabelStyle(views::style::STYLE_BODY_4);
+      radio->SetEnabledTextColorIds(kColorActivityIndicatorSubtitleForeground);
       radio->SetVisible(bubble_content.is_user_modifiable);
       radio->SetMultiLine(true);
       radio_group_.push_back(radio.get());
@@ -473,7 +473,7 @@ void ContentSettingBubbleContents::Init() {
   }
 
   if (bubble_content.manage_text_style == ManageTextStyle::kHoverButton) {
-    SetButtons(ui::DIALOG_BUTTON_NONE);
+    SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
     auto separator = std::make_unique<views::Separator>();
     rows.push_back({std::move(separator), LayoutRowType::DEFAULT});
 
@@ -485,8 +485,8 @@ void ContentSettingBubbleContents::Init() {
             },
             this),
         GetSiteSettingsIcon(), bubble_content.manage_text,
-        /*secondary_text=*/std::u16string(), bubble_content.manage_tooltip,
         /*subtitle_text=*/std::u16string(), GetLaunchIcon());
+    site_settings_link->SetTooltipText(bubble_content.manage_tooltip);
     rows.push_back({std::move(site_settings_link), LayoutRowType::FULL_WIDTH});
   }
 
@@ -519,16 +519,6 @@ void ContentSettingBubbleContents::Init() {
   content_setting_bubble_model_->set_owner(this);
 }
 
-void ContentSettingBubbleContents::StyleLearnMoreButton() {
-  DCHECK(learn_more_button_);
-  const ui::ColorProvider* cp = GetColorProvider();
-  SkColor icon_color = cp->GetColor(ui::kColorIcon);
-  SkColor icon_disabled_color = cp->GetColor(ui::kColorIconDisabled);
-  views::SetImageFromVectorIconWithColor(learn_more_button_,
-                                         vector_icons::kHelpOutlineIcon,
-                                         icon_color, icon_disabled_color);
-}
-
 std::unique_ptr<views::View>
 ContentSettingBubbleContents::CreateHelpAndManageView() {
   DCHECK(content_setting_bubble_model_);
@@ -537,23 +527,25 @@ ContentSettingBubbleContents::CreateHelpAndManageView() {
   std::vector<std::unique_ptr<views::View>> extra_views;
   // Optionally add a help icon if the view wants to link to a help page.
   if (bubble_content.show_learn_more) {
-    auto learn_more_button = views::CreateVectorImageButton(base::BindRepeating(
-        [](ContentSettingBubbleContents* bubble) {
-          bubble->GetWidget()->Close();
-          bubble->content_setting_bubble_model_->OnLearnMoreClicked();
-        },
-        base::Unretained(this)));
+    auto learn_more_button = views::CreateVectorImageButtonWithNativeTheme(
+        base::BindRepeating(
+            [](ContentSettingBubbleContents* bubble) {
+              bubble->GetWidget()->Close();
+              bubble->content_setting_bubble_model_->OnLearnMoreClicked();
+            },
+            base::Unretained(this)),
+        vector_icons::kHelpOutlineIcon);
     learn_more_button->SetTooltipText(
         l10n_util::GetStringUTF16(IDS_LEARN_MORE));
-    learn_more_button_ = learn_more_button.get();
     extra_views.push_back(std::move(learn_more_button));
   }
   // Optionally add a "Manage" button if the view wants to use a button to
   // invoke a separate management UI related to the dialog content.
   if (ShouldShowManageButton(bubble_content)) {
     std::u16string title = bubble_content.manage_text;
-    if (title.empty())
+    if (title.empty()) {
       title = l10n_util::GetStringUTF16(IDS_MANAGE);
+    }
     auto manage_button = std::make_unique<views::MdTextButton>(
         base::BindRepeating(
             [](ContentSettingBubbleContents* bubble) {
@@ -565,22 +557,23 @@ ContentSettingBubbleContents::CreateHelpAndManageView() {
     manage_button->SetMinSize(gfx::Size(
         layout->GetDistanceMetric(views::DISTANCE_DIALOG_BUTTON_MINIMUM_WIDTH),
         0));
-    if (features::IsChromeRefresh2023()) {
-      manage_button->SetStyle(ui::ButtonStyle::kTonal);
-    }
+    manage_button->SetStyle(ui::ButtonStyle::kTonal);
     manage_button_ = manage_button.get();
     extra_views.push_back(std::move(manage_button));
   }
-  if (extra_views.empty())
+  if (extra_views.empty()) {
     return nullptr;
-  if (extra_views.size() == 1)
+  }
+  if (extra_views.size() == 1) {
     return std::move(extra_views.front());
+  }
   auto container = std::make_unique<views::View>();
   container->SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal, gfx::Insets(),
       layout->GetDistanceMetric(views::DISTANCE_RELATED_CONTROL_HORIZONTAL)));
-  for (auto& extra_view : extra_views)
+  for (auto& extra_view : extra_views) {
     container->AddChildView(std::move(extra_view));
+  }
   return container;
 }
 
@@ -605,8 +598,9 @@ void ContentSettingBubbleContents::PrimaryPageChanged(content::Page& page) {
 
 void ContentSettingBubbleContents::OnVisibilityChanged(
     content::Visibility visibility) {
-  if (visibility == content::Visibility::HIDDEN)
+  if (visibility == content::Visibility::HIDDEN) {
     GetWidget()->Close();
+  }
 }
 
 void ContentSettingBubbleContents::WebContentsDestroyed() {

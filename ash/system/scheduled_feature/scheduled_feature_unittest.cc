@@ -315,11 +315,8 @@ class ScheduledFeatureTest : public NoSessionAshTestBase,
     RegisterUserProfilePrefs(prefs->registry(), /*country=*/"",
                              /*for_test=*/true);
     auto* const session_controller_client = GetSessionControllerClient();
-    session_controller_client->AddUserSession(user_email,
-                                              user_manager::UserType::kRegular,
-                                              /*provide_pref_service=*/false);
-    session_controller_client->SetUserPrefService(
-        AccountId::FromUserEmail(user_email), std::move(prefs));
+    session_controller_client->AddUserSession(
+        user_email, user_manager::UserType::kRegular, std::move(prefs));
   }
 
   void SwitchActiveUser(const std::string& email) {
@@ -754,7 +751,7 @@ TEST_F(ScheduledFeatureTest, ExplicitUserTogglesWhileScheduleIsActive) {
 // Tests that changing the custom start and end times, in such a way that
 // shouldn't change the current status, only updates the timer but doesn't
 // change the status.
-// TODO(crbug.com/1410064): Fix test failure and re-enable on ChromeOS.
+// TODO(crbug.com/40889492): Fix test failure and re-enable on ChromeOS.
 #if BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_ChangingStartTimesThatDontChangeTheStatus \
   DISABLED_ChangingStartTimesThatDontChangeTheStatus

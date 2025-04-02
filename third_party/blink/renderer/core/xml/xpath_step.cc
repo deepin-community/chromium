@@ -237,7 +237,6 @@ static inline bool NodeMatchesBasicTest(Node* node,
     }
   }
   NOTREACHED();
-  return false;
 }
 
 static inline bool NodeMatches(EvaluationContext& evaluation_context,

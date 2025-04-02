@@ -33,6 +33,7 @@
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_delegate.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/compositor/layer.h"
 #include "ui/wm/core/ime_util_chromeos.h"
 #include "ui/wm/core/window_util.h"
@@ -45,9 +46,10 @@ using ::chromeos::WindowStateType;
 // Sets the restore bounds and show state overrides. These values take
 // precedence over the restore bounds and restore show state (if set).
 // If |bounds_override| is empty the values are cleared.
-void SetWindowRestoreOverrides(aura::Window* window,
-                               const gfx::Rect& bounds_override,
-                               ui::WindowShowState window_state_override) {
+void SetWindowRestoreOverrides(
+    aura::Window* window,
+    const gfx::Rect& bounds_override,
+    ui::mojom::WindowShowState window_state_override) {
   if (bounds_override.IsEmpty()) {
     window->ClearProperty(kRestoreWindowStateTypeOverrideKey);
     window->ClearProperty(kRestoreBoundsOverrideKey);
@@ -68,9 +70,11 @@ gfx::Size GetMaximumSizeOfWindow(WindowState* window_state) {
       screen_util::GetMaximizedWindowBoundsInParent(window_state->window())
           .size();
 
-  gfx::Size size = window_state->window()->delegate()
-                       ? window_state->window()->delegate()->GetMaximumSize()
-                       : gfx::Size();
+  gfx::Size size =
+      window_state->window()->delegate()
+          ? window_state->window()->delegate()->GetMaximumSize().value_or(
+                gfx::Size())
+          : gfx::Size();
   if (size.IsEmpty())
     return workspace_size;
 
@@ -137,11 +141,12 @@ bool BoundsChangeIsFromVKAndAllowed(aura::Window* window) {
 
 }  // namespace
 
-TabletModeWindowState::TabletModeWindowState(aura::Window* window,
-                                             TabletModeWindowManager* creator,
-                                             bool snap,
-                                             bool animate_bounds_on_attach,
-                                             bool entering_tablet_mode)
+TabletModeWindowState::TabletModeWindowState(
+    aura::Window* window,
+    base::WeakPtr<TabletModeWindowManager> creator,
+    bool snap,
+    bool animate_bounds_on_attach,
+    bool entering_tablet_mode)
     : window_(window),
       creator_(creator),
       animate_bounds_on_attach_(animate_bounds_on_attach) {
@@ -155,7 +160,6 @@ TabletModeWindowState::TabletModeWindowState(aura::Window* window,
   state_type_on_attach_ = snap || state->IsFloated()
                               ? current_state_type_
                               : state->GetWindowTypeOnMaximizable();
-  // TODO(oshima|sammiequon): consider SplitView scenario.
   WindowState::ScopedBoundsChangeAnimation bounds_animation(
       window, entering_tablet_mode && !ShouldAnimateWindowForTransition(window)
                   ? WindowState::BoundsChangeAnimationType::kAnimateZero
@@ -166,7 +170,9 @@ TabletModeWindowState::TabletModeWindowState(aura::Window* window,
 }
 
 TabletModeWindowState::~TabletModeWindowState() {
-  creator_->WindowStateDestroyed(window_);
+  if (creator_) {
+    creator_->WindowStateDestroyed(window_);
+  }
 }
 
 // static
@@ -197,7 +203,6 @@ void TabletModeWindowState::UpdateWindowPosition(
       break;
     case WindowState::BoundsChangeAnimationType::kAnimateZero:
       NOTREACHED();
-      break;
   }
 }
 
@@ -299,7 +304,6 @@ void TabletModeWindowState::OnWMEvent(WindowState* window_state,
       // window is in tablet mode. PIP window uses DefaultState instead, not
       // TabletModeWindowState.
       NOTREACHED();
-      break;
     case WM_EVENT_TRUSTED_PIN:
       if (!Shell::Get()->screen_pinning_controller()->IsPinned()) {
         UpdateWindow(window_state, WindowStateType::kTrustedPinned,
@@ -358,7 +362,7 @@ void TabletModeWindowState::OnWMEvent(WindowState* window_state,
       break;
     case WM_EVENT_SET_BOUNDS: {
       gfx::Rect bounds_in_parent =
-          event->AsSetBoundsWMEvent()->requested_bounds();
+          event->AsSetBoundsWMEvent()->requested_bounds_in_parent();
       if (bounds_in_parent.IsEmpty())
         break;
 
@@ -455,7 +459,7 @@ void TabletModeWindowState::AttachState(WindowState* window_state,
 void TabletModeWindowState::DetachState(WindowState* window_state) {
   // From now on, we can use the default session restore mechanism again.
   SetWindowRestoreOverrides(window_state->window(), gfx::Rect(),
-                            ui::SHOW_STATE_NORMAL);
+                            ui::mojom::WindowShowState::kNormal);
 }
 
 void TabletModeWindowState::UpdateWindow(WindowState* window_state,

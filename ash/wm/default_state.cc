@@ -53,8 +53,9 @@ constexpr char kSnapWindowDeviceOrientationHistogramName[] =
     "Ash.Window.Snap.DeviceOrientation";
 
 gfx::Size GetWindowMaximumSize(aura::Window* window) {
-  return window->delegate() ? window->delegate()->GetMaximumSize()
-                            : gfx::Size();
+  return window->delegate()
+             ? window->delegate()->GetMaximumSize().value_or(gfx::Size())
+             : gfx::Size();
 }
 
 // Moves the window to the specified display if necessary.
@@ -196,6 +197,9 @@ void DefaultState::HandleWorkspaceEvents(WindowState* window_state,
       // to the root window.
       // If a window is opened as maximized or fullscreen, its bounds may be
       // empty, so update the bounds now before checking empty.
+      // TODO(minch): Check whether we can consolidate with the check inside
+      // UpdateBoundsForDisplayOrWorkAreaBoundsChange before doing the
+      // adjustment.
       if (window_state->is_dragged() ||
           window_state->allow_set_bounds_direct() ||
           SetMaximizedOrFullscreenBounds(window_state)) {
@@ -229,11 +233,10 @@ void DefaultState::HandleWorkspaceEvents(WindowState* window_state,
       // Use entire display instead of workarea. The logic ensures 30%
       // visibility which should be enough to see where the window gets
       // moved.
-      gfx::Rect display_area = screen_util::GetDisplayBoundsInParent(window);
-      int min_width = bounds.width() * kMinimumPercentOnScreenArea;
-      int min_height = bounds.height() * kMinimumPercentOnScreenArea;
-      AdjustBoundsToEnsureWindowVisibility(display_area, min_width, min_height,
-                                           &bounds);
+      const gfx::Rect display_area =
+          screen_util::GetDisplayBoundsInParent(window);
+      AdjustBoundsToEnsureMinimumWindowVisibility(
+          display_area, /*client_controlled=*/false, &bounds);
       window_state->AdjustSnappedBoundsForDisplayWorkspaceChange(&bounds);
       window_state->SetBoundsConstrained(bounds);
       return;
@@ -287,10 +290,16 @@ void DefaultState::HandleCompoundEvents(WindowState* window_state,
       gfx::Rect work_area =
           screen_util::GetDisplayWorkAreaBoundsInParent(window);
       // Maximize vertically if:
+      // - The window is resizable and maximizable
       // - The window does not have a max height defined.
       // - The window is floated or has the normal state type. Snapped windows
       //   are excluded because they are already maximized vertically and
       //   reverting to the restored bounds looks weird.
+      if (!window_state->CanResize() || !window_state->CanMaximize()) {
+        wm::AnimateWindow(window_state->window(),
+                          wm::WINDOW_ANIMATION_TYPE_BOUNCE);
+        return;
+      }
       if (GetWindowMaximumSize(window).height() != 0)
         return;
       if (!window_state->IsNormalStateType() && !window_state->IsFloated())
@@ -308,8 +317,14 @@ void DefaultState::HandleCompoundEvents(WindowState* window_state,
     }
     case WM_EVENT_TOGGLE_HORIZONTAL_MAXIMIZE: {
       // Maximize horizontally if:
+      // - The window is resizable and maximizable
       // - The window does not have a max width defined.
       // - The window is snapped or floated or has the normal state type.
+      if (!window_state->CanResize() || !window_state->CanMaximize()) {
+        wm::AnimateWindow(window_state->window(),
+                          wm::WINDOW_ANIMATION_TYPE_BOUNCE);
+        return;
+      }
       if (GetWindowMaximumSize(window).width() != 0)
         return;
       if (!window_state->IsNormalOrSnapped() && !window_state->IsFloated())
@@ -343,7 +358,6 @@ void DefaultState::HandleCompoundEvents(WindowState* window_state,
       return;
     default:
       NOTREACHED() << "Unknown event:" << event->type();
-      break;
   }
 }
 
@@ -357,7 +371,6 @@ void DefaultState::HandleBoundsEvents(WindowState* window_state,
     } break;
     default:
       NOTREACHED() << "Unknown event:" << event->type();
-      break;
   }
 }
 
@@ -385,7 +398,8 @@ void DefaultState::HandleTransitionEvents(WindowState* window_state,
     return;
   }
 
-  if (type == WM_EVENT_SNAP_PRIMARY || type == WM_EVENT_SNAP_SECONDARY) {
+  if ((type == WM_EVENT_SNAP_PRIMARY || type == WM_EVENT_SNAP_SECONDARY) &&
+      window_state->CanSnap()) {
     HandleWindowSnapping(window_state, type,
                          event->AsSnapEvent()->snap_action_source());
   }
@@ -449,18 +463,18 @@ void DefaultState::SetBounds(WindowState* window_state,
 
   if (is_dragged || window_state->allow_set_bounds_direct()) {
     if (event->animate()) {
-      window_state->SetBoundsDirectAnimated(event->requested_bounds(),
+      window_state->SetBoundsDirectAnimated(event->requested_bounds_in_parent(),
                                             event->duration());
     } else {
       // TODO(oshima|varkha): Is this still needed? crbug.com/485612.
-      window_state->SetBoundsDirect(event->requested_bounds());
+      window_state->SetBoundsDirect(event->requested_bounds_in_parent());
     }
   } else if (!SetMaximizedOrFullscreenBounds(window_state)) {
     if (event->animate()) {
-      window_state->SetBoundsDirectAnimated(event->requested_bounds(),
+      window_state->SetBoundsDirectAnimated(event->requested_bounds_in_parent(),
                                             event->duration());
     } else {
-      window_state->SetBoundsConstrained(event->requested_bounds());
+      window_state->SetBoundsConstrained(event->requested_bounds_in_parent());
       // Update the restore size if the bounds is updated by PIP itself.
       if (window_state->IsPip() && window_state->HasRestoreBounds()) {
         gfx::Rect restore_bounds = window_state->GetRestoreBoundsInScreen();
@@ -639,6 +653,7 @@ void DefaultState::UpdateBoundsFromState(
         // window hasn't been updated yet in the case of dragging to another
         // display. crbug.com/666836.
         AdjustBoundsToEnsureMinimumWindowVisibility(work_area_in_parent,
+                                                    /*client_controlled=*/false,
                                                     &bounds_in_parent);
       }
       break;
@@ -664,10 +679,24 @@ void DefaultState::UpdateBoundsFromState(
       if (previous_state_type == WindowStateType::kMinimized) {
         bounds_in_parent = window->bounds();
       } else {
+        // Default state can be used for always on top windows in tablet mode,
+        // which are not managed by the tablet mode window manager. Float state
+        // is not allowed for always on top but this may be called when a
+        // floated window has been put into always on top and we have not yet
+        // exited float state yet. See http://b/317064996 for more details.
+        // TODO(http://b/325282588): `DefaultState` should be for clamshell
+        // (non-ARC apps) only. See if `TabletModeWindowState` can handle
+        // always-on-top window gracefully.
         bounds_in_parent =
-            Shell::Get()->float_controller()->GetFloatWindowClamshellBounds(
-                window, float_start_location.value_or(
-                            chromeos::FloatStartLocation::kBottomRight));
+            window->GetProperty(aura::client::kZOrderingKey) !=
+                    ui::ZOrderLevel::kNormal
+                ? window->bounds()
+                : Shell::Get()
+                      ->float_controller()
+                      ->GetFloatWindowClamshellBounds(
+                          window,
+                          float_start_location.value_or(
+                              chromeos::FloatStartLocation::kBottomRight));
       }
       break;
     }
@@ -718,6 +747,7 @@ void DefaultState::UpdateBoundsForDisplayOrWorkAreaBoundsChange(
     WindowState* window_state,
     bool ensure_full_window_visibility) {
   if (window_state->is_dragged() || window_state->allow_set_bounds_direct() ||
+      window_state->ignore_keyboard_bounds_change() ||
       SetMaximizedOrFullscreenBounds(window_state)) {
     return;
   }
@@ -730,7 +760,8 @@ void DefaultState::UpdateBoundsForDisplayOrWorkAreaBoundsChange(
   else if (!wm::GetTransientParent(window_state->window()) &&
            !(window_state->IsPip() &&
              Shell::Get()->pip_controller()->is_tucked())) {
-    AdjustBoundsToEnsureMinimumWindowVisibility(work_area_in_parent, &bounds);
+    AdjustBoundsToEnsureMinimumWindowVisibility(
+        work_area_in_parent, /*client_controlled=*/false, &bounds);
   }
   window_state->AdjustSnappedBoundsForDisplayWorkspaceChange(&bounds);
 

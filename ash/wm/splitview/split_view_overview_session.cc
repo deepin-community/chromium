@@ -101,15 +101,27 @@ chromeos::WindowStateType SplitViewOverviewSession::GetWindowStateType() const {
 }
 
 void SplitViewOverviewSession::HandleClickOrTap(const ui::LocatedEvent& event) {
-  gfx::Point location_in_screen = event.location();
+  if (event.type() != ui::EventType::kMousePressed &&
+      event.type() != ui::EventType::kTouchReleased) {
+    return;
+  }
+
   aura::Window* target = static_cast<aura::Window*>(event.target());
-  wm::ConvertPointToScreen(target, &location_in_screen);
+  if (target != window_) {
+    // The target might be in the window layout menu, not `window_` itself, in
+    // which case we don't need to handle it and end overview.
+    return;
+  }
+
   const int client_component =
       window_util::GetNonClientComponent(target, event.location());
-  if ((event.type() == ui::ET_MOUSE_PRESSED ||
-       event.type() == ui::ET_TOUCH_RELEASED) &&
-      window_->GetBoundsInScreen().Contains(location_in_screen) &&
-      (client_component == HTCLIENT || client_component == HTCAPTION)) {
+  if (client_component != HTCLIENT && client_component != HTCAPTION) {
+    return;
+  }
+
+  gfx::Point location_in_screen = event.location();
+  wm::ConvertPointToScreen(target, &location_in_screen);
+  if (window_->GetBoundsInScreen().Contains(location_in_screen)) {
     MaybeEndOverview(SplitViewOverviewSessionExitPoint::kSkip,
                      OverviewEnterExitType::kNormal);
   }
@@ -148,7 +160,6 @@ void SplitViewOverviewSession::OnResizeLoopStarted(aura::Window* window) {
 void SplitViewOverviewSession::OnResizeLoopEnded(aura::Window* window) {
   presentation_time_recorder_.reset();
 
-  // TODO(sophiewen): Only used by metrics. See if we can remove this.
   aura::Window* root_window = window->GetRootWindow();
   SplitViewController::Get(root_window)->NotifyWindowResized();
 
@@ -197,14 +208,16 @@ void SplitViewOverviewSession::OnWindowBoundsChanged(
     presentation_time_recorder_->RequestNext();
   }
 
-  CHECK(IsInOverviewSession());
+  // Overview may be ending, during which we don't need to update the
+  // window or grid bounds. `this` will be destroyed soon.
+  if (!IsInOverviewSession()) {
+    return;
+  }
+
   // When in clamshell `SplitViewOverviewSession`, we need to manually refresh
   // the grid bounds, because `OverviewGrid` will calculate the bounds based
   // on `SplitViewController::divider_position_` which wouldn't work for
   // multiple groups.
-  // TODO(michelefan | sophiewen): Reconsider the ownership of the session
-  // and generalize the `OverviewGrid` bounds calculation to be independent
-  // from `SplitViewController`.
   GetOverviewSession()
       ->GetGridWithRootWindow(window->GetRootWindow())
       ->RefreshGridBounds(/*animate=*/false);

@@ -19,7 +19,6 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
-#include "content/browser/blob_storage/chrome_blob_storage_context.h"
 #include "content/browser/webui/shared_resources_data_source.h"
 #include "content/browser/webui/url_data_source_impl.h"
 #include "content/browser/webui/web_ui_data_source_impl.h"
@@ -92,7 +91,7 @@ std::vector<std::string> GetWebUISchemesCached() {
 
 }  // namespace
 
-URLDataManagerBackend::URLDataManagerBackend() : next_request_id_(0) {
+URLDataManagerBackend::URLDataManagerBackend() {
   {
     // Add a shared data source for chrome://resources.
     auto* source = new WebUIDataSourceImpl(kChromeUIResourcesHost);
@@ -138,7 +137,6 @@ void URLDataManagerBackend::UpdateWebUIDataSource(
   auto it = data_sources_.find(source_name);
   if (it == data_sources_.end() || !it->second->IsWebUIDataSourceImpl()) {
     NOTREACHED();
-    return;
   }
   static_cast<WebUIDataSourceImpl*>(it->second.get())
       ->AddLocalizedStrings(update);
@@ -211,7 +209,7 @@ scoped_refptr<net::HttpResponseHeaders> URLDataManagerBackend::GetHeaders(
       csp_header.append(source->GetContentSecurityPolicy(directive));
     }
 
-    // TODO(crbug.com/1051745): Both CSP frame ancestors and XFO headers may be
+    // TODO(crbug.com/40118579): Both CSP frame ancestors and XFO headers may be
     // added to the response but frame ancestors would take precedence. In the
     // future, XFO will be removed so when that happens remove the check and
     // always add frame ancestors.
@@ -271,7 +269,6 @@ bool URLDataManagerBackend::CheckURLIsValid(const GURL& url) {
 
   if (!url.is_valid()) {
     NOTREACHED();
-    return false;
   }
 
   return true;

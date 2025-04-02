@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 import type * as Common from '../../core/common/common.js';
-import type * as Platform from '../../core/platform/platform.js';
 import * as i18n from '../../core/i18n/i18n.js';
+import type * as Platform from '../../core/platform/platform.js';
 import type * as TextUtils from '../text_utils/text_utils.js';
 
 const UIStrings = {
@@ -66,8 +66,8 @@ export class PlatformFileSystem {
   }
 
   async requestFileContent(_path: Platform.DevToolsPath.EncodedPathString):
-      Promise<TextUtils.ContentProvider.DeferredContent> {
-    return {content: null, error: i18nString(UIStrings.unableToReadFilesWithThis), isEncoded: false};
+      Promise<TextUtils.ContentData.ContentDataOrError> {
+    return {error: i18nString(UIStrings.unableToReadFilesWithThis)};
   }
 
   setFileContent(_path: Platform.DevToolsPath.EncodedPathString, _content: string, _isBase64: boolean): void {

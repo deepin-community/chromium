@@ -2,11 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import {DEFAULT_MODULE_CONFIGURATIONS, type ModuleConfigurations} from './ModuleConfiguration.js';
-import {type Chrome} from '../../../extension-api/ExtensionAPI.js';
+import type {Chrome} from '../../../extension-api/ExtensionAPI.js';
 
-import {WorkerRPC, type AsyncHostInterface, type WorkerInterface} from './WorkerRPC.js';
-import {type WasmValue} from './WasmTypes.js';
+import {DEFAULT_MODULE_CONFIGURATIONS, type ModuleConfigurations} from './ModuleConfiguration.js';
+import type {WasmValue} from './WasmTypes.js';
+import {type AsyncHostInterface, type WorkerInterface, WorkerRPC} from './WorkerRPC.js';
 
 export class WorkerPlugin implements Chrome.DevTools.LanguageExtensionPlugin, AsyncHostInterface {
   private readonly worker: Worker;
@@ -27,6 +27,10 @@ export class WorkerPlugin implements Chrome.DevTools.LanguageExtensionPlugin, As
   }
   getWasmOp(op: number, stopId: unknown): Promise<WasmValue> {
     return chrome.devtools.languageServices.getWasmOp(op, stopId);
+  }
+  reportResourceLoad(resourceUrl: string, status: {success: boolean, errorMessage?: string, size?: number}):
+      Promise<void> {
+    return chrome.devtools.languageServices.reportResourceLoad(resourceUrl, status);
   }
 
   static async create(
@@ -65,7 +69,8 @@ export class WorkerPlugin implements Chrome.DevTools.LanguageExtensionPlugin, As
   }
 
   getFunctionInfo(rawLocation: Chrome.DevTools.RawLocation):
-      Promise<{frames: Chrome.DevTools.FunctionInfo[]}|{missingSymbolFiles: string[]}> {
+      Promise<{frames: Chrome.DevTools.FunctionInfo[], missingSymbolFiles: string[]}|
+              {frames: Chrome.DevTools.FunctionInfo[]}|{missingSymbolFiles: string[]}> {
     return this.rpc.sendMessage('getFunctionInfo', rawLocation);
   }
 
@@ -82,7 +87,7 @@ export class WorkerPlugin implements Chrome.DevTools.LanguageExtensionPlugin, As
   }
 
   evaluate(expression: string, context: Chrome.DevTools.RawLocation, stopId: unknown):
-      Promise<Chrome.DevTools.RemoteObject|null> {
+      Promise<Chrome.DevTools.RemoteObject|Chrome.DevTools.ForeignObject|null> {
     return this.rpc.sendMessage('evaluate', expression, context, stopId);
   }
 
@@ -122,8 +127,8 @@ if (typeof chrome !== 'undefined' && typeof chrome.storage !== 'undefined') {
   }
 
   const defaultConfig = {
-    'moduleConfigurations': DEFAULT_MODULE_CONFIGURATIONS,
-    'logPluginApiCalls': false,
+    moduleConfigurations: DEFAULT_MODULE_CONFIGURATIONS,
+    logPluginApiCalls: false,
   };
   chrome.storage.local.get(defaultConfig, ({moduleConfigurations, logPluginApiCalls}) => {
     let pluginPromise = registerPlugin(moduleConfigurations, logPluginApiCalls);

@@ -70,7 +70,7 @@ class MockDesktopEnvironment : public DesktopEnvironment {
               (override));
   MOCK_METHOD(std::unique_ptr<DesktopCapturer>,
               CreateVideoCapturer,
-              (),
+              (webrtc::ScreenId),
               (override));
   MOCK_METHOD(DesktopDisplayInfoMonitor*,
               GetDisplayInfoMonitor,
@@ -176,6 +176,10 @@ class MockClientSessionEventHandler : public ClientSession::EventHandler {
               (ClientSession*,
                const std::string&,
                const protocol::TransportRoute&),
+              (override));
+  MOCK_METHOD(std::optional<ErrorCode>,
+              OnSessionPoliciesReceived,
+              (const SessionPolicies& policies),
               (override));
 };
 

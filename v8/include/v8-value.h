@@ -302,6 +302,11 @@ class V8_EXPORT Value : public Data {
   bool IsInt32Array() const;
 
   /**
+   * Returns true if this value is a Float16Array.
+   */
+  bool IsFloat16Array() const;
+
+  /**
    * Returns true if this value is a Float32Array.
    */
   bool IsFloat32Array() const;
@@ -340,6 +345,11 @@ class V8_EXPORT Value : public Data {
    * Returns true if this value is a WasmMemoryObject.
    */
   bool IsWasmMemoryObject() const;
+
+  /**
+   * Returns true if this value is a WasmMemoryMapDescriptor.
+   */
+  bool IsWasmMemoryMapDescriptor() const;
 
   /**
    * Returns true if this value is a WasmModuleObject.
@@ -630,8 +640,9 @@ bool Value::QuickIsString() const {
   A obj = internal::ValueHelper::ValueAsAddress(this);
   if (!I::HasHeapObjectTag(obj)) return false;
 #if V8_STATIC_ROOTS_BOOL && !V8_MAP_PACKING
-  return I::CheckInstanceMapRange(obj, I::StaticReadOnlyRoot::kFirstStringMap,
-                                  I::StaticReadOnlyRoot::kLastStringMap);
+  return I::CheckInstanceMapRange(obj,
+                                  I::StaticReadOnlyRoot::kStringMapLowerBound,
+                                  I::StaticReadOnlyRoot::kStringMapUpperBound);
 #else
   return (I::GetInstanceType(obj) < I::kFirstNonstringType);
 #endif  // V8_STATIC_ROOTS_BOOL

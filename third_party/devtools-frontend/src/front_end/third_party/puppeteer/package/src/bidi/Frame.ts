@@ -16,32 +16,42 @@ import {
   firstValueFrom,
   map,
   of,
+  race,
   raceWith,
   switchMap,
 } from '../../third_party/rxjs/rxjs.js';
 import type {CDPSession} from '../api/CDPSession.js';
-import type {ElementHandle} from '../api/ElementHandle.js';
 import {
   Frame,
   throwIfDetached,
   type GoToOptions,
   type WaitForOptions,
 } from '../api/Frame.js';
-import type {WaitForSelectorOptions} from '../api/Page.js';
 import {PageEvent} from '../api/Page.js';
+import {Accessibility} from '../cdp/Accessibility.js';
+import type {ConsoleMessageType} from '../common/ConsoleMessage.js';
 import {
   ConsoleMessage,
   type ConsoleMessageLocation,
 } from '../common/ConsoleMessage.js';
 import {TargetCloseError, UnsupportedOperation} from '../common/Errors.js';
 import type {TimeoutSettings} from '../common/TimeoutSettings.js';
-import type {Awaitable, NodeFor} from '../common/types.js';
-import {debugError, fromEmitterEvent, timeout} from '../common/util.js';
+import type {Awaitable} from '../common/types.js';
+import {
+  debugError,
+  fromAbortSignal,
+  fromEmitterEvent,
+  timeout,
+} from '../common/util.js';
+import {isErrorLike} from '../util/ErrorLike.js';
 
 import {BidiCdpSession} from './CDPSession.js';
 import type {BrowsingContext} from './core/BrowsingContext.js';
+import type {Navigation} from './core/Navigation.js';
+import type {Request} from './core/Request.js';
 import {BidiDeserializer} from './Deserializer.js';
 import {BidiDialog} from './Dialog.js';
+import type {BidiElementHandle} from './ElementHandle.js';
 import {ExposeableFunction} from './ExposedFunction.js';
 import {BidiHTTPRequest, requests} from './HTTPRequest.js';
 import type {BidiHTTPResponse} from './HTTPResponse.js';
@@ -52,10 +62,25 @@ import {BidiFrameRealm} from './Realm.js';
 import {rewriteNavigationError} from './util.js';
 import {BidiWebWorker} from './WebWorker.js';
 
+// TODO: Remove this and map CDP the correct method.
+// Requires breaking change.
+function convertConsoleMessageLevel(method: string): ConsoleMessageType {
+  switch (method) {
+    case 'group':
+      return 'startGroup';
+    case 'groupCollapsed':
+      return 'startGroupCollapsed';
+    case 'groupEnd':
+      return 'endGroup';
+    default:
+      return method as ConsoleMessageType;
+  }
+}
+
 export class BidiFrame extends Frame {
   static from(
     parent: BidiPage | BidiFrame,
-    browsingContext: BrowsingContext
+    browsingContext: BrowsingContext,
   ): BidiFrame {
     const frame = new BidiFrame(parent, browsingContext);
     frame.#initialize();
@@ -69,10 +94,11 @@ export class BidiFrame extends Frame {
 
   override readonly _id: string;
   override readonly client: BidiCdpSession;
+  override readonly accessibility: Accessibility;
 
   private constructor(
     parent: BidiPage | BidiFrame,
-    browsingContext: BrowsingContext
+    browsingContext: BrowsingContext,
   ) {
     super();
     this.#parent = parent;
@@ -84,11 +110,12 @@ export class BidiFrame extends Frame {
       default: BidiFrameRealm.from(this.browsingContext.defaultRealm, this),
       internal: BidiFrameRealm.from(
         this.browsingContext.createWindowRealm(
-          `__puppeteer_internal_${Math.ceil(Math.random() * 10000)}`
+          `__puppeteer_internal_${Math.ceil(Math.random() * 10000)}`,
         ),
-        this
+        this,
       ),
     };
+    this.accessibility = new Accessibility(this.realms.default, this._id);
   }
 
   #initialize(): void {
@@ -102,7 +129,7 @@ export class BidiFrame extends Frame {
     this.browsingContext.on('closed', () => {
       for (const session of BidiCdpSession.sessions.values()) {
         if (session.frame === this) {
-          void session.detach().catch(debugError);
+          session.onClose();
         }
       }
       this.page().trustedEmitter.emit(PageEvent.FrameDetached, this);
@@ -111,13 +138,13 @@ export class BidiFrame extends Frame {
     this.browsingContext.on('request', ({request}) => {
       const httpRequest = BidiHTTPRequest.from(request, this);
       request.once('success', () => {
-        // SAFETY: BidiHTTPRequest will create this before here.
         this.page().trustedEmitter.emit(PageEvent.RequestFinished, httpRequest);
       });
 
       request.once('error', () => {
         this.page().trustedEmitter.emit(PageEvent.RequestFailed, httpRequest);
       });
+      void httpRequest.finalizeInterceptions();
     });
 
     this.browsingContext.on('navigation', ({navigation}) => {
@@ -137,7 +164,7 @@ export class BidiFrame extends Frame {
     this.browsingContext.on('userprompt', ({userPrompt}) => {
       this.page().trustedEmitter.emit(
         PageEvent.Dialog,
-        BidiDialog.from(userPrompt)
+        BidiDialog.from(userPrompt),
       );
     });
 
@@ -163,11 +190,12 @@ export class BidiFrame extends Frame {
         this.page().trustedEmitter.emit(
           PageEvent.Console,
           new ConsoleMessage(
-            entry.method as any,
+            convertConsoleMessageLevel(entry.method),
             text,
             args,
-            getStackTraceLocations(entry.stackTrace)
-          )
+            getStackTraceLocations(entry.stackTrace),
+            this,
+          ),
         );
       } else if (isJavaScriptLogEntry(entry)) {
         const error = new Error(entry.text ?? '');
@@ -182,7 +210,7 @@ export class BidiFrame extends Frame {
             stackLines.push(
               `    at ${frame.functionName || '<anonymous>'} (${frame.url}:${
                 frame.lineNumber + 1
-              }:${frame.columnNumber + 1})`
+              }:${frame.columnNumber + 1})`,
             );
             if (stackLines.length >= Error.stackTraceLimit) {
               break;
@@ -194,7 +222,7 @@ export class BidiFrame extends Frame {
         this.page().trustedEmitter.emit(PageEvent.PageError, error);
       } else {
         debugError(
-          `Unhandled LogEntry with type "${entry.type}", text "${entry.text}" and level "${entry.level}"`
+          `Unhandled LogEntry with type "${entry.type}", text "${entry.text}" and level "${entry.level}"`,
         );
       }
     });
@@ -224,12 +252,21 @@ export class BidiFrame extends Frame {
     return this.page()._timeoutSettings;
   }
 
-  override mainRealm(): BidiRealm {
+  override mainRealm(): BidiFrameRealm {
     return this.realms.default;
   }
 
-  override isolatedRealm(): BidiRealm {
+  override isolatedRealm(): BidiFrameRealm {
     return this.realms.internal;
+  }
+
+  realm(id: string): BidiRealm | undefined {
+    for (const realm of Object.values(this.realms)) {
+      if (realm.realm.id === id) {
+        return realm;
+      }
+    }
+    return;
   }
 
   override page(): BidiPage {
@@ -238,10 +275,6 @@ export class BidiFrame extends Frame {
       parent = parent.#parent;
     }
     return parent;
-  }
-
-  override isOOPFrame(): never {
-    throw new UnsupportedOperation();
   }
 
   override url(): string {
@@ -268,11 +301,11 @@ export class BidiFrame extends Frame {
       }
       return fromEmitterEvent(
         this.page().trustedEmitter,
-        PageEvent.FrameDetached
+        PageEvent.FrameDetached,
       ).pipe(
         filter(detachedFrame => {
           return detachedFrame === this;
-        })
+        }),
       );
     });
   }
@@ -280,7 +313,7 @@ export class BidiFrame extends Frame {
   @throwIfDetached
   override async goto(
     url: string,
-    options: GoToOptions = {}
+    options: GoToOptions = {},
   ): Promise<BidiHTTPResponse | null> {
     const [response] = await Promise.all([
       this.waitForNavigation(options),
@@ -288,15 +321,35 @@ export class BidiFrame extends Frame {
       // readiness=interactive.
       //
       // Related: https://bugzilla.mozilla.org/show_bug.cgi?id=1846601
-      this.browsingContext.navigate(
-        url,
-        Bidi.BrowsingContext.ReadinessState.Interactive
-      ),
+      this.browsingContext
+        .navigate(url, Bidi.BrowsingContext.ReadinessState.Interactive)
+        .catch(error => {
+          if (
+            isErrorLike(error) &&
+            error.message.includes('net::ERR_HTTP_RESPONSE_CODE_FAILURE')
+          ) {
+            return;
+          }
+
+          if (error.message.includes('navigation canceled')) {
+            return;
+          }
+
+          if (
+            error.message.includes(
+              'Navigation was aborted by another navigation',
+            )
+          ) {
+            return;
+          }
+
+          throw error;
+        }),
     ]).catch(
       rewriteNavigationError(
         url,
-        options.timeout ?? this.timeoutSettings.navigationTimeout()
-      )
+        options.timeout ?? this.timeoutSettings.navigationTimeout(),
+      ),
     );
     return response;
   }
@@ -304,7 +357,7 @@ export class BidiFrame extends Frame {
   @throwIfDetached
   override async setContent(
     html: string,
-    options: WaitForOptions = {}
+    options: WaitForOptions = {},
   ): Promise<void> {
     await Promise.all([
       this.setFrameContent(html),
@@ -312,72 +365,112 @@ export class BidiFrame extends Frame {
         combineLatest([
           this.#waitForLoad$(options),
           this.#waitForNetworkIdle$(options),
-        ])
+        ]),
       ),
     ]);
   }
 
   @throwIfDetached
   override async waitForNavigation(
-    options: WaitForOptions = {}
+    options: WaitForOptions = {},
   ): Promise<BidiHTTPResponse | null> {
-    const {timeout: ms = this.timeoutSettings.navigationTimeout()} = options;
+    const {timeout: ms = this.timeoutSettings.navigationTimeout(), signal} =
+      options;
 
     const frames = this.childFrames().map(frame => {
       return frame.#detached$();
     });
     return await firstValueFrom(
       combineLatest([
-        fromEmitterEvent(this.browsingContext, 'navigation').pipe(
-          switchMap(({navigation}) => {
-            return this.#waitForLoad$(options).pipe(
-              delayWhen(() => {
-                if (frames.length === 0) {
-                  return of(undefined);
-                }
-                return combineLatest(frames);
-              }),
-              raceWith(
-                fromEmitterEvent(navigation, 'fragment'),
-                fromEmitterEvent(navigation, 'failed').pipe(
-                  map(({url}) => {
-                    throw new Error(`Navigation failed: ${url}`);
-                  })
+        race(
+          fromEmitterEvent(this.browsingContext, 'navigation'),
+          fromEmitterEvent(this.browsingContext, 'historyUpdated').pipe(
+            map(() => {
+              return {navigation: null};
+            }),
+          ),
+        )
+          .pipe(first())
+          .pipe(
+            switchMap(({navigation}) => {
+              if (navigation === null) {
+                return of(null);
+              }
+              return this.#waitForLoad$(options).pipe(
+                delayWhen(() => {
+                  if (frames.length === 0) {
+                    return of(undefined);
+                  }
+                  return combineLatest(frames);
+                }),
+                raceWith(
+                  fromEmitterEvent(navigation, 'fragment'),
+                  fromEmitterEvent(navigation, 'failed'),
+                  fromEmitterEvent(navigation, 'aborted').pipe(
+                    map(({url}) => {
+                      throw new Error(`Navigation aborted: ${url}`);
+                    }),
+                  ),
                 ),
-                fromEmitterEvent(navigation, 'aborted').pipe(
-                  map(({url}) => {
-                    throw new Error(`Navigation aborted: ${url}`);
-                  })
-                )
-              ),
-              map(() => {
-                return navigation;
-              })
-            );
-          })
-        ),
+                switchMap(() => {
+                  if (navigation.request) {
+                    function requestFinished$(
+                      request: Request,
+                    ): Observable<Navigation | null> {
+                      if (navigation === null) {
+                        return of(null);
+                      }
+                      // Reduces flakiness if the response events arrive after
+                      // the load event.
+                      // Usually, the response or error is already there at this point.
+                      if (request.response || request.error) {
+                        return of(navigation);
+                      }
+                      if (request.redirect) {
+                        return requestFinished$(request.redirect);
+                      }
+                      return fromEmitterEvent(request, 'success')
+                        .pipe(
+                          raceWith(fromEmitterEvent(request, 'error')),
+                          raceWith(fromEmitterEvent(request, 'redirect')),
+                        )
+                        .pipe(
+                          switchMap(() => {
+                            return requestFinished$(request);
+                          }),
+                        );
+                    }
+                    return requestFinished$(navigation.request);
+                  }
+                  return of(navigation);
+                }),
+              );
+            }),
+          ),
         this.#waitForNetworkIdle$(options),
       ]).pipe(
         map(([navigation]) => {
+          if (!navigation) {
+            return null;
+          }
           const request = navigation.request;
           if (!request) {
             return null;
           }
-          const httpRequest = requests.get(request)!;
-          const lastRedirect = httpRequest.redirectChain().at(-1);
-          return (
-            lastRedirect !== undefined ? lastRedirect : httpRequest
-          ).response();
+          const lastRequest = request.lastRedirect ?? request;
+          const httpRequest = requests.get(lastRequest)!;
+          return httpRequest.response();
         }),
         raceWith(
           timeout(ms),
+          fromAbortSignal(signal),
           this.#detached$().pipe(
             map(() => {
               throw new TargetCloseError('Frame detached.');
-            })
-          )
-        )
-      )
+            }),
+          ),
+        ),
+      ),
     );
   }
 
@@ -392,42 +485,36 @@ export class BidiFrame extends Frame {
   #exposedFunctions = new Map<string, ExposeableFunction<never[], unknown>>();
   async exposeFunction<Args extends unknown[], Ret>(
     name: string,
-    apply: (...args: Args) => Awaitable<Ret>
+    apply: (...args: Args) => Awaitable<Ret>,
   ): Promise<void> {
     if (this.#exposedFunctions.has(name)) {
       throw new Error(
-        `Failed to add page binding with name ${name}: globalThis['${name}'] already exists!`
+        `Failed to add page binding with name ${name}: globalThis['${name}'] already exists!`,
       );
     }
-    const exposeable = new ExposeableFunction(this, name, apply);
+    const exposeable = await ExposeableFunction.from(this, name, apply);
     this.#exposedFunctions.set(name, exposeable);
-    try {
-      await exposeable.expose();
-    } catch (error) {
-      this.#exposedFunctions.delete(name);
-      throw error;
-    }
   }
 
-  override waitForSelector<Selector extends string>(
-    selector: Selector,
-    options?: WaitForSelectorOptions
-  ): Promise<ElementHandle<NodeFor<Selector>> | null> {
-    if (selector.startsWith('aria')) {
-      throw new UnsupportedOperation(
-        'ARIA selector is not supported for BiDi!'
+  async removeExposedFunction(name: string): Promise<void> {
+    const exposedFunction = this.#exposedFunctions.get(name);
+    if (!exposedFunction) {
+      throw new Error(
+        `Failed to remove page binding with name ${name}: window['${name}'] does not exists!`,
       );
     }
 
-    return super.waitForSelector(selector, options);
+    this.#exposedFunctions.delete(name);
+    await exposedFunction[Symbol.asyncDispose]();
   }
 
   async createCDPSession(): Promise<CDPSession> {
-    const {sessionId} = await this.client.send('Target.attachToTarget', {
-      targetId: this._id,
-      flatten: true,
-    });
-    return new BidiCdpSession(this, sessionId);
+    if (!this.page().browser().cdpSupported) {
+      throw new UnsupportedOperation();
+    }
+
+    const cdpConnection = this.page().browser().cdpConnection!;
+    return await cdpConnection._createSession({targetId: this._id});
   }
 
   @throwIfDetached
@@ -459,7 +546,7 @@ export class BidiFrame extends Frame {
     return combineLatest(
       [...events].map(event => {
         return fromEmitterEvent(this.browsingContext, event);
-      })
+      }),
     ).pipe(
       map(() => {}),
       first(),
@@ -468,9 +555,9 @@ export class BidiFrame extends Frame {
         this.#detached$().pipe(
           map(() => {
             throw new Error('Frame detached.');
-          })
-        )
-      )
+          }),
+        ),
+      ),
     );
   }
 
@@ -504,22 +591,43 @@ export class BidiFrame extends Frame {
       concurrency,
     });
   }
+
+  @throwIfDetached
+  async setFiles(element: BidiElementHandle, files: string[]): Promise<void> {
+    await this.browsingContext.setFiles(
+      // SAFETY: ElementHandles are always remote references.
+      element.remoteValue() as Bidi.Script.SharedReference,
+      files,
+    );
+  }
+
+  @throwIfDetached
+  async locateNodes(
+    element: BidiElementHandle,
+    locator: Bidi.BrowsingContext.Locator,
+  ): Promise<Bidi.Script.NodeRemoteValue[]> {
+    return await this.browsingContext.locateNodes(
+      locator,
+      // SAFETY: ElementHandles are always remote references.
+      [element.remoteValue() as Bidi.Script.SharedReference],
+    );
+  }
 }
 
 function isConsoleLogEntry(
-  event: Bidi.Log.Entry
+  event: Bidi.Log.Entry,
 ): event is Bidi.Log.ConsoleLogEntry {
   return event.type === 'console';
 }
 
 function isJavaScriptLogEntry(
-  event: Bidi.Log.Entry
+  event: Bidi.Log.Entry,
 ): event is Bidi.Log.JavascriptLogEntry {
   return event.type === 'javascript';
 }
 
 function getStackTraceLocations(
-  stackTrace?: Bidi.Script.StackTrace
+  stackTrace?: Bidi.Script.StackTrace,
 ): ConsoleMessageLocation[] {
   const stackTraceLocations: ConsoleMessageLocation[] = [];
   if (stackTrace) {

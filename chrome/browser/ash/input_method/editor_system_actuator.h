@@ -6,13 +6,16 @@
 #define CHROME_BROWSER_ASH_INPUT_METHOD_EDITOR_SYSTEM_ACTUATOR_H_
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/ash/input_method/editor_consent_enums.h"
 #include "chrome/browser/ash/input_method/editor_metrics_recorder.h"
 #include "chrome/browser/ash/input_method/editor_text_insertion.h"
+#include "chrome/browser/ash/input_method/editor_transition_enums.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chromeos/ash/services/orca/public/mojom/orca_service.mojom.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
@@ -30,6 +33,9 @@ class EditorSystemActuator : public orca::mojom::SystemActuator {
     virtual void ProcessConsentAction(ConsentAction consent_action) = 0;
     virtual void ShowUI() = 0;
     virtual void CloseUI() = 0;
+    virtual void HandleTrigger(
+        std::optional<std::string_view> preset_query_id,
+        std::optional<std::string_view> freeform_text) = 0;
     virtual EditorMetricsRecorder* GetMetricsRecorder() = 0;
     virtual size_t GetSelectedTextLength() = 0;
   };
@@ -48,9 +54,15 @@ class EditorSystemActuator : public orca::mojom::SystemActuator {
   void ShowUI() override;
   void CloseUI() override;
   void SubmitFeedback(const std::string& description) override;
+  void OnTrigger(orca::mojom::TriggerContextPtr trigger_context) override;
+  void EmitMetricEvent(orca::mojom::MetricEvent metric_event) override;
+  void OnInputContextUpdated(const GURL& url);
 
   // Relevant input events
   void OnFocus(int context_id);
+
+  void SetNoticeTransitionAction(
+      EditorNoticeTransitionAction transition_action);
 
  private:
   void QueueTextInsertion(const std::string pending_text);
@@ -67,6 +79,11 @@ class EditorSystemActuator : public orca::mojom::SystemActuator {
   // Only one text insertion can be queued at a time, with new text insertions
   // overwriting previously queued insertions.
   std::unique_ptr<EditorTextInsertion> queued_text_insertion_;
+
+  GURL current_url_;
+
+  EditorNoticeTransitionAction notice_transition_action_ =
+      EditorNoticeTransitionAction::kShowEditorPanel;
 
   base::OneShotTimer announcement_delay_;
   base::WeakPtrFactory<EditorSystemActuator> weak_ptr_factory_{this};

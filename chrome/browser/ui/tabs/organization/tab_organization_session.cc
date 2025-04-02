@@ -13,6 +13,10 @@
 #include "chrome/browser/ui/tabs/organization/tab_data.h"
 #include "chrome/browser/ui/tabs/organization/tab_organization.h"
 #include "chrome/browser/ui/tabs/organization/tab_organization_request.h"
+#include "chrome/browser/ui/tabs/tab_group.h"
+#include "chrome/browser/ui/tabs/tab_group_model.h"
+#include "components/tab_groups/tab_group_id.h"
+#include "content/public/browser/web_contents.h"
 
 namespace {
 int kNextSessionID = 1;
@@ -23,35 +27,69 @@ TabOrganizationSession::TabOrganizationSession()
 
 TabOrganizationSession::TabOrganizationSession(
     std::unique_ptr<TabOrganizationRequest> request,
-    TabOrganizationEntryPoint entrypoint)
+    TabOrganizationEntryPoint entrypoint,
+    const tabs::TabInterface* base_session_tab)
     : request_(std::move(request)),
       session_id_(kNextSessionID),
-      entrypoint_(entrypoint) {
+      entrypoint_(entrypoint),
+      base_session_tab_(base_session_tab) {
   kNextSessionID++;
 }
 
 TabOrganizationSession::~TabOrganizationSession() {
+  const int group_count = tab_organizations_.size();
+  switch (entrypoint_) {
+    case TabOrganizationEntryPoint::kProactive: {
+      UMA_HISTOGRAM_COUNTS_100("Tab.Organization.Proactive.GroupCount",
+                               group_count);
+      break;
+    }
+    case TabOrganizationEntryPoint::kTabContextMenu: {
+      UMA_HISTOGRAM_COUNTS_100("Tab.Organization.TabContextMenu.GroupCount",
+                               group_count);
+      break;
+    }
+    case TabOrganizationEntryPoint::kThreeDotMenu: {
+      UMA_HISTOGRAM_COUNTS_100("Tab.Organization.ThreeDotMenu.GroupCount",
+                               group_count);
+      break;
+    }
+    case TabOrganizationEntryPoint::kTabSearch: {
+      UMA_HISTOGRAM_COUNTS_100("Tab.Organization.TabSearch.GroupCount",
+                               group_count);
+      break;
+    }
+    case TabOrganizationEntryPoint::kNone: {
+    }
+  }
+  UMA_HISTOGRAM_COUNTS_100("Tab.Organization.AllEntrypoints.GroupCount",
+                           group_count);
+
   for (auto& organization : tab_organizations_) {
     organization->RemoveObserver(this);
 
     switch (entrypoint_) {
-      case TabOrganizationEntryPoint::PROACTIVE: {
+      case TabOrganizationEntryPoint::kProactive: {
         UMA_HISTOGRAM_ENUMERATION("Tab.Organization.Proactive.UserChoice",
                                   organization->choice());
         break;
       }
-      case TabOrganizationEntryPoint::TAB_CONTEXT_MENU: {
+      case TabOrganizationEntryPoint::kTabContextMenu: {
         UMA_HISTOGRAM_ENUMERATION("Tab.Organization.TabContextMenu.UserChoice",
                                   organization->choice());
         break;
       }
-      case TabOrganizationEntryPoint::THREE_DOT_MENU: {
+      case TabOrganizationEntryPoint::kThreeDotMenu: {
         UMA_HISTOGRAM_ENUMERATION("Tab.Organization.ThreeDotMenu.UserChoice",
                                   organization->choice());
         break;
       }
-
-      case TabOrganizationEntryPoint::NONE: {
+      case TabOrganizationEntryPoint::kTabSearch: {
+        UMA_HISTOGRAM_ENUMERATION("Tab.Organization.TabSearch.UserChoice",
+                                  organization->choice());
+        break;
+      }
+      case TabOrganizationEntryPoint::kNone: {
       }
     }
 
@@ -74,6 +112,9 @@ TabOrganizationSession::~TabOrganizationSession() {
 
   if (request_) {
     request_->LogResults(this);
+    // The request may contain a callback which should happen before the
+    // destructor goes out of scope
+    request_.reset();
   }
 }
 
@@ -81,31 +122,44 @@ TabOrganizationSession::~TabOrganizationSession() {
 std::unique_ptr<TabOrganizationSession>
 TabOrganizationSession::CreateSessionForBrowser(
     const Browser* browser,
-    const content::WebContents* base_session_webcontents) {
+    const TabOrganizationEntryPoint entrypoint,
+    const tabs::TabInterface* base_session_tab) {
   std::unique_ptr<TabOrganizationRequest> request =
       TabOrganizationRequestFactory::GetForProfile(browser->profile())
           ->CreateRequest(browser->profile());
 
   // iterate through the tabstripmodel building the tab data.
-  std::vector<std::unique_ptr<TabData>> tab_datas;
   TabStripModel* tab_strip_model = browser->tab_strip_model();
   for (int index = 0; index < tab_strip_model->count(); index++) {
-    content::WebContents* web_contents =
-        tab_strip_model->GetWebContentsAt(index);
-    std::unique_ptr<TabData> tab_data =
-        std::make_unique<TabData>(tab_strip_model, web_contents);
+    tabs::TabInterface* tab = tab_strip_model->GetTabAtIndex(index);
+    std::unique_ptr<TabData> tab_data = std::make_unique<TabData>(tab);
     if (!tab_data->IsValidForOrganizing()) {
       continue;
     }
 
-    if (base_session_webcontents && web_contents == base_session_webcontents) {
+    if (base_session_tab && tab == base_session_tab) {
       request->SetBaseTabID(tab_data->tab_id());
     }
 
     request->AddTabData(std::move(tab_data));
   }
 
-  return std::make_unique<TabOrganizationSession>(std::move(request));
+  TabGroupModel* tab_group_model = tab_strip_model->group_model();
+  for (tab_groups::TabGroupId group_id : tab_group_model->ListTabGroups()) {
+    TabGroup* group = tab_group_model->GetTabGroup(group_id);
+    std::u16string title = group->visual_data()->title();
+    std::vector<std::unique_ptr<TabData>> tabs;
+    const gfx::Range tab_indices = group->ListTabs();
+    for (size_t index = tab_indices.start(); index < tab_indices.end();
+         index++) {
+      tabs.push_back(
+          std::make_unique<TabData>(tab_strip_model->GetTabAtIndex(index)));
+    }
+    request->AddGroupData(group_id, title, std::move(tabs));
+  }
+
+  return std::make_unique<TabOrganizationSession>(std::move(request),
+                                                  entrypoint, base_session_tab);
 }
 
 const TabOrganization* TabOrganizationSession::GetNextTabOrganization() const {
@@ -168,6 +222,12 @@ void TabOrganizationSession::StartRequest() {
   NotifyObserversOfUpdate();
 }
 
+void TabOrganizationSession::SetUserInstruction(
+    const std::string& user_instruction) {
+  CHECK(request_);
+  request_->SetUserInstruction(user_instruction);
+}
+
 void TabOrganizationSession::NotifyObserversOfUpdate() {
   for (auto& observer : observers_) {
     observer.OnTabOrganizationSessionUpdated(this);
@@ -200,6 +260,44 @@ void TabOrganizationSession::PopulateOrganizations(
        response->organizations) {
     std::vector<std::unique_ptr<TabData>> tab_datas_for_org;
 
+    // Add grouped tabs
+    std::optional<tab_groups::TabGroupId> group_id;
+    if (response_organization.group_id.has_value()) {
+      TabStripModel* tab_strip_model =
+          request()->tab_datas()[0]->original_tab_strip_model();
+
+      // Replace group id with an id with a matching token, as determined by
+      // string equality. This is required because the token has been
+      // translated to a string and back as part of the TabOrganizationRequest,
+      // and is no longer the same object as the token referenced by the
+      // TabGroupId in the model.
+      std::vector<tab_groups::TabGroupId> all_group_ids =
+          tab_strip_model->group_model()->ListTabGroups();
+      const auto matching_id_iter = std::find_if(
+          all_group_ids.begin(), all_group_ids.end(),
+          [&](const tab_groups::TabGroupId& id) {
+            return response_organization.group_id.value().ToString() ==
+                   id.ToString();
+          });
+      if (matching_id_iter == all_group_ids.end()) {
+        // Do not include organizations which reference tab groups that no
+        // longer exist.
+        continue;
+      }
+      group_id = std::make_optional(*matching_id_iter);
+
+      TabGroupModel* tab_group_model = tab_strip_model->group_model();
+      TabGroup* group = tab_group_model->GetTabGroup(group_id.value());
+      const gfx::Range tab_indices = group->ListTabs();
+      for (size_t index = tab_indices.start(); index < tab_indices.end();
+           index++) {
+        tab_datas_for_org.emplace_back(
+            std::make_unique<TabData>(tab_strip_model->GetTabAtIndex(index)));
+      }
+    }
+    const int first_new_tab_index = tab_datas_for_org.size();
+
+    // Add ungrouped tabs
     for (const TabData::TabID& tab_id : response_organization.tab_ids) {
       // TODO for now we can't use the TabID directly, we instead need to use
       // the webcontents ptr to refer to the tab.
@@ -222,8 +320,7 @@ void TabOrganizationSession::PopulateOrganizations(
 
       // Reconstruct the tab data in for the organization.
       std::unique_ptr<TabData> tab_data_for_org =
-          std::make_unique<TabData>((*matching_tab)->original_tab_strip_model(),
-                                    (*matching_tab)->web_contents());
+          std::make_unique<TabData>((*matching_tab)->tab());
       tab_datas_for_org.emplace_back(std::move(tab_data_for_org));
     }
 
@@ -232,8 +329,10 @@ void TabOrganizationSession::PopulateOrganizations(
 
     std::unique_ptr<TabOrganization> organization =
         std::make_unique<TabOrganization>(std::move(tab_datas_for_org),
-                                          std::move(names));
+                                          std::move(names),
+                                          first_new_tab_index);
 
+    organization->SetTabGroupId(group_id);
     response_organization.organization_id = organization->organization_id();
 
     organization->AddObserver(this);

@@ -13,15 +13,18 @@
 #include "ui/base/models/list_selection_model.h"
 #include "ui/base/models/table_model.h"
 #include "ui/base/models/table_model_observer.h"
+#include "ui/color/color_id.h"
 #include "ui/gfx/font_list.h"
+#include "ui/gfx/render_text.h"
+#include "ui/views/layout/layout_provider.h"
 #include "ui/views/metadata/view_factory.h"
+#include "ui/views/style/typography.h"
 #include "ui/views/view.h"
 #include "ui/views/views_export.h"
 
 namespace ui {
 
 struct AXActionData;
-struct AXNodeData;
 
 }  // namespace ui
 
@@ -50,11 +53,33 @@ class TableHeader;
 class TableViewObserver;
 class TableViewTestHelper;
 
+struct TableHeaderStyle {
+  std::optional<int> cell_vertical_padding;
+  std::optional<int> cell_horizontal_padding;
+  std::optional<int> resize_bar_vertical_padding;
+  std::optional<int> separator_horizontal_padding;
+  std::optional<gfx::Font::Weight> font_weight;
+  std::optional<ui::ColorId> separator_horizontal_color_id;
+  std::optional<ui::ColorId> separator_vertical_color_id;
+  std::optional<ui::ColorId> background_color_id;
+};
+
+struct TableBackgroundStyle {
+  ui::ColorId background = ui::kColorTableBackground;
+  ui::ColorId alternate = ui::kColorTableBackgroundAlternate;
+  ui::ColorId selected_focused = ui::kColorTableBackgroundSelectedFocused;
+  ui::ColorId selected_unfocused = ui::kColorTableBackgroundSelectedUnfocused;
+};
+
+struct TableStyle {
+  TableBackgroundStyle background_tokens;
+};
+
 // The cell's in the first column of a table can contain:
 // - only text
 // - a small icon (16x16) and some text
 // - a check box and some text
-enum class TableType { kTextOnly, kIconAndText };
+enum class TableType : bool { kTextOnly, kIconAndText };
 
 class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   METADATA_HEADER(TableView, View)
@@ -63,7 +88,7 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // Used by AdvanceActiveVisibleColumn(), AdvanceSelection() and
   // ResizeColumnViaKeyboard() to determine the direction to change the
   // selection.
-  enum class AdvanceDirection {
+  enum class AdvanceDirection : bool {
     kDecrement,
     kIncrement,
   };
@@ -98,6 +123,9 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
 
   using SortDescriptors = std::vector<SortDescriptor>;
 
+  static constexpr int kTextContext = style::CONTEXT_TABLE_ROW;
+  static constexpr int kTextStyle = style::STYLE_BODY_4;
+
   // Creates a new table using the model and columns specified.
   // The table type applies to the content of the first column (text, icon and
   // text, checkbox and text).
@@ -114,7 +142,8 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
 
   // Returns a new ScrollView that contains the given |table|.
   static std::unique_ptr<ScrollView> CreateScrollViewWithTable(
-      std::unique_ptr<TableView> table);
+      std::unique_ptr<TableView> table,
+      bool has_border = true);
 
   // Returns a new Builder<ScrollView> that contains the |table| constructed
   // from the given Builder<TableView>.
@@ -145,6 +174,9 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // Sets the TableGrouper. TableView does not own |grouper| (common use case is
   // to have TableModel implement TableGrouper).
   void SetGrouper(TableGrouper* grouper);
+
+  // Determines whether to draw the TableGrouper on the left side of the table.
+  void SetGrouperVisibility(bool visible);
 
   // Returns the number of rows in the TableView.
   size_t GetRowCount() const;
@@ -215,6 +247,7 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // Maps from the index in terms of the view to that of the model.
   size_t ViewToModel(size_t view_index) const;
 
+  void SetRowPadding(views::DistanceMetric distance_metric);
   int GetRowHeight() const { return row_height_; }
 
   bool GetSelectOnRemove() const;
@@ -230,6 +263,10 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   bool GetSortOnPaint() const;
   void SetSortOnPaint(bool sort_on_paint);
 
+  // If enabled, hovering over a row causes the row's background color to
+  // change.
+  void SetMouseHoveringEnabled(bool enabled);
+
   // Returns the proper ax sort direction.
   ax::mojom::SortDirection GetFirstSortDescriptorDirection() const;
 
@@ -244,21 +281,35 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // |row| should be a view index, not a model index.
   // |visible_column_index| indexes into |visible_columns_|.
   AXVirtualView* GetVirtualAccessibilityCell(size_t row,
-                                             size_t visible_column_index);
+                                             size_t visible_column_index) const;
 
   bool header_row_is_active() const { return header_row_is_active_; }
 
+  void SetHeaderStyle(const TableHeaderStyle& style);
+  const TableHeaderStyle& header_style() const { return header_style_; }
+
+  void SetTableStyle(const TableStyle& style);
+  const TableStyle& table_style() const { return table_style_; }
+
+  ui::ColorId BackgroundColorId() const;
+  ui::ColorId BackgroundAlternateColorId() const;
+  ui::ColorId BackgroundSelectedFocusedColorId() const;
+  ui::ColorId BackgroundSelectedUnfocusedColorId() const;
+
   // View overrides:
   void Layout(PassKey) override;
-  gfx::Size CalculatePreferredSize() const override;
+  gfx::Size CalculatePreferredSize(
+      const SizeBounds& /*available_size*/) const override;
   bool GetNeedsNotificationWhenVisibleBoundsChange() const override;
   void OnVisibleBoundsChanged() override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
+  void OnMouseMoved(const ui::MouseEvent& event) override;
+  void OnMouseExited(const ui::MouseEvent& event) override;
   void OnGestureEvent(ui::GestureEvent* event) override;
-  std::u16string GetTooltipText(const gfx::Point& p) const override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  std::u16string GetRenderedTooltipText(const gfx::Point& p) const override;
   bool HandleAccessibleAction(const ui::AXActionData& action_data) override;
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 
   // ui::TableModelObserver overrides:
   void OnModelChanged() override;
@@ -296,6 +347,23 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   };
 
   void OnPaintImpl(gfx::Canvas* canvas);
+
+  // Draws a string with the desired parameters in an efficient way by reusing
+  // RenderTexts for each cell.
+  void DrawString(gfx::Canvas* canvas,
+                  const std::u16string& text,
+                  SkColor color,
+                  const gfx::Rect& text_bounds,
+                  int flags,
+                  size_t row,
+                  size_t col);
+
+  // Updates |render_text| from the specified parameters.
+  void UpdateRenderText(const gfx::Rect& rect,
+                        const std::u16string& text,
+                        int flags,
+                        SkColor color,
+                        gfx::RenderText* render_text);
 
   // Returns the horizontal margin between the bounds of a cell and its
   // contents.
@@ -358,6 +426,11 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // Invokes SchedulePaint() for the selected rows.
   void SchedulePaintForSelection();
 
+  // Invokes SchedulePaintForRect() on the old and new hovered rows.
+  // If either parameter is nullopt, paint is not scheduled for that parameter.
+  void OnHoverChanged(std::optional<size_t> previous_hovered_row,
+                      std::optional<size_t> new_hovered_row);
+
   // Returns the TableColumn matching the specified id.
   ui::TableColumn FindColumnByID(int id) const;
 
@@ -390,6 +463,10 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // 1.
   GroupRange GetGroupRange(size_t model_index) const;
 
+  // Updates the accessible name for the table's views from `start_view_index`
+  // up to `start_view_index` + `length`.
+  void UpdateAccessibleNameForIndex(size_t start_view_index, size_t length);
+
   // Updates a set of accessibility views that expose the visible table contents
   // to assistive software.
   void RebuildVirtualAccessibilityChildren();
@@ -399,6 +476,16 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // process of changing but the virtual accessibility children haven't been
   // updated yet, e.g. showing or hiding a column via SetColumnVisibility().
   void ClearVirtualAccessibilityChildren();
+
+  void UpdateVirtualAccessibilityChildrenVisibilityState();
+
+  void SetAccessibleSelectionForIndex(size_t view_index, bool selected) const;
+  void SetAccessibleSelectionForRange(size_t start_view_index,
+                                      size_t end_view_index,
+                                      bool selected) const;
+  void ClearAccessibleSelection() const;
+  void UpdateAccessibleSelectionForColumnIndex(
+      size_t visible_column_index) const;
 
   // Helper functions used in UpdateVirtualAccessibilityChildrenBounds() for
   // calculating the accessibility bounds for the header and table rows and
@@ -437,7 +524,7 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // Returns the virtual accessibility view corresponding to the specified row.
   // |row| should be a view index into the TableView's body elements, not a
   // model index.
-  AXVirtualView* GetVirtualAccessibilityBodyRow(size_t row);
+  AXVirtualView* GetVirtualAccessibilityBodyRow(size_t row) const;
 
   // Returns the virtual accessibility view corresponding to the header row, if
   // it exists.
@@ -447,8 +534,9 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // given row at the specified column index.
   // `ax_row` should be the virtual view of either a header or body row.
   // `visible_column_index` indexes into `visible_columns_`.
-  AXVirtualView* GetVirtualAccessibilityCellImpl(AXVirtualView* ax_row,
-                                                 size_t visible_column_index);
+  AXVirtualView* GetVirtualAccessibilityCellImpl(
+      AXVirtualView* ax_row,
+      size_t visible_column_index) const;
 
   // Creates a virtual accessibility view that is used to expose information
   // about the row at |view_index| to assistive software.
@@ -471,20 +559,16 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
                                          int view_index,
                                          int model_index);
 
-  // The accessibility view |ax_row| callback function that populates the
-  // accessibility data for a table row.
-  void PopulateAccessibilityRowData(AXVirtualView* ax_row,
-                                    ui::AXNodeData* data);
-
-  // The accessibility view |ax_cell| callback function that populates the
-  // accessibility data for a table cell.
-  void PopulateAccessibilityCellData(AXVirtualView* ax_cell,
-                                     ui::AXNodeData* data);
-
   // Updates the focus rings of the TableView and the TableHeader if necessary.
   void UpdateFocusRings();
 
-  raw_ptr<ui::TableModel> model_ = nullptr;
+  // Handles key events for keyboard navigation by cell. Returns true if the
+  // event was handled.
+  bool HandleKeyPressedForKeyboardNavigationByCell(const ui::KeyEvent& event);
+
+  // TODO(327473315): Only one of raw_ptr in this class is dangling. Find which
+  // one.
+  raw_ptr<ui::TableModel, LeakedDanglingUntriaged> model_ = nullptr;
 
   std::vector<ui::TableColumn> columns_;
 
@@ -498,12 +582,17 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
 
   // The header. This is only created if more than one column is specified or
   // the first column has a non-empty title.
-  raw_ptr<TableHeader> header_ = nullptr;
+  // TODO(327473315): Only one of raw_ptr in this class is dangling. Find which
+  // one.
+  raw_ptr<TableHeader, LeakedDanglingUntriaged> header_ = nullptr;
 
   // TableView allows using the keyboard to activate a cell or row, including
   // optionally the header row. This bool keeps track of whether the active row
   // is the header row, since the selection model doesn't support that.
   bool header_row_is_active_ = false;
+
+  // The row beneath the cursor, if the table is focused.
+  std::optional<size_t> hovered_row_ = std::nullopt;
 
   TableType table_type_ = TableType::kTextOnly;
 
@@ -516,7 +605,9 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // is selected then.
   bool select_on_remove_ = true;
 
-  raw_ptr<TableViewObserver, DanglingUntriaged> observer_ = nullptr;
+  // TODO(327473315): Only one of raw_ptr in this class is dangling. Find which
+  // one.
+  raw_ptr<TableViewObserver, LeakedDanglingUntriaged> observer_ = nullptr;
   // If |sort_on_paint_| is true, table will sort before painting.
   bool sort_on_paint_ = false;
 
@@ -541,7 +632,9 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   std::vector<size_t> view_to_model_;
   std::vector<size_t> model_to_view_;
 
-  raw_ptr<TableGrouper> grouper_ = nullptr;
+  // TODO(327473315): Only one of raw_ptr in this class is dangling. Find which
+  // one.
+  raw_ptr<TableGrouper, LeakedDanglingUntriaged> grouper_ = nullptr;
 
   // True if in SetVisibleColumnWidth().
   bool in_set_visible_column_width_ = false;
@@ -549,6 +642,22 @@ class VIEWS_EXPORT TableView : public View, public ui::TableModelObserver {
   // Keeps track whether a call to UpdateAccessibilityFocus is already
   // pending or not.
   bool update_accessibility_focus_pending_ = false;
+
+  // Draws the Grouper if one is present, and set to true.
+  bool grouper_visible_ = true;
+
+  // Customization for the header. Includes options such as padding.
+  TableHeaderStyle header_style_;
+
+  // Customization for the table.
+  TableStyle table_style_;
+
+  // TODO(crbug.com/388086397): Enable by mouse hovering by default when color
+  // tokens are refined on all platforms.
+  bool hovering_enabled_ = false;
+
+  // RenderText cache from row,col.
+  std::vector<std::vector<std::unique_ptr<gfx::RenderText>>> render_text_cache_;
 
   // Weak pointer factory, enables using PostTask safely.
   base::WeakPtrFactory<TableView> weak_factory_;
@@ -573,5 +682,27 @@ END_VIEW_BUILDER
 }  // namespace views
 
 DEFINE_VIEW_BUILDER(VIEWS_EXPORT, views::TableView)
+
+namespace base {
+
+// Allow use of ScopedObservation with TableView, which requires use of
+// SetObserver and only supports a single TableViewObserver at a time.
+template <>
+struct ScopedObservationTraits<views::TableView, views::TableViewObserver> {
+  static void AddObserver(views::TableView* source,
+                          views::TableViewObserver* observer) {
+    CHECK(!source->GetObserver())
+        << "TableView does not support multiple observers";
+    source->SetObserver(observer);
+  }
+  static void RemoveObserver(views::TableView* source,
+                             views::TableViewObserver* observer) {
+    CHECK_EQ(source->GetObserver(), observer)
+        << "TableView does not support multiple observers";
+    source->SetObserver(nullptr);
+  }
+};
+
+}  // namespace base
 
 #endif  // UI_VIEWS_CONTROLS_TABLE_TABLE_VIEW_H_

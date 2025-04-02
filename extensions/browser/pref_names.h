@@ -118,7 +118,7 @@ inline constexpr char kPinnedExtensions[] = "extensions.pinned_extensions";
 
 // Indicates on-disk data might have skeletal data that needs to be cleaned
 // on the next start of the browser.
-// TODO(crbug.com/1463825): Delete ExtensionsPref::kStorageGarbageCollect.
+// TODO(crbug.com/40922689): Delete ExtensionsPref::kStorageGarbageCollect.
 inline constexpr char kStorageGarbageCollect[] =
     "extensions.storage.garbagecollect";
 
@@ -142,6 +142,11 @@ extern const char kPrefContentSettings[];
 
 // Extension-set incognito content settings.
 extern const char kPrefIncognitoContentSettings[];
+
+// Per-profile UUID to distinguish global shortcut sessions for
+// org.freedesktop.portal.GlobalShortcuts.
+inline constexpr char kGlobalShortcutsUuid[] =
+    "extensions.global_shortcuts.uuid";
 
 }  // namespace pref_names
 }  // namespace extensions

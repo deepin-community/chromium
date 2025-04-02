@@ -24,7 +24,7 @@ export class AccessibilitySidebarView extends UI.ThrottledWidget.ThrottledWidget
   private readonly axNodeSubPane: AXNodeSubPane;
   private readonly sourceOrderSubPane: SourceOrderPane;
   private constructor(throttlingTimeout?: number) {
-    super(false /* isWebComponent */, throttlingTimeout);
+    super(false /* useShadowDom */, throttlingTimeout);
     this.nodeInternal = null;
     this.axNodeInternal = null;
     this.skipNextPullNode = false;
@@ -102,7 +102,7 @@ export class AccessibilitySidebarView extends UI.ThrottledWidget.ThrottledWidget
     if (!accessibilityModel) {
       return;
     }
-    if (!Root.Runtime.experiments.isEnabled('fullAccessibilityTree')) {
+    if (!Root.Runtime.experiments.isEnabled('full-accessibility-tree')) {
       accessibilityModel.clear();
     }
     await accessibilityModel.requestPartialAXTree(node);

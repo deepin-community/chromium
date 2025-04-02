@@ -30,8 +30,10 @@
 #include "services/network/public/mojom/trust_tokens.mojom-blink.h"
 #include "services/network/public/mojom/web_sandbox_flags.mojom-blink.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/permissions_policy/policy_helper_public.h"
 #include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
 #include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom-blink.h"
+#include "third_party/blink/public/mojom/permissions_policy/policy_disposition.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_html_iframe_element.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
@@ -57,11 +59,13 @@
 namespace blink {
 
 namespace {
-// Cut down |value| if too long and return empty string if null. This is used to
-// convert the HTML attributes to report to the browser.
+// Cut down |value| if too long . This is used to convert the HTML attributes
+// to report to the browser.
 String ConvertToReportValue(const AtomicString& value) {
   if (value.IsNull()) {
-    return g_empty_string;
+    // If the value is null, report null so that it can be distinguishable from
+    // an empty string.
+    return String();
   }
   static constexpr size_t kMaxLengthToReport = 1024;
   return value.GetString().Left(kMaxLengthToReport);
@@ -132,7 +136,7 @@ bool HTMLIFrameElement::IsPresentationAttribute(
 void HTMLIFrameElement::CollectStyleForPresentationAttribute(
     const QualifiedName& name,
     const AtomicString& value,
-    MutableCSSPropertyValueSet* style) {
+    HeapVector<CSSPropertyValue, 8>& style) {
   if (name == html_names::kWidthAttr) {
     AddHTMLLengthToStyle(style, CSSPropertyID::kWidth, value);
   } else if (name == html_names::kHeightAttr) {
@@ -209,9 +213,8 @@ void HTMLIFrameElement::ParseAttribute(
         GetDocument().AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
             mojom::blink::ConsoleMessageSource::kOther,
             mojom::blink::ConsoleMessageLevel::kError,
-            WebString::FromUTF8(
-                "Error while parsing the 'sandbox' attribute: " +
-                parsed.error_message)));
+            "Error while parsing the 'sandbox' attribute: " +
+                String::FromUTF8(parsed.error_message)));
       }
     }
     SetSandboxFlags(current_flags);
@@ -273,7 +276,8 @@ void HTMLIFrameElement::ParseAttribute(
       UseCounter::Count(GetDocument(), WebFeature::kIFrameCSPAttribute);
     }
   } else if (name == html_names::kBrowsingtopicsAttr) {
-    if (RuntimeEnabledFeatures::TopicsAPIEnabled(GetExecutionContext()) &&
+    if (GetExecutionContext() &&
+        RuntimeEnabledFeatures::TopicsAPIEnabled(GetExecutionContext()) &&
         GetExecutionContext()->IsSecureContext()) {
       bool old_browsing_topics = !params.old_value.IsNull();
       bool new_browsing_topics = !params.new_value.IsNull();
@@ -281,6 +285,7 @@ void HTMLIFrameElement::ParseAttribute(
       if (new_browsing_topics) {
         UseCounter::Count(GetDocument(),
                           WebFeature::kIframeBrowsingTopicsAttribute);
+        UseCounter::Count(GetDocument(), WebFeature::kTopicsAPIAll);
       }
 
       if (new_browsing_topics != old_browsing_topics) {
@@ -288,8 +293,7 @@ void HTMLIFrameElement::ParseAttribute(
       }
     }
   } else if (name == html_names::kAdauctionheadersAttr &&
-             RuntimeEnabledFeatures::FledgeNegativeTargetingEnabled(
-                 GetExecutionContext())) {
+             GetExecutionContext()) {
     if (!GetExecutionContext()->IsSecureContext()) {
       GetDocument().AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
           mojom::blink::ConsoleMessageSource::kOther,
@@ -306,7 +310,8 @@ void HTMLIFrameElement::ParseAttribute(
       }
     }
   } else if (name == html_names::kSharedstoragewritableAttr &&
-             RuntimeEnabledFeatures::SharedStorageAPIM118Enabled(
+             GetExecutionContext() &&
+             RuntimeEnabledFeatures::SharedStorageAPIEnabled(
                  GetExecutionContext())) {
     if (!GetExecutionContext()->IsSecureContext()) {
       GetDocument().AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
@@ -455,7 +460,8 @@ ParsedPermissionsPolicy HTMLIFrameElement::ConstructContainerPolicy() const {
   // enable the feature for all origins.
   if (AllowFullscreen()) {
     bool policy_changed = AllowFeatureEverywhereIfNotPresent(
-        mojom::blink::PermissionsPolicyFeature::kFullscreen, container_policy);
+        network::mojom::PermissionsPolicyFeature::kFullscreen,
+        container_policy);
     if (!policy_changed) {
       logger.Warn(
           "Allow attribute will take precedence over 'allowfullscreen'.");
@@ -465,7 +471,7 @@ ParsedPermissionsPolicy HTMLIFrameElement::ConstructContainerPolicy() const {
   // set, enable the feature for all origins.
   if (AllowPaymentRequest()) {
     bool policy_changed = AllowFeatureEverywhereIfNotPresent(
-        mojom::blink::PermissionsPolicyFeature::kPayment, container_policy);
+        network::mojom::PermissionsPolicyFeature::kPayment, container_policy);
     // Measure cases where allowpaymentrequest had an actual effect, to see if
     // we can deprecate it. See https://crbug.com/1127988
     if (policy_changed) {
@@ -579,7 +585,7 @@ HTMLIFrameElement::ConstructTrustTokenParams() const {
   }
 
   if (!GetExecutionContext()->IsFeatureEnabled(
-          mojom::blink::PermissionsPolicyFeature::kTrustTokenRedemption)) {
+          network::mojom::PermissionsPolicyFeature::kTrustTokenRedemption)) {
     GetExecutionContext()->AddConsoleMessage(MakeGarbageCollected<
                                              ConsoleMessage>(
         mojom::blink::ConsoleMessageSource::kOther,
@@ -621,21 +627,18 @@ void HTMLIFrameElement::DidChangeAttributes() {
   if (RuntimeEnabledFeatures::TopicsAPIEnabled(GetExecutionContext()) &&
       GetExecutionContext()->IsSecureContext()) {
     attributes->browsing_topics =
-        !FastGetAttribute(html_names::kBrowsingtopicsAttr).IsNull();
+        FastHasAttribute(html_names::kBrowsingtopicsAttr);
   }
 
-  if (RuntimeEnabledFeatures::FledgeNegativeTargetingEnabled(
-          GetExecutionContext()) &&
-      GetExecutionContext()->IsSecureContext()) {
+  if (GetExecutionContext()->IsSecureContext()) {
     attributes->ad_auction_headers =
-        !FastGetAttribute(html_names::kAdauctionheadersAttr).IsNull();
+        FastHasAttribute(html_names::kAdauctionheadersAttr);
   }
 
-  if (RuntimeEnabledFeatures::SharedStorageAPIM118Enabled(
-          GetExecutionContext()) &&
+  if (RuntimeEnabledFeatures::SharedStorageAPIEnabled(GetExecutionContext()) &&
       GetExecutionContext()->IsSecureContext()) {
     attributes->shared_storage_writable_opted_in =
-        !FastGetAttribute(html_names::kSharedstoragewritableAttr).IsNull();
+        FastHasAttribute(html_names::kSharedstoragewritableAttr);
   }
 
   attributes->id = ConvertToReportValue(id_);
@@ -651,6 +654,46 @@ void HTMLIFrameElement::DidChangeAttributes() {
   }
   GetDocument().GetFrame()->GetLocalFrameHostRemote().DidChangeSrcDoc(
       ContentFrame()->GetFrameToken(), srcdoc_value);
+}
+
+void HTMLIFrameElement::CheckPotentialPermissionsPolicyViolation() {
+  if (allow_.empty()) {
+    return;
+  }
+
+  scoped_refptr<const SecurityOrigin> src_origin =
+      GetOriginForPermissionsPolicy();
+  url::Origin src = src_origin->ToUrlOrigin();
+  ParsedPermissionsPolicy container_policy = ConstructContainerPolicy();
+  auto& security_context = GetExecutionContext()->GetSecurityContext();
+  for (const auto& feature_desc : GetPermissionsPolicyFeatureList(src)) {
+    network::mojom::PermissionsPolicyFeature feature = feature_desc.first;
+    if (!IsFeatureDeclared(feature, container_policy)) {
+      continue;
+    }
+
+    if (auto* permissions_policy = security_context.GetPermissionsPolicy();
+        permissions_policy &&
+        !PermissionsPolicy::InheritedValueForFeature(
+            src, permissions_policy, feature_desc, container_policy)) {
+      auto endpoint = std::optional<String>(
+          permissions_policy->GetEndpointForFeature(feature));
+      GetExecutionContext()->ReportPotentialPermissionsPolicyViolation(
+          feature, mojom::blink::PolicyDisposition::kEnforce, endpoint,
+          /*message*/ "", allow_);
+    } else if (auto* report_only_permissions_policy =
+                   security_context.GetReportOnlyPermissionsPolicy();
+               report_only_permissions_policy &&
+               !PermissionsPolicy::InheritedValueForFeature(
+                   src, report_only_permissions_policy, feature_desc,
+                   container_policy)) {
+      auto endpoint = std::optional<String>(
+          report_only_permissions_policy->GetEndpointForFeature(feature));
+      GetExecutionContext()->ReportPotentialPermissionsPolicyViolation(
+          feature, mojom::blink::PolicyDisposition::kReport, endpoint,
+          /*message*/ "", allow_);
+    }
+  }
 }
 
 }  // namespace blink

@@ -55,7 +55,7 @@ class ValidationFunction : public ExtensionFunction {
   bool did_respond() { return did_respond_; }
 
  private:
-  ~ValidationFunction() override {}
+  ~ValidationFunction() override = default;
   bool should_succeed_;
   bool did_respond_;
 };
@@ -63,7 +63,7 @@ class ValidationFunction : public ExtensionFunction {
 
 using ChromeExtensionFunctionUnitTest = ExtensionServiceTestBase;
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_SimpleFunctionTest DISABLED_SimpleFunctionTest
 #else
 #define MAYBE_SimpleFunctionTest SimpleFunctionTest

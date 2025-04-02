@@ -74,7 +74,7 @@ InstantService::InstantService(Profile* profile)
   // Listen for theme installation.
   ThemeServiceFactory::GetForProfile(profile_)->AddObserver(this);
 
-  // TODO(crbug.com/1192394): multiple WebUI pages depend on the theme source
+  // TODO(crbug.com/40757220): multiple WebUI pages depend on the theme source
   // without adding it themselves. This is not causing an issue because the
   // theme source is being added here. The source should be added where it is
   // used and then the following can be removed.
@@ -94,7 +94,7 @@ InstantService::InstantService(Profile* profile)
 InstantService::~InstantService() = default;
 
 void InstantService::AddInstantProcess(content::RenderProcessHost* host) {
-  process_ids_.insert(host->GetID());
+  process_ids_.insert(host->GetDeprecatedID());
   // The same process may be added for multiple WebContents. Only observe once.
   if (!host_observation_.IsObservingSource(host)) {
     host_observation_.AddObservation(host);
@@ -178,7 +178,7 @@ void InstantService::RenderProcessHostDestroyed(
     content::RenderProcessHost* host) {
   Profile* renderer_profile = static_cast<Profile*>(host->GetBrowserContext());
   if (profile_ == renderer_profile) {
-    process_ids_.erase(host->GetID());
+    process_ids_.erase(host->GetDeprecatedID());
     host_observation_.RemoveObservation(host);
   }
 }

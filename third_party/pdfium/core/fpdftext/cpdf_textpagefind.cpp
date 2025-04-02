@@ -11,13 +11,14 @@
 #include <vector>
 
 #include "core/fpdftext/cpdf_textpage.h"
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/fx_system.h"
 #include "core/fxcrt/fx_unicode.h"
+#include "core/fxcrt/ptr_util.h"
 #include "core/fxcrt/stl_util.h"
-#include "third_party/base/check.h"
-#include "third_party/base/memory/ptr_util.h"
 
 namespace {
 
@@ -94,24 +95,28 @@ WideString GetStringCase(const WideString& wsOriginal, bool bMatchCase) {
 std::optional<WideString> ExtractSubString(const wchar_t* lpszFullString,
                                            int iSubString) {
   DCHECK(lpszFullString);
+  UNSAFE_TODO({
+    while (iSubString--) {
+      lpszFullString = wcschr(lpszFullString, L' ');
+      if (!lpszFullString) {
+        return std::nullopt;
+      }
 
-  while (iSubString--) {
-    lpszFullString = wcschr(lpszFullString, L' ');
-    if (!lpszFullString)
-      return std::nullopt;
-
-    lpszFullString++;
-    while (*lpszFullString == L' ')
       lpszFullString++;
-  }
+      while (*lpszFullString == L' ') {
+        lpszFullString++;
+      }
+    }
 
-  const wchar_t* lpchEnd = wcschr(lpszFullString, L' ');
-  int nLen = lpchEnd ? static_cast<int>(lpchEnd - lpszFullString)
-                     : static_cast<int>(wcslen(lpszFullString));
-  if (nLen < 0)
-    return std::nullopt;
+    const wchar_t* lpchEnd = wcschr(lpszFullString, L' ');
+    int nLen = lpchEnd ? static_cast<int>(lpchEnd - lpszFullString)
+                       : static_cast<int>(wcslen(lpszFullString));
+    if (nLen < 0) {
+      return std::nullopt;
+    }
 
-  return WideString(lpszFullString, static_cast<size_t>(nLen));
+    return WideString(lpszFullString, static_cast<size_t>(nLen));
+  });
 }
 
 std::vector<WideString> ExtractFindWhat(const WideString& findwhat) {

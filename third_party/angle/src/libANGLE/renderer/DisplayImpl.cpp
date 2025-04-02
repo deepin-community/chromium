@@ -27,11 +27,6 @@ class MockDevice : public DeviceImpl
         UNREACHABLE();
         return egl::EglBadAttribute();
     }
-    EGLint getType() override
-    {
-        UNREACHABLE();
-        return EGL_NONE;
-    }
     void generateExtensions(egl::DeviceExtensions *outExtensions) const override
     {
         *outExtensions = egl::DeviceExtensions();
@@ -126,19 +121,9 @@ DeviceImpl *DisplayImpl::createDevice()
     return new MockDevice();
 }
 
-bool DisplayImpl::isX11() const
+angle::NativeWindowSystem DisplayImpl::getWindowSystem() const
 {
-    return false;
-}
-
-bool DisplayImpl::isWayland() const
-{
-    return false;
-}
-
-bool DisplayImpl::isGBM() const
-{
-    return false;
+    return angle::NativeWindowSystem::Other;
 }
 
 bool DisplayImpl::supportsDmaBufFormat(EGLint format) const
@@ -158,6 +143,16 @@ egl::Error DisplayImpl::queryDmaBufModifiers(EGLint format,
                                              EGLuint64KHR *modifiers,
                                              EGLBoolean *external_only,
                                              EGLint *num_modifiers)
+{
+    UNREACHABLE();
+    return egl::NoError();
+}
+
+egl::Error DisplayImpl::querySupportedCompressionRates(const egl::Config *configuration,
+                                                       const egl::AttributeMap &attributes,
+                                                       EGLint *rates,
+                                                       EGLint rate_size,
+                                                       EGLint *num_rates) const
 {
     UNREACHABLE();
     return egl::NoError();

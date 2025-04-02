@@ -26,6 +26,16 @@ chromium-metrics-reviews@google.com.
 
 <enums>
 
+<enum name="BooleanOpenFromDuplicates">
+  <int value="0" label="Created New file"/>
+  <int value="1" label="Opened existing duplicate"/>
+</enum>
+
+<enum name="BooleanOpenInline">
+  <int value="0" label="Open in external app"/>
+  <int value="1" label="Open inline"/>
+</enum>
+
 <enum name="BooleanReplaced">
   <int value="0" label="Did Not Replace"/>
   <int value="1" label="Replaced"/>
@@ -116,6 +126,7 @@ chromium-metrics-reviews@google.com.
   <int value="3" label="NOT_ADDED_EXCEED_MAX_LENGTH"/>
   <int value="4" label="ADDED_WARNING_FIRST_SHOWN"/>
   <int value="5" label="ADDED_WARNING_ACTION"/>
+  <int value="6" label="NOT_ADDED_DOWNLOAD_NOT_DANGEROUS"/>
 </enum>
 
 <enum name="DownloadARModelState">
@@ -264,7 +275,7 @@ chromium-metrics-reviews@google.com.
   <int value="0" label="GetDownloads"/>
   <int value="1" label="OpenFile"/>
   <int value="2" label="Drag"/>
-  <int value="3" label="SaveDangerous"/>
+  <int value="3" label="SaveDangerous (obsolete)"/>
   <int value="4" label="DiscardDangerous"/>
   <int value="5" label="Show"/>
   <int value="6" label="Pause"/>
@@ -282,6 +293,7 @@ chromium-metrics-reviews@google.com.
   <int value="18" label="OpenBypassWarningPrompt"/>
   <int value="19" label="SaveDangerousFromPrompt"/>
   <int value="20" label="CancelBypassWarningPrompt"/>
+  <int value="21" label="OpenSurveyOnDangerousInterstitial"/>
 </enum>
 
 <enum name="DownloadedFileAction">
@@ -427,12 +439,13 @@ chromium-metrics-reviews@google.com.
   <int value="15" label="DEEP_SCANNED_SAFE"/>
   <int value="16" label="DEEP_SCANNED_OPENED_DANGEROUS"/>
   <int value="17" label="PROMPT_FOR_SCANNING"/>
-  <int value="18" label="BLOCKED_UNSUPPORTED_FILETYPE"/>
+  <int value="18" label="BLOCKED_UNSUPPORTED_FILETYPE (deprecated)"/>
   <int value="19" label="DANGEROUS_ACCOUNT_COMPROMISE"/>
   <int value="20" label="DOWNLOAD_DANGER_TYPE_DEEP_SCANNED_FAILED"/>
   <int value="21"
       label="DOWNLOAD_DANGER_TYPE_PROMPT_FOR_LOCAL_PASSWORD_SCANNING"/>
   <int value="22" label="DOWNLOAD_DANGER_TYPE_ASYNC_LOCAL_PASSWORD_SCANNING"/>
+  <int value="23" label="DOWNLOAD_DANGER_TYPE_BLOCKED_SCAN_FAILED"/>
 </enum>
 
 <enum name="DownloadLaterDialogChoice">
@@ -470,6 +483,7 @@ chromium-metrics-reviews@google.com.
   <int value="1" label="Opened in browser by default"/>
   <int value="2" label="Opened with plaform handler by user choice"/>
   <int value="3" label="Opened with an alternate rename handler"/>
+  <int value="4" label="Opened with the Media App on ChromeOS"/>
 </enum>
 
 <enum name="DownloadPassKitResult">
@@ -686,6 +700,18 @@ chromium-metrics-reviews@google.com.
   <int value="7" label="Failed to parse media file"/>
   <int value="8" label="Successfully parsed media file"/>
   <int value="9" label="Timeout and failed"/>
+</enum>
+
+<enum name="NotificationAttachEvent">
+  <int value="0" label="Attached on job start"/>
+  <int value="1" label="Attached after job start"/>
+  <int value="2" label="Never attached before job complete"/>
+</enum>
+
+<enum name="OpenDownloadWithExternalAppsSource">
+  <int value="0" label="Open file"/>
+  <int value="1" label="Download progress message"/>
+  <int value="2" label="App menu"/>
 </enum>
 
 <enum name="PresentAddPassesDialogResult">

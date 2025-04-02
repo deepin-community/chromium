@@ -18,7 +18,6 @@ static_library("common") {
   deps = [
     ":mojo_interfaces",
     "//base",
-    "//build:chromeos_buildflags",
     "//components/cloud_devices/common:common",
     "//printing",
     "//printing/backend",
@@ -40,10 +39,6 @@ mojom("mojo_interfaces") {
   enabled_features = []
   if (enable_print_preview) {
     enabled_features += [ "enable_print_preview" ]
-  }
-
-  if (enable_print_content_analysis) {
-    enabled_features += [ "enable_print_content_analysis" ]
   }
 }
 

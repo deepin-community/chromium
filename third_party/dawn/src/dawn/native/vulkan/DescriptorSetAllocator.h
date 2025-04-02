@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "dawn/common/Mutex.h"
 #include "dawn/common/SerialQueue.h"
 #include "dawn/common/vulkan_platform.h"
 #include "dawn/native/Error.h"
@@ -49,22 +50,19 @@ class DescriptorSetAllocator : public ObjectBase {
 
   public:
     static Ref<DescriptorSetAllocator> Create(
-        BindGroupLayout* layout,
+        DeviceBase* device,
         absl::flat_hash_map<VkDescriptorType, uint32_t> descriptorCountPerType);
 
-    ResultOrError<DescriptorSetAllocation> Allocate();
+    ResultOrError<DescriptorSetAllocation> Allocate(BindGroupLayout* layout);
     void Deallocate(DescriptorSetAllocation* allocationInfo);
     void FinishDeallocation(ExecutionSerial completedSerial);
 
   private:
-    DescriptorSetAllocator(BindGroupLayout* layout,
+    DescriptorSetAllocator(DeviceBase* device,
                            absl::flat_hash_map<VkDescriptorType, uint32_t> descriptorCountPerType);
     ~DescriptorSetAllocator() override;
 
-    MaybeError AllocateDescriptorPool();
-
-    // TODO(https://crbug.com/dawn/2349): Investigate DanglingUntriaged in dawn/native.
-    raw_ptr<const BindGroupLayout, DanglingUntriaged> mLayout;
+    MaybeError AllocateDescriptorPool(BindGroupLayout* layout);
 
     std::vector<VkDescriptorPoolSize> mPoolSizes;
     SetIndex mMaxSets;
@@ -84,6 +82,9 @@ class DescriptorSetAllocator : public ObjectBase {
     };
     SerialQueue<ExecutionSerial, Deallocation> mPendingDeallocations;
     ExecutionSerial mLastDeallocationSerial = ExecutionSerial(0);
+
+    // Used to guard all public member functions.
+    Mutex mMutex;
 };
 
 }  // namespace dawn::native::vulkan

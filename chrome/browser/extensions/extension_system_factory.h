@@ -38,7 +38,6 @@ class ExtensionSystemSharedFactory : public ProfileKeyedServiceFactory {
 };
 
 // BrowserContextKeyedServiceFactory for ExtensionSystemImpl.
-// TODO(yoz): Rename to ExtensionSystemImplFactory.
 class ExtensionSystemFactory : public ExtensionSystemProvider {
  public:
   ExtensionSystemFactory(const ExtensionSystemFactory&) = delete;
@@ -57,7 +56,7 @@ class ExtensionSystemFactory : public ExtensionSystemProvider {
   ~ExtensionSystemFactory() override;
 
   // BrowserContextKeyedServiceFactory implementation:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
   content::BrowserContext* GetBrowserContextToUse(
       content::BrowserContext* context) const override;

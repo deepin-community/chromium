@@ -50,7 +50,6 @@ std::optional<ModelProvider::Response> SegmentationModelExecutor::Postprocess(
       tflite::task::core::PopulateVector<float>(output_tensors[0], &data);
   if (!status.ok()) {
     NOTREACHED();
-    return std::nullopt;
   }
   return data;
 }

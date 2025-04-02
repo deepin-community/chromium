@@ -8,14 +8,17 @@
 #include <iomanip>
 #include <limits>
 #include <utility>
+
 #include "base/android/android_hardware_buffer_compat.h"
 #include "base/android/jni_android.h"
+#include "base/barrier_callback.h"
 #include "base/containers/contains.h"
 #include "base/containers/queue.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/numerics/angle_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
@@ -33,7 +36,6 @@
 #include "device/vr/util/transform_utils.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
-#include "ui/gfx/geometry/angle_conversions.h"
 #include "ui/gfx/geometry/transform_util.h"
 #include "ui/gfx/gpu_fence.h"
 #include "ui/gl/gl_bindings.h"
@@ -44,7 +46,7 @@
 #include "ui/gl/init/gl_factory.h"
 
 namespace {
-// TODO(https://crbug.com/1192867): Some pages can hang if we try to wait for
+// TODO(crbug.com/40757470): Some pages can hang if we try to wait for
 // the compositor to acknowledge receipt of a frame before moving it to the
 // "rendering" state of the state machine. However, not doing so could increase
 // the latency of frames under heavy load as we aren't listening to back
@@ -68,22 +70,6 @@ const float kScheduleFrametimeMarginForUpdate = 0.2f;
 const float kScheduleFrametimeMarginForRender = 0.2f;
 
 const int kSampleWindowSize = 3;
-
-gfx::Transform GetContentTransform(const gfx::RectF& bounds) {
-  // Calculate the transform matrix from quad coordinates (range 0..1 with
-  // origin at bottom left of the quad) to texture lookup UV coordinates (also
-  // range 0..1 with origin at bottom left), where the active viewport uses a
-  // subset of the texture range that needs to be magnified to fill the quad.
-  // The bounds as used by the UpdateLayerBounds mojo messages appear to use an
-  // old WebVR convention with origin at top left, so the Y range needs to be
-  // mirrored.
-  gfx::Transform transform;
-  transform.set_rc(0, 0, bounds.width());
-  transform.set_rc(1, 1, bounds.height());
-  transform.set_rc(0, 3, bounds.x());
-  transform.set_rc(1, 3, 1.f - bounds.y() - bounds.height());
-  return transform;
-}
 
 gfx::Size GetCameraImageSize(const gfx::Size& in, const gfx::Transform& xform) {
   // The UV transform matrix handles rotation and cropping. Get the
@@ -133,7 +119,6 @@ ArCoreGlInitializeResult::~ArCoreGlInitializeResult() = default;
 ArCoreGl::ArCoreGl(std::unique_ptr<ArImageTransport> ar_image_transport)
     : gl_thread_task_runner_(base::SingleThreadTaskRunner::GetCurrentDefault()),
       ar_image_transport_(std::move(ar_image_transport)),
-      use_ar_compositor_(ArImageTransport::UseSharedBuffer()),
       webxr_(std::make_unique<WebXrPresentationState>()),
       average_camera_frametime_(kSampleWindowSize),
       average_animate_time_(kSampleWindowSize),
@@ -162,10 +147,11 @@ ArCoreGl::~ArCoreGl() {
 }
 
 bool ArCoreGl::CanRenderDOMContent() {
-  return use_ar_compositor_;
+  return true;
 }
 
 void ArCoreGl::Initialize(
+    const scoped_refptr<base::SingleThreadTaskRunner>& main_thread_task_runner,
     XrJavaCoordinator* session_utils,
     ArCoreFactory* arcore_factory,
     XrFrameSinkClient* xr_frame_sink_client,
@@ -208,13 +194,7 @@ void ArCoreGl::Initialize(
   view_.mojo_from_view = gfx::Transform();
   view_.field_of_view = mojom::VRFieldOfView::New(0.0f, 0.0f, 0.0f, 0.0f);
 
-  // If we're using the ArCompositor, we need to initialize GL without the
-  // drawing_widget. (Since the ArCompositor accesses the surface through a
-  // different mechanism than the drawing_widget it's okay to set it null here).
-  if (use_ar_compositor_) {
-    drawing_widget = gfx::kNullAcceleratedWidget;
-  }
-  if (!InitializeGl(drawing_widget)) {
+  if (!InitializeGl()) {
     std::move(callback).Run(
         base::unexpected(ArCoreGlInitializeError::kFailure));
     return;
@@ -262,26 +242,28 @@ void ArCoreGl::Initialize(
 
   initialized_callback_ = std::move(callback);
 
-  // TODO(https://crbug.com/953503): start using the list to control the
+  // TODO(crbug.com/41453315): start using the list to control the
   // behavior of local and unbounded spaces & send appropriate data back in
   // GetFrameData().
   enabled_features_ = maybe_initialize_result->enabled_features;
   depth_configuration_ = maybe_initialize_result->depth_configuration;
 
+  // Set whether or not the session produces frames with WebGPU based on in the
+  // 'webgpu' feature was requested.
+  const bool webgpu_session =
+      enabled_features_.contains(device::mojom::XRSessionFeature::WEBGPU);
+
   DVLOG(3) << "ar_image_transport_->Initialize()...";
   ar_image_transport_->Initialize(
-      webxr_.get(), base::BindOnce(&ArCoreGl::OnArImageTransportReady,
-                                   weak_ptr_factory_.GetWeakPtr()));
+      webxr_.get(),
+      base::BindOnce(&ArCoreGl::OnArImageTransportReady,
+                     weak_ptr_factory_.GetWeakPtr()),
+      webgpu_session);
 
-  if (use_ar_compositor_) {
-    InitializeArCompositor(surface_handle, root_window, xr_frame_sink_client,
-                           dom_setup);
-    webxr_->SetStateMachineType(
-        WebXrPresentationState::StateMachineType::kVizComposited);
-  } else {
-    webxr_->SetStateMachineType(
-        WebXrPresentationState::StateMachineType::kBrowserComposited);
-  }
+  InitializeArCompositor(main_thread_task_runner, surface_handle, root_window,
+                         xr_frame_sink_client, dom_setup);
+  webxr_->SetStateMachineType(
+      WebXrPresentationState::StateMachineType::kVizComposited);
 
   // Set the texture on ArCore to render the camera. Must be after
   // ar_image_transport_->Initialize().
@@ -290,10 +272,12 @@ void ArCoreGl::Initialize(
   arcore_->SetDisplayGeometry(kDefaultFrameSize, kDefaultRotation);
 }
 
-void ArCoreGl::InitializeArCompositor(gpu::SurfaceHandle surface_handle,
-                                      ui::WindowAndroid* root_window,
-                                      XrFrameSinkClient* xr_frame_sink_client,
-                                      device::DomOverlaySetup dom_setup) {
+void ArCoreGl::InitializeArCompositor(
+    const scoped_refptr<base::SingleThreadTaskRunner>& main_thread_task_runner,
+    gpu::SurfaceHandle surface_handle,
+    ui::WindowAndroid* root_window,
+    XrFrameSinkClient* xr_frame_sink_client,
+    device::DomOverlaySetup dom_setup) {
   ArCompositorFrameSink::BeginFrameCallback begin_frame_callback =
       base::BindRepeating(&ArCoreGl::OnBeginFrame,
                           weak_ptr_factory_.GetWeakPtr());
@@ -327,8 +311,8 @@ void ArCoreGl::InitializeArCompositor(gpu::SurfaceHandle surface_handle,
       can_issue_new_frame_callback);
 
   ar_compositor_->Initialize(
-      surface_handle, root_window, screen_size_, xr_frame_sink_client,
-      dom_setup,
+      main_thread_task_runner, surface_handle, root_window, screen_size_,
+      xr_frame_sink_client, dom_setup,
       base::BindOnce(&ArCoreGl::OnArCompositorInitialized,
                      weak_ptr_factory_.GetWeakPtr()),
       base::BindOnce(&ArCoreGl::OnBindingDisconnect,
@@ -369,13 +353,11 @@ void ArCoreGl::OnArCompositorInitialized(bool initialized) {
 void ArCoreGl::OnInitialized() {
   DVLOG(1) << __func__;
   if (!is_image_transport_ready_ ||
-      (use_ar_compositor_ &&
-       !(ar_compositor_ && ar_compositor_->IsInitialized())))
+      !(ar_compositor_ && ar_compositor_->IsInitialized())) {
     return;
+  }
 
-  // Assert that if we're using SharedBuffer transport, we've got an
-  // ArCompositor, and that we don't have it if we aren't using SharedBuffers.
-  DCHECK_EQ(!!ar_compositor_, ArImageTransport::UseSharedBuffer());
+  DCHECK(ar_compositor_);
 
   is_initialized_ = true;
   webxr_->NotifyMailboxBridgeReady();
@@ -402,20 +384,8 @@ void ArCoreGl::CreateSession(ArCoreGlCreateSessionCallback create_callback,
       device::mojom::XRPresentationTransportOptions::New();
   transport_options->wait_for_gpu_fence = true;
 
-  if (ArImageTransport::UseSharedBuffer()) {
-    DVLOG(2) << __func__
-             << ": UseSharedBuffer()=true, DRAW_INTO_TEXTURE_MAILBOX";
-    transport_options->transport_method =
-        device::mojom::XRPresentationTransportMethod::DRAW_INTO_TEXTURE_MAILBOX;
-  } else {
-    DVLOG(2) << __func__
-             << ": UseSharedBuffer()=false, SUBMIT_AS_MAILBOX_HOLDER";
-    transport_options->transport_method =
-        device::mojom::XRPresentationTransportMethod::SUBMIT_AS_MAILBOX_HOLDER;
-    transport_options->wait_for_transfer_notification = true;
-    ar_image_transport_->SetFrameAvailableCallback(base::BindRepeating(
-        &ArCoreGl::OnTransportFrameAvailable, weak_ptr_factory_.GetWeakPtr()));
-  }
+  transport_options->transport_method =
+      device::mojom::XRPresentationTransportMethod::DRAW_INTO_TEXTURE_MAILBOX;
 
   auto submit_frame_sink = device::mojom::XRPresentationConnection::New();
   submit_frame_sink->client_receiver =
@@ -437,7 +407,7 @@ void ArCoreGl::CreateSession(ArCoreGlCreateSessionCallback create_callback,
       &ArCoreGl::OnBindingDisconnect, weak_ptr_factory_.GetWeakPtr()));
 }
 
-bool ArCoreGl::InitializeGl(gfx::AcceleratedWidget drawing_widget) {
+bool ArCoreGl::InitializeGl() {
   DVLOG(3) << __func__;
 
   DCHECK(IsOnGlThread());
@@ -445,8 +415,8 @@ bool ArCoreGl::InitializeGl(gfx::AcceleratedWidget drawing_widget) {
 
   // ARCore provides the camera image as a native GL texture and doesn't support
   // ANGLE, so disable it.
-  // TODO(crbug.com/1170580): support ANGLE with cardboard?
-  gl::init::DisableANGLE();
+  // TODO(crbug.com/40744597): support ANGLE with cardboard?
+  gl::DisableANGLE();
 
   gl::GLDisplay* display = nullptr;
   if (gl::GetGLImplementation() == gl::kGLImplementationNone) {
@@ -462,17 +432,12 @@ bool ArCoreGl::InitializeGl(gfx::AcceleratedWidget drawing_widget) {
 
   DCHECK(gl::GetGLImplementation() != gl::kGLImplementationEGLANGLE);
 
-  // If we weren't provided with a drawing_widget, then we need to set up the
-  // surface for Offscreen usage.
-  scoped_refptr<gl::GLSurface> surface;
-  if (drawing_widget != gfx::kNullAcceleratedWidget) {
-    surface = gl::init::CreateViewGLSurface(display, drawing_widget);
-  } else {
-    surface = gl::init::CreateOffscreenGLSurface(display, {0, 0});
-  }
+  scoped_refptr<gl::GLSurface> surface =
+      gl::init::CreateOffscreenGLSurface(display, {0, 0});
+
   DVLOG(3) << "surface=" << surface.get();
   if (!surface.get()) {
-    DLOG(ERROR) << "gl::init::CreateViewGLSurface failed";
+    DLOG(ERROR) << "gl::init::CreateOffscreenGLSurface failed";
     return false;
   }
 
@@ -592,10 +557,10 @@ void ArCoreGl::RecalculateUvsAndProjection() {
 
   // VRFieldOfView wants positive angles.
   mojom::VRFieldOfViewPtr field_of_view = mojom::VRFieldOfView::New();
-  field_of_view->left_degrees = gfx::RadToDeg(atanf(-left / depth_near));
-  field_of_view->right_degrees = gfx::RadToDeg(atanf(right / depth_near));
-  field_of_view->down_degrees = gfx::RadToDeg(atanf(-bottom / depth_near));
-  field_of_view->up_degrees = gfx::RadToDeg(atanf(top / depth_near));
+  field_of_view->left_degrees = base::RadToDeg(atanf(-left / depth_near));
+  field_of_view->right_degrees = base::RadToDeg(atanf(right / depth_near));
+  field_of_view->down_degrees = base::RadToDeg(atanf(-bottom / depth_near));
+  field_of_view->up_degrees = base::RadToDeg(atanf(top / depth_near));
   DVLOG(3) << " fov degrees up=" << field_of_view->up_degrees
            << " down=" << field_of_view->down_degrees
            << " left=" << field_of_view->left_degrees
@@ -710,53 +675,41 @@ void ArCoreGl::GetFrameData(
   xrframe->time_pose = now;
   xrframe->bounds_left = viewport_bounds_;
 
-  if (ArImageTransport::UseSharedBuffer()) {
-    // Whether or not a handle to the shared buffer is passed to blink, the GPU
-    // will need the camera, so always copy it over, and then decide if we are
-    // also sending the camera frame to the renderer.
-    // Note that even though the buffers are re-used this does not leak data
-    // as the decision of whether or not the renderer gets camera frames is made
-    // on a per-session and not a per-frame basis.
-    gpu::MailboxHolder camera_image_buffer_holder =
-        ar_image_transport_->TransferCameraImageFrame(
-            webxr_.get(), camera_image_size_, uv_transform_);
+  // Whether or not a handle to the shared buffer is passed to blink, the GPU
+  // will need the camera, so always copy it over, and then decide if we are
+  // also sending the camera frame to the renderer.
+  // Note that even though the buffers are re-used this does not leak data
+  // as the decision of whether or not the renderer gets camera frames is made
+  // on a per-session and not a per-frame basis.
+  WebXrSharedBuffer* camera_shared_buffer =
+      ar_image_transport_->TransferCameraImageFrame(
+          webxr_.get(), camera_image_size_, uv_transform_);
+  CHECK(camera_shared_buffer);
 
-    if (IsFeatureEnabled(device::mojom::XRSessionFeature::CAMERA_ACCESS)) {
-      frame_data->camera_image_buffer_holder = camera_image_buffer_holder;
-      frame_data->camera_image_size = camera_image_size_;
-    }
+  if (IsFeatureEnabled(device::mojom::XRSessionFeature::CAMERA_ACCESS)) {
+    frame_data->camera_image_buffer_shared_image =
+        camera_shared_buffer->shared_image->Export();
+    frame_data->camera_image_buffer_sync_token =
+        camera_shared_buffer->sync_token;
+    frame_data->camera_image_size = camera_image_size_;
   }
 
-  // Check if floor height estimate has changed.
-  float new_floor_height_estimate = arcore_->GetEstimatedFloorHeight();
-  if (!floor_height_estimate_ ||
-      *floor_height_estimate_ != new_floor_height_estimate) {
-    floor_height_estimate_ = new_floor_height_estimate;
-
-    if (!stage_parameters_) {
-      stage_parameters_ = mojom::VRStageParameters::New();
-    }
-    stage_parameters_->mojo_from_floor = gfx::Transform();
-    stage_parameters_->mojo_from_floor.Translate3d(
-        0, (-1 * *floor_height_estimate_), 0);
-
-    stage_parameters_id_++;
+  if (IsFeatureEnabled(
+          device::mojom::XRSessionFeature::REF_SPACE_LOCAL_FLOOR)) {
+    gfx::Transform mojo_from_floor = gfx::Transform();
+    mojo_from_floor.Translate3d(0, (-1 * arcore_->GetEstimatedFloorHeight()),
+                                0);
+    frame_data->mojo_from_floor = std::move(mojo_from_floor);
   }
 
-  // Only send updates to the stage parameters if the session's stage parameters
-  // id is different.
-  frame_data->stage_parameters_id = stage_parameters_id_;
-  if (!options || options->stage_parameters_id != stage_parameters_id_) {
-    frame_data->stage_parameters = stage_parameters_.Clone();
-  }
-
-  if (ArImageTransport::UseSharedBuffer()) {
-    // Set up a shared buffer for the renderer to draw into, it'll be sent
-    // alongside the frame pose.
-    gpu::MailboxHolder buffer_holder = ar_image_transport_->TransferFrame(
-        webxr_.get(), transfer_size_, uv_transform_);
-    frame_data->buffer_holder = buffer_holder;
-  }
+  // Set up a shared buffer for the renderer to draw into, it'll be sent
+  // alongside the frame pose.
+  WebXrSharedBuffer* content_shared_buffer = ar_image_transport_->TransferFrame(
+      webxr_.get(), transfer_size_, uv_transform_);
+  CHECK(content_shared_buffer);
+  frame_data->buffer_shared_image =
+      content_shared_buffer->shared_image->Export();
+  frame_data->buffer_sync_token = content_shared_buffer->sync_token;
 
   // Create the frame data to return to the renderer.
   if (!pose) {
@@ -828,21 +781,7 @@ bool ArCoreGl::IsSubmitFrameExpected(int16_t frame_index) {
 
 void ArCoreGl::CopyCameraImageToFramebuffer() {
   DVLOG(3) << __func__;
-  DCHECK(!ArImageTransport::UseSharedBuffer());
-
-  // Draw the current camera texture to the output default framebuffer now, if
-  // available.
-  if (have_camera_image_) {
-    ar_image_transport_->CopyCameraImageToFramebuffer(
-        /*framebuffer=*/0, screen_size_, uv_transform_);
-    have_camera_image_ = false;
-  }
-
-  // We're done with the camera image for this frame, post a task to start the
-  // next animating frame and its ARCore update if we had deferred it.
-  if (pending_getframedata_ && !ar_compositor_) {
-    ScheduleGetFrameData();
-  }
+  NOTREACHED();
 }
 
 base::TimeDelta ArCoreGl::EstimatedArCoreFrameTime() {
@@ -989,20 +928,20 @@ void ArCoreGl::FinishRenderingFrame(WebXrFrame* frame) {
   // be in use. In this case, we'll have received sync tokens to wait on until
   // the GPU is *actually* done with the resources associated with the frame.
   if (!frame->reclaimed_sync_tokens.empty()) {
-    // We need one frame token for the interface to create the GPU fence (which
-    // under the covers just waits on it before creating the fence). It doesn't
-    // matter which order we wait on the tokens, as if we pick the "latest"
-    // token to Wait on first, the wait calls on the "earlier" tokens will just
-    // be a no-op. Since we have at least one token, we'll use that token to
-    // create the GPU fence and just wait on the others here and now. If we only
-    // have one token, then the loop below will just be skipped over.
-    for (size_t i = 1; i < frame->reclaimed_sync_tokens.size(); i++) {
-      ar_image_transport_->WaitSyncToken(frame->reclaimed_sync_tokens[i]);
+    auto barrier_callback =
+        base::BarrierCallback<std::unique_ptr<gfx::GpuFence>>(
+            frame->reclaimed_sync_tokens.size(),
+            base::BindOnce(&ArCoreGl::OnReclaimedGpuFenceAvailable,
+                           GetWeakPtr(), frame));
+    // We'll have to wait until the latest fence resolves and any earlier waits
+    // will simply become no-ops if they are waited on after that fence, so we
+    // don't need to try to do anything fancy with regards to the ordering of
+    // the tokens.
+    for (const auto& reclaimed_sync_token : frame->reclaimed_sync_tokens) {
+      ar_image_transport_->WaitSyncToken(reclaimed_sync_token);
+      ar_image_transport_->CreateGpuFenceForSyncToken(reclaimed_sync_token,
+                                                      barrier_callback);
     }
-    ar_image_transport_->CreateGpuFenceForSyncToken(
-        frame->reclaimed_sync_tokens[0],
-        base::BindOnce(&ArCoreGl::OnReclaimedGpuFenceAvailable, GetWeakPtr(),
-                       frame));
     frame->reclaimed_sync_tokens.clear();
   } else {
     // We didn't have any frame tokens, so just finish up this frame now.
@@ -1015,17 +954,19 @@ void ArCoreGl::FinishRenderingFrame(WebXrFrame* frame) {
 
 void ArCoreGl::OnReclaimedGpuFenceAvailable(
     WebXrFrame* frame,
-    std::unique_ptr<gfx::GpuFence> gpu_fence) {
+    std::vector<std::unique_ptr<gfx::GpuFence>> gpu_fences) {
   TRACE_EVENT1("gpu", __func__, "frame", frame->index);
   DVLOG(3) << __func__ << ": frame=" << frame->index;
 
-  ar_image_transport_->ServerWaitForGpuFence(std::move(gpu_fence));
+  for (auto& gpu_fence : gpu_fences) {
+    ar_image_transport_->ServerWaitForGpuFence(std::move(gpu_fence));
+  }
 
   // The ServerWait above is enough that we could re-use this frame now, since
   // its usage is now appropriately synchronized; however, we have no way of
   // getting the time that the gpu fence triggered, which we need for the
   // rendered frame stats that drive dynamic viewport scaling.
-  // TODO(https://crbug.com/1188302): It appears as though we are actually
+  // TODO(crbug.com/40754792): It appears as though we are actually
   // placing/waiting on this fence after the frame *after* this current frame.
   frame->render_completion_fence = gl::GLFence::CreateForGpuFence();
 
@@ -1084,7 +1025,7 @@ void ArCoreGl::GetRenderedFrameStats(WebXrFrame* frame) {
   // the WritesDone time reported via OnBeginFrame's timing_data instead, but
   // those aren't guaranteed to be available. See also the GPU load
   // estimate in rendering_time_ratio_ which uses a different calculation.
-  // TODO(https://crbug.com/1382589): revisit this calculation?
+  // TODO(crbug.com/40877379): revisit this calculation?
   base::TimeTicks completion_time = now;
   DCHECK(frame->render_completion_fence);
   completion_time = static_cast<gl::GLFenceAndroidNativeFenceSync*>(
@@ -1219,41 +1160,7 @@ void ArCoreGl::DidNotProduceVizFrame(int16_t frame_index) {
 void ArCoreGl::SubmitFrame(int16_t frame_index,
                            const gpu::MailboxHolder& mailbox,
                            base::TimeDelta time_waited) {
-  TRACE_EVENT1("gpu", __func__, "frame", frame_index);
-  DVLOG(2) << __func__ << ": frame=" << frame_index;
-  DCHECK(!ArImageTransport::UseSharedBuffer());
-
-  if (!IsSubmitFrameExpected(frame_index))
-    return;
-
-  webxr_->ProcessOrDefer(base::BindOnce(&ArCoreGl::ProcessFrameFromMailbox,
-                                        weak_ptr_factory_.GetWeakPtr(),
-                                        frame_index, mailbox));
-}
-
-void ArCoreGl::ProcessFrameFromMailbox(int16_t frame_index,
-                                       const gpu::MailboxHolder& mailbox) {
-  TRACE_EVENT1("gpu", __func__, "frame", frame_index);
-  DVLOG(2) << __func__ << ": frame=" << frame_index;
-  DCHECK(webxr_->HaveProcessingFrame());
-  DCHECK(!ArImageTransport::UseSharedBuffer());
-
-  // Use only the active bounds of the viewport, converting the
-  // bounds UV boundaries to a transform. See also OnWebXrTokenSignaled().
-  gfx::Transform transform =
-      GetContentTransform(webxr_->GetProcessingFrame()->bounds_left);
-  ar_image_transport_->CopyMailboxToSurfaceAndSwap(transfer_size_, mailbox,
-                                                   transform);
-
-  // Notify the client that we're done with the mailbox so that the underlying
-  // image is eligible for destruction.
-  submit_client_->OnSubmitFrameTransferred(true);
-
-  CopyCameraImageToFramebuffer();
-
-  // Now wait for ar_image_transport_ to call OnTransportFrameAvailable
-  // indicating that the image drawn onto the Surface is ready for consumption
-  // from the SurfaceTexture.
+  NOTREACHED();
 }
 
 void ArCoreGl::TransitionProcessingFrameToRendering() {
@@ -1292,53 +1199,32 @@ void ArCoreGl::TransitionProcessingFrameToRendering() {
   }
 }
 
-void ArCoreGl::OnTransportFrameAvailable(const gfx::Transform& uv_transform) {
-  DVLOG(2) << __func__;
-  DCHECK(!ArImageTransport::UseSharedBuffer());
-  DCHECK(webxr_->HaveProcessingFrame());
-  int16_t frame_index = webxr_->GetProcessingFrame()->index;
-  TRACE_EVENT1("gpu", __func__, "frame", frame_index);
-
-  TransitionProcessingFrameToRendering();
-
-  // Now copy the received SurfaceTexture image to the framebuffer.
-  // Don't use the viewport bounds here, those already got applied
-  // when copying the mailbox image to the transfer Surface
-  // in ProcessFrameFromMailbox.
-  ar_image_transport_->CopyDrawnImageToFramebuffer(
-      webxr_.get(), /*framebuffer=*/0, screen_size_, uv_transform);
-
-  FinishFrame(frame_index);
-
-  if (submit_client_) {
-    // Create a local GpuFence and pass it to the Renderer via IPC.
-    std::unique_ptr<gl::GLFence> gl_fence = gl::GLFence::CreateForGpuFence();
-    std::unique_ptr<gfx::GpuFence> gpu_fence2 = gl_fence->GetGpuFence();
-    submit_client_->OnSubmitFrameGpuFence(
-        gpu_fence2->GetGpuFenceHandle().Clone());
-  }
-}
-
 void ArCoreGl::SubmitFrameDrawnIntoTexture(int16_t frame_index,
                                            const gpu::SyncToken& sync_token,
                                            base::TimeDelta time_waited) {
   TRACE_EVENT1("gpu", __func__, "frame", frame_index);
   DVLOG(2) << __func__ << ": frame=" << frame_index;
-  DCHECK(ArImageTransport::UseSharedBuffer());
   DCHECK(ar_compositor_);
 
   if (!IsSubmitFrameExpected(frame_index))
     return;
 
-  // The previous sync token has been consumed by the renderer process, if we
-  // want to use this buffer again, we need to wait on this token.
+  // The previous sync token has been consumed by the renderer process, so we
+  // need to set this one for use by the compositor.
   webxr_->GetAnimatingFrame()->shared_buffer->sync_token = sync_token;
+  webxr_->GetAnimatingFrame()->camera_image_shared_buffer->sync_token =
+      sync_token;
+
+  const ArCompositorFrameSink::FrameType frame_type =
+      ar_image_transport_->IsWebGPUSession()
+          ? ArCompositorFrameSink::FrameType::kHasWebGpuContent
+          : ArCompositorFrameSink::FrameType::kHasWebGlContent;
 
   // Start processing the frame now if possible. If there's already a current
   // processing frame, defer it until that frame calls TryDeferredProcessing.
-  webxr_->ProcessOrDefer(base::BindOnce(
-      &ArCoreGl::SubmitVizFrame, weak_ptr_factory_.GetWeakPtr(), frame_index,
-      ArCompositorFrameSink::FrameType::kHasWebXrContent));
+  webxr_->ProcessOrDefer(base::BindOnce(&ArCoreGl::SubmitVizFrame,
+                                        weak_ptr_factory_.GetWeakPtr(),
+                                        frame_index, frame_type));
 }
 
 void ArCoreGl::SubmitVizFrame(int16_t frame_index,
@@ -1364,7 +1250,7 @@ void ArCoreGl::SubmitVizFrame(int16_t frame_index,
   }
 
   if (submit_client_ &&
-      frame_type == ArCompositorFrameSink::FrameType::kHasWebXrContent) {
+      frame_type != ArCompositorFrameSink::FrameType::kMissingWebXrContent) {
     // Create a local GpuFence and pass it to the Renderer via IPC.
     std::unique_ptr<gl::GLFence> gl_fence = gl::GLFence::CreateForGpuFence();
     std::unique_ptr<gfx::GpuFence> gpu_fence2 = gl_fence->GetGpuFence();
@@ -1583,7 +1469,9 @@ void ArCoreGl::ProcessFrame(
   }
 
   if (IsFeatureEnabled(device::mojom::XRSessionFeature::DEPTH)) {
-    frame_data->depth_data = arcore_->GetDepthData();
+    // We only return a single view.
+    CHECK(frame_data->views.size() > 0);
+    frame_data->views[0]->depth_data = arcore_->GetDepthData();
   }
 
   if (IsFeatureEnabled(device::mojom::XRSessionFeature::IMAGE_TRACKING)) {

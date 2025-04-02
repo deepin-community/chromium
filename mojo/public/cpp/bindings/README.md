@@ -75,6 +75,8 @@ You can include the above generated header in your sources in order to use the
 definitions therein:
 
 ``` cpp
+#include <string_view>
+
 #include "services/business/public/mojom/factory.mojom.h"
 
 class TableImpl : public db::mojom::Table {
@@ -256,6 +258,9 @@ sequence:
 ``` cpp
 LoggerImpl impl(std::move(receiver));
 ```
+
+If `LoggerImpl` is in another process, see
+[Sending Interfaces Over Interfaces](#sending-interfaces-over-interfaces).
 
 The diagram below illustrates the following sequence of events, all set in
 motion by the above line of code:
@@ -718,7 +723,8 @@ LOG(INFO) << "Value is " << value->get_string_value();  // DCHECK!
 Mojom `feature` generates a `base::Feature` with the given `name` and
 `default_state` (`true` => `ENABLED_BY_DEFAULT`). The feature can be accessed
 and tested in C++ using the mapped name even if it is not used to mark any
-interfaces or methods.
+[interfaces](#runtimefeature-on-interfaces) or
+[methods](#runtimefeature-on-methods).
 
 ```mojom
 module experiment.mojom;
@@ -1487,11 +1493,11 @@ returning a read-only view of the data in the accessor is recommended to
 avoid copying. It is safe because the input object is guaranteed to
 outlive the usage of the result returned by the accessor method.
 
-The following example uses `StringPiece` to return a view of the GURL's
+The following example uses `std::string_view` to return a view of the GURL's
 data (`//url/mojom/url_gurl_mojom_traits.h`):
 
 ``` cpp
-#include "base/strings/string_piece.h"
+
 #include "url/gurl.h"
 #include "url/mojom/url.mojom.h"
 #include "url/url_constants.h"
@@ -1511,9 +1517,62 @@ struct StructTraits<url::mojom::UrlDataView, GURL> {
 }  // namespace mojo
 ```
 
+### Defining `EnumTraits`
+
+Similar to `StructTraits`, you can specialize the
+[`mojo::EnumTraits`](https://cs.chromium.org/chromium/src/mojo/public/cpp/bindings/enum_traits.h)
+to handle conversion between a Mojom enum and a native enum
+
+In general, it's better to just use the Mojom enum directly. However, in some circumstances this
+is impractical: perhaps the native enum is from a third-party library, or the value must be used
+by code that is not aware of Mojo (such as Cronet).
+
+A specialization typically uses simple `switch` statements to convert between the two enums:
+
+```cpp
+#include "mojo/public/cpp/bindings/enum_traits.h"
+
+template <>
+struct EnumTraits<mojom::MyEnum, MyEnum> {
+  static mojom::MyEnum ToMojom(MyEnum input);
+  static bool FromMojom(mojom::MyEnum input, MyEnum* output);
+};
+```
+
+```cpp
+#include "mojo/public/cpp/bindings/enum_traits.h"
+
+// static
+mojom::MyEnum
+EnumTraits<mojom::MyEnum, MyEnum>::ToMojom(MyEnum input) {
+  switch (input) {
+    case MyEnum::CUSTOM_VALUE_0:
+      return mojom::MyEnum::VALUE_0;
+    case MyEnum::CUSTOM_VALUE_1:
+      return mojom::MyEnum::VALUE_1;
+  };
+
+  NOTREACHED();
+}
+
+// static
+bool EnumTraits<mojom::MyEnum, MyEnum>::FromMojom(mojom::MyEnum input, MyEnum* output) {
+  switch (input) {
+    case mojom::MyEnum::VALUE_0:
+      *output = MyEnum::CUSTOM_VALUE_0;
+      return true;
+    case mojom::MyEnum::VALUE_1:
+      *output = MyEnum::CUSTOM_VALUE_1;
+      return true;
+  };
+
+  return false;
+}
+```
+
 ### Enabling a New Type Mapping
 
-We've defined the `StructTraits` necessary, but we still need to teach the
+We've defined the `StructTraits` or `EnumTraits` necessary, but we still need to teach the
 bindings generator (and hence the build system) about the mapping. To do this we
 must add some more information to our `mojom` target in GN:
 
@@ -1542,6 +1601,10 @@ mojom("mojom") {
         {
           mojom = "gfx.mojom.Rect"
           cpp = "::gfx::Rect"
+        },
+        {
+          mojom = "mojom.MyEnum"
+          cpp = "::MyEnum"
         },
       ]
       traits_headers = [ "//ui/gfx/geometry/mojo/geometry_mojom_traits.h" ]
@@ -1641,7 +1704,7 @@ to valid getter return types:
 | `FooEnum`                    | Value of any type that has an appropriate `EnumTraits` specialization defined. By default this includes only the generated `FooEnum` type.
 | `FooStruct`                  | Value or reference to any type that has an appropriate `StructTraits` specialization defined. By default this includes only the generated `FooStructPtr` type.
 | `FooUnion`                   | Value of reference to any type that has an appropriate `UnionTraits` specialization defined. By default this includes only the generated `FooUnionPtr` type.
-| `Foo?`                       | `absl::optional<CppType>`, where `CppType` is the value type defined by the appropriate traits class specialization (e.g. `StructTraits`, `mojo::MapTraits`, etc.). This may be customized by the [typemapping](#Enabling-a-New-Type-Mapping).
+| `Foo?`                       | `std::optional<CppType>`, where `CppType` is the value type defined by the appropriate traits class specialization (e.g. `StructTraits`, `mojo::MapTraits`, etc.). This may be customized by the [typemapping](#Enabling-a-New-Type-Mapping).
 
 ### Using Generated DataView Types
 
@@ -1812,6 +1875,15 @@ example above.
 For converting between Blink and non-Blink variants, please see
 `//third_party/blink/public/platform/cross_variant_mojo_util.h`.
 
+Blink strings deserve a special mention, since `WTF::String` can store either
+Latin-1 or UTF-16, and converts to UTF-8 as needed. Since Mojo strings are
+supposed to be UTF-8, converting a `WTF::String` to a mojo string will convert
+it to UTF-8. When converting a Mojo string back to a WTF::String, the string is
+re-encoded from UTF-8 back into UTF-16. Invalid UTF-16 is tolerated throughout
+and converted to invalid UTF-8, so if your WTF::String may contain invalid
+UTF-16, don't represent it on the wire with a mojo string - use a mojo
+ByteString instead.
+
 ## Versioning Considerations
 
 For general documentation of versioning in the Mojom IDL see
@@ -1860,6 +1932,13 @@ enum Department {
   kResearch,
 };
 ```
+
+*** note
+**NOTE**: The `[Default]` enumerator value is distinct from the automatically
+populated enum value used when a non-nullable enum field is not defined in an
+older client's versioned struct definition
+([the enumerator value corresponding to `0`](/mojo/public/tools/bindings/README.md#ensuring-backward-compatible-behavior)).
+***
 
 ### Using Mojo Bindings in Chrome
 

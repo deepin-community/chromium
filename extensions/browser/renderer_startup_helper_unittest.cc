@@ -6,7 +6,6 @@
 
 #include "base/containers/contains.h"
 #include "base/memory/raw_ptr.h"
-#include "base/test/scoped_feature_list.h"
 #include "components/crx_file/id_util.h"
 #include "content/public/test/mock_render_process_host.h"
 #include "content/public/test/test_browser_context.h"
@@ -18,6 +17,7 @@
 #include "extensions/browser/test_extensions_browser_client.h"
 #include "extensions/common/extension_builder.h"
 #include "extensions/common/extension_id.h"
+#include "extensions/common/mojom/host_id.mojom.h"
 #include "extensions/common/mojom/renderer.mojom.h"
 #include "extensions/common/permissions/permissions_data.h"
 #include "mojo/public/cpp/bindings/associated_receiver_set.h"
@@ -116,8 +116,7 @@ class RendererStartupHelperInterceptor : public RendererStartupHelper,
   void SetDeveloperMode(bool current_developer_mode) override {}
 
   void SetSessionInfo(version_info::Channel channel,
-                      mojom::FeatureSessionType session,
-                      bool is_lock_screen_context) override {}
+                      mojom::FeatureSessionType session) override {}
   void SetSystemFont(const std::string& font_family,
                      const std::string& font_size) override {}
 
@@ -126,7 +125,12 @@ class RendererStartupHelperInterceptor : public RendererStartupHelper,
   void SetScriptingAllowlist(
       const std::vector<ExtensionId>& extension_ids) override {}
 
-  void UpdateUserScriptWorld(mojom::UserScriptWorldInfoPtr info) override {}
+  void UpdateUserScriptWorlds(
+      std::vector<mojom::UserScriptWorldInfoPtr> info) override {}
+
+  void ClearUserScriptWorldConfig(
+      const ExtensionId& extension_id,
+      const std::optional<std::string>& world_id) override {}
 
   void ShouldSuspend(ShouldSuspendCallback callback) override {
     std::move(callback).Run();
@@ -534,16 +538,11 @@ class RendererStartupHelperTestCaptivePortalPopupWindow
   RendererStartupHelperTestCaptivePortalPopupWindow() = default;
   ~RendererStartupHelperTestCaptivePortalPopupWindow() override = default;
   void SetUp() override {
-    feature_list_.InitAndEnableFeature(
-        chromeos::features::kCaptivePortalPopupWindow);
     RendererStartupHelperTest::SetUp();
     static_cast<TestingPrefServiceSimple*>(pref_service())
         ->registry()
         ->RegisterBooleanPref(chromeos::prefs::kCaptivePortalSignin, false);
   }
-
- private:
-  base::test::ScopedFeatureList feature_list_;
 };
 
 // Tests that only incognito-enabled extensions are loaded in an incognito

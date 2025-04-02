@@ -60,13 +60,9 @@ declare namespace Adb {
   type NetworkDiscoveryConfig = string[];
 }
 
-interface HTMLElement {
-  createChild(tagName: string, className?: string, content?: string): HTMLElement;
-}
-
 interface Element {
   boxInWindow(targetWindow?: Window): AnchorBox;
-  createChild(tagName: string, className?: string, content?: string): Element;
+  createChild<K extends keyof HTMLElementTagNameMap>(tagName: K, className?: string): HTMLElementTagNameMap[K];
   hasFocus(): boolean;
   positionAt(x: (number|undefined), y: (number|undefined), relativeTo?: Element): void;
   removeChildren(): void;
@@ -74,7 +70,7 @@ interface Element {
 }
 
 interface DocumentFragment {
-  createChild(tagName: string, className?: string, content?: string): Element;
+  createChild<K extends keyof HTMLElementTagNameMap>(tagName: K, className?: string): HTMLElementTagNameMap[K];
 }
 
 interface Event {
@@ -100,8 +96,6 @@ interface Node {
   deepTextContent(): string
   window(): Window;
   childTextNodes(): Node[];
-  __widget?: any;
-  __widgetCounter?: number|null;
 }
 
 declare function onInvokeElement(element: Element, callback: (event: Event) => void): void;

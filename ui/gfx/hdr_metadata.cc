@@ -4,10 +4,11 @@
 
 #include "ui/gfx/hdr_metadata.h"
 
-#include "skia/ext/skcolorspace_primaries.h"
-
 #include <iomanip>
 #include <sstream>
+
+#include "skia/ext/skcolorspace_primaries.h"
+#include "third_party/skia/include/core/SkColorSpace.h"
 
 namespace gfx {
 
@@ -52,8 +53,8 @@ std::string HdrMetadataExtendedRange::ToString() const {
 // static
 HDRMetadata HDRMetadata::PopulateUnspecifiedWithDefaults(
     const std::optional<gfx::HDRMetadata>& hdr_metadata) {
-  constexpr HdrMetadataSmpteSt2086 kDefaults2086(SkNamedPrimariesExt::kRec2020,
-                                                 10000.f, 0.f);
+  constexpr HdrMetadataSmpteSt2086 kDefaults2086(SkNamedPrimaries::kRec2020,
+                                                 1000.f, 0.f);
 
   if (!hdr_metadata)
     return HDRMetadata(kDefaults2086);
@@ -69,7 +70,7 @@ HDRMetadata HDRMetadata::PopulateUnspecifiedWithDefaults(
     result.smpte_st_2086->primaries = kDefaults2086.primaries;
   }
 
-  // If the max luminance is unspecified, replace it with the default 10,000
+  // If the max luminance is unspecified, replace it with the default 1,000
   // nits.
   if (result.smpte_st_2086->luminance_max == 0.f) {
     result.smpte_st_2086->luminance_max = kDefaults2086.luminance_max;

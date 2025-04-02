@@ -4,18 +4,21 @@
 
 #include "third_party/blink/public/platform/web_drag_data.h"
 
+#include <vector>
+
 #include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/abseil-cpp/absl/types/variant.h"
-#include "third_party/blink/public/platform/web_vector.h"
 #include "third_party/blink/renderer/core/clipboard/data_object.h"
 #include "third_party/blink/renderer/core/testing/null_execution_context.h"
 #include "third_party/blink/renderer/platform/file_metadata.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 
 namespace blink {
 
 TEST(WebDragDataTest, items) {
+  test::TaskEnvironment task_environment;
   ScopedNullExecutionContext context;
   DataObject* data_object = DataObject::Create();
 
@@ -66,7 +69,7 @@ TEST(WebDragDataTest, items) {
   }
 
   WebDragData data = data_object->ToWebDragData();
-  WebVector<WebDragData::Item> items = data.Items();
+  std::vector<WebDragData::Item> items = data.Items();
   ASSERT_EQ(6u, items.size());
 
   {

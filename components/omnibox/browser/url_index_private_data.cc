@@ -22,7 +22,7 @@
 #include "base/i18n/case_conversion.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
-#include "base/ranges/algorithm.h"
+#include "base/not_fatal_until.h"
 #include "base/stl_util.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -68,7 +68,7 @@ bool LengthGreater(const std::u16string& string_a,
 class UpdateRecentVisitsFromHistoryDBTask : public history::HistoryDBTask {
  public:
   explicit UpdateRecentVisitsFromHistoryDBTask(
-      URLIndexPrivateData* private_data,
+      scoped_refptr<URLIndexPrivateData> private_data,
       history::URLID url_id);
   UpdateRecentVisitsFromHistoryDBTask(
       const UpdateRecentVisitsFromHistoryDBTask&) = delete;
@@ -84,7 +84,7 @@ class UpdateRecentVisitsFromHistoryDBTask : public history::HistoryDBTask {
 
   // The URLIndexPrivateData that gets updated after the historyDB
   // task returns.
-  raw_ptr<URLIndexPrivateData, AcrossTasksDanglingUntriaged> private_data_;
+  scoped_refptr<URLIndexPrivateData> private_data_;
   // The ID of the URL to get visits for and then update.
   history::URLID url_id_;
   // Whether fetching the recent visits for the URL succeeded.
@@ -95,9 +95,11 @@ class UpdateRecentVisitsFromHistoryDBTask : public history::HistoryDBTask {
 };
 
 UpdateRecentVisitsFromHistoryDBTask::UpdateRecentVisitsFromHistoryDBTask(
-    URLIndexPrivateData* private_data,
+    scoped_refptr<URLIndexPrivateData> private_data,
     history::URLID url_id)
-    : private_data_(private_data), url_id_(url_id), succeeded_(false) {}
+    : private_data_(std::move(private_data)),
+      url_id_(url_id),
+      succeeded_(false) {}
 
 bool UpdateRecentVisitsFromHistoryDBTask::RunOnDBThread(
     history::HistoryBackend* backend,
@@ -243,11 +245,10 @@ ScoredHistoryMatches URLIndexPrivateData::HistoryItemsForTerms(
     search_term_cache_.clear();
   } else {
     // Remove any stale SearchTermCacheItems.
-    std::erase_if(
-        search_term_cache_,
-        [](const std::pair<std::u16string, SearchTermCacheItem>& item) {
-          return !item.second.used_;
-        });
+    std::erase_if(search_term_cache_,
+                  [](const SearchTermCacheMap::value_type& item) {
+                    return !item.second.used_;
+                  });
   }
 
   return scored_items;
@@ -356,11 +357,12 @@ void URLIndexPrivateData::ScheduleUpdateRecentVisits(
 
 bool URLIndexPrivateData::DeleteURL(const GURL& url) {
   // Find the matching entry in the history_info_map_.
-  auto pos = base::ranges::find(
+  // To avoid creating a temporary GURL instance,
+  // the lambda expression should return the GURL reference.
+  auto pos = std::ranges::find(
       history_info_map_, url,
-      [](const std::pair<const HistoryID, HistoryInfoMapValue>& item) {
-        return item.second.url_row.url();
-      });
+      [](const std::pair<const HistoryID, HistoryInfoMapValue>& item)
+          -> const GURL& { return item.second.url_row.url(); });
   if (pos == history_info_map_.end())
     return false;
   RemoveRowFromIndex(pos->second.url_row);
@@ -374,8 +376,6 @@ scoped_refptr<URLIndexPrivateData> URLIndexPrivateData::RebuildFromHistory(
     const std::set<std::string>& scheme_allowlist) {
   if (!history_db)
     return nullptr;
-
-  base::TimeTicks beginning_time = base::TimeTicks::Now();
 
   history::URLDatabase::URLEnumerator history_enum;
   if (!history_db->InitURLEnumeratorForSignificant(&history_enum))
@@ -401,8 +401,6 @@ scoped_refptr<URLIndexPrivateData> URLIndexPrivateData::RebuildFromHistory(
     }
   }
 
-  UMA_HISTOGRAM_TIMES("History.InMemoryURLIndexingTime",
-                      base::TimeTicks::Now() - beginning_time);
   UMA_HISTOGRAM_COUNTS_1M("History.InMemoryURLHistoryItems",
                           rebuilt_data->history_id_word_map_.size());
   // TODO(manukh): Add histograms if we decide to experiment with
@@ -700,11 +698,11 @@ void URLIndexPrivateData::HistoryIdsToScoredMatches(
     auto hist_pos = history_info_map_.find(history_id);
     const history::URLRow& hist_item = hist_pos->second.url_row;
     auto starts_pos = word_starts_map_.find(history_id);
-    DCHECK(starts_pos != word_starts_map_.end());
+    CHECK(starts_pos != word_starts_map_.end(), base::NotFatalUntil::M130);
 
     bool is_highly_visited_host =
         !host_filter.empty() ||
-        base::ranges::find(HighlyVisitedHosts(), hist_item.url().host()) !=
+        std::ranges::find(HighlyVisitedHosts(), hist_item.url().host()) !=
             HighlyVisitedHosts().end();
     ScoredHistoryMatch new_scored_match(
         hist_item, hist_pos->second.visits, lower_raw_string, lower_raw_terms,
@@ -880,14 +878,15 @@ void URLIndexPrivateData::RemoveRowWordsFromIndex(const history::URLRow& row) {
   // Reconcile any changes to word usage.
   for (WordID word_id : word_id_set) {
     auto word_id_history_map_iter = word_id_history_map_.find(word_id);
-    DCHECK(word_id_history_map_iter != word_id_history_map_.end());
+    CHECK(word_id_history_map_iter != word_id_history_map_.end(),
+          base::NotFatalUntil::M130);
 
     word_id_history_map_iter->second.erase(history_id);
     if (!word_id_history_map_iter->second.empty())
       continue;
 
     // The word is no longer in use. Reconcile any changes to character usage.
-    std::u16string word = word_list_[word_id];
+    const std::u16string& word = word_list_[word_id];
     for (char16_t uni_char : Char16SetFromString16(word)) {
       auto char_word_map_iter = char_word_map_.find(uni_char);
       char_word_map_iter->second.erase(word_id);
@@ -966,13 +965,14 @@ URLIndexPrivateData::GetTermsAndWordStartsOffsets(
       base::SplitString(lower_raw_string, base::kWhitespaceUTF16,
                         base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
   if (lower_raw_terms.empty()) {
-    return {{}, {}};
+    return {String16Vector(), WordStarts()};
   }
 
   WordStarts lower_terms_to_word_starts_offsets;
   CalculateWordStartsOffsets(lower_raw_terms,
                              &lower_terms_to_word_starts_offsets);
-  return {lower_raw_terms, lower_terms_to_word_starts_offsets};
+  return {std::move(lower_raw_terms),
+          std::move(lower_terms_to_word_starts_offsets)};
 }
 
 URLIndexPrivateData::SearchTermCacheItem::~SearchTermCacheItem() = default;

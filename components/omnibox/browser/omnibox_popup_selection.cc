@@ -4,12 +4,15 @@
 
 #include "components/omnibox/browser/omnibox_popup_selection.h"
 
+#include <algorithm>
+
 #include "build/build_config.h"
 #include "components/omnibox/browser/actions/omnibox_action.h"
+#include "components/omnibox/browser/autocomplete_match.h"
 #include "components/omnibox/browser/autocomplete_result.h"
 #include "components/search_engines/template_url_service.h"
 
-#include <algorithm>
+constexpr bool kIsDesktop = !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS);
 
 const size_t OmniboxPopupSelection::kNoMatch = static_cast<size_t>(-1);
 
@@ -46,7 +49,7 @@ bool OmniboxPopupSelection::IsAction() const {
 
 bool OmniboxPopupSelection::IsControlPresentOnMatch(
     const AutocompleteResult& result,
-    PrefService* pref_service) const {
+    const PrefService* pref_service) const {
   if (line >= result.size()) {
     return false;
   }
@@ -84,25 +87,30 @@ bool OmniboxPopupSelection::IsControlPresentOnMatch(
       return match.suggestion_group_id != previous_match.suggestion_group_id;
     }
     case NORMAL:
-      return true;
+      // `NULL_RESULT_MESSAGE` cannot be focused.
+      return match.type != AutocompleteMatchType::NULL_RESULT_MESSAGE;
     case KEYWORD_MODE:
       return match.associated_keyword != nullptr;
     case FOCUSED_BUTTON_ACTION: {
       // Actions buttons should not be shown in keyword mode.
       return !match.from_keyword && action_index < match.actions.size();
     }
+    case FOCUSED_BUTTON_THUMBS_UP:
+    case FOCUSED_BUTTON_THUMBS_DOWN:
+      return match.type == AutocompleteMatchType::HISTORY_EMBEDDINGS;
     case FOCUSED_BUTTON_REMOVE_SUGGESTION:
       return match.SupportsDeletion();
+    case FOCUSED_IPH_LINK:
+      return match.IsIPHSuggestion() && !match.iph_link_url.is_empty();
     default:
       break;
   }
   NOTREACHED();
-  return false;
 }
 
 OmniboxPopupSelection OmniboxPopupSelection::GetNextSelection(
     const AutocompleteResult& result,
-    PrefService* pref_service,
+    const PrefService* pref_service,
     TemplateURLService* template_url_service,
     Direction direction,
     Step step) const {
@@ -166,14 +174,13 @@ OmniboxPopupSelection OmniboxPopupSelection::GetNextSelection(
   }
 
   NOTREACHED();
-  return *this;
 }
 
 // static
 std::vector<OmniboxPopupSelection>
 OmniboxPopupSelection::GetAllAvailableSelectionsSorted(
     const AutocompleteResult& result,
-    PrefService* pref_service,
+    const PrefService* pref_service,
     TemplateURLService* template_url_service,
     Direction direction,
     Step step) {
@@ -183,10 +190,8 @@ OmniboxPopupSelection::GetAllAvailableSelectionsSorted(
   std::vector<LineState> all_states;
   if (step == kWholeLine || step == kAllLines) {
     all_states.push_back(NORMAL);
-    if (OmniboxFieldTrial::IsKeywordModeRefreshEnabled()) {
-      // Whole line stepping can go straight into keyword mode.
-      all_states.push_back(KEYWORD_MODE);
-    }
+    // Whole line stepping can go straight into keyword mode.
+    all_states.push_back(KEYWORD_MODE);
   } else {
     // Arrow keys should never reach the header controls.
     if (step == kStateOrLine) {
@@ -198,7 +203,10 @@ OmniboxPopupSelection::GetAllAvailableSelectionsSorted(
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
     all_states.push_back(FOCUSED_BUTTON_ACTION);
 #endif
+    all_states.push_back(FOCUSED_BUTTON_THUMBS_UP);
+    all_states.push_back(FOCUSED_BUTTON_THUMBS_DOWN);
     all_states.push_back(FOCUSED_BUTTON_REMOVE_SUGGESTION);
+    all_states.push_back(FOCUSED_IPH_LINK);
   }
   DCHECK(std::is_sorted(all_states.begin(), all_states.end()))
       << "This algorithm depends on a sorted list of line states.";
@@ -220,8 +228,7 @@ OmniboxPopupSelection::GetAllAvailableSelectionsSorted(
             break;
           }
         }
-      } else if (line_state == KEYWORD_MODE &&
-                 OmniboxFieldTrial::IsKeywordModeRefreshEnabled()) {
+      } else if (line_state == KEYWORD_MODE && kIsDesktop) {
         OmniboxPopupSelection selection(line_number, line_state);
         if (selection.IsControlPresentOnMatch(result, pref_service)) {
           if (result.match_at(line_number)

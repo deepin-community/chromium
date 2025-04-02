@@ -26,7 +26,6 @@ RTCRtpSource::Type RTCRtpSource::SourceType() const {
       return RTCRtpSource::Type::kCSRC;
     default:
       NOTREACHED();
-      return RTCRtpSource::Type::kSSRC;
   }
 }
 

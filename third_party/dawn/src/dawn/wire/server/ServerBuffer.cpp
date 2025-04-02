@@ -29,17 +29,19 @@
 #include <memory>
 
 #include "dawn/common/Assert.h"
+#include "dawn/common/StringViewUtils.h"
 #include "dawn/wire/BufferConsumer_impl.h"
 #include "dawn/wire/WireCmd_autogen.h"
+#include "dawn/wire/WireResult.h"
 #include "dawn/wire/server/Server.h"
 
 namespace dawn::wire::server {
 
 WireResult Server::PreHandleBufferUnmap(const BufferUnmapCmd& cmd) {
     Known<WGPUBuffer> buffer;
-    WIRE_TRY(BufferObjects().Get(cmd.selfId, &buffer));
+    WIRE_TRY(Objects<WGPUBuffer>().Get(cmd.selfId, &buffer));
 
-    if (buffer->mappedAtCreation && !(buffer->usage & WGPUMapMode_Write)) {
+    if (buffer->mappedAtCreation && !(buffer->usage & WGPUBufferUsage_MapWrite)) {
         // This indicates the writeHandle is for mappedAtCreation only. Destroy on unmap
         // writeHandle could have possibly been deleted if buffer is already destroyed so we
         // don't assert it's non-null
@@ -54,7 +56,7 @@ WireResult Server::PreHandleBufferUnmap(const BufferUnmapCmd& cmd) {
 WireResult Server::PreHandleBufferDestroy(const BufferDestroyCmd& cmd) {
     // Destroying a buffer does an implicit unmapping.
     Known<WGPUBuffer> buffer;
-    WIRE_TRY(BufferObjects().Get(cmd.selfId, &buffer));
+    WIRE_TRY(Objects<WGPUBuffer>().Get(cmd.selfId, &buffer));
 
     // The buffer was destroyed. Clear the Read/WriteHandle.
     buffer->readHandle = nullptr;
@@ -67,7 +69,7 @@ WireResult Server::PreHandleBufferDestroy(const BufferDestroyCmd& cmd) {
 WireResult Server::DoBufferMapAsync(Known<WGPUBuffer> buffer,
                                     ObjectHandle eventManager,
                                     WGPUFuture future,
-                                    WGPUMapModeFlags mode,
+                                    WGPUMapMode mode,
                                     uint64_t offset64,
                                     uint64_t size64) {
     // These requests are just forwarded to the buffer, with userdata containing what the
@@ -85,11 +87,13 @@ WireResult Server::DoBufferMapAsync(Known<WGPUBuffer> buffer,
     // client does the default size computation, we should always have a valid actual size here
     // in server. All other invalid actual size can be caught by dawn native side validation.
     if (offset64 > std::numeric_limits<size_t>::max()) {
-        OnBufferMapAsyncCallback(userdata.get(), WGPUBufferMapAsyncStatus_OffsetOutOfRange);
+        static constexpr WGPUStringView kOffsetOutOfRange = {"Buffer offset was out of range.", 31};
+        OnBufferMapAsyncCallback(userdata.get(), WGPUMapAsyncStatus_Error, kOffsetOutOfRange);
         return WireResult::Success;
     }
     if (size64 >= WGPU_WHOLE_MAP_SIZE) {
-        OnBufferMapAsyncCallback(userdata.get(), WGPUBufferMapAsyncStatus_SizeOutOfRange);
+        static constexpr WGPUStringView kSizeOutOfRange = {"Buffer size was out of range.", 29};
+        OnBufferMapAsyncCallback(userdata.get(), WGPUMapAsyncStatus_Error, kSizeOutOfRange);
         return WireResult::Success;
     }
 
@@ -99,8 +103,10 @@ WireResult Server::DoBufferMapAsync(Known<WGPUBuffer> buffer,
     userdata->offset = offset;
     userdata->size = size;
 
-    mProcs.bufferMapAsync(buffer->handle, mode, offset, size,
-                          ForwardToServer<&Server::OnBufferMapAsyncCallback>, userdata.release());
+    mProcs.bufferMapAsync(
+        buffer->handle, mode, offset, size,
+        {nullptr, WGPUCallbackMode_AllowSpontaneous,
+         ForwardToServer2<&Server::OnBufferMapAsyncCallback>, userdata.release(), nullptr});
 
     return WireResult::Success;
 }
@@ -113,16 +119,16 @@ WireResult Server::DoDeviceCreateBuffer(Known<WGPUDevice> device,
                                         uint64_t writeHandleCreateInfoLength,
                                         const uint8_t* writeHandleCreateInfo) {
     // Create and register the buffer object.
-    Known<WGPUBuffer> buffer;
-    WIRE_TRY(BufferObjects().Allocate(&buffer, bufferHandle));
+    Reserved<WGPUBuffer> buffer;
+    WIRE_TRY(Objects<WGPUBuffer>().Allocate(&buffer, bufferHandle));
     buffer->handle = mProcs.deviceCreateBuffer(device->handle, descriptor);
     buffer->usage = descriptor->usage;
     buffer->mappedAtCreation = descriptor->mappedAtCreation;
 
     // isReadMode and isWriteMode could be true at the same time if usage contains
-    // WGPUMapMode_Read and buffer is mappedAtCreation
-    bool isReadMode = descriptor->usage & WGPUMapMode_Read;
-    bool isWriteMode = descriptor->usage & WGPUMapMode_Write || descriptor->mappedAtCreation;
+    // WGPUBufferUsage_MapRead and buffer is mappedAtCreation
+    bool isReadMode = descriptor->usage & WGPUBufferUsage_MapRead;
+    bool isWriteMode = descriptor->usage & WGPUBufferUsage_MapWrite || descriptor->mappedAtCreation;
 
     // This is the size of data deserialized from the command stream to create the read/write
     // handle, which must be CPU-addressable.
@@ -213,21 +219,24 @@ WireResult Server::DoBufferUpdateMappedData(Known<WGPUBuffer> buffer,
     return WireResult::Success;
 }
 
-void Server::OnBufferMapAsyncCallback(MapUserdata* data, WGPUBufferMapAsyncStatus status) {
+void Server::OnBufferMapAsyncCallback(MapUserdata* data,
+                                      WGPUMapAsyncStatus status,
+                                      WGPUStringView message) {
     // Skip sending the callback if the buffer has already been destroyed.
     Known<WGPUBuffer> buffer;
-    if (BufferObjects().Get(data->buffer.id, &buffer) != WireResult::Success ||
+    if (Objects<WGPUBuffer>().Get(data->buffer.id, &buffer) != WireResult::Success ||
         buffer->generation != data->buffer.generation) {
         return;
     }
 
     bool isRead = data->mode & WGPUMapMode_Read;
-    bool isSuccess = status == WGPUBufferMapAsyncStatus_Success;
+    bool isSuccess = status == WGPUMapAsyncStatus_Success;
 
-    ReturnBufferMapAsyncCallbackCmd cmd;
+    ReturnBufferMapAsyncCallbackCmd cmd = {};
     cmd.eventManager = data->eventManager;
     cmd.future = data->future;
     cmd.status = status;
+    cmd.message = message;
     cmd.readDataUpdateInfoLength = 0;
     cmd.readDataUpdateInfo = nullptr;
 

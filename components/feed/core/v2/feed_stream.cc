@@ -7,11 +7,11 @@
 #include <algorithm>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/containers/flat_set.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
@@ -20,7 +20,6 @@
 #include "base/logging.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
-#include "base/ranges/algorithm.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "build/buildflag.h"
@@ -67,10 +66,12 @@
 #include "components/offline_pages/task/closure_task.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/base/signin_pref_names.h"
+#include "google_apis/gaia/gaia_id.h"
 
 namespace feed {
 namespace {
 constexpr size_t kMaxRecentFeedNavigations = 10;
+constexpr base::TimeDelta kFeedCloseRefreshDelay = base::Minutes(30);
 
 void UpdateDebugStreamData(
     const UploadActionsTask::Result& upload_actions_result,
@@ -109,11 +110,6 @@ ContentOrder GetValidWebFeedContentOrder(const PrefService& pref_service) {
   ContentOrder pref_order = prefs::GetWebFeedContentOrder(pref_service);
   if (pref_order != ContentOrder::kUnspecified)
     return pref_order;
-  // Fallback to Finch determined order.
-  std::string finch_order = base::GetFieldTrialParamValueByFeature(
-      kWebFeed, "following_feed_content_order");
-  if (finch_order == "reverse_chron")
-    return ContentOrder::kReverseChron;
   // Defaults to grouped, encompassing finch_order == "grouped".
   return ContentOrder::kGrouped;
 }
@@ -391,7 +387,7 @@ void FeedStream::StreamLoadComplete(LoadStreamTask::Result result) {
 
   // When done loading the for-you feed, try to refresh the web-feed if there's
   // no unread content.
-  if (base::FeatureList::IsEnabled(kWebFeed) &&
+  if (IsWebFeedEnabled() && IsSignedIn() &&
       result.load_type != LoadType::kManualRefresh &&
       result.stream_type.IsForYou() && chained_web_feed_refresh_enabled_) {
     // Checking for users without follows.
@@ -497,14 +493,12 @@ void FeedStream::DestroySurface(SurfaceId surface) {
 }
 
 void FeedStream::CleanupDestroyedSurfaces() {
-  all_surfaces_.erase(base::ranges::remove_if(
-                          all_surfaces_,
-                          [&](const FeedStreamSurface& surface) {
-                            return base::ranges::find(destroyed_surfaces_,
-                                                      surface.GetSurfaceId()) !=
-                                   destroyed_surfaces_.end();
-                          }),
-                      all_surfaces_.end());
+  auto to_remove = std::ranges::remove_if(
+      all_surfaces_, [&](const FeedStreamSurface& surface) {
+        return std::ranges::find(destroyed_surfaces_, surface.GetSurfaceId()) !=
+               destroyed_surfaces_.end();
+      });
+  all_surfaces_.erase(to_remove.begin(), to_remove.end());
   destroyed_surfaces_.clear();
 }
 
@@ -564,7 +558,7 @@ void FeedStream::RemoveUnreadContentObserver(const StreamType& stream_type,
     UnreadContentObserver* ptr = notifier.observer().get();
     return ptr == nullptr || observer == ptr;
   };
-  base::EraseIf(stream.unread_content_notifiers, predicate);
+  std::erase_if(stream.unread_content_notifiers, predicate);
 }
 
 void FeedStream::ScheduleModelUnloadIfNoSurfacesAttached(
@@ -634,6 +628,11 @@ bool FeedStream::IsFeedEnabledByDse() {
   }
 #endif  // BUILDFLAG(IS_ANDROID)
   return true;
+}
+
+bool FeedStream::IsWebFeedEnabled() {
+  return feed::IsWebFeedEnabledForLocale(delegate_->GetCountry()) &&
+         !base::FeatureList::IsEnabled(kWebFeedKillSwitch);
 }
 
 void FeedStream::EnabledPreferencesChanged() {
@@ -781,7 +780,7 @@ void FeedStream::ExecuteOperations(
     DLOG(ERROR) << "Calling ExecuteOperations before the model is loaded";
     return;
   }
-  // TODO(crbug.com/1227897): Convert this to a task.
+  // TODO(crbug.com/40777338): Convert this to a task.
   return model->ExecuteOperations(std::move(operations));
 }
 
@@ -804,7 +803,7 @@ EphemeralChangeId FeedStream::CreateEphemeralChange(
 
 EphemeralChangeId FeedStream::CreateEphemeralChangeFromPackedData(
     SurfaceId surface_id,
-    base::StringPiece data) {
+    std::string_view data) {
   feedpacking::DismissData msg;
   msg.ParseFromArray(data.data(), data.size());
   return CreateEphemeralChange(surface_id,
@@ -832,7 +831,7 @@ bool FeedStream::RejectEphemeralChange(SurfaceId surface_id,
 }
 
 void FeedStream::ProcessThereAndBackAgain(
-    base::StringPiece data,
+    std::string_view data,
     const LoggingParameters& logging_parameters) {
   feedwire::ThereAndBackAgainData msg;
   msg.ParseFromArray(data.data(), data.size());
@@ -847,7 +846,7 @@ void FeedStream::ProcessThereAndBackAgain(
 }
 
 void FeedStream::ProcessViewAction(
-    base::StringPiece data,
+    std::string_view data,
     const LoggingParameters& logging_parameters) {
   if (!logging_parameters.view_actions_enabled)
     return;
@@ -977,7 +976,7 @@ void FeedStream::SubscribedWebFeedCount(
     base::OnceCallback<void(int)> callback) {
   subscriptions().SubscribedWebFeedCount(std::move(callback));
 }
-void FeedStream::RegisterFeedUserSettingsFieldTrial(base::StringPiece group) {
+void FeedStream::RegisterFeedUserSettingsFieldTrial(std::string_view group) {
   delegate_->RegisterFeedUserSettingsFieldTrial(group);
 }
 
@@ -1052,7 +1051,7 @@ LaunchResult FeedStream::ShouldAttemptLoad(const StreamType& stream_type,
   // be called again from within the LoadStreamTask, and then the metadata
   // will be initialized.
   if (metadata_populated_ &&
-      delegate_->GetAccountInfo().gaia != metadata_.gaia()) {
+      delegate_->GetAccountInfo().gaia != GaiaId(metadata_.gaia())) {
     return {LoadStreamStatus::kDataInStoreIsForAnotherUser,
             feedwire::DiscoverLaunchResult::DATA_IN_STORE_IS_FOR_ANOTHER_USER};
   }
@@ -1106,9 +1105,6 @@ LaunchResult FeedStream::ShouldMakeFeedQueryRequest(
     case StreamKind::kUnknown:
       DLOG(ERROR) << "Unknown stream kind";
       [[fallthrough]];
-    case StreamKind::kSupervisedUser:
-      request_type = NetworkRequestType::kSupervisedFeed;
-      break;
     case StreamKind::kForYou:
       request_type = (load_type != LoadType::kLoadMore)
                          ? NetworkRequestType::kFeedQuery
@@ -1191,7 +1187,7 @@ RequestMetadata FeedStream::GetSignedInRequestMetadata() const {
 RequestMetadata FeedStream::GetRequestMetadata(const StreamType& stream_type,
                                                bool is_for_next_page) const {
   const Stream* stream = FindStream(stream_type);
-  // TODO(crbug.com/1370127) handle null single web feed streams
+  // TODO(crbug.com/40869569) handle null single web feed streams
   DCHECK(stream);
   RequestMetadata result;
   if (is_for_next_page) {
@@ -1326,7 +1322,7 @@ void FeedStream::BackgroundRefreshComplete(LoadStreamTask::Result result) {
 // Performs work that is necessary for both background and foreground load
 // tasks.
 void FeedStream::LoadTaskComplete(const LoadStreamTask::Result& result) {
-  if (delegate_->GetAccountInfo().gaia != metadata_.gaia()) {
+  if (delegate_->GetAccountInfo().gaia != GaiaId(metadata_.gaia())) {
     ClearAll();
     return;
   }
@@ -1382,7 +1378,8 @@ void FeedStream::FinishClearAll() {
   has_stored_data_.SetValue(false);
   feed::prefs::SetExperiments({}, *profile_prefs_);
   feed::prefs::ClearClientInstanceId(*profile_prefs_);
-  SetMetadata(feedstore::MakeMetadata(delegate_->GetAccountInfo().gaia));
+  SetMetadata(
+      feedstore::MakeMetadata(delegate_->GetAccountInfo().gaia.ToString()));
 
   delegate_->ClearAll();
 
@@ -1534,7 +1531,7 @@ void FeedStream::ReportOpenAction(const GURL& url,
     privacy_notice_card_tracker_.OnOpenAction(
         stream.model->FindContentId(ToContentRevision(slice_id)));
   }
-  ScheduleFeedCloseRefreshOnInteraction(surface->GetStreamType());
+  ScheduleFeedCloseRefresh(surface->GetStreamType());
 }
 
 void FeedStream::ReportOpenVisitComplete(SurfaceId /*surface_id*/,
@@ -1596,12 +1593,6 @@ void FeedStream::ReportFeedViewed(SurfaceId surface_id) {
     return;
   }
 
-  // Skip feed-close refresh scheduling if this surface was already viewed.
-  // entry should never be null, but if it is, we will skip rescheduling.
-  StreamSurfaceSet::Entry* entry = stream->surfaces.FindSurface(surface_id);
-  if (entry && !entry->feed_viewed)
-    ScheduleFeedCloseRefreshOnFirstView(stream->type);
-
   stream->surfaces.FeedViewed(surface_id);
   MaybeNotifyHasUnreadContent(stream->type);
 }
@@ -1616,7 +1607,7 @@ void FeedStream::ReportStreamScrolled(SurfaceId surface_id, int distance_dp) {
   }
   metrics_reporter_->StreamScrolled(surface->GetStreamType(), distance_dp);
   if (GetStream(surface->GetStreamType()).surfaces.HasSurfaceShowingContent()) {
-    ScheduleFeedCloseRefreshOnInteraction(surface->GetStreamType());
+    ScheduleFeedCloseRefresh(surface->GetStreamType());
   }
 }
 void FeedStream::ReportStreamScrollStart(SurfaceId /*surface_id*/) {
@@ -1737,23 +1728,8 @@ ContentOrder FeedStream::GetContentOrderFromPrefs(
     NOTREACHED()
         << "GetContentOrderFromPrefs is not supported for this stream_type "
         << stream_type;
-    return ContentOrder::kUnspecified;
   }
   return prefs::GetWebFeedContentOrder(*profile_prefs_);
-}
-
-void FeedStream::ScheduleFeedCloseRefreshOnInteraction(const StreamType& type) {
-  if (!base::FeatureList::IsEnabled(kFeedCloseRefresh))
-    return;
-  ScheduleFeedCloseRefresh(type);
-}
-
-void FeedStream::ScheduleFeedCloseRefreshOnFirstView(const StreamType& type) {
-  if (!base::FeatureList::IsEnabled(kFeedCloseRefresh) ||
-      kFeedCloseRefreshRequireInteraction.Get()) {
-    return;
-  }
-  ScheduleFeedCloseRefresh(type);
 }
 
 void FeedStream::ScheduleFeedCloseRefresh(const StreamType& type) {
@@ -1765,7 +1741,7 @@ void FeedStream::ScheduleFeedCloseRefresh(const StreamType& type) {
 
   last_refresh_scheduled_on_interaction_time_ = now;
 
-  base::TimeDelta delay = base::Minutes(kFeedCloseRefreshDelayMinutes.Get());
+  base::TimeDelta delay = kFeedCloseRefreshDelay;
   RequestSchedule schedule;
   schedule.anchor_time = base::Time::Now();
   schedule.refresh_offsets = {delay, delay * 2, delay * 3};
@@ -1792,9 +1768,10 @@ void FeedStream::CheckDuplicatedContentsOnRefresh() {
   base::flat_set<uint32_t> viewed_content_hashes(
       stream_metadata.viewed_content_hashes().begin(),
       stream_metadata.viewed_content_hashes().end());
-  base::EraseIf(most_recent_viewed_content_hashes,
-      [&viewed_content_hashes](
-      uint32_t x) { return viewed_content_hashes.contains(x); });
+  std::erase_if(most_recent_viewed_content_hashes,
+                [&viewed_content_hashes](uint32_t x) {
+                  return viewed_content_hashes.contains(x);
+                });
   most_recent_viewed_content_hashes.insert(
       most_recent_viewed_content_hashes.end(),
       stream_metadata.viewed_content_hashes().begin(),
@@ -1823,12 +1800,13 @@ void FeedStream::CheckDuplicatedContentsOnRefresh() {
       if (pos < 10 &&
           most_recent_content_hashes.contains(hash_list.hashes(0))) {
         duplicate_count_for_top_10++;
-        if (pos == 0)
+        if (pos == 0) {
           is_duplicated_at_pos_1 = true;
-        else if (pos == 1)
+        } else if (pos == 1) {
           is_duplicated_at_pos_2 = true;
-        else if (pos == 2)
+        } else if (pos == 2) {
           is_duplicated_at_pos_3 = true;
+        }
       }
 
       for (uint32_t hash : hash_list.hashes()) {

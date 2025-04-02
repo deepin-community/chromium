@@ -10,6 +10,7 @@
 
 #include <string>
 
+#include "base/containers/span.h"
 #include "base/trace_event/trace_event.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context.h"
@@ -17,17 +18,14 @@
 #include "ui/gl/gl_enums.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_version_info.h"
+#include "ui/gl/startup_trace.h"
 
 namespace gl {
 
-DriverEGL g_driver_egl;  // Exists in .bss
+DriverEGL g_driver_egl = {};
 
 void DriverEGL::InitializeStaticBindings() {
-  // Ensure struct has been zero-initialized.
-  char* this_bytes = reinterpret_cast<char*>(this);
-  DCHECK(this_bytes[0] == 0);
-  DCHECK(memcmp(this_bytes, this_bytes + 1, sizeof(*this) - 1) == 0);
-
+  GPU_STARTUP_TRACE_EVENT("DriverEGL::InitializeStaticBindings");
   fn.eglAcquireExternalContextANGLEFn =
       reinterpret_cast<eglAcquireExternalContextANGLEProc>(
           GetGLProcAddress("eglAcquireExternalContextANGLE"));
@@ -158,6 +156,8 @@ void DriverEGL::InitializeStaticBindings() {
       reinterpret_cast<eglInitializeProc>(GetGLProcAddress("eglInitialize"));
   fn.eglLabelObjectKHRFn = reinterpret_cast<eglLabelObjectKHRProc>(
       GetGLProcAddress("eglLabelObjectKHR"));
+  fn.eglLockVulkanQueueANGLEFn = reinterpret_cast<eglLockVulkanQueueANGLEProc>(
+      GetGLProcAddress("eglLockVulkanQueueANGLE"));
   fn.eglMakeCurrentFn =
       reinterpret_cast<eglMakeCurrentProc>(GetGLProcAddress("eglMakeCurrent"));
   fn.eglPostSubBufferNVFn = reinterpret_cast<eglPostSubBufferNVProc>(
@@ -215,6 +215,9 @@ void DriverEGL::InitializeStaticBindings() {
   fn.eglSetBlobCacheFuncsANDROIDFn =
       reinterpret_cast<eglSetBlobCacheFuncsANDROIDProc>(
           GetGLProcAddress("eglSetBlobCacheFuncsANDROID"));
+  fn.eglSetValidationEnabledANGLEFn =
+      reinterpret_cast<eglSetValidationEnabledANGLEProc>(
+          GetGLProcAddress("eglSetValidationEnabledANGLE"));
   fn.eglStreamAttribKHRFn = reinterpret_cast<eglStreamAttribKHRProc>(
       GetGLProcAddress("eglStreamAttribKHR"));
   fn.eglStreamConsumerAcquireKHRFn =
@@ -243,6 +246,9 @@ void DriverEGL::InitializeStaticBindings() {
       GetGLProcAddress("eglSwapInterval"));
   fn.eglTerminateFn =
       reinterpret_cast<eglTerminateProc>(GetGLProcAddress("eglTerminate"));
+  fn.eglUnlockVulkanQueueANGLEFn =
+      reinterpret_cast<eglUnlockVulkanQueueANGLEProc>(
+          GetGLProcAddress("eglUnlockVulkanQueueANGLE"));
   fn.eglWaitClientFn =
       reinterpret_cast<eglWaitClientProc>(GetGLProcAddress("eglWaitClient"));
   fn.eglWaitGLFn =
@@ -259,6 +265,7 @@ void DriverEGL::InitializeStaticBindings() {
 }
 
 void ClientExtensionsEGL::InitializeClientExtensionSettings() {
+  GPU_STARTUP_TRACE_EVENT("DriverEGL::InitializeClientExtensionSettings");
   std::string client_extensions(GetClientExtensions());
   [[maybe_unused]] gfx::ExtensionSet extensions(
       gfx::MakeExtensionSet(client_extensions));
@@ -267,6 +274,7 @@ void ClientExtensionsEGL::InitializeClientExtensionSettings() {
       gfx::HasExtension(extensions, "EGL_ANGLE_display_power_preference");
   b_EGL_ANGLE_feature_control =
       gfx::HasExtension(extensions, "EGL_ANGLE_feature_control");
+  b_EGL_ANGLE_no_error = gfx::HasExtension(extensions, "EGL_ANGLE_no_error");
   b_EGL_ANGLE_platform_angle =
       gfx::HasExtension(extensions, "EGL_ANGLE_platform_angle");
   b_EGL_ANGLE_platform_angle_d3d =
@@ -298,6 +306,7 @@ void ClientExtensionsEGL::InitializeClientExtensionSettings() {
 }
 
 void DisplayExtensionsEGL::InitializeExtensionSettings(EGLDisplay display) {
+  GPU_STARTUP_TRACE_EVENT("DriverEGL::InitializeExtensionSettings");
   std::string platform_extensions(GetPlatformExtensions(display));
   [[maybe_unused]] gfx::ExtensionSet extensions(
       gfx::MakeExtensionSet(platform_extensions));
@@ -324,6 +333,8 @@ void DisplayExtensionsEGL::InitializeExtensionSettings(EGLDisplay display) {
       extensions, "EGL_ANGLE_create_context_webgl_compatibility");
   b_EGL_ANGLE_d3d_share_handle_client_buffer =
       gfx::HasExtension(extensions, "EGL_ANGLE_d3d_share_handle_client_buffer");
+  b_EGL_ANGLE_device_vulkan =
+      gfx::HasExtension(extensions, "EGL_ANGLE_device_vulkan");
   b_EGL_ANGLE_display_semaphore_share_group =
       gfx::HasExtension(extensions, "EGL_ANGLE_display_semaphore_share_group");
   b_EGL_ANGLE_display_texture_share_group =
@@ -338,6 +349,7 @@ void DisplayExtensionsEGL::InitializeExtensionSettings(EGLDisplay display) {
       gfx::HasExtension(extensions, "EGL_ANGLE_keyed_mutex");
   b_EGL_ANGLE_metal_shared_event_sync =
       gfx::HasExtension(extensions, "EGL_ANGLE_metal_shared_event_sync");
+  b_EGL_ANGLE_no_error = gfx::HasExtension(extensions, "EGL_ANGLE_no_error");
   b_EGL_ANGLE_power_preference =
       gfx::HasExtension(extensions, "EGL_ANGLE_power_preference");
   b_EGL_ANGLE_query_surface_pointer =
@@ -416,7 +428,7 @@ void DisplayExtensionsEGL::InitializeExtensionSettings(EGLDisplay display) {
 }
 
 void DriverEGL::ClearBindings() {
-  memset(this, 0, sizeof(*this));
+  *this = {};
 }
 
 void EGLApiBase::eglAcquireExternalContextANGLEFn(EGLDisplay dpy,
@@ -776,6 +788,10 @@ EGLint EGLApiBase::eglLabelObjectKHRFn(EGLDisplay display,
   return driver_->fn.eglLabelObjectKHRFn(display, objectType, object, label);
 }
 
+void EGLApiBase::eglLockVulkanQueueANGLEFn(EGLDisplay dpy) {
+  driver_->fn.eglLockVulkanQueueANGLEFn(dpy);
+}
+
 EGLBoolean EGLApiBase::eglMakeCurrentFn(EGLDisplay dpy,
                                         EGLSurface draw,
                                         EGLSurface read,
@@ -922,6 +938,10 @@ void EGLApiBase::eglSetBlobCacheFuncsANDROIDFn(EGLDisplay dpy,
   driver_->fn.eglSetBlobCacheFuncsANDROIDFn(dpy, set, get);
 }
 
+void EGLApiBase::eglSetValidationEnabledANGLEFn(EGLBoolean validationState) {
+  driver_->fn.eglSetValidationEnabledANGLEFn(validationState);
+}
+
 EGLBoolean EGLApiBase::eglStreamAttribKHRFn(EGLDisplay dpy,
                                             EGLStreamKHR stream,
                                             EGLenum attribute,
@@ -987,6 +1007,10 @@ EGLBoolean EGLApiBase::eglSwapIntervalFn(EGLDisplay dpy, EGLint interval) {
 
 EGLBoolean EGLApiBase::eglTerminateFn(EGLDisplay dpy) {
   return driver_->fn.eglTerminateFn(dpy);
+}
+
+void EGLApiBase::eglUnlockVulkanQueueANGLEFn(EGLDisplay dpy) {
+  driver_->fn.eglUnlockVulkanQueueANGLEFn(dpy);
 }
 
 EGLBoolean EGLApiBase::eglWaitClientFn(void) {
@@ -1445,6 +1469,11 @@ EGLint TraceEGLApi::eglLabelObjectKHRFn(EGLDisplay display,
   return egl_api_->eglLabelObjectKHRFn(display, objectType, object, label);
 }
 
+void TraceEGLApi::eglLockVulkanQueueANGLEFn(EGLDisplay dpy) {
+  TRACE_EVENT_BINARY_EFFICIENT0("gpu", "TraceEGLAPI::eglLockVulkanQueueANGLE");
+  egl_api_->eglLockVulkanQueueANGLEFn(dpy);
+}
+
 EGLBoolean TraceEGLApi::eglMakeCurrentFn(EGLDisplay dpy,
                                          EGLSurface draw,
                                          EGLSurface read,
@@ -1623,6 +1652,12 @@ void TraceEGLApi::eglSetBlobCacheFuncsANDROIDFn(EGLDisplay dpy,
   egl_api_->eglSetBlobCacheFuncsANDROIDFn(dpy, set, get);
 }
 
+void TraceEGLApi::eglSetValidationEnabledANGLEFn(EGLBoolean validationState) {
+  TRACE_EVENT_BINARY_EFFICIENT0("gpu",
+                                "TraceEGLAPI::eglSetValidationEnabledANGLE");
+  egl_api_->eglSetValidationEnabledANGLEFn(validationState);
+}
+
 EGLBoolean TraceEGLApi::eglStreamAttribKHRFn(EGLDisplay dpy,
                                              EGLStreamKHR stream,
                                              EGLenum attribute,
@@ -1704,6 +1739,12 @@ EGLBoolean TraceEGLApi::eglSwapIntervalFn(EGLDisplay dpy, EGLint interval) {
 EGLBoolean TraceEGLApi::eglTerminateFn(EGLDisplay dpy) {
   TRACE_EVENT_BINARY_EFFICIENT0("gpu", "TraceEGLAPI::eglTerminate");
   return egl_api_->eglTerminateFn(dpy);
+}
+
+void TraceEGLApi::eglUnlockVulkanQueueANGLEFn(EGLDisplay dpy) {
+  TRACE_EVENT_BINARY_EFFICIENT0("gpu",
+                                "TraceEGLAPI::eglUnlockVulkanQueueANGLE");
+  egl_api_->eglUnlockVulkanQueueANGLEFn(dpy);
 }
 
 EGLBoolean TraceEGLApi::eglWaitClientFn(void) {
@@ -2364,6 +2405,11 @@ EGLint LogEGLApi::eglLabelObjectKHRFn(EGLDisplay display,
   return result;
 }
 
+void LogEGLApi::eglLockVulkanQueueANGLEFn(EGLDisplay dpy) {
+  GL_SERVICE_LOG("eglLockVulkanQueueANGLE" << "(" << dpy << ")");
+  egl_api_->eglLockVulkanQueueANGLEFn(dpy);
+}
+
 EGLBoolean LogEGLApi::eglMakeCurrentFn(EGLDisplay dpy,
                                        EGLSurface draw,
                                        EGLSurface read,
@@ -2619,6 +2665,12 @@ void LogEGLApi::eglSetBlobCacheFuncsANDROIDFn(EGLDisplay dpy,
   egl_api_->eglSetBlobCacheFuncsANDROIDFn(dpy, set, get);
 }
 
+void LogEGLApi::eglSetValidationEnabledANGLEFn(EGLBoolean validationState) {
+  GL_SERVICE_LOG("eglSetValidationEnabledANGLE" << "(" << validationState
+                                                << ")");
+  egl_api_->eglSetValidationEnabledANGLEFn(validationState);
+}
+
 EGLBoolean LogEGLApi::eglStreamAttribKHRFn(EGLDisplay dpy,
                                            EGLStreamKHR stream,
                                            EGLenum attribute,
@@ -2732,6 +2784,11 @@ EGLBoolean LogEGLApi::eglTerminateFn(EGLDisplay dpy) {
   EGLBoolean result = egl_api_->eglTerminateFn(dpy);
   GL_SERVICE_LOG("GL_RESULT: " << result);
   return result;
+}
+
+void LogEGLApi::eglUnlockVulkanQueueANGLEFn(EGLDisplay dpy) {
+  GL_SERVICE_LOG("eglUnlockVulkanQueueANGLE" << "(" << dpy << ")");
+  egl_api_->eglUnlockVulkanQueueANGLEFn(dpy);
 }
 
 EGLBoolean LogEGLApi::eglWaitClientFn(void) {

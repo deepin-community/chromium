@@ -18,14 +18,17 @@ bool FixedArrayBase::IsCowArray() const {
   return map() == GetReadOnlyRoots().fixed_cow_array_map();
 }
 
-Handle<FixedArray> FixedArray::SetAndGrow(Isolate* isolate,
-                                          Handle<FixedArray> array, int index,
-                                          Handle<Object> value) {
+template <template <typename> typename HandleType>
+  requires(
+      std::is_convertible_v<HandleType<FixedArray>, DirectHandle<FixedArray>>)
+HandleType<FixedArray> FixedArray::SetAndGrow(Isolate* isolate,
+                                              HandleType<FixedArray> array,
+                                              int index,
+                                              DirectHandle<Object> value) {
   int len = array->length();
   if (index >= len) {
     int new_capacity = FixedArray::NewCapacityForIndex(index, len);
-    array = Handle<FixedArray>::cast(
-        FixedArray::Resize(isolate, array, new_capacity));
+    array = Cast<FixedArray>(FixedArray::Resize(isolate, array, new_capacity));
     // TODO(jgruber): This is somewhat subtle - other FixedArray methods
     // use `undefined` as a filler. Make this more explicit.
     array->FillWithHoles(len, new_capacity);
@@ -35,20 +38,36 @@ Handle<FixedArray> FixedArray::SetAndGrow(Isolate* isolate,
   return array;
 }
 
+template DirectHandle<FixedArray> FixedArray::SetAndGrow(
+    Isolate* isolate, DirectHandle<FixedArray> array, int index,
+    DirectHandle<Object> value);
+template IndirectHandle<FixedArray> FixedArray::SetAndGrow(
+    Isolate* isolate, IndirectHandle<FixedArray> array, int index,
+    DirectHandle<Object> value);
+
 void FixedArray::RightTrim(Isolate* isolate, int new_capacity) {
   DCHECK_NE(map(), ReadOnlyRoots{isolate}.fixed_cow_array_map());
   Super::RightTrim(isolate, new_capacity);
 }
 
-Handle<FixedArray> FixedArray::RightTrimOrEmpty(Isolate* isolate,
-                                                Handle<FixedArray> array,
-                                                int new_length) {
+template <template <typename> typename HandleType>
+  requires(
+      std::is_convertible_v<HandleType<FixedArray>, DirectHandle<FixedArray>>)
+HandleType<FixedArray> FixedArray::RightTrimOrEmpty(
+    Isolate* isolate, HandleType<FixedArray> array, int new_length) {
   if (new_length == 0) {
-    return ReadOnlyRoots{isolate}.empty_fixed_array_handle();
+    return isolate->factory()->empty_fixed_array();
   }
   array->RightTrim(isolate, new_length);
   return array;
 }
+
+template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
+    DirectHandle<FixedArray> FixedArray::RightTrimOrEmpty(
+        Isolate* isolate, DirectHandle<FixedArray> array, int new_length);
+template EXPORT_TEMPLATE_DEFINE(V8_EXPORT_PRIVATE)
+    IndirectHandle<FixedArray> FixedArray::RightTrimOrEmpty(
+        Isolate* isolate, IndirectHandle<FixedArray> array, int new_length);
 
 // static
 Handle<ArrayList> ArrayList::Add(Isolate* isolate, Handle<ArrayList> array,
@@ -66,7 +85,7 @@ Handle<ArrayList> ArrayList::Add(Isolate* isolate, Handle<ArrayList> array,
 
 // static
 Handle<ArrayList> ArrayList::Add(Isolate* isolate, Handle<ArrayList> array,
-                                 Handle<Object> obj,
+                                 DirectHandle<Object> obj,
                                  AllocationType allocation) {
   int length = array->length();
   int new_length = length + 1;
@@ -81,7 +100,8 @@ Handle<ArrayList> ArrayList::Add(Isolate* isolate, Handle<ArrayList> array,
 
 // static
 Handle<ArrayList> ArrayList::Add(Isolate* isolate, Handle<ArrayList> array,
-                                 Handle<Object> obj0, Handle<Object> obj1,
+                                 DirectHandle<Object> obj0,
+                                 DirectHandle<Object> obj1,
                                  AllocationType allocation) {
   int length = array->length();
   int new_length = length + 2;
@@ -96,13 +116,14 @@ Handle<ArrayList> ArrayList::Add(Isolate* isolate, Handle<ArrayList> array,
 }
 
 // static
-Handle<FixedArray> ArrayList::ToFixedArray(Isolate* isolate,
-                                           Handle<ArrayList> array,
-                                           AllocationType allocation) {
+DirectHandle<FixedArray> ArrayList::ToFixedArray(Isolate* isolate,
+                                                 DirectHandle<ArrayList> array,
+                                                 AllocationType allocation) {
   int length = array->length();
   if (length == 0) return isolate->factory()->empty_fixed_array();
 
-  Handle<FixedArray> result = FixedArray::New(isolate, length, allocation);
+  DirectHandle<FixedArray> result =
+      FixedArray::New(isolate, length, allocation);
   DisallowGarbageCollection no_gc;
   WriteBarrierMode mode = result->GetWriteBarrierMode(no_gc);
   ObjectSlot dst_slot(result->RawFieldOfElementAt(0));
@@ -139,7 +160,7 @@ Handle<ArrayList> ArrayList::EnsureSpace(Isolate* isolate,
 // static
 Handle<WeakArrayList> WeakArrayList::AddToEnd(Isolate* isolate,
                                               Handle<WeakArrayList> array,
-                                              MaybeObjectHandle value) {
+                                              MaybeObjectDirectHandle value) {
   int length = array->length();
   array = EnsureSpace(isolate, array, length + 1);
   {
@@ -155,7 +176,7 @@ Handle<WeakArrayList> WeakArrayList::AddToEnd(Isolate* isolate,
 
 Handle<WeakArrayList> WeakArrayList::AddToEnd(Isolate* isolate,
                                               Handle<WeakArrayList> array,
-                                              MaybeObjectHandle value1,
+                                              MaybeObjectDirectHandle value1,
                                               Tagged<Smi> value2) {
   int length = array->length();
   array = EnsureSpace(isolate, array, length + 2);
@@ -174,7 +195,7 @@ Handle<WeakArrayList> WeakArrayList::AddToEnd(Isolate* isolate,
 // static
 Handle<WeakArrayList> WeakArrayList::Append(Isolate* isolate,
                                             Handle<WeakArrayList> array,
-                                            MaybeObjectHandle value,
+                                            MaybeObjectDirectHandle value,
                                             AllocationType allocation) {
   int length = 0;
   int new_length = 0;
@@ -228,9 +249,9 @@ void WeakArrayList::Compact(Isolate* isolate) {
   int new_length = 0;
 
   for (int i = 0; i < length; i++) {
-    MaybeObject value = Get(isolate, i);
+    Tagged<MaybeObject> value = Get(isolate, i);
 
-    if (!value->IsCleared()) {
+    if (!value.IsCleared()) {
       if (new_length != i) {
         Set(new_length, value);
       }
@@ -260,7 +281,7 @@ Handle<WeakArrayList> WeakArrayList::EnsureSpace(Isolate* isolate,
 int WeakArrayList::CountLiveWeakReferences() const {
   int live_weak_references = 0;
   for (int i = 0; i < length(); i++) {
-    if (Get(i)->IsWeak()) {
+    if (Get(i).IsWeak()) {
       ++live_weak_references;
     }
   }
@@ -270,14 +291,14 @@ int WeakArrayList::CountLiveWeakReferences() const {
 int WeakArrayList::CountLiveElements() const {
   int non_cleared_objects = 0;
   for (int i = 0; i < length(); i++) {
-    if (!Get(i)->IsCleared()) {
+    if (!Get(i).IsCleared()) {
       ++non_cleared_objects;
     }
   }
   return non_cleared_objects;
 }
 
-bool WeakArrayList::RemoveOne(MaybeObjectHandle value) {
+bool WeakArrayList::RemoveOne(MaybeObjectDirectHandle value) {
   int last_index = length() - 1;
   // Optimize for the most recently added element to be removed again.
   for (int i = last_index; i >= 0; --i) {
@@ -285,14 +306,14 @@ bool WeakArrayList::RemoveOne(MaybeObjectHandle value) {
     // Move the last element into this slot (or no-op, if this is the last
     // slot).
     Set(i, Get(last_index));
-    Set(last_index, HeapObjectReference::ClearedValue(GetIsolate()));
+    Set(last_index, ClearedValue(GetIsolate()));
     set_length(last_index);
     return true;
   }
   return false;
 }
 
-bool WeakArrayList::Contains(MaybeObject value) {
+bool WeakArrayList::Contains(Tagged<MaybeObject> value) {
   for (int i = 0; i < length(); ++i) {
     if (Get(i) == value) return true;
   }

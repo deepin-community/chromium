@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
-#include "base/ranges/algorithm.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/task_environment.h"
@@ -111,7 +112,7 @@ class PredictionModelStoreBrowserTestBase : public InProcessBrowserTest {
   }
 
   void SetUpCommandLine(base::CommandLine* cmd) override {
-    cmd->AppendSwitch(switches::kDisableCheckingUserPermissionsForTesting);
+    cmd->AppendSwitch(switches::kGoogleApiKeyConfigurationCheckOverride);
     cmd->AppendSwitchASCII(
         switches::kOptimizationGuideServiceGetModelsURL,
         models_server_
@@ -204,7 +205,7 @@ class PredictionModelStoreBrowserTestBase : public InProcessBrowserTest {
     EXPECT_EQ(request.method, net::test_server::METHOD_POST);
     EXPECT_TRUE(get_models_request.ParseFromString(request.content));
     response->set_code(net::HTTP_OK);
-    if (!base::ranges::any_of(
+    if (!std::ranges::any_of(
             get_models_request.requested_models(),
             [](const proto::ModelInfo& model_info) {
               return model_info.optimization_target() ==
@@ -251,7 +252,15 @@ class PredictionModelStoreBrowserTest
       const PredictionModelStoreBrowserTest&) = delete;
 };
 
-IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest, TestRegularProfile) {
+// TODO(crbug.com/329617221): Test is flaky on Win, Linux, and Mac ASan bots.
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || \
+    (BUILDFLAG(IS_MAC) && defined(ADDRESS_SANITIZER))
+#define MAYBE_TestRegularProfile DISABLED_TestRegularProfile
+#else
+#define MAYBE_TestRegularProfile TestRegularProfile
+#endif
+IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest,
+                       MAYBE_TestRegularProfile) {
   ModelFileObserver model_file_observer;
   RegisterAndWaitForModelUpdate(&model_file_observer);
   EXPECT_EQ(model_file_observer.optimization_target(),
@@ -271,7 +280,7 @@ IN_PROC_BROWSER_TEST_F(PredictionModelStoreBrowserTest, TestRegularProfile) {
       kSuccessfulModelVersion, 1);
 }
 
-// TODO(crbug.com/1517460): Re-enable this test
+// TODO(crbug.com/41490438): Re-enable this test
 #if BUILDFLAG(IS_CHROMEOS) && defined(ADDRESS_SANITIZER)
 #define MAYBE_TestIncognitoProfile DISABLED_TestIncognitoProfile
 #else

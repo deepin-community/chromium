@@ -80,6 +80,21 @@ CONNECTED_FLOW_TABLE = Table(
     ],
     parent=FLOW_TABLE)
 
+ARGS_WITH_DEFAULTS_TABLE = Table(
+    python_module=__file__,
+    class_name='WinscopeArgsWithDefaultsTable',
+    sql_name='__intrinsic_winscope_proto_to_args_with_defaults',
+    columns=[
+        C("table_name", CppString(), flags=ColumnFlag.HIDDEN),
+        C('base64_proto_id', CppUint32()),
+        C('flat_key', CppString()),
+        C('key', CppString()),
+        C('int_value', CppOptional(CppInt64())),
+        C('string_value', CppOptional(CppString())),
+        C('real_value', CppOptional(CppDouble())),
+        C('value_type', CppString()),
+    ])
+
 DESCENDANT_SLICE_TABLE = Table(
     python_module=__file__,
     class_name="DescendantSliceTable",
@@ -110,25 +125,6 @@ EXPERIMENTAL_ANNOTATED_CALLSTACK_TABLE = Table(
     ],
     parent=STACK_PROFILE_CALLSITE_TABLE)
 
-EXPERIMENTAL_COUNTER_DUR_TABLE = Table(
-    python_module=__file__,
-    class_name="ExperimentalCounterDurTable",
-    sql_name="experimental_counter_dur",
-    columns=[
-        C("dur", CppInt64()),
-        C("delta", CppDouble()),
-    ],
-    parent=COUNTER_TABLE)
-
-EXPERIMENTAL_SCHED_UPID_TABLE = Table(
-    python_module=__file__,
-    class_name="ExperimentalSchedUpidTable",
-    sql_name="experimental_sched_upid",
-    columns=[
-        C("upid", CppOptional(CppTableId(PROCESS_TABLE))),
-    ],
-    parent=SCHED_SLICE_TABLE)
-
 EXPERIMENTAL_SLICE_LAYOUT_TABLE = Table(
     python_module=__file__,
     class_name="ExperimentalSliceLayoutTable",
@@ -139,34 +135,27 @@ EXPERIMENTAL_SLICE_LAYOUT_TABLE = Table(
     ],
     parent=SLICE_TABLE)
 
-DOMINATOR_TREE_TABLE = Table(
+DFS_WEIGHT_BOUNDED_TABLE = Table(
     python_module=__file__,
-    class_name="DominatorTreeTable",
-    sql_name="__intrinsic_dominator_tree",
+    class_name="DfsWeightBoundedTable",
+    sql_name="__intrinsic_dfs_weight_bounded",
     columns=[
-        C("node_id", CppUint32()),
-        C("dominator_node_id", CppOptional(CppUint32())),
-        C("in_source_node_ids",
-          CppOptional(CppString()),
-          flags=ColumnFlag.HIDDEN),
-        C("in_dest_node_ids", CppOptional(CppString()),
-          flags=ColumnFlag.HIDDEN),
-        C("in_root_node_id", CppOptional(CppUint32()), flags=ColumnFlag.HIDDEN),
-    ])
-
-DFS_TABLE = Table(
-    python_module=__file__,
-    class_name="DfsTable",
-    sql_name="__intrinsic_dfs",
-    columns=[
+        C("root_node_id", CppUint32()),
         C("node_id", CppUint32()),
         C("parent_node_id", CppOptional(CppUint32())),
         C("in_source_node_ids",
-          CppOptional(CppString()),
+          CppOptional(CppUint32()),
           flags=ColumnFlag.HIDDEN),
-        C("in_dest_node_ids", CppOptional(CppString()),
+        C("in_dest_node_ids", CppOptional(CppUint32()),
           flags=ColumnFlag.HIDDEN),
-        C("in_start_node_id", CppOptional(CppUint32()),
+        C("in_edge_weights", CppOptional(CppUint32()), flags=ColumnFlag.HIDDEN),
+        C("in_root_node_ids", CppOptional(CppUint32()),
+          flags=ColumnFlag.HIDDEN),
+        C("in_root_max_weights",
+          CppOptional(CppUint32()),
+          flags=ColumnFlag.HIDDEN),
+        C("in_is_target_weight_floor",
+          CppOptional(CppUint32()),
           flags=ColumnFlag.HIDDEN),
     ])
 
@@ -176,13 +165,11 @@ ALL_TABLES = [
     ANCESTOR_SLICE_TABLE,
     ANCESTOR_STACK_PROFILE_CALLSITE_TABLE,
     CONNECTED_FLOW_TABLE,
+    ARGS_WITH_DEFAULTS_TABLE,
     DESCENDANT_SLICE_BY_STACK_TABLE,
     DESCENDANT_SLICE_TABLE,
-    DFS_TABLE,
-    DOMINATOR_TREE_TABLE,
+    DFS_WEIGHT_BOUNDED_TABLE,
     EXPERIMENTAL_ANNOTATED_CALLSTACK_TABLE,
-    EXPERIMENTAL_COUNTER_DUR_TABLE,
-    EXPERIMENTAL_SCHED_UPID_TABLE,
     EXPERIMENTAL_SLICE_LAYOUT_TABLE,
     TABLE_INFO_TABLE,
 ]

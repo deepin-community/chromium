@@ -32,13 +32,14 @@ bool XzExtractor::IsXzFile(const base::FilePath& image_path) {
                                       base::File::FLAG_READ |
                                       base::File::FLAG_WIN_EXCLUSIVE_WRITE |
                                       base::File::FLAG_WIN_SHARE_DELETE);
-  if (!src_file.IsValid())
+  if (!src_file.IsValid()) {
     return false;
+  }
 
   constexpr size_t kExpectedSize = sizeof(kExpectedMagic);
   uint8_t actual_magic[kExpectedSize] = {};
   return src_file.ReadAtCurrentPosAndCheck(actual_magic) &&
-         base::ranges::equal(kExpectedMagic, actual_magic);
+         std::ranges::equal(kExpectedMagic, actual_magic);
 }
 
 // static

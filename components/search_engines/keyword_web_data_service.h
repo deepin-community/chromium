@@ -29,19 +29,12 @@ struct WDKeywordsResult {
   ~WDKeywordsResult();
 
   KeywordTable::Keywords keywords;
-  // Identifies the ID of the TemplateURL that is the default search. A value of
-  // 0 indicates there is no default search provider.
-  int64_t default_search_provider_id = 0;
 
   // Context qualifying the built-in keywords and starter pack engines data.
   struct Metadata {
     // Version number of the most recent prepopulate data that has been merged
     // into the current keyword data.
     int builtin_keyword_data_version = 0;
-
-    // Version number of Chrome milestone when the keyword data has been last
-    // merged into the database.
-    int builtin_keyword_milestone = 0;
 
     // Country associated with the keywords data, stored as a country ID,
     // see `country_codes::CountryStringToCountryID()`.
@@ -53,8 +46,7 @@ struct WDKeywordsResult {
 
     // Whether any metadata associated with the keywords bundle is set.
     bool HasBuiltinKeywordData() const {
-      return builtin_keyword_data_version != 0 ||
-             builtin_keyword_milestone != 0 || builtin_keyword_country != 0;
+      return builtin_keyword_data_version != 0 || builtin_keyword_country != 0;
     }
 
     // Whether any metadata associated with the starter pack bundle is set.
@@ -112,14 +104,12 @@ class KeywordWebDataService : public WebDataServiceBase {
   // On success, consumer is notified with WDResult<KeywordTable::Keywords>.
   Handle GetKeywords(WebDataServiceConsumer* consumer);
 
-  // Sets the ID of the default search provider.
-  void SetDefaultSearchProviderID(TemplateURLID id);
-
   // Sets the version of the builtin keyword data.
   void SetBuiltinKeywordDataVersion(int version);
 
-  // Sets the Chrome milestone associated with the builtin keyword data.
-  void SetBuiltinKeywordMilestone(int milestone_version);
+  // Clears the Chrome milestone associated with the builtin keyword data. Used
+  // for cleanup.
+  void ClearBuiltinKeywordMilestone();
 
   // Sets the country ID associated with the builtin keyword data.
   void SetBuiltinKeywordCountry(int country_id);

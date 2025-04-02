@@ -125,7 +125,7 @@ bool ParseAttributes(
       parsed->rel = rel.value();
       is_rel_set = true;
     } else if (name == "as") {
-      // TODO(crbug.com/1182567): Make sure ignoring second and subsequent ones
+      // TODO(crbug.com/40170852): Make sure ignoring second and subsequent ones
       // is a reasonable behavior.
       if (parsed->as != mojom::LinkAsAttribute::kUnspecified)
         continue;
@@ -134,7 +134,7 @@ bool ParseAttributes(
         return false;
       parsed->as = as.value();
     } else if (name == "crossorigin") {
-      // TODO(crbug.com/1182567): Make sure ignoring second and subsequent ones
+      // TODO(crbug.com/40170852): Make sure ignoring second and subsequent ones
       // is a reasonable behavior.
       if (parsed->cross_origin != mojom::CrossOriginAttribute::kUnspecified)
         continue;
@@ -144,7 +144,7 @@ bool ParseAttributes(
         return false;
       parsed->cross_origin = cross_origin.value();
     } else if (name == "type") {
-      // TODO(crbug.com/1182567): Make sure ignoring second and subsequent ones
+      // TODO(crbug.com/40170852): Make sure ignoring second and subsequent ones
       // is a reasonable behavior.
       if (parsed->mime_type.has_value())
         continue;
@@ -152,7 +152,7 @@ bool ParseAttributes(
         return false;
       parsed->mime_type = attr.second.value();
     } else if (name == "fetchpriority") {
-      // TODO(crbug.com/1182567): Make sure ignoring second and subsequent ones
+      // TODO(crbug.com/40170852): Make sure ignoring second and subsequent ones
       // is a reasonable behavior.
       if (parsed->fetch_priority != mojom::FetchPriorityAttribute::kAuto) {
         continue;
@@ -179,8 +179,8 @@ std::vector<mojom::LinkHeaderPtr> ParseLinkHeaders(
     const net::HttpResponseHeaders& headers,
     const GURL& base_url) {
   std::vector<mojom::LinkHeaderPtr> parsed_headers;
-  std::string link_header;
-  headers.GetNormalizedHeader("link", &link_header);
+  std::string link_header =
+      headers.GetNormalizedHeader("link").value_or(std::string());
   for (const auto& pair : link_header_util::SplitLinkHeader(link_header)) {
     std::string url;
     std::unordered_map<std::string, std::optional<std::string>> attrs;

@@ -40,12 +40,12 @@
 #include "src/tint/utils/containers/vector.h"
 #include "src/tint/utils/diagnostic/diagnostic.h"
 #include "src/tint/utils/diagnostic/source.h"
+#include "src/tint/utils/generation_id.h"
 #include "src/tint/utils/ice/ice.h"
-#include "src/tint/utils/id/generation_id.h"
 #include "src/tint/utils/macros/compiler.h"
 #include "src/tint/utils/rtti/castable.h"
+#include "src/tint/utils/rtti/traits.h"
 #include "src/tint/utils/symbol/symbol.h"
-#include "src/tint/utils/traits/traits.h"
 
 // Forward declarations
 namespace tint::ast {
@@ -127,9 +127,7 @@ class CloneContext {
     ast::Type Clone(const ast::Type& ty);
 
     /// Clones the Source `s` into #dst
-    /// TODO(bclayton) - Currently this 'clone' is a shallow copy. If/when
-    /// `Source.File`s are owned by the Program this should make a copy of the
-    /// file.
+    /// @note this 'clone' is a shallow copy.
     /// @param s the `Source` to clone
     /// @return the cloned source
     Source Clone(const Source& s) const { return s; }
@@ -291,7 +289,7 @@ class CloneContext {
         for (auto& transform : transforms_) {
             bool already_registered = transform.typeinfo->Is(&tint::TypeInfo::Of<T>()) ||
                                       tint::TypeInfo::Of<T>().Is(transform.typeinfo);
-            if (TINT_UNLIKELY(already_registered)) {
+            if (DAWN_UNLIKELY(already_registered)) {
                 TINT_ICE() << "ReplaceAll() called with a handler for type "
                            << TypeInfo::Of<T>().name
                            << " that is already handled by a handler for type "
@@ -316,10 +314,9 @@ class CloneContext {
     /// register a SymbolTransform more than once will result in an ICE.
     /// @returns this CloneContext so calls can be chained
     CloneContext& ReplaceAll(const SymbolTransform& replacer) {
-        if (TINT_UNLIKELY(symbol_transform_)) {
+        if (DAWN_UNLIKELY(symbol_transform_)) {
             TINT_ICE() << "ReplaceAll(const SymbolTransform&) called multiple times on the same "
                           "CloneContext";
-            return *this;
         }
         symbol_transform_ = replacer;
         return *this;
@@ -373,7 +370,7 @@ class CloneContext {
     template <typename T, size_t N, typename OBJECT>
     CloneContext& Remove(const Vector<T, N>& vector, OBJECT* object) {
         TINT_ASSERT_GENERATION_IDS_EQUAL_IF_VALID(src_id, object);
-        if (TINT_UNLIKELY((std::find(vector.begin(), vector.end(), object) == vector.end()))) {
+        if (DAWN_UNLIKELY((std::find(vector.begin(), vector.end(), object) == vector.end()))) {
             TINT_ICE() << "CloneContext::Remove() vector does not contain object";
             return *this;
         }
@@ -439,7 +436,7 @@ class CloneContext {
                                const OBJECT* object) {
         TINT_ASSERT_GENERATION_IDS_EQUAL_IF_VALID(src_id, before);
         TINT_ASSERT_GENERATION_IDS_EQUAL_IF_VALID(dst, object);
-        if (TINT_UNLIKELY((std::find(vector.begin(), vector.end(), before) == vector.end()))) {
+        if (DAWN_UNLIKELY((std::find(vector.begin(), vector.end(), before) == vector.end()))) {
             TINT_ICE() << "CloneContext::InsertBefore() vector does not contain before";
             return *this;
         }
@@ -480,7 +477,7 @@ class CloneContext {
                               const OBJECT* object) {
         TINT_ASSERT_GENERATION_IDS_EQUAL_IF_VALID(src_id, after);
         TINT_ASSERT_GENERATION_IDS_EQUAL_IF_VALID(dst, object);
-        if (TINT_UNLIKELY((std::find(vector.begin(), vector.end(), after) == vector.end()))) {
+        if (DAWN_UNLIKELY((std::find(vector.begin(), vector.end(), after) == vector.end()))) {
             TINT_ICE() << "CloneContext::InsertAfter() vector does not contain after";
             return *this;
         }
@@ -566,20 +563,18 @@ class CloneContext {
             return nullptr;
         }
         const TO* cast = obj->template As<TO>();
-        if (TINT_LIKELY(cast)) {
+        if (DAWN_LIKELY(cast)) {
             return cast;
         }
         CheckedCastFailure(obj, tint::TypeInfo::Of<TO>());
-        return nullptr;
     }
 
     /// Clones a Node object, using any replacements or transforms that have
     /// been configured.
     const ast::Node* CloneNode(const ast::Node* object);
 
-    /// Adds an error diagnostic to Diagnostics() that the cloned object was not
-    /// of the expected type.
-    void CheckedCastFailure(const ast::Node* got, const TypeInfo& expected);
+    /// Aborts with an ICE describing that the cloned object type was not as required.
+    [[noreturn]] void CheckedCastFailure(const ast::Node* got, const TypeInfo& expected);
 
     /// @returns the diagnostic list of #dst
     diag::List& Diagnostics() const;

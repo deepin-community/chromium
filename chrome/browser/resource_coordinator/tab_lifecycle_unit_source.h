@@ -14,7 +14,6 @@
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "components/performance_manager/public/mojom/coordination_unit.mojom.h"
 #include "components/performance_manager/public/mojom/lifecycle.mojom-forward.h"
-#include "components/performance_manager/public/web_contents_proxy.h"
 
 class TabStripModel;
 
@@ -78,6 +77,7 @@ class TabLifecycleUnitSource : public BrowserListObserver,
   FRIEND_TEST_ALL_PREFIXES(TabManagerTest, TabManagerWasDiscarded);
   FRIEND_TEST_ALL_PREFIXES(TabManagerTest,
                            TabManagerWasDiscardedCrossSiteSubFrame);
+  FRIEND_TEST_ALL_PREFIXES(TabLifecycleUnitSourceTest, Freeze);
 
   // Returns the TabLifecycleUnit instance associated with |web_contents|, or
   // nullptr if |web_contents| isn't a tab.
@@ -145,7 +145,8 @@ class TabLifecycleUnitSource : public BrowserListObserver,
 
   // Observers notified when the discarded or auto-discardable state of a tab
   // changes.
-  base::ObserverList<TabLifecycleObserver>::Unchecked tab_lifecycle_observers_;
+  base::ObserverList<TabLifecycleObserver>::UncheckedAndDanglingUntriaged
+      tab_lifecycle_observers_;
 
   // A clock that advances when Chrome is in use.
   const raw_ptr<UsageClock> usage_clock_;

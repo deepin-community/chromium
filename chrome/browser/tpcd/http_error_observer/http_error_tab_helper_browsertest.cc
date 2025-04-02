@@ -4,6 +4,8 @@
 
 #include "chrome/browser/tpcd/http_error_observer/http_error_tab_helper.h"
 
+#include <string_view>
+
 #include "base/feature_list.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
@@ -101,7 +103,7 @@ class HTTPErrProcBrowserTest : public InProcessBrowserTest {
 
   // Navigates to a page with an iframe, then navigates the iframe to the given
   // GURL. Can also set TPC blocking cookie.
-  void NavigateToURLAndIFrame(base::StringPiece host, const GURL iframe_url) {
+  void NavigateToURLAndIFrame(std::string_view host, const GURL iframe_url) {
     ASSERT_TRUE(ui_test_utils::NavigateToURL(
         browser(), https_server()->GetURL(host, "/iframe.html")));
     ASSERT_TRUE(NavigateIframeToURL(
@@ -128,23 +130,15 @@ IN_PROC_BROWSER_TEST_F(HTTPErrProcBrowserTest, NoErr) {
             0u);
 }
 
-class HTTPErrProcPre3pcdBrowserTest : public HTTPErrProcBrowserTest {
- public:
-  HTTPErrProcPre3pcdBrowserTest() {
-    scoped_feature_list_.InitAndDisableFeature(
-        content_settings::features::kTrackingProtection3pcd);
-  }
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
-};
-
 // Check that the ThirdPartyCookieBreakageIndicator UKM is sent on HTTP Error
 // without cookies blocked
-IN_PROC_BROWSER_TEST_F(HTTPErrProcPre3pcdBrowserTest, WithCookiesWithErr) {
+IN_PROC_BROWSER_TEST_F(HTTPErrProcBrowserTest, WithCookiesWithErr) {
   ukm::TestAutoSetUkmRecorder ukm_recorder;
 
-  SetThirdPartyCookieBlocking(false);
+  CookieSettingsFactory::GetForProfile(browser()->profile())
+      ->SetThirdPartyCookieSetting(
+          https_server()->GetURL(kHostB, "/page404.html"),
+          CONTENT_SETTING_ALLOW);
   NavigateToURLAndIFrame(
       /*host=*/kHostA,
       /*iframe_url=*/https_server()->GetURL(kHostB, "/page404.html"));
@@ -190,7 +184,7 @@ IN_PROC_BROWSER_TEST_F(HTTPErrProcBrowserTest, TPCBlockedImageErr) {
 }
 
 // Check that the ThirdPartyCookieBreakageIndicator UKM works with fetches
-// TODO(https://crbug.com/1497270): Fix flakiness and re-enable.
+// TODO(crbug.com/40938887): Fix flakiness and re-enable.
 IN_PROC_BROWSER_TEST_F(HTTPErrProcBrowserTest, DISABLED_TPCBlockedFetchErr) {
   ukm::TestAutoSetUkmRecorder ukm_recorder;
 
@@ -211,9 +205,10 @@ IN_PROC_BROWSER_TEST_F(HTTPErrProcBrowserTest, TPCBlockedIframeErr) {
   ukm::TestAutoSetUkmRecorder ukm_recorder;
 
   SetThirdPartyCookieBlocking(true);
-  content::SetCookie(browser()->profile(),
-                     https_server()->GetURL(kHostB, "/no_real_image.html"),
-                     "thirdparty=1;SameSite=None;Secure");
+  ASSERT_TRUE(
+      content::SetCookie(browser()->profile(),
+                         https_server()->GetURL(kHostB, "/no_real_image.html"),
+                         "thirdparty=1;SameSite=None;Secure"));
   NavigateToURLAndIFrame(
       /*host=*/kHostA,
       /*iframe_url=*/https_server()->GetURL(kHostB, "/no_real_image.html"));
@@ -230,10 +225,10 @@ IN_PROC_BROWSER_TEST_F(HTTPErrProcBrowserTest, TPCBlocked5xxErr) {
   ukm::TestAutoSetUkmRecorder ukm_recorder;
 
   SetThirdPartyCookieBlocking(true);
-  content::SetCookie(
+  ASSERT_TRUE(content::SetCookie(
       browser()->profile(),
       https_server()->GetURL(kHostB, "/echo-cookie-with-status?status=500"),
-      "thirdparty=1;SameSite=None;Secure");
+      "thirdparty=1;SameSite=None;Secure"));
   NavigateToURLAndIFrame(
       /*host=*/kHostA,
       /*iframe_url=*/
@@ -252,9 +247,9 @@ IN_PROC_BROWSER_TEST_F(HTTPErrProcBrowserTest, TPCBlocked4xxErr) {
   ukm::TestAutoSetUkmRecorder ukm_recorder;
 
   SetThirdPartyCookieBlocking(true);
-  content::SetCookie(browser()->profile(),
-                     https_server()->GetURL(kHostB, "/not-real.html"),
-                     "thirdparty=1;SameSite=None;Secure");
+  ASSERT_TRUE(content::SetCookie(
+      browser()->profile(), https_server()->GetURL(kHostB, "/not-real.html"),
+      "thirdparty=1;SameSite=None;Secure"));
   NavigateToURLAndIFrame(
       /*host=*/kHostA,
       /*iframe_url=*/https_server()->GetURL(kHostB, "/not-real.html"));
@@ -268,14 +263,14 @@ IN_PROC_BROWSER_TEST_F(HTTPErrProcBrowserTest, TPCBlocked4xxErr) {
 }
 
 // Check that multiple entries are entered correctly.
-// TODO(https://crbug.com/1498862): Fix flakiness and re-enable.
+// TODO(crbug.com/40287588): Fix flakiness and re-enable.
 IN_PROC_BROWSER_TEST_F(HTTPErrProcBrowserTest, DISABLED_MultiErrs) {
   ukm::TestAutoSetUkmRecorder ukm_recorder;
 
   SetThirdPartyCookieBlocking(true);
-  content::SetCookie(browser()->profile(),
-                     https_server()->GetURL(kHostB, "/page404.html"),
-                     "thirdparty=1;SameSite=None;Secure");
+  ASSERT_TRUE(content::SetCookie(
+      browser()->profile(), https_server()->GetURL(kHostB, "/page404.html"),
+      "thirdparty=1;SameSite=None;Secure"));
   NavigateToURLAndIFrame(
       /*host=*/kHostA,
       /*iframe_url=*/https_server()->GetURL(kHostB, "/page404.html"));

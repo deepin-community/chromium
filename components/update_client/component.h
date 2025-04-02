@@ -5,6 +5,7 @@
 #ifndef COMPONENTS_UPDATE_CLIENT_COMPONENT_H_
 #define COMPONENTS_UPDATE_CLIENT_COMPONENT_H_
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
@@ -19,26 +20,55 @@
 #include "base/memory/ref_counted.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "base/version.h"
+#include "components/update_client/crx_cache.h"
 #include "components/update_client/crx_downloader.h"
+#include "components/update_client/pipeline.h"
 #include "components/update_client/protocol_parser.h"
 #include "components/update_client/update_client.h"
 #include "url/gurl.h"
 
 namespace update_client {
 
-class ActionRunner;
 class Configurator;
 struct CrxUpdateItem;
 struct UpdateContext;
 
 // Describes a CRX component managed by the UpdateEngine. Each instance of
 // this class is associated with one instance of UpdateContext.
+//
+// Through the course of the update flow, each Component's state_ will change:
+//
+//  ╔══════════════╗   ┌──────┐
+//  ║ kUpdateError ║ ← │ kNew │
+//  ║              ║   └──────┘
+//  ║              ║      ↓
+//  ║              ║   ┌───────────┐   ╔═══════════╗
+//  ║              ║ ← │ kChecking │ → ║ kUpToDate ║
+//  ║              ║   └───────────┘   ╚═══════════╝
+//  ║              ║      ↓
+//  ║              ║   ┌────────────┐
+//  ║              ║ ← │ kCanUpdate │
+//  ║              ║   └────────────┘
+//  ║              ║      ↓
+//  ║              ║   ┌─────────────────────────────────┐   ╔══════════╗
+//  ║              ║ ← │ kDownloading ↔ kUpdating → kRun │ → ║ kUpdated ║
+//  ╚══════════════╝   └─────────────────────────────────┘   ╚══════════╝
+//
+// Each box in the above diagram corresponds to a specific Component::State.
+// Component::State::Updating is responsible for running the kDownloading,
+// kUpdating (installing), and kRun actions. The transitions between those
+// three substates depends on the pipeline of operations provided by the update
+// server and the details of what files are in cache. For example, if the
+// installer is already cached, downloading will be skipped. As another example,
+// if an installer fails, a fallback installer may be downloaded and run.
+//
+// When the service is checking for updates only (but not applying them),
+// kCanUpdate will transition to kUpdateError.
 class Component {
  public:
-  using Events = UpdateClient::Observer::Events;
-
   using CallbackHandleComplete = base::OnceCallback<void()>;
 
   Component(const UpdateContext& update_context, const std::string& id);
@@ -52,14 +82,11 @@ class Component {
 
   CrxUpdateItem GetCrxUpdateItem() const;
 
-  // Sets the ping-only state for this component.
-  void PingOnly(const CrxComponent& crx_component,
-                UpdateClient::PingParams ping_params);
-
   // Called by the UpdateEngine when an update check for this component is done.
-  void SetUpdateCheckResult(const std::optional<ProtocolParser::Result>& result,
+  void SetUpdateCheckResult(std::optional<ProtocolParser::Result> result,
                             ErrorCategory error_category,
-                            int error);
+                            int error,
+                            base::OnceCallback<void(bool)> callback);
 
   // Called by the UpdateEngine when a component enters a wait for throttling
   // purposes.
@@ -110,11 +137,7 @@ class Component {
   bool diff_update_failed() const { return diff_error_code_; }
 
   ErrorCategory error_category() const { return error_category_; }
-  int error_code() const {
-    return installer_result_ && installer_result_->original_error
-               ? installer_result_->original_error
-               : error_code_;
-  }
+  int error_code() const { return error_code_; }
   int extra_code1() const { return extra_code1_; }
   ErrorCategory diff_error_category() const { return diff_error_category_; }
   int diff_error_code() const { return diff_error_code_; }
@@ -130,6 +153,8 @@ class Component {
 
   // Returns a clone of the component events.
   std::vector<base::Value::Dict> GetEvents() const;
+
+  void AppendEvent(base::Value::Dict event);
 
  private:
   friend class MockPingManagerImpl;
@@ -239,7 +264,10 @@ class Component {
     // State overrides.
     void DoHandle() override;
     bool CanTryDiffUpdate() const;
-    void CheckIfCacheContainsCrxComplete(bool crx_is_in_cache);
+    void GetNextCrxFromCacheComplete(
+        base::expected<base::FilePath, UnpackerError> result);
+    void CheckIfCacheContainsPreviousCrxComplete(
+        base::expected<base::FilePath, UnpackerError> result);
   };
 
   class StateUpToDate : public State {
@@ -254,68 +282,6 @@ class Component {
     void DoHandle() override;
   };
 
-  class StateDownloadingDiff : public State {
-   public:
-    explicit StateDownloadingDiff(Component* component);
-    StateDownloadingDiff(const StateDownloadingDiff&) = delete;
-    StateDownloadingDiff& operator=(const StateDownloadingDiff&) = delete;
-    ~StateDownloadingDiff() override;
-
-   private:
-    // State overrides.
-    void DoHandle() override;
-
-    // Called when progress is being made downloading a CRX. Can be called
-    // multiple times due to how the CRX downloader switches between
-    // different downloaders and fallback urls.
-    void DownloadProgress(int64_t downloaded_bytes, int64_t total_bytes);
-
-    void DownloadComplete(const CrxDownloader::Result& download_result);
-
-    // Downloads updates for one CRX id only.
-    scoped_refptr<CrxDownloader> crx_downloader_;
-  };
-
-  class StateDownloading : public State {
-   public:
-    explicit StateDownloading(Component* component);
-    StateDownloading(const StateDownloading&) = delete;
-    StateDownloading& operator=(const StateDownloading&) = delete;
-    ~StateDownloading() override;
-
-   private:
-    // State overrides.
-    void DoHandle() override;
-
-    // Called when progress is being made downloading a CRX. Can be called
-    // multiple times due to how the CRX downloader switches between
-    // different downloaders and fallback urls.
-    void DownloadProgress(int64_t downloaded_bytes, int64_t total_bytes);
-
-    void DownloadComplete(const CrxDownloader::Result& download_result);
-
-    // Downloads updates for one CRX id only.
-    scoped_refptr<CrxDownloader> crx_downloader_;
-  };
-
-  class StateUpdatingDiff : public State {
-   public:
-    explicit StateUpdatingDiff(Component* component);
-    StateUpdatingDiff(const StateUpdatingDiff&) = delete;
-    StateUpdatingDiff& operator=(const StateUpdatingDiff&) = delete;
-    ~StateUpdatingDiff() override;
-
-   private:
-    // State overrides.
-    void DoHandle() override;
-
-    void InstallProgress(int install_progress);
-    void InstallComplete(ErrorCategory error_category,
-                         int error_code,
-                         int extra_code1,
-                         std::optional<CrxInstaller::Result> installer_result);
-  };
-
   class StateUpdating : public State {
    public:
     explicit StateUpdating(Component* component);
@@ -327,11 +293,7 @@ class Component {
     // State overrides.
     void DoHandle() override;
 
-    void InstallProgress(int install_progress);
-    void InstallComplete(ErrorCategory error_category,
-                         int error_code,
-                         int extra_code1,
-                         std::optional<CrxInstaller::Result> installer_result);
+    void PipelineComplete(const CategorizedError& result);
   };
 
   class StateUpdated : public State {
@@ -346,41 +308,13 @@ class Component {
     void DoHandle() override;
   };
 
-  class StatePingOnly : public State {
-   public:
-    explicit StatePingOnly(Component* component);
-    StatePingOnly(const StatePingOnly&) = delete;
-    StatePingOnly& operator=(const StatePingOnly&) = delete;
-    ~StatePingOnly() override;
-
-   private:
-    // State overrides.
-    void DoHandle() override;
-  };
-
-  class StateRun : public State {
-   public:
-    explicit StateRun(Component* component);
-    StateRun(const StateRun&) = delete;
-    StateRun& operator=(const StateRun&) = delete;
-    ~StateRun() override;
-
-   private:
-    // State overrides.
-    void DoHandle() override;
-
-    void ActionRunComplete(bool succeeded, int error_code, int extra_code1);
-
-    // Runs the action referred by the |action_run_| member of the Component
-    // class.
-    std::unique_ptr<ActionRunner> action_runner_;
-  };
-
   // Returns true is the update payload for this component can be downloaded
   // by a downloader which can do bandwidth throttling on the client side.
-  bool CanDoBackgroundDownload() const;
+  // The decision may be predicated on the expected size of the download.
+  bool CanDoBackgroundDownload(int64_t size) const;
 
-  void AppendEvent(base::Value::Dict event);
+  // Returns true if the component has a differential update.
+  bool HasDiffUpdate() const;
 
   // Changes the component state and notifies the caller of the |Handle|
   // function that the handling of this component state is complete.
@@ -390,9 +324,7 @@ class Component {
   // If an UpdateClient::CrxStateChangeCallback is provided as an argument to
   // UpdateClient::Install or UpdateClient::Update function calls, then the
   // callback is invoked as well.
-  void NotifyObservers(Events event) const;
-
-  void SetParseResult(const ProtocolParser::Result& result);
+  void NotifyObservers() const;
 
   // These functions return a specific event. Each data member of the event is
   // represented as a key-value pair in a dictionary value.
@@ -410,8 +342,8 @@ class Component {
   const std::string id_;
   std::optional<CrxComponent> crx_component_;
 
-  // The status of the updatecheck response.
-  std::string status_;
+  // The update pipeline.
+  base::expected<PipelineStartCallback, CategorizedError> pipeline_;
 
   // Time when an update check for this CRX has happened.
   base::TimeTicks last_check_;
@@ -426,6 +358,10 @@ class Component {
   // The cryptographic hash values for the component payload.
   std::string hash_sha256_;
   std::string hashdiff_sha256_;
+
+  // The expected size of the download as reported by the update server.
+  int64_t size_ = -1;
+  int64_t sizediff_ = -1;
 
   // The from/to version and fingerprint values.
   base::Version previous_version_;
@@ -486,7 +422,10 @@ class Component {
   std::unique_ptr<State> state_;
   const raw_ref<const UpdateContext> update_context_;
 
-  ComponentState previous_state_ = ComponentState::kLastStatus;
+  // Some `State` classes map to multiple `ComponentState` values - in those
+  // cases, state_hint_ indicates which ComponentState the State is currently
+  // processing.
+  ComponentState state_hint_ = ComponentState::kNew;
 
   // True if this component has reached a final state because all its states
   // have been handled.

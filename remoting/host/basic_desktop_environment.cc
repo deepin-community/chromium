@@ -9,6 +9,8 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/logging.h"
+#include "base/notreached.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "remoting/host/action_executor.h"
@@ -30,8 +32,6 @@
 #include "third_party/webrtc/modules/desktop_capture/desktop_capture_options.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capturer.h"
 #include "third_party/webrtc/modules/desktop_capture/mouse_cursor_monitor.h"
-
-#include "base/logging.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "remoting/host/win/evaluate_d3d.h"
@@ -75,7 +75,7 @@ class IgnoreXServerGrabsWatchdog : public base::Watchdog::Delegate {
 
   void Alarm() override {
     // Crash the host if IgnoreXServerGrabs() takes too long.
-    CHECK(false) << "IgnoreXServerGrabs() timed out.";
+    NOTREACHED() << "IgnoreXServerGrabs() timed out.";
   }
 
  private:
@@ -188,12 +188,12 @@ BasicDesktopEnvironment::CreateRemoteWebAuthnStateChangeNotifier() {
   return std::make_unique<RemoteWebAuthnExtensionNotifier>();
 }
 
-std::unique_ptr<DesktopCapturer>
-BasicDesktopEnvironment::CreateVideoCapturer() {
+std::unique_ptr<DesktopCapturer> BasicDesktopEnvironment::CreateVideoCapturer(
+    webrtc::ScreenId id) {
   DCHECK(caller_task_runner_->BelongsToCurrentThread());
 
   scoped_refptr<base::SingleThreadTaskRunner> capture_task_runner;
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   capture_task_runner = ui_task_runner_;
 #elif BUILDFLAG(IS_LINUX) && defined(REMOTING_USE_WAYLAND)
   // Each capturer instance should get its own thread so the capturers don't
@@ -207,7 +207,7 @@ BasicDesktopEnvironment::CreateVideoCapturer() {
   // platforms. For example, if we run the desktop capturer on a different
   // thread on Windows, the cursor shape won't be captured when in GDI mode.
   capture_task_runner = video_capture_task_runner_;
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_LINUX)
+#endif
 
 #if defined(REMOTING_USE_X11)
   if (!IsRunningWayland()) {
@@ -223,12 +223,12 @@ BasicDesktopEnvironment::CreateVideoCapturer() {
   std::unique_ptr<DesktopCapturer> desktop_capturer;
   if (options_.capture_video_on_dedicated_thread()) {
     auto desktop_capturer_wrapper = std::make_unique<DesktopCapturerWrapper>();
-    desktop_capturer_wrapper->CreateCapturer(desktop_capture_options());
+    desktop_capturer_wrapper->CreateCapturer(desktop_capture_options(), id);
     desktop_capturer = std::move(desktop_capturer_wrapper);
   } else {
     auto desktop_capturer_proxy =
         std::make_unique<DesktopCapturerProxy>(std::move(capture_task_runner));
-    desktop_capturer_proxy->CreateCapturer(desktop_capture_options());
+    desktop_capturer_proxy->CreateCapturer(desktop_capture_options(), id);
     desktop_capturer = std::move(desktop_capturer_proxy);
   }
 
@@ -266,8 +266,14 @@ BasicDesktopEnvironment::BasicDesktopEnvironment(
     desktop_capture_options().x_display()->IgnoreXServerGrabs();
   }
 #elif BUILDFLAG(IS_WIN)
-  options_.desktop_capture_options()->set_allow_directx_capturer(
-      IsD3DAvailable());
+  // Check whether D3D is available as long as the DirectX capturer wasn't
+  // explicitly disabled. This check is necessary because the network process
+  // runs in Session 0 and cannot check whether D3D is available or not so the
+  // default value is set to true but can be overridden by the client.
+  if (options_.desktop_capture_options()->allow_directx_capturer()) {
+    options_.desktop_capture_options()->set_allow_directx_capturer(
+        IsD3DAvailable());
+  }
 #endif
 }
 

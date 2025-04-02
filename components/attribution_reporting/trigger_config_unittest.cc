@@ -15,6 +15,7 @@
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "components/attribution_reporting/event_report_windows.h"
+#include "components/attribution_reporting/max_event_level_reports.h"
 #include "components/attribution_reporting/source_registration_error.mojom.h"
 #include "components/attribution_reporting/source_type.mojom.h"
 #include "components/attribution_reporting/test_utils.h"
@@ -58,14 +59,14 @@ TEST(TriggerDataMatchingTest, Parse) {
       {
           .desc = "wrong_type",
           .json = R"json({"trigger_data_matching":1})json",
-          .matches =
-              ErrorIs(SourceRegistrationError::kTriggerDataMatchingWrongType),
+          .matches = ErrorIs(
+              SourceRegistrationError::kTriggerDataMatchingValueInvalid),
       },
       {
           .desc = "invalid_value",
           .json = R"json({"trigger_data_matching":"MODULUS"})json",
           .matches = ErrorIs(
-              SourceRegistrationError::kTriggerDataMatchingUnknownValue),
+              SourceRegistrationError::kTriggerDataMatchingValueInvalid),
       },
       {
           .desc = "valid_modulus",
@@ -117,12 +118,14 @@ TEST(TriggerSpecsTest, Default) {
       /*start_time=*/base::Hours(2),
       /*end_times=*/{base::Hours(9)});
 
-  EXPECT_THAT(TriggerSpecs(SourceType::kEvent, kReportWindows),
+  EXPECT_THAT(TriggerSpecs(SourceType::kEvent, kReportWindows,
+                           MaxEventLevelReports(SourceType::kEvent)),
               AllOf(Property(&TriggerSpecs::SingleSharedSpec, IsTrue()),
                     ElementsAre(Pair(0, TriggerSpec(kReportWindows)),
                                 Pair(1, TriggerSpec(kReportWindows)))));
 
-  EXPECT_THAT(TriggerSpecs(SourceType::kNavigation, kReportWindows),
+  EXPECT_THAT(TriggerSpecs(SourceType::kNavigation, kReportWindows,
+                           MaxEventLevelReports(SourceType::kNavigation)),
               AllOf(Property(&TriggerSpecs::SingleSharedSpec, IsTrue()),
                     ElementsAre(Pair(0, TriggerSpec(kReportWindows)),
                                 Pair(1, TriggerSpec(kReportWindows)),
@@ -155,18 +158,22 @@ TEST(TriggerSpecsTest, Parse) {
           .json = R"json({})json",
           .source_type = SourceType::kNavigation,
           .matches_full_flex = ValueIs(
-              TriggerSpecs(SourceType::kNavigation, kDefaultReportWindows)),
+              TriggerSpecs(SourceType::kNavigation, kDefaultReportWindows,
+                           MaxEventLevelReports(SourceType::kNavigation))),
           .matches_top_level_trigger_data = ValueIs(
-              TriggerSpecs(SourceType::kNavigation, kDefaultReportWindows)),
+              TriggerSpecs(SourceType::kNavigation, kDefaultReportWindows,
+                           MaxEventLevelReports(SourceType::kNavigation))),
       },
       {
           .desc = "missing_event",
           .json = R"json({})json",
           .source_type = SourceType::kEvent,
           .matches_full_flex =
-              ValueIs(TriggerSpecs(SourceType::kEvent, kDefaultReportWindows)),
+              ValueIs(TriggerSpecs(SourceType::kEvent, kDefaultReportWindows,
+                                   MaxEventLevelReports(SourceType::kEvent))),
           .matches_top_level_trigger_data =
-              ValueIs(TriggerSpecs(SourceType::kEvent, kDefaultReportWindows)),
+              ValueIs(TriggerSpecs(SourceType::kEvent, kDefaultReportWindows,
+                                   MaxEventLevelReports(SourceType::kEvent))),
       },
       {
           .desc = "trigger_specs_wrong_type",
@@ -194,15 +201,15 @@ TEST(TriggerSpecsTest, Parse) {
             24, 25, 26, 27, 28, 29, 30, 31,
             32
           ]})json",
-          .matches_full_flex =
-              ErrorIs(SourceRegistrationError::kExcessiveTriggerData),
+          .matches_full_flex = ErrorIs(
+              SourceRegistrationError::kTriggerSpecExcessiveTriggerData),
           .matches_top_level_trigger_data = ValueIs(_),
       },
       {
           .desc = "spec_wrong_type",
           .json = R"json({"trigger_specs": [0]})json",
           .matches_full_flex =
-              ErrorIs(SourceRegistrationError::kTriggerSpecWrongType),
+              ErrorIs(SourceRegistrationError::kTriggerSpecsWrongType),
           .matches_top_level_trigger_data = ValueIs(_),
       },
       {
@@ -215,16 +222,16 @@ TEST(TriggerSpecsTest, Parse) {
       {
           .desc = "trigger_data_wrong_type",
           .json = R"json({"trigger_data": 1})json",
-          .matches_full_flex = ErrorIs(
-              SourceRegistrationError::kTriggerSpecTriggerDataWrongType),
-          .matches_top_level_trigger_data = ErrorIs(
-              SourceRegistrationError::kTriggerSpecTriggerDataWrongType),
+          .matches_full_flex =
+              ErrorIs(SourceRegistrationError::kTriggerDataListInvalid),
+          .matches_top_level_trigger_data =
+              ErrorIs(SourceRegistrationError::kTriggerDataListInvalid),
       },
       {
           .desc = "spec_trigger_data_empty",
           .json = R"json({"trigger_specs": [{"trigger_data": []}]})json",
-          .matches_full_flex =
-              ErrorIs(SourceRegistrationError::kTriggerSpecTriggerDataEmpty),
+          .matches_full_flex = ErrorIs(
+              SourceRegistrationError::kTriggerSpecTriggerDataListInvalid),
           .matches_top_level_trigger_data = ValueIs(_),
       },
       {
@@ -262,41 +269,41 @@ TEST(TriggerSpecsTest, Parse) {
             ]},
             {"trigger_data": [32]}
           ]})json",
-          .matches_full_flex =
-              ErrorIs(SourceRegistrationError::kExcessiveTriggerData),
+          .matches_full_flex = ErrorIs(
+              SourceRegistrationError::kTriggerSpecExcessiveTriggerData),
           .matches_top_level_trigger_data = ValueIs(_),
       },
       {
           .desc = "trigger_data_value_wrong_type",
           .json = R"json({"trigger_data": ["1"]})json",
-          .matches_full_flex = ErrorIs(
-              SourceRegistrationError::kTriggerSpecTriggerDataValueWrongType),
-          .matches_top_level_trigger_data = ErrorIs(
-              SourceRegistrationError::kTriggerSpecTriggerDataValueWrongType),
+          .matches_full_flex =
+              ErrorIs(SourceRegistrationError::kTriggerDataListInvalid),
+          .matches_top_level_trigger_data =
+              ErrorIs(SourceRegistrationError::kTriggerDataListInvalid),
       },
       {
           .desc = "trigger_data_value_fractional",
           .json = R"json({"trigger_data": [1.5]})json",
-          .matches_full_flex = ErrorIs(
-              SourceRegistrationError::kTriggerSpecTriggerDataValueWrongType),
-          .matches_top_level_trigger_data = ErrorIs(
-              SourceRegistrationError::kTriggerSpecTriggerDataValueWrongType),
+          .matches_full_flex =
+              ErrorIs(SourceRegistrationError::kTriggerDataListInvalid),
+          .matches_top_level_trigger_data =
+              ErrorIs(SourceRegistrationError::kTriggerDataListInvalid),
       },
       {
           .desc = "trigger_data_value_negative",
           .json = R"json({"trigger_data": [-1]})json",
-          .matches_full_flex = ErrorIs(
-              SourceRegistrationError::kTriggerSpecTriggerDataValueOutOfRange),
-          .matches_top_level_trigger_data = ErrorIs(
-              SourceRegistrationError::kTriggerSpecTriggerDataValueOutOfRange),
+          .matches_full_flex =
+              ErrorIs(SourceRegistrationError::kTriggerDataListInvalid),
+          .matches_top_level_trigger_data =
+              ErrorIs(SourceRegistrationError::kTriggerDataListInvalid),
       },
       {
           .desc = "trigger_data_value_above_max",
           .json = R"json({"trigger_data": [4294967296]})json",
-          .matches_full_flex = ErrorIs(
-              SourceRegistrationError::kTriggerSpecTriggerDataValueOutOfRange),
-          .matches_top_level_trigger_data = ErrorIs(
-              SourceRegistrationError::kTriggerSpecTriggerDataValueOutOfRange),
+          .matches_full_flex =
+              ErrorIs(SourceRegistrationError::kTriggerDataListInvalid),
+          .matches_top_level_trigger_data =
+              ErrorIs(SourceRegistrationError::kTriggerDataListInvalid),
       },
       {
           .desc = "trigger_data_value_minimal",
@@ -316,6 +323,12 @@ TEST(TriggerSpecsTest, Parse) {
               ValueIs(ElementsAre(Key(4294967295))),
       },
       {
+          .desc = "trigger_data_value_trailing_zero",
+          .json = R"json({"trigger_data": [2.0]})json",
+          .matches_full_flex = ValueIs(ElementsAre(Key(2))),
+          .matches_top_level_trigger_data = ValueIs(ElementsAre(Key(2))),
+      },
+      {
           .desc = "trigger_data_value_duplicate",
           .json = R"json({"trigger_data": [1, 3, 1, 2]})json",
           .matches_full_flex =
@@ -330,8 +343,8 @@ TEST(TriggerSpecsTest, Parse) {
             {"trigger_data": [4, 2]},
             {"trigger_data": [1, 5]},
           ]})json",
-          .matches_full_flex =
-              ErrorIs(SourceRegistrationError::kDuplicateTriggerData),
+          .matches_full_flex = ErrorIs(
+              SourceRegistrationError::kTriggerSpecDuplicateTriggerData),
           .matches_top_level_trigger_data = ValueIs(_),
       },
       {
@@ -433,6 +446,24 @@ TEST(TriggerSpecsTest, Parse) {
               SourceRegistrationError::kTopLevelTriggerDataAndTriggerSpecs),
           .matches_top_level_trigger_data = ValueIs(IsEmpty()),
       },
+      {
+          // Tested more thoroughly in `max_event_level_reports_unittest.cc`
+          .desc = "max_event_level_reports_valid",
+          .json = R"json({"max_event_level_reports":5})json",
+          .matches_full_flex =
+              ValueIs(Property(&TriggerSpecs::max_event_level_reports, 5)),
+          .matches_top_level_trigger_data =
+              ValueIs(Property(&TriggerSpecs::max_event_level_reports, 5)),
+      },
+      {
+          // Tested more thoroughly in `max_event_level_reports_unittest.cc`
+          .desc = "max_event_level_reports_invalid",
+          .json = R"json({"max_event_level_reports":null})json",
+          .matches_full_flex = ErrorIs(
+              SourceRegistrationError::kMaxEventLevelReportsValueInvalid),
+          .matches_top_level_trigger_data = ErrorIs(
+              SourceRegistrationError::kMaxEventLevelReportsValueInvalid),
+      },
   };
 
   for (const auto& test_case : kTestCases) {
@@ -477,12 +508,13 @@ TEST(TriggerSpecsTest, ToJson) {
           {/*trigger_data=*/3, /*index=*/1},
           {/*trigger_data=*/4294967295, /*index=*/1},
       },
-      kSpecList);
+      kSpecList, MaxEventLevelReports(7));
 
   base::Value::Dict dict;
   kSpecs.Serialize(dict);
 
   EXPECT_THAT(dict, base::test::IsJson(R"json({
+    "max_event_level_reports": 7,
     "trigger_specs": [
       {
         "trigger_data": [1, 5],
@@ -521,7 +553,7 @@ TEST(TriggerSpecsTest, Iterator) {
           {/*trigger_data=*/3, /*index=*/1},
           {/*trigger_data=*/4294967295, /*index=*/1},
       },
-      kSpecList);
+      kSpecList, MaxEventLevelReports());
 
   EXPECT_FALSE(kSpecs.empty());
   EXPECT_EQ(kSpecs.size(), 4u);
@@ -576,7 +608,7 @@ TEST(TriggerSpecsTest, Find) {
           {/*trigger_data=*/4, /*index=*/1},
           {/*trigger_data=*/5, /*index=*/0},
       },
-      kSpecList);
+      kSpecList, MaxEventLevelReports());
 
   const struct {
     TriggerDataMatching trigger_data_matching;
@@ -635,7 +667,7 @@ TEST(TriggerSpecsTest, Find_ModulusContiguous) {
           {/*trigger_data=*/1, /*index=*/0},
           {/*trigger_data=*/2, /*index=*/1},
       },
-      kSpecList);
+      kSpecList, MaxEventLevelReports());
 
   const struct {
     uint64_t trigger_data;

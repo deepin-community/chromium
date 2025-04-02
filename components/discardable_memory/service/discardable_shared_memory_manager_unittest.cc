@@ -1,6 +1,12 @@
 // Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "components/discardable_memory/service/discardable_shared_memory_manager.h"
 
 #include <stddef.h>
@@ -22,7 +28,7 @@ const int kInvalidUniqueID = -1;
 
 class TestDiscardableSharedMemory : public base::DiscardableSharedMemory {
  public:
-  TestDiscardableSharedMemory() {}
+  TestDiscardableSharedMemory() = default;
 
   explicit TestDiscardableSharedMemory(base::UnsafeSharedMemoryRegion region)
       : DiscardableSharedMemory(std::move(region)) {}
@@ -97,12 +103,12 @@ TEST_F(DiscardableSharedMemoryManagerTest, AllocateForClient) {
   bool rv = memory.Map(kDataSize);
   ASSERT_TRUE(rv);
 
-  memcpy(memory.memory(), data, kDataSize);
+  memory.memory().copy_from(data);
   memory.SetNow(base::Time::FromSecondsSinceUnixEpoch(1));
   memory.Unlock(0, 0);
 
   ASSERT_EQ(base::DiscardableSharedMemory::SUCCESS, memory.Lock(0, 0));
-  EXPECT_EQ(memcmp(data, memory.memory(), kDataSize), 0);
+  EXPECT_EQ(data, memory.memory());
   memory.Unlock(0, 0);
 }
 
@@ -283,7 +289,7 @@ class SetMemoryLimitRunner : public base::DelegateSimpleThread::Delegate {
  public:
   SetMemoryLimitRunner(DiscardableSharedMemoryManager* manager, size_t limit)
       : manager_(manager), limit_(limit) {}
-  ~SetMemoryLimitRunner() override {}
+  ~SetMemoryLimitRunner() override = default;
 
   void Run() override { manager_->SetMemoryLimit(limit_); }
 

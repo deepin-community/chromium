@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type * as puppeteer from 'puppeteer-core';
 
-import {requireTestRunnerConfigSetting} from '../../conductor/test_runner_config.js';
+import {GEN_DIR} from '../../conductor/paths.js';
 import {
   $,
   $$,
@@ -22,7 +22,6 @@ import {
   pasteText,
   platform,
   pressKey,
-  reloadDevTools,
   setCheckBox,
   step,
   timeout,
@@ -35,6 +34,7 @@ import {
 } from '../../shared/helper.js';
 
 import {openSoftContextMenuAndClickOnItem} from './context-menu-helpers.js';
+import {veImpression} from './visual-logging-helpers.js';
 
 export const ACTIVE_LINE = '.CodeMirror-activeline > pre > span';
 export const PAUSE_BUTTON = '[aria-label="Pause script execution"]';
@@ -49,7 +49,6 @@ export const SELECTED_THREAD_SELECTOR = 'div.thread-item.selected > div.thread-i
 export const STEP_INTO_BUTTON = '[aria-label="Step into next function call"]';
 export const STEP_OVER_BUTTON = '[aria-label="Step over next function call"]';
 export const STEP_OUT_BUTTON = '[aria-label="Step out of current function"]';
-export const TURNED_OFF_PAUSE_BUTTON_SELECTOR = 'button.toolbar-state-off';
 export const TURNED_ON_PAUSE_BUTTON_SELECTOR = 'button.toolbar-state-on';
 export const DEBUGGER_PAUSED_EVENT = 'DevTools.DebuggerPaused';
 const WATCH_EXPRESSION_VALUE_SELECTOR = '.watch-expression-tree-item .object-value-string.value';
@@ -94,7 +93,7 @@ export async function doubleClickSourceTreeItem(selector: string) {
 
 export async function waitForSourcesPanel(): Promise<void> {
   // Wait for the navigation panel to show up
-  await waitFor('.navigator-file-tree-item');
+  await waitFor('.navigator-file-tree-item, .empty-state');
 }
 
 export async function openSourcesPanel() {
@@ -160,6 +159,12 @@ export async function createNewSnippet(snippetName: string, content?: string) {
   }
 }
 
+export async function openWorkspaceSubPane() {
+  const root = await waitFor('.navigator-tabbed-pane');
+  await click('[aria-label="Workspace"]', {root});
+  await waitFor('[aria-label="Workspace panel"]');
+}
+
 export async function openOverridesSubPane() {
   const root = await waitFor('.navigator-tabbed-pane');
   await clickMoreTabsButton(root);
@@ -169,7 +174,7 @@ export async function openOverridesSubPane() {
 
 export async function openFileInEditor(sourceFile: string) {
   await waitForSourceFiles(
-      SourceFileEvents.SourceFileLoaded, files => files.some(f => f.endsWith(sourceFile)),
+      SourceFileEvents.SOURCE_FILE_LOADED, files => files.some(f => f.endsWith(sourceFile)),
       // Open a particular file in the editor
       () => doubleClickSourceTreeItem(`[aria-label="${sourceFile}, file"]`));
 }
@@ -312,7 +317,7 @@ export async function checkBreakpointDidNotActivate() {
     const breakpointIndicator = await Promise.all(pauseIndicators.map(elements => {
       return elements.evaluate(el => el.className);
     }));
-    assert.deepEqual(breakpointIndicator.length, 0, 'script had been paused');
+    assert.lengthOf(breakpointIndicator, 0, 'script had been paused');
   });
 }
 
@@ -439,7 +444,6 @@ export async function setEventListenerBreakpoint(groupName: string, eventName: s
 }
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface Window {
     /* eslint-disable @typescript-eslint/naming-convention */
     __sourceFileEvents: Map<number, {files: string[], handler: (e: Event) => void}>;
@@ -448,8 +452,8 @@ declare global {
 }
 
 export const enum SourceFileEvents {
-  SourceFileLoaded = 'source-file-loaded',
-  AddedToSourceTree = 'source-tree-file-added',
+  SOURCE_FILE_LOADED = 'source-file-loaded',
+  ADDED_TO_SOURCE_TREE = 'source-tree-file-added',
 }
 
 let nextEventHandlerId = 0;
@@ -497,7 +501,7 @@ export async function waitForSourceFiles<T>(
 
 export async function captureAddedSourceFiles(count: number, action: () => Promise<void>): Promise<string[]> {
   let capturedFileNames!: string[];
-  await waitForSourceFiles(SourceFileEvents.AddedToSourceTree, files => {
+  await waitForSourceFiles(SourceFileEvents.ADDED_TO_SOURCE_TREE, files => {
     capturedFileNames = files;
     return files.length >= count;
   }, action);
@@ -506,7 +510,7 @@ export async function captureAddedSourceFiles(count: number, action: () => Promi
 
 export async function reloadPageAndWaitForSourceFile(target: puppeteer.Page, sourceFile: string) {
   await waitForSourceFiles(
-      SourceFileEvents.SourceFileLoaded, files => files.some(f => f.endsWith(sourceFile)), () => target.reload());
+      SourceFileEvents.SOURCE_FILE_LOADED, files => files.some(f => f.endsWith(sourceFile)), () => target.reload());
 }
 
 export function isEqualOrAbbreviation(abbreviated: string, full: string): boolean {
@@ -519,11 +523,12 @@ export function isEqualOrAbbreviation(abbreviated: string, full: string): boolea
 }
 
 // Helpers for navigating the file tree.
-export type NestedFileSelector = {
-  rootSelector: string,
-  domainSelector: string,
-  folderSelector?: string, fileSelector: string,
-};
+export interface NestedFileSelector {
+  rootSelector: string;
+  domainSelector: string;
+  folderSelector?: string;
+  fileSelector: string;
+}
 
 export function createSelectorsForWorkerFile(
     workerName: string, folderName: string, fileName: string, workerIndex = 1): NestedFileSelector {
@@ -631,7 +636,9 @@ export async function openNestedWorkerFile(selectors: NestedFileSelector) {
 
 export async function inspectMemory(variableName: string) {
   await openSoftContextMenuAndClickOnItem(
-      `[data-object-property-name-for-test="${variableName}"]`, 'Reveal in Memory inspector panel');
+      `[data-object-property-name-for-test="${variableName}"]`,
+      'Open in Memory inspector panel',
+  );
 }
 
 export async function typeIntoSourcesAndSave(text: string) {
@@ -728,12 +735,6 @@ export async function addSelectedTextToWatches() {
   await frontend.keyboard.up('Shift');
 }
 
-export async function refreshDevToolsAndRemoveBackendState(target: puppeteer.Page) {
-  // Navigate to a different site to make sure that back-end state will be removed.
-  await target.goto('about:blank');
-  await reloadDevTools({selectedPanel: {name: 'sources'}});
-}
-
 export async function enableLocalOverrides() {
   await clickMoreTabsButton();
   await click(OVERRIDES_TAB_SELECTOR);
@@ -741,14 +742,14 @@ export async function enableLocalOverrides() {
   await waitFor(CLEAR_CONFIGURATION_SELECTOR);
 }
 
-export type LabelMapping = {
-  label: string,
-  moduleOffset: number,
-  bytecode: number,
-  sourceLine: number,
-  labelLine: number,
-  labelColumn: number,
-};
+export interface LabelMapping {
+  label: string;
+  moduleOffset: number;
+  bytecode: number;
+  sourceLine: number;
+  labelLine: number;
+  labelColumn: number;
+}
 
 export class WasmLocationLabels {
   readonly #mappings: Map<string, LabelMapping[]>;
@@ -761,9 +762,7 @@ export class WasmLocationLabels {
   }
 
   static load(source: string, wasm: string): WasmLocationLabels {
-    const testSuitePath = requireTestRunnerConfigSetting<string>('test-suite-path');
-    const target = requireTestRunnerConfigSetting<string>('target');
-    const mapFileName = path.join('out', target, testSuitePath, 'resources', `${wasm}.map.json`);
+    const mapFileName = path.join(GEN_DIR, 'test', 'e2e', 'resources', `${wasm}.map.json`);
     const mapFile = JSON.parse(fs.readFileSync(mapFileName, {encoding: 'utf-8'})) as Array<{
                       source: string,
                       generatedLine: number,
@@ -772,7 +771,7 @@ export class WasmLocationLabels {
                       originalLine: number,
                       originalColumn: number,
                     }>;
-    const sourceFileName = path.join('out', target, testSuitePath, 'resources', source);
+    const sourceFileName = path.join(GEN_DIR, 'test', 'e2e', 'resources', source);
     const sourceFile = fs.readFileSync(sourceFileName, {encoding: 'utf-8'});
     const labels = new Map<string, number>();
     for (const [index, line] of sourceFile.split('\n').entries()) {
@@ -866,7 +865,83 @@ export async function waitForLines(lineCount: number): Promise<void> {
 }
 
 export async function isPrettyPrinted(): Promise<boolean> {
-  const prettyButton = await waitFor('[aria-label="Pretty print"]');
-  const isPretty = await prettyButton.evaluate(e => e.ariaPressed);
-  return isPretty === 'true';
+  const prettyButton = await waitFor('[title="Pretty print"]');
+  const isPretty = await prettyButton.evaluate(e => e.classList.contains('toggled'));
+  return isPretty === true;
+}
+
+export function veImpressionForSourcesPanel() {
+  return veImpression('Panel', 'sources', [
+    veImpression(
+        'Toolbar', 'debug',
+        [
+          veImpression('Toggle', 'debugger.toggle-pause'),
+          veImpression('Action', 'debugger.step-over'),
+          veImpression('Action', 'debugger.step-into'),
+          veImpression('Action', 'debugger.step-out'),
+          veImpression('Action', 'debugger.step'),
+          veImpression('Toggle', 'debugger.toggle-breakpoints-active'),
+        ]),
+    veImpression(
+        'Pane', 'debug',
+        [
+          veImpression('SectionHeader', 'sources.watch'),
+          veImpression('SectionHeader', 'sources.js-breakpoints'),
+          veImpression('SectionHeader', 'sources.scope-chain'),
+          veImpression('SectionHeader', 'sources.callstack'),
+          veImpression('SectionHeader', 'sources.xhr-breakpoints'),
+          veImpression('SectionHeader', 'sources.dom-breakpoints'),
+          veImpression('SectionHeader', 'sources.global-listeners'),
+          veImpression('SectionHeader', 'sources.event-listener-breakpoints'),
+          veImpression('SectionHeader', 'sources.csp-violation-breakpoints'),
+          veImpression('Section', 'sources.scope-chain'),
+          veImpression('Section', 'sources.callstack'),
+          veImpression(
+              'Section', 'sources.js-breakpoints',
+              [
+                veImpression('Toggle', 'pause-uncaught'),
+                veImpression('Toggle', 'pause-on-caught-exception'),
+              ]),
+        ]),
+    veImpression(
+        'Pane', 'editor',
+        [
+          veImpression('Toolbar', 'bottom'),
+          veImpression(
+              'Toolbar', 'top',
+              [
+                veImpression('ToggleSubpane', 'navigator'),
+                veImpression('ToggleSubpane', 'debugger'),
+              ]),
+        ]),
+    veImpression(
+        'Toolbar', 'navigator',
+        [
+          veImpression('DropDown', 'more-tabs'),
+          veImpression('PanelTabHeader', 'navigator-network'),
+          veImpression('PanelTabHeader', 'navigator-files'),
+          veImpression('DropDown', 'more-options'),
+        ]),
+    veImpression(
+        'Pane', 'navigator-network',
+        [
+          veImpression(
+              'Tree', undefined,
+              [
+                veImpression(
+                    'TreeItem', 'frame',
+                    [
+                      veImpression('Expand'),
+                      veImpression(
+                          'TreeItem', 'domain',
+                          [
+                            veImpression('Expand'),
+                            veImpression('TreeItem', 'document', [
+                              veImpression('Value', 'title'),
+                            ]),
+                          ]),
+                    ]),
+              ]),
+        ]),
+  ]);
 }

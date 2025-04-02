@@ -11,6 +11,31 @@
  * off the JS externs and has no knowledge of this file.
  */
 
+type RectF =
+    import('//resources/mojo/ui/gfx/geometry/mojom/geometry.mojom-webui.js')
+        .RectF;
+type MojoUrl = import('//resources/mojo/url/mojom/url.mojom-webui.js').Url;
+
+type PageMetadata =
+    import('./media_app_ui_untrusted.mojom-webui.js').PageMetadata;
+type OcrUntrustedPageInterface =
+    import('./media_app_ui_untrusted.mojom-webui.js').OcrUntrustedPageInterface;
+type RequestBitmapResponse = import('./media_app_ui_untrusted.mojom-webui.js')
+                                 .OcrUntrustedPage_RequestBitmap_ResponseParams;
+
+type MahiUntrustedPageInterface =
+    import('./media_app_ui_untrusted.mojom-webui.js')
+        .MahiUntrustedPageInterface;
+type GetPdfContentResponse =
+    import('./media_app_ui_untrusted.mojom-webui.js')
+        .MahiUntrustedPage_GetPdfContent_ResponseParams;
+
+type InitializeResult =
+    import('./mantis_service.mojom-webui.js').InitializeResult;
+type MantisResult = import('./mantis_processor.mojom-webui.js').MantisResult;
+type MantisSafetyClassifierVerdict =
+    import('./mantis_processor.mojom-webui.js').SafetyClassifierVerdict;
+
 /**
  * Wraps an HTML File object (or a mock, or media loaded through another means).
  */
@@ -157,33 +182,6 @@ declare interface AbstractFileList {
 }
 
 /**
- * Represents a box with top-left coordinates and a width and height.
- */
-declare class Rect {
-  /**
-   * Represents a box with top-left coordinates and a width and height.
-   * @param left Left.
-   * @param top Top.
-   * @param width Width.
-   * @param height Height.
-   */
-  constructor(left: number, top: number, width: number, height: number);
-  height: number;
-  left: number;
-  top: number;
-  width: number;
-}
-
-/**
- * The page metadata using Closure. This should be deleted on migrating to the
- * geometry RectF in the MediaApp code.
- */
-declare class PageMetadataWithClosureRect {
-  id: string;
-  rect: Rect;
-}
-
-/**
  * The delegate which exposes open source privileged WebUi functions to
  * MediaApp.
  */
@@ -217,6 +215,15 @@ declare interface ClientApiDelegate {
    */
   notifyCurrentFile(name?: string, type?: string): void;
   /**
+   * Notify MediaApp that a file has been opened.
+   */
+  notifyFileOpened(name?: string, type?: string): void;
+  /**
+   * Notify the app that the current file's name has been changed by "Rename"
+   * or "Saved as".
+   */
+  notifyFilenameChanged(name: string): void;
+  /**
    * Attempts to extract a JPEG "preview" from a RAW image file. Throws on any
    * failure. Note this is typically a full-sized preview, not a thumbnail.
    * @return A Blob-backed File with type: image/jpeg.
@@ -246,14 +253,39 @@ declare interface ClientApiDelegate {
    */
   maybeTriggerPdfHats?: () => void;
   /**
+   * Called when the media app finishes loading a PDF file, to notify Mahi about
+   * the refresh availability.
+   */
+  onPdfLoaded(): void;
+  /**
+   * Called when the media app shows a context menu on PDF surface, to notify
+   * Mahi to show its widget card accordingly.
+   * @param anchor The coordinate and size of the context menu to help Mahi
+   *     align the widget.
+   * @param selectedText Any currently selected/highlighted text in the PDF.
+   */
+  onPdfContextMenuShow(anchor: RectF, selectedText: string): void;
+  /**
+   * Called when the media app hides its context menu from PDF surface, to
+   * notify Mahi to hide its widget card accordingly.
+   */
+  onPdfContextMenuHide(): void;
+  /**
    * Alert the OCR service that the PDF's page metadata has changed.
    */
-  pageMetadataUpdated(pageMetadata: PageMetadataWithClosureRect[]): void;
+  pageMetadataUpdated(pageMetadata: PageMetadata[]): void;
   /**
    * Alert the OCR service that a specific page's contents has changed and
    * should have OCR applied again.
    */
   pageContentsUpdated(dirtyPageId: string): void;
+  /**
+   * Submit a form to a URL - required since plain form submit doesn't have ideal behavior in LaCrOS.
+   * @param url URL to submit the form to (must have host == lens.google.com).
+   * @param payload Bytes corresponding to formdata which is the payload.
+   * @param header The content-type header including the form boundary specifier.
+   */
+  submitForm(url: MojoUrl, payload: number[], header: string): void;
   /**
    * Called whenever the viewport changes, e.g. due to scrolling, zooming,
    * resizing the window, or opening and closing toolbars/panels.
@@ -262,13 +294,63 @@ declare interface ClientApiDelegate {
    *     and pinch zoom) and ink units. Larger numbers indicate the document
    *     is more zoomed in.
    */
-  viewportUpdated(viewportBox: Rect, scaleFactor: number): void;
+  viewportUpdated(viewportBox: RectF, scaleFactor: number): void;
+  /**
+   * Checks Mantis feature availability, which can be restricted based on
+   * device, user type, and others.
+   */
+  isMantisAvailable(): Promise<boolean>;
+  /**
+   * Loads Mantis' assets from DLC and initializes the processor for subsequent
+   * queries.
+   */
+  initializeMantis(): Promise<InitializeResult>;
+  /**
+   * Performs image segmentation on the image based on the prior selection.
+   * The `image` and `selection` are byte arrays containing the encoded
+   * format of an image (e.g., PNG, JPEG).
+   * @param image The image to segment.
+   * @param selection The prior selection to incorporate into the segmentation
+   *     algorithm. The area to segment should be indicated by the red channel.
+   */
+  segmentImage(image: number[], selection: number[]): Promise<MantisResult>;
+  /**
+   * Fills the image generatively based on the text and seed. Pass the same
+   * `seed` across method calls to get identical result. The `image` and `mask`
+   * are byte arrays containing the encoded format of an image (e.g., PNG,
+   * JPEG).
+   * @param image The image to modify.
+   * @param mask The image indicating which area that generative fill should be
+   *     applied. The area to fill should be indicated by the red channel.
+   * @param text The description that guides the generative process.
+   * @param seed The number to allow reproducibility.
+   */
+  generativeFillImage(
+      image: number[], mask: number[], text: string,
+      seed: number): Promise<MantisResult>;
+  /**
+   * Inpaints the image based on the mask and seed. Pass the same `seed` across
+   * method calls to get identical result. The `image` and `mask` are byte
+   * arrays containing the encoded format of an image (e.g., PNG, JPEG).
+   * @param image The image to modify.
+   * @param mask The image indicating which area that inpainting should be
+   *     applied. The area to inpaint should be indicated by the red channel.
+   * @param seed The number to allow reproducibility.
+   */
+  inpaintImage(image: number[], mask: number[], seed: number):
+      Promise<MantisResult>;
+  /**
+   * Classifies image for Trust & Safety checking.
+   * @param image The image to classify.
+   */
+  classifyImageSafety(image: number[]): Promise<MantisSafetyClassifierVerdict>;
 }
 
 /**
  * The client Api for interacting with the media app instance.
  */
-declare interface ClientApi {
+declare interface ClientApi extends OcrUntrustedPageInterface,
+                                    MahiUntrustedPageInterface {
   /**
    * Looks up handler(s) and loads media via FileList.
    */
@@ -279,9 +361,31 @@ declare interface ClientApi {
    */
   setDelegate(delegate: ClientApiDelegate|null): void;
   /**
+   * Gets the bitmap for the page with `requestedPageId`.
+   */
+  requestBitmap(requestedPageId: string): Promise<RequestBitmapResponse>;
+  /**
    * If a document is currently loaded, scrolls and zooms to the given viewport.
    */
-  setViewport(viewport: Rect): Promise<void>;
+  setViewport(viewport: RectF): Promise<void>;
+  /**
+   * Gets the text content from the PDF file, truncated if the byte size exceeds
+   * `byteSizeLimit`.
+   */
+  getPdfContent(byteSizeLimit: number): Promise<GetPdfContentResponse>;
+  /**
+   * Hides the context menu from the PDF surface, if currently shown.
+   */
+  hidePdfContextMenu(): Promise<void>;
+  /**
+   * Reports Mantis initialization progress, primarily to monitor first-time DLC
+   * download. The associated `initializeMantis()` promise will only be resolved
+   * upon completion (1.0 progress) or if an error occurs. If the
+   * DLC has been previously downloaded, the progress will immediately be
+   * reported as `1.0`.
+   * @param progress the progress between 0.0 and 1.0 (inclusive).
+   */
+  reportMantisProgress(progress: number): void;
 }
 
 /**

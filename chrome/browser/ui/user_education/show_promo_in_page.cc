@@ -16,11 +16,12 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "components/user_education/common/feature_promo_controller.h"
-#include "components/user_education/common/help_bubble_factory_registry.h"
-#include "components/user_education/common/help_bubble_params.h"
+#include "chrome/browser/user_education/user_education_service.h"
+#include "chrome/browser/user_education/user_education_service_factory.h"
+#include "components/user_education/common/feature_promo/feature_promo_controller.h"
+#include "components/user_education/common/help_bubble/help_bubble_factory_registry.h"
+#include "components/user_education/common/help_bubble/help_bubble_params.h"
 #include "components/user_education/webui/help_bubble_webui.h"
 #include "content/public/browser/navigation_handle.h"
 #include "ui/base/interaction/element_tracker.h"
@@ -67,6 +68,7 @@ class ShowPromoInPageImpl : public ShowPromoInPage {
           params.overwrite_active_tab
               ? WindowOpenDisposition::CURRENT_TAB
               : WindowOpenDisposition::NEW_FOREGROUND_TAB;
+      navigate_params.window_action = NavigateParams::SHOW_WINDOW;
       navigate_handle_ = Navigate(&navigate_params);
     } else {
       auto* visible_element =
@@ -100,18 +102,17 @@ class ShowPromoInPageImpl : public ShowPromoInPage {
     DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
     anchor_subscription_ = base::CallbackListSubscription();
     navigate_handle_.reset();
-    timeout_.AbandonAndStop();
+    timeout_.Stop();
 
     // It's possible that the browser window was closed and somehow the tab
     // opened in another window. It's an edge case but an important one since a
     // HelpBubbleFactoryRegistry is needed to create the help bubble.
     if (browser_) {
-      auto* const factory =
-          static_cast<user_education::FeaturePromoControllerCommon*>(
-              browser_->window()->GetFeaturePromoController())
-              ->bubble_factory_registry();
+      auto& factory =
+          UserEducationServiceFactory::GetForBrowserContext(browser_->profile())
+              ->help_bubble_factory_registry();
       help_bubble_ =
-          factory->CreateHelpBubble(anchor_element, std::move(bubble_params_));
+          factory.CreateHelpBubble(anchor_element, std::move(bubble_params_));
       DCHECK(help_bubble_);
 
       // Maybe focus the web contents containing the bubble (if it's the main
@@ -137,7 +138,10 @@ class ShowPromoInPageImpl : public ShowPromoInPage {
     std::move(callback_).Run(this, true);
   }
 
-  void OnBubbleClosed(user_education::HelpBubble* help_bubble) { delete this; }
+  void OnBubbleClosed(user_education::HelpBubble*,
+                      user_education::HelpBubble::CloseReason) {
+    delete this;
+  }
 
   void OnTimeout() {
     DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);

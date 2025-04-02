@@ -8,15 +8,15 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/metrics/histogram_tester.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/time/time.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/search_engine_choice/search_engine_choice_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/country_codes/country_codes.h"
-#include "components/search_engines/prepopulated_engines.h"
-#include "components/search_engines/search_engine_choice_utils.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/search_engines/search_engine_type.h"
 #include "components/search_engines/search_engines_pref_names.h"
 #include "components/search_engines/search_engines_switches.h"
@@ -28,6 +28,7 @@
 #include "content/public/test/test_web_contents_factory.h"
 #include "content/public/test/test_web_ui.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/search_engines_data/resources/definitions/prepopulated_engines.h"
 #include "ui/events/devices/device_data_manager.h"
 
 namespace settings {
@@ -55,15 +56,24 @@ TemplateURL* AddSearchEngine(TemplateURLService* template_url_service,
 }
 }  // namespace
 
-class SearchEnginesHandlerTestBase : public testing::Test {
+class SearchEnginesHandlerTest : public testing::Test {
  public:
-  SearchEnginesHandlerTestBase()
+  SearchEnginesHandlerTest()
       : profile_manager_(TestingBrowserProcess::GetGlobal()) {
     ui::DeviceDataManager::CreateInstance();
   }
 
   void SetUp() override {
     testing::Test::SetUp();
+
+    // The search engine choice feature is only enabled for countries in the
+    // EEA region.
+    const int kBelgiumCountryId =
+        country_codes::CountryCharsToCountryID('B', 'E');
+    base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+        switches::kSearchEngineChoiceCountry,
+        country_codes::CountryIDToCountryString(kBelgiumCountryId));
+
     ASSERT_TRUE(profile_manager_.SetUp());
     profile_ = profile_manager_.CreateTestingProfile("Profile 1");
 
@@ -93,12 +103,10 @@ class SearchEnginesHandlerTestBase : public testing::Test {
   content::TestWebUI* web_ui() { return &web_ui_; }
   Profile* profile() const { return profile_; }
   SearchEnginesHandler* handler() const { return handler_.get(); }
-  base::test::ScopedFeatureList* feature_list() { return &feature_list_; }
   base::HistogramTester& histogram_tester() { return histogram_tester_; }
 
  private:
   base::HistogramTester histogram_tester_;
-  base::test::ScopedFeatureList feature_list_;
   content::BrowserTaskEnvironment task_environment_;
   TestingProfileManager profile_manager_;
   content::TestWebContentsFactory web_contents_factory_;
@@ -107,47 +115,7 @@ class SearchEnginesHandlerTestBase : public testing::Test {
   std::unique_ptr<SearchEnginesHandler> handler_;
 };
 
-class SearchEnginesHandlerParametrizedTest
-    : public SearchEnginesHandlerTestBase,
-      public testing::WithParamInterface<bool> {
- public:
-  SearchEnginesHandlerParametrizedTest() {
-    if (WithSearchEnginesChoiceEnabled()) {
-      feature_list()->InitAndEnableFeature(
-          switches::kSearchEngineChoiceTrigger);
-    } else {
-      feature_list()->InitAndDisableFeature(
-          switches::kSearchEngineChoiceTrigger);
-    }
-  }
-
-  void SetUp() override {
-    SearchEnginesHandlerTestBase::SetUp();
-
-    if (WithSearchEnginesChoiceEnabled()) {
-      // The search engine choice feature is only enabled for countries in the
-      // EEA region.
-      const int kBelgiumCountryId =
-          country_codes::CountryCharsToCountryID('B', 'E');
-      base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-          switches::kSearchEngineChoiceCountry,
-          country_codes::CountryIDToCountryString(kBelgiumCountryId));
-    }
-  }
-
-  bool WithSearchEnginesChoiceEnabled() const { return GetParam(); }
-};
-
-INSTANTIATE_TEST_SUITE_P(,
-                         SearchEnginesHandlerParametrizedTest,
-                         testing::Bool(),
-                         [](const testing::TestParamInfo<bool>& info) {
-                           return info.param ? "WithSearchEngineChoiceEnabled"
-                                             : "Default";
-                         });
-
-TEST_P(SearchEnginesHandlerParametrizedTest,
-       ChangeInTemplateUrlDataTriggersCallback) {
+TEST_F(SearchEnginesHandlerTest, ChangeInTemplateUrlDataTriggersCallback) {
   EXPECT_EQ(0U, web_ui()->call_data().size());
   TemplateURLService* template_url_service =
       TemplateURLServiceFactory::GetForProfile(profile());
@@ -168,54 +136,34 @@ TEST_P(SearchEnginesHandlerParametrizedTest,
   EXPECT_EQ("search-engines-changed", second_call_data.arg1()->GetString());
 }
 
-TEST_P(SearchEnginesHandlerParametrizedTest,
+TEST_F(SearchEnginesHandlerTest,
        SettingTheDefaultSearchEngineRecordsHistogram) {
   base::Value::List first_call_args;
   // Search engine model id.
   first_call_args.Append(1);
   first_call_args.Append(static_cast<int>(
       search_engines::ChoiceMadeLocation::kSearchEngineSettings));
+  first_call_args.Append(base::Value());  // saveGuestChoice
   web_ui()->HandleReceivedMessage("setDefaultSearchEngine", first_call_args);
 
   histogram_tester().ExpectUniqueSample(
       search_engines::kSearchEngineChoiceScreenDefaultSearchEngineTypeHistogram,
-      SearchEngineType::SEARCH_ENGINE_BING,
-      WithSearchEnginesChoiceEnabled() ? 1 : 0);
+      SearchEngineType::SEARCH_ENGINE_BING, 1);
 
   base::Value::List second_call_args;
   // Search engine model id.
   second_call_args.Append(1);
   second_call_args.Append(
       static_cast<int>(search_engines::ChoiceMadeLocation::kSearchSettings));
+  second_call_args.Append(base::Value());  // saveGuestChoice
   web_ui()->HandleReceivedMessage("setDefaultSearchEngine", second_call_args);
 
   histogram_tester().ExpectUniqueSample(
       search_engines::kSearchEngineChoiceScreenDefaultSearchEngineTypeHistogram,
-      SearchEngineType::SEARCH_ENGINE_BING,
-      WithSearchEnginesChoiceEnabled() ? 1 : 0);
+      SearchEngineType::SEARCH_ENGINE_BING, 1);
 }
 
-class SearchEnginesHandlerTestWithSearchEngineChoiceEnabled
-    : public SearchEnginesHandlerTestBase {
- public:
-  SearchEnginesHandlerTestWithSearchEngineChoiceEnabled() {
-    feature_list()->InitAndEnableFeature(switches::kSearchEngineChoiceTrigger);
-  }
-
-  void SetUp() override {
-    SearchEnginesHandlerTestBase::SetUp();
-
-    // The search engine choice feature is only enabled for countries in the
-    // EEA region.
-    const int kBelgiumCountryId =
-        country_codes::CountryCharsToCountryID('B', 'E');
-    base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-        switches::kSearchEngineChoiceCountry,
-        country_codes::CountryIDToCountryString(kBelgiumCountryId));
-  }
-};
-
-TEST_F(SearchEnginesHandlerTestWithSearchEngineChoiceEnabled,
+TEST_F(SearchEnginesHandlerTest,
        ModifyingSearchEngineSetsSearchEngineChoiceTimestamp) {
   PrefService* pref_service = profile()->GetPrefs();
   // The search engine choice feature is only enabled for countries in the EEA
@@ -236,6 +184,7 @@ TEST_F(SearchEnginesHandlerTestWithSearchEngineChoiceEnabled,
   args.Append(1);
   args.Append(static_cast<int>(
       search_engines::ChoiceMadeLocation::kSearchEngineSettings));
+  args.Append(base::Value());  // saveGuestChoice
   web_ui()->HandleReceivedMessage("setDefaultSearchEngine", args);
 
   EXPECT_NEAR(pref_service->GetInt64(
@@ -247,7 +196,7 @@ TEST_F(SearchEnginesHandlerTestWithSearchEngineChoiceEnabled,
             version_info::GetVersionNumber());
 }
 
-TEST_F(SearchEnginesHandlerTestWithSearchEngineChoiceEnabled,
+TEST_F(SearchEnginesHandlerTest,
        RecordingSearchEngineShouldBeDoneAfterSettingDefault) {
   TemplateURLService* template_url_service =
       TemplateURLServiceFactory::GetForProfile(profile());
@@ -271,10 +220,110 @@ TEST_F(SearchEnginesHandlerTestWithSearchEngineChoiceEnabled,
   args.Append(1);
   args.Append(static_cast<int>(
       search_engines::ChoiceMadeLocation::kSearchEngineSettings));
+  args.Append(base::Value());  // saveGuestChoice
   web_ui()->HandleReceivedMessage("setDefaultSearchEngine", args);
 
   histogram_tester().ExpectUniqueSample(
       search_engines::kSearchEngineChoiceScreenDefaultSearchEngineTypeHistogram,
       SearchEngineType::SEARCH_ENGINE_BING, 1);
 }
+
+TEST_F(SearchEnginesHandlerTest, GetSaveGuestChoiceRegularProfile) {
+  EXPECT_EQ(0U, web_ui()->call_data().size());
+  base::Value::List args;
+  args.Append("callback_id");
+  web_ui()->HandleReceivedMessage("getSaveGuestChoice", args);
+  EXPECT_EQ(1U, web_ui()->call_data().size());
+  auto& call_data = web_ui()->call_data().back();
+  EXPECT_EQ(call_data->arg1()->GetString(), "callback_id");
+  // arg2 is a boolean that is true if the callback is successful.
+  EXPECT_TRUE(call_data->arg2()->GetBool());
+  // arg3 is our result.
+  EXPECT_TRUE(call_data->arg3()->is_none());
+}
+
+TEST_F(SearchEnginesHandlerTest, GetSaveGuestChoiceGuestProfile) {
+  auto* choice_service =
+      search_engines::SearchEngineChoiceServiceFactory::GetForProfile(
+          profile());
+  choice_service->SetIsProfileEligibleForDseGuestPropagationForTesting(true);
+
+  EXPECT_EQ(0U, web_ui()->call_data().size());
+  {
+    base::Value::List args;
+    args.Append("callback_id_1");
+    web_ui()->HandleReceivedMessage("getSaveGuestChoice", args);
+    EXPECT_EQ(1U, web_ui()->call_data().size());
+    auto& call_data = web_ui()->call_data().back();
+    EXPECT_EQ(call_data->arg1()->GetString(), "callback_id_1");
+    // arg2 is a boolean that is true if the callback is successful.
+    EXPECT_TRUE(call_data->arg2()->GetBool());
+    // arg3 is our result.
+    EXPECT_FALSE(call_data->arg3()->GetBool());
+  }
+
+  choice_service->SetSavedSearchEngineBetweenGuestSessions(2);
+  {
+    base::Value::List args;
+    args.Append("callback_id_2");
+    web_ui()->HandleReceivedMessage("getSaveGuestChoice", args);
+    EXPECT_EQ(2U, web_ui()->call_data().size());
+    auto& call_data = web_ui()->call_data().back();
+    EXPECT_EQ(call_data->arg1()->GetString(), "callback_id_2");
+    // arg2 is a boolean that is true if the callback is successful.
+    EXPECT_TRUE(call_data->arg2()->GetBool());
+    // arg3 is our result.
+    EXPECT_TRUE(call_data->arg3()->GetBool());
+  }
+}
+
+TEST_F(SearchEnginesHandlerTest, UpdateSavedGuestSearch) {
+  auto* choice_service =
+      search_engines::SearchEngineChoiceServiceFactory::GetForProfile(
+          profile());
+  choice_service->SetIsProfileEligibleForDseGuestPropagationForTesting(true);
+
+  EXPECT_EQ(std::nullopt,
+            choice_service->GetSavedSearchEngineBetweenGuestSessions());
+  {
+    base::Value::List args;
+    // Search engine model id.
+    args.Append(1);
+    args.Append(static_cast<int>(
+        search_engines::ChoiceMadeLocation::kSearchEngineSettings));
+    args.Append(true);  // saveGuestChoice
+    web_ui()->HandleReceivedMessage("setDefaultSearchEngine", args);
+  }
+  // Check that saved guest DSE is updated.
+  EXPECT_EQ(TemplateURLPrepopulateData::bing.id,
+            choice_service->GetSavedSearchEngineBetweenGuestSessions());
+
+  {
+    base::Value::List args;
+    // Search engine model id.
+    args.Append(0);
+    args.Append(static_cast<int>(
+        search_engines::ChoiceMadeLocation::kSearchEngineSettings));
+    args.Append(base::Value());  // saveGuestChoice
+    web_ui()->HandleReceivedMessage("setDefaultSearchEngine", args);
+  }
+  // Check that saved DSE doesn't change if a null saveGuestChoice parameter is
+  // passed in.
+  EXPECT_EQ(TemplateURLPrepopulateData::bing.id,
+            choice_service->GetSavedSearchEngineBetweenGuestSessions());
+
+  {
+    base::Value::List args;
+    // Search engine model id.
+    args.Append(0);
+    args.Append(static_cast<int>(
+        search_engines::ChoiceMadeLocation::kSearchEngineSettings));
+    args.Append(false);  // saveGuestChoice
+    web_ui()->HandleReceivedMessage("setDefaultSearchEngine", args);
+  }
+  // Check that saved DSE is removed when saveGuestChoice is off.
+  EXPECT_EQ(std::nullopt,
+            choice_service->GetSavedSearchEngineBetweenGuestSessions());
+}
+
 }  // namespace settings

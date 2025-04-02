@@ -8,37 +8,38 @@
 #include <string>
 #include <vector>
 
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/metrics/stability_metrics_manager.h"
-#include "ash/components/arc/mojom/power.mojom.h"
-#include "ash/components/arc/power/arc_power_bridge.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/test/arc_util_test_support.h"
-#include "ash/components/arc/test/connection_holder_util.h"
-#include "ash/components/arc/test/fake_app_host.h"
-#include "ash/components/arc/test/fake_app_instance.h"
-#include "ash/components/arc/test/fake_arc_session.h"
-#include "ash/components/arc/test/fake_power_instance.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/bind.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/ash/arc/boot_phase_monitor/arc_boot_phase_monitor_bridge.h"
+#include "chrome/browser/ash/arc/instance_throttle/arc_active_audio_throttle_observer.h"
 #include "chrome/browser/ash/arc/instance_throttle/arc_boot_phase_throttle_observer.h"
 #include "chrome/browser/ash/arc/instance_throttle/arc_power_throttle_observer.h"
 #include "chrome/browser/ash/arc/session/arc_session_manager.h"
 #include "chrome/browser/ash/arc/test/test_arc_session_manager.h"
-#include "chrome/browser/ash/throttle_observer.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
 #include "chromeos/ash/components/dbus/concierge/fake_concierge_client.h"
 #include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/ash/components/throttle/throttle_observer.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/metrics/stability_metrics_manager.h"
+#include "chromeos/ash/experiences/arc/mojom/power.mojom.h"
+#include "chromeos/ash/experiences/arc/power/arc_power_bridge.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
+#include "chromeos/ash/experiences/arc/test/connection_holder_util.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_host.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
+#include "chromeos/ash/experiences/arc/test/fake_arc_session.h"
+#include "chromeos/ash/experiences/arc/test/fake_intent_helper_host.h"
+#include "chromeos/ash/experiences/arc/test/fake_intent_helper_instance.h"
+#include "chromeos/ash/experiences/arc/test/fake_power_instance.h"
 #include "chromeos/dbus/power/power_manager_client.h"
-#include "components/arc/test/fake_intent_helper_host.h"
-#include "components/arc/test/fake_intent_helper_instance.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "content/public/test/browser_task_environment.h"
 #include "services/device/public/cpp/test/test_wake_lock_provider.h"
@@ -174,7 +175,6 @@ class ArcInstanceThrottleTest : public testing::Test {
         return observer.get();
     }
     NOTREACHED();
-    return nullptr;
   }
 
   ash::ThrottleObserver* GetArcBootPhaseThrottleObserver() {
@@ -185,7 +185,6 @@ class ArcInstanceThrottleTest : public testing::Test {
         return observer.get();
     }
     NOTREACHED();
-    return nullptr;
   }
 
   ash::ThrottleObserver* GetArcPowerThrottleObserver() {
@@ -196,7 +195,11 @@ class ArcInstanceThrottleTest : public testing::Test {
         return observer.get();
     }
     NOTREACHED();
-    return nullptr;
+  }
+
+  ArcInstanceThrottle* CreateArcInstanceThrottle() {
+    return ArcInstanceThrottle::GetForBrowserContextForTesting(
+        testing_profile_.get());
   }
 
   FakePowerInstance* power_instance() { return power_instance_.get(); }
@@ -436,6 +439,30 @@ TEST_F(ArcInstanceThrottleTest, TestPowerNotification) {
   EXPECT_EQ(3, power_instance()->cpu_restriction_state_count());
 }
 
+MATCHER_P(IsObserverNameEquals, name, "") {
+  return arg->name() == name;
+}
+
+TEST_F(ArcInstanceThrottleTest, UnthrottleOnActiveAudioV2FeatureOff) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndDisableFeature(arc::kUnthrottleOnActiveAudioV2);
+
+  auto* arc_instance_throttle = CreateArcInstanceThrottle();
+  EXPECT_THAT(arc_instance_throttle->observers_for_testing(),
+              testing::Not(testing::Contains(
+                  IsObserverNameEquals(kArcActiveAudioThrottleObserverName))));
+}
+
+TEST_F(ArcInstanceThrottleTest, UnthrottleOnActiveAudioV2FeatureOn) {
+  base::test::ScopedFeatureList feature;
+  feature.InitAndEnableFeature(arc::kUnthrottleOnActiveAudioV2);
+
+  auto* arc_instance_throttle = CreateArcInstanceThrottle();
+  EXPECT_THAT(arc_instance_throttle->observers_for_testing(),
+              testing::Contains(
+                  IsObserverNameEquals(kArcActiveAudioThrottleObserverName)));
+}
+
 // For testing ARCVM specific part of the class.
 class ArcInstanceThrottleVMTest : public testing::Test {
  public:
@@ -499,7 +526,6 @@ class ArcInstanceThrottleVMTest : public testing::Test {
         return observer.get();
     }
     NOTREACHED();
-    return nullptr;
   }
 
   base::RunLoop* run_loop() { return run_loop_.get(); }

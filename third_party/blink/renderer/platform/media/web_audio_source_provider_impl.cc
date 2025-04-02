@@ -10,10 +10,10 @@
 #include "base/check_op.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/task/bind_post_task.h"
 #include "base/thread_annotations.h"
 #include "media/base/audio_glitch_info.h"
@@ -123,7 +123,7 @@ WebAudioSourceProviderImpl::WebAudioSourceProviderImpl(
     media::MediaLog* media_log,
     base::OnceClosure on_set_client_callback /* = base::OnceClosure()*/)
     : sink_(std::move(sink)),
-      tee_filter_(new TeeFilter()),
+      tee_filter_(std::make_unique<TeeFilter>()),
       media_log_(media_log),
       on_set_client_callback_(std::move(on_set_client_callback)) {}
 
@@ -176,7 +176,7 @@ void WebAudioSourceProviderImpl::SetClient(
 }
 
 void WebAudioSourceProviderImpl::ProvideInput(
-    const WebVector<float*>& audio_data,
+    const std::vector<float*>& audio_data,
     int number_of_frames) {
   if (!bus_wrapper_ ||
       static_cast<size_t>(bus_wrapper_->channels()) != audio_data.size()) {
@@ -185,8 +185,13 @@ void WebAudioSourceProviderImpl::ProvideInput(
   }
 
   bus_wrapper_->set_frames(number_of_frames);
-  for (size_t i = 0; i < audio_data.size(); ++i)
-    bus_wrapper_->SetChannelData(static_cast<int>(i), audio_data[i]);
+  for (size_t i = 0; i < audio_data.size(); ++i) {
+    // TODO(crbug.com/375449662): Spanify `audio_data` parameter.
+    bus_wrapper_->SetChannelData(
+        static_cast<int>(i),
+        UNSAFE_TODO(base::span(audio_data[i],
+                               base::checked_cast<size_t>(number_of_frames))));
+  }
 
   // Use a try lock to avoid contention in the real-time audio thread.
   base::AutoTryLock auto_try_lock(sink_lock_);
@@ -288,7 +293,6 @@ bool WebAudioSourceProviderImpl::SetVolume(double volume) {
 
 media::OutputDeviceInfo WebAudioSourceProviderImpl::GetOutputDeviceInfo() {
   NOTREACHED();  // The blocking API is intentionally not supported.
-  return media::OutputDeviceInfo();
 }
 
 void WebAudioSourceProviderImpl::GetOutputDeviceInfoAsync(

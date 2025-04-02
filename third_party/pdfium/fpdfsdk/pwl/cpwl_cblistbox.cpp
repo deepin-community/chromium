@@ -8,10 +8,10 @@
 
 #include <utility>
 
+#include "core/fxcrt/notreached.h"
 #include "fpdfsdk/pwl/cpwl_combo_box.h"
 #include "fpdfsdk/pwl/cpwl_list_ctrl.h"
 #include "public/fpdf_fwlevent.h"
-#include "third_party/base/notreached.h"
 
 CPWL_CBListBox::CPWL_CBListBox(
     const CreateParams& cp,
@@ -74,7 +74,7 @@ bool CPWL_CBListBox::OnMovementKeyDown(FWL_VKEYCODE nKeyCode,
       m_pListCtrl->OnVK_RIGHT(IsSHIFTKeyDown(nFlag), IsCTRLKeyDown(nFlag));
       break;
     default:
-      NOTREACHED_NORETURN();
+      NOTREACHED();
   }
   return OnNotifySelectionChanged(true, nFlag);
 }

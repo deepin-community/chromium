@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "third_party/blink/renderer/core/animation/interpolation_environment.h"
+#include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
 #include "third_party/blink/renderer/core/svg/svg_integer_optional_integer.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
@@ -41,8 +42,13 @@ SVGIntegerOptionalIntegerInterpolationType::MaybeConvertSVGValue(
 }
 
 static SVGInteger* ToPositiveInteger(const InterpolableValue* number) {
+  // Note: using default CSSToLengthConversionData here as it's
+  // guaranteed to be a double.
+  // TODO(crbug.com/325821290): Avoid InterpolableNumber here.
   return MakeGarbageCollected<SVGInteger>(
-      ClampTo<int>(round(To<InterpolableNumber>(number)->Value()), 1));
+      ClampTo<int>(round(To<InterpolableNumber>(number)->Value(
+                       CSSToLengthConversionData(/*element=*/nullptr))),
+                   1));
 }
 
 SVGPropertyBase* SVGIntegerOptionalIntegerInterpolationType::AppliedSVGValue(

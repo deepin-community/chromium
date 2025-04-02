@@ -2,11 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "services/device/hid/hid_connection_impl.h"
+
+#include <algorithm>
 
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/ranges/algorithm.h"
 
 namespace device {
 
@@ -58,7 +64,7 @@ void HidConnectionImpl::OnInputReport(
   DCHECK_GE(size, 1u);
   std::vector<uint8_t> data;
   if (size > 1) {
-    data = std::vector<uint8_t>(buffer->front() + 1, buffer->front() + size);
+    data = std::vector<uint8_t>(buffer->data() + 1, buffer->data() + size);
   }
   client_->OnInputReport(/*report_id=*/buffer->data()[0], data);
 }
@@ -80,7 +86,7 @@ void HidConnectionImpl::OnRead(ReadCallback callback,
   }
   DCHECK(buffer);
 
-  std::vector<uint8_t> data(buffer->front() + 1, buffer->front() + size);
+  std::vector<uint8_t> data(buffer->data() + 1, buffer->data() + size);
   std::move(callback).Run(true, buffer->data()[0], data);
 }
 
@@ -90,10 +96,9 @@ void HidConnectionImpl::Write(uint8_t report_id,
   DCHECK(hid_connection_);
 
   auto io_buffer =
-      base::MakeRefCounted<base::RefCountedBytes>(buffer.size() + 1);
-  io_buffer->data()[0] = report_id;
-
-  base::ranges::copy(buffer, io_buffer->front() + 1);
+      base::MakeRefCounted<base::RefCountedBytes>(buffer.size() + 1u);
+  io_buffer->as_vector().data()[0u] = report_id;
+  base::span(io_buffer->as_vector()).subspan(1u).copy_from(buffer);
 
   hid_connection_->Write(io_buffer, base::BindOnce(&HidConnectionImpl::OnWrite,
                                                    weak_factory_.GetWeakPtr(),
@@ -124,7 +129,7 @@ void HidConnectionImpl::OnGetFeatureReport(
   }
   DCHECK(buffer);
 
-  std::vector<uint8_t> data(buffer->front(), buffer->front() + size);
+  std::vector<uint8_t> data(buffer->data(), buffer->data() + size);
   std::move(callback).Run(true, data);
 }
 
@@ -134,10 +139,9 @@ void HidConnectionImpl::SendFeatureReport(uint8_t report_id,
   DCHECK(hid_connection_);
 
   auto io_buffer =
-      base::MakeRefCounted<base::RefCountedBytes>(buffer.size() + 1);
-  io_buffer->data()[0] = report_id;
-
-  base::ranges::copy(buffer, io_buffer->front() + 1);
+      base::MakeRefCounted<base::RefCountedBytes>(buffer.size() + 1u);
+  io_buffer->as_vector()[0u] = report_id;
+  base::span(io_buffer->as_vector()).subspan(1u).copy_from(buffer);
 
   hid_connection_->SendFeatureReport(
       io_buffer,

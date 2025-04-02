@@ -132,9 +132,6 @@ void GCMKeyStore::CreateKeysAfterInitialize(
 
   if (!key) {
     NOTREACHED() << "Unable to initialize a P-256 key pair.";
-
-    std::move(callback).Run(nullptr /* key */, std::string() /* auth_secret */);
-    return;
   }
 
   // Create the authentication secret, which has to be a cryptographically

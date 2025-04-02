@@ -8,7 +8,7 @@ import * as Common from '../common/common.js';
 import * as i18n from '../i18n/i18n.js';
 
 import {InspectorFrontendHostInstance} from './InspectorFrontendHost.js';
-import {type LoadNetworkResourceResult} from './InspectorFrontendHostAPI.js';
+import type {LoadNetworkResourceResult} from './InspectorFrontendHostAPI.js';
 
 const UIStrings = {
   /**
@@ -76,12 +76,12 @@ const _boundStreams: {
   [x: number]: Common.StringOutputStream.OutputStream,
 } = {};
 
-const _bindOutputStream = function(stream: Common.StringOutputStream.OutputStream): number {
+export const bindOutputStream = function(stream: Common.StringOutputStream.OutputStream): number {
   _boundStreams[++_lastStreamId] = stream;
   return _lastStreamId;
 };
 
-const _discardOutputStream = function(id: number): void {
+export const discardOutputStream = function(id: number): void {
   void _boundStreams[id].close();
   delete _boundStreams[id];
 };
@@ -97,7 +97,7 @@ export interface LoadErrorDescription {
   message?: string;
 }
 
-export let load = function(
+export const load = function(
     url: string, headers: {
       [x: string]: string,
     }|null,
@@ -118,19 +118,6 @@ export let load = function(
     callback(success, headers, stream.data(), errorDescription);
   }
 };
-
-export function setLoadForTest(
-    newLoad: (
-        arg0: string, arg1: {
-          [x: string]: string,
-        }|null,
-        arg2: (
-            arg0: boolean, arg1: {
-              [x: string]: string,
-            },
-            arg2: string, arg3: LoadErrorDescription) => void) => void): void {
-  load = newLoad;
-}
 
 function getNetErrorCategory(netError: number): string {
   if (netError > -100) {
@@ -238,7 +225,7 @@ function canBeRemoteFilePath(url: string): boolean {
   try {
     const urlObject = new URL(url);
     return urlObject.protocol === 'file:' && urlObject.host !== '';
-  } catch (exception) {
+  } catch {
     return false;
   }
 }
@@ -254,7 +241,7 @@ export const loadAsStream = function(
          },
           arg2: LoadErrorDescription) => void),
     allowRemoteFilePaths?: boolean): void {
-  const streamId = _bindOutputStream(stream);
+  const streamId = bindOutputStream(stream);
   const parsedURL = new Common.ParsedURL.ParsedURL(url);
   if (parsedURL.isDataURL()) {
     loadXHR(url).then(dataURLDecodeSuccessful).catch(dataURLDecodeFailed);
@@ -287,7 +274,7 @@ export const loadAsStream = function(
       const {success, description} = createErrorMessageFromResponse(response);
       callback(success, response.headers || {}, description);
     }
-    _discardOutputStream(streamId);
+    discardOutputStream(streamId);
   }
 
   function dataURLDecodeSuccessful(text: string): void {

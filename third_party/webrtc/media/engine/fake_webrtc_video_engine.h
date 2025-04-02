@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "api/environment/environment.h"
 #include "api/fec_controller_override.h"
 #include "api/video/encoded_image.h"
 #include "api/video/video_bitrate_allocation.h"
@@ -63,10 +64,12 @@ class FakeWebRtcVideoDecoderFactory : public webrtc::VideoDecoderFactory {
   FakeWebRtcVideoDecoderFactory();
 
   std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override;
-  std::unique_ptr<webrtc::VideoDecoder> CreateVideoDecoder(
+  std::unique_ptr<webrtc::VideoDecoder> Create(
+      const webrtc::Environment& env,
       const webrtc::SdpVideoFormat& format) override;
 
   void DecoderDestroyed(FakeWebRtcVideoDecoder* decoder);
+  void AddSupportedVideoCodec(const webrtc::SdpVideoFormat& format);
   void AddSupportedVideoCodecType(const std::string& name);
   int GetNumCreatedDecoders();
   const std::vector<FakeWebRtcVideoDecoder*>& decoders();
@@ -116,8 +119,9 @@ class FakeWebRtcVideoEncoderFactory : public webrtc::VideoEncoderFactory {
   std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override;
   webrtc::VideoEncoderFactory::CodecSupport QueryCodecSupport(
       const webrtc::SdpVideoFormat& format,
-      absl::optional<std::string> scalability_mode) const override;
-  std::unique_ptr<webrtc::VideoEncoder> CreateVideoEncoder(
+      std::optional<std::string> scalability_mode) const override;
+  std::unique_ptr<webrtc::VideoEncoder> Create(
+      const webrtc::Environment& env,
       const webrtc::SdpVideoFormat& format) override;
 
   bool WaitForCreatedVideoEncoders(int num_encoders);

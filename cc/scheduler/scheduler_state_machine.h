@@ -7,13 +7,14 @@
 
 #include <stdint.h>
 
+#include "base/time/time.h"
+#include "base/tracing/protos/chrome_track_event.pbzero.h"
 #include "cc/cc_export.h"
 #include "cc/scheduler/commit_earlyout_reason.h"
 #include "cc/scheduler/draw_result.h"
 #include "cc/scheduler/scheduler_settings.h"
 #include "cc/tiles/tile_priority.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
-#include "third_party/perfetto/protos/perfetto/trace/track_event/chrome_compositor_scheduler_state.pbzero.h"
 
 namespace cc {
 
@@ -49,8 +50,8 @@ class CC_EXPORT SchedulerStateMachine {
     WAITING_FOR_FIRST_COMMIT,
     WAITING_FOR_FIRST_ACTIVATION,
   };
-  static perfetto::protos::pbzero::ChromeCompositorStateMachine::MajorState::
-      LayerTreeFrameSinkState
+  static perfetto::protos::pbzero::ChromeCompositorStateMachineV2::
+      MajorStateV2::LayerTreeFrameSinkState
       LayerTreeFrameSinkStateToProtozeroEnum(LayerTreeFrameSinkState state);
 
   // Note: BeginImplFrameState does not cycle through these states in a fixed
@@ -60,35 +61,32 @@ class CC_EXPORT SchedulerStateMachine {
     INSIDE_BEGIN_FRAME,
     INSIDE_DEADLINE,
   };
-  static perfetto::protos::pbzero::ChromeCompositorStateMachine::MajorState::
-      BeginImplFrameState
+  static perfetto::protos::pbzero::ChromeCompositorStateMachineV2::
+      MajorStateV2::BeginImplFrameState
       BeginImplFrameStateToProtozeroEnum(BeginImplFrameState state);
 
-  // These values are persisted to logs. Entries should not be renumbered and
-  // numeric values should never be reused.
-  // TODO(weiliangc): The histogram is used to understanding what type of
-  // deadline mode do we encounter in real world and is set to expire after
-  // 2022. The Enum can be changed after the histogram is removed.
   // The scheduler uses a deadline to wait for main thread updates before
   // submitting a compositor frame. BeginImplFrameDeadlineMode specifies when
   // the deadline should run.
   enum class BeginImplFrameDeadlineMode {
-    NONE = 0,  // No deadline should be scheduled e.g. for synchronous
-               // compositor.
+    NONE = 0,       // No deadline should be scheduled e.g. for synchronous
+                    // compositor.
     IMMEDIATE = 1,  // Deadline should be scheduled to run immediately.
-    REGULAR = 2,    // Deadline should be scheduled to run at the deadline
-                    // provided by in the BeginFrameArgs.
-    LATE = 3,       // Deadline should be scheduled run when the next frame is
-                    // expected to arrive.
-    BLOCKED = 4,    // Deadline should be blocked indefinitely until the next
-                    // frame arrives.
+    WAIT_FOR_SCROLL = 2,  // Deadline should be delayed as we are expecting
+                          // input for a scroll.
+    REGULAR = 3,          // Deadline should be scheduled to run at the deadline
+                          // provided by in the BeginFrameArgs.
+    LATE = 4,     // Deadline should be scheduled run when the next frame is
+                  // expected to arrive.
+    BLOCKED = 5,  // Deadline should be blocked indefinitely until the next
+                  // frame arrives.
     kMaxValue = BLOCKED,
   };
   // TODO(nuskos): Update Scheduler::ScheduleBeginImplFrameDeadline event to
   // used typed macros so we can remove this ToString function.
   static const char* BeginImplFrameDeadlineModeToString(
       BeginImplFrameDeadlineMode mode);
-  static perfetto::protos::pbzero::ChromeCompositorSchedulerState::
+  static perfetto::protos::pbzero::ChromeCompositorSchedulerStateV2::
       BeginImplFrameDeadlineMode
       BeginImplFrameDeadlineModeToProtozeroEnum(
           BeginImplFrameDeadlineMode mode);
@@ -99,8 +97,8 @@ class CC_EXPORT SchedulerStateMachine {
     READY_TO_COMMIT,  // A previously issued BeginMainFrame has been processed,
                       // and is ready to commit.
   };
-  static perfetto::protos::pbzero::ChromeCompositorStateMachine::MajorState::
-      BeginMainFrameState
+  static perfetto::protos::pbzero::ChromeCompositorStateMachineV2::
+      MajorStateV2::BeginMainFrameState
       BeginMainFrameStateToProtozeroEnum(BeginMainFrameState state);
 
   // When a redraw is forced, it goes through a complete commit -> activation ->
@@ -111,8 +109,8 @@ class CC_EXPORT SchedulerStateMachine {
     WAITING_FOR_ACTIVATION,
     WAITING_FOR_DRAW,
   };
-  static perfetto::protos::pbzero::ChromeCompositorStateMachine::MajorState::
-      ForcedRedrawOnTimeoutState
+  static perfetto::protos::pbzero::ChromeCompositorStateMachineV2::
+      MajorStateV2::ForcedRedrawOnTimeoutState
       ForcedRedrawOnTimeoutStateToProtozeroEnum(
           ForcedRedrawOnTimeoutState state);
 
@@ -148,11 +146,11 @@ class CC_EXPORT SchedulerStateMachine {
     NOTIFY_BEGIN_MAIN_FRAME_NOT_EXPECTED_UNTIL,
     NOTIFY_BEGIN_MAIN_FRAME_NOT_EXPECTED_SOON,
   };
-  static perfetto::protos::pbzero::ChromeCompositorSchedulerAction
+  static perfetto::protos::pbzero::ChromeCompositorSchedulerActionV2
   ActionToProtozeroEnum(Action action);
 
   void AsProtozeroInto(
-      perfetto::protos::pbzero::ChromeCompositorStateMachine* state) const;
+      perfetto::protos::pbzero::ChromeCompositorStateMachineV2* state) const;
 
   Action NextAction() const;
   void WillSendBeginMainFrame();
@@ -209,9 +207,23 @@ class CC_EXPORT SchedulerStateMachine {
 
   bool IsDrawThrottled() const;
 
+  // Throttles main frame production to a given interval, but not compositor
+  // frames.
+  void SetThrottleMainFrames(base::TimeDelta interval);
+  base::TimeDelta main_frame_throttled_interval() const {
+    return main_frame_throttled_interval_;
+  }
+
   // Indicates whether the LayerTreeHostImpl is visible.
   void SetVisible(bool visible);
   bool visible() const { return visible_; }
+
+  // Indicates that warming up is requested to create a new LayerTreeFrameSink
+  // even if the LayerTreeHost is invisible. This is an experimental function
+  // and only used if `kWarmUpCompositor` is enabled. Currently, this will be
+  // requested only from prerendered pages. Please see crbug.com/40240492 for
+  // more details.
+  void SetShouldWarmUp();
 
   void SetBeginFrameSourcePaused(bool paused);
   bool begin_frame_source_paused() const { return begin_frame_source_paused_; }
@@ -223,6 +235,7 @@ class CC_EXPORT SchedulerStateMachine {
   // |did_invalidate_layer_tree_frame_sink()|.
   void SetNeedsRedraw();
   bool needs_redraw() const { return needs_redraw_; }
+
 
   bool did_invalidate_layer_tree_frame_sink() const {
     return did_invalidate_layer_tree_frame_sink_;
@@ -258,7 +271,13 @@ class CC_EXPORT SchedulerStateMachine {
   // Indicates that a new begin main frame flow needs to be performed, either
   // to pull updates from the main thread to the impl, or to push deltas from
   // the impl thread to main.
-  void SetNeedsBeginMainFrame();
+  //
+  // If `now` is true, then the BeginMainFrame() update is not throttled, and
+  // the next BeginMainFrame() will be sent at the next opportunity, regardless
+  // of the interval since the last one. This is to be used in cases where
+  // `SetThrottleMainFrames()` has been called, and we have an "urgent" update
+  // that should not wait more than necessary.
+  void SetNeedsBeginMainFrame(bool now = false);
   bool needs_begin_main_frame() const { return needs_begin_main_frame_; }
 
   void SetMainThreadWantsBeginMainFrameNotExpectedMessages(bool new_state);
@@ -363,10 +382,20 @@ class CC_EXPORT SchedulerStateMachine {
 
   bool resourceless_draw() const { return resourceless_draw_; }
 
+  void set_is_scrolling(bool is_scrolling) { is_scrolling_ = is_scrolling; }
+  void set_waiting_for_scroll_event(bool waiting_for_scroll_event) {
+    waiting_for_scroll_event_ = waiting_for_scroll_event;
+  }
+
  protected:
   bool BeginFrameRequiredForAction() const;
   bool BeginFrameNeededForVideo() const;
   bool ProactiveBeginFrameWanted() const;
+
+  // Indicates if we should post a deadline for drawing, and if we should delay
+  // sending BeginMainFrame. This is true when we are expecting a scroll event
+  // to arrive, are prioritizing smoothness, and have begun frame production.
+  bool ShouldWaitForScrollEvent() const;
 
   // Indicates if we should post the deadline to draw immediately. This is true
   // when we aren't expecting a commit or activation, or we're prioritizing
@@ -399,6 +428,9 @@ class CC_EXPORT SchedulerStateMachine {
   void WillPerformImplSideInvalidationInternal();
   void DidDrawInternal(DrawResult draw_result);
 
+  // Virtual for testing.
+  virtual base::TimeTicks Now() const;
+
   const SchedulerSettings settings_;
 
   LayerTreeFrameSinkState layer_tree_frame_sink_state_ =
@@ -421,6 +453,9 @@ class CC_EXPORT SchedulerStateMachine {
   int last_frame_number_draw_performed_ = -1;
   int last_frame_number_begin_main_frame_sent_ = -1;
   int last_frame_number_invalidate_layer_tree_frame_sink_performed_ = -1;
+
+  base::TimeTicks last_sent_begin_main_frame_time_;
+  base::TimeDelta main_frame_throttled_interval_;
 
   // Inputs from the last impl frame that are required for decisions made in
   // this impl frame. The values from the last frame are cached before being
@@ -455,6 +490,7 @@ class CC_EXPORT SchedulerStateMachine {
   bool needs_one_begin_impl_frame_ = false;
   bool needs_post_commit_ = false;
   bool visible_ = false;
+  bool should_warm_up_ = false;
   bool begin_frame_source_paused_ = false;
   bool resourceless_draw_ = false;
   bool can_draw_ = false;
@@ -504,6 +540,15 @@ class CC_EXPORT SchedulerStateMachine {
   bool draw_aborted_for_paused_begin_frame_ = false;
 
   unsigned consecutive_cant_draw_count_ = 0u;
+
+  // When true we will prioritize BeginImplFrameDeadlineMode::SCROLL if
+  // `SchedulerSettings.scroll_deadline_mode_enabled_` is enabled.
+  bool is_scrolling_ = false;
+  // Only true when `is_scrolling_` is also true. While true there was no
+  // available scroll events at the start of OnBeginImplFrame and we were
+  // expecting some. Once `is_scrolling_` is false, we are no longer expecting
+  // scroll events to arrive.
+  bool waiting_for_scroll_event_ = false;
 };
 
 }  // namespace cc

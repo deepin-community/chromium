@@ -28,6 +28,7 @@
 #include "third_party/blink/renderer/core/editing/iterators/text_iterator.h"
 
 #include <unicode/utf16.h>
+
 #include "build/build_config.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/display_lock/display_lock_utilities.h"
@@ -41,9 +42,15 @@
 #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_legend_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_opt_group_element.h"
+#include "third_party/blink/renderer/core/html/forms/html_option_element.h"
 #include "third_party/blink/renderer/core/html/forms/text_control_element.h"
+#include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_image_element.h"
+#include "third_party/blink/renderer/core/html/html_meter_element.h"
+#include "third_party/blink/renderer/core/html/html_progress_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/layout/table/layout_table.h"
@@ -51,6 +58,7 @@
 #include "third_party/blink/renderer/core/layout/table/layout_table_row.h"
 #include "third_party/blink/renderer/platform/fonts/font.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -441,11 +449,15 @@ void TextIteratorAlgorithm<Strategy>::Advance() {
               Strategy::IsDescendantOf(*end_container_, *parent_node)) {
             return;
           }
+          // We should call the ExitNode() always if |node_| has a layout
+          // object or not and it's the last child under |parent_node|.
           bool have_layout_object = node_->GetLayoutObject();
           node_ = parent_node;
           fully_clipped_stack_.Pop();
           parent_node = Strategy::Parent(*node_);
-          if (have_layout_object) {
+          if (RuntimeEnabledFeatures::
+                  CallExitNodeWithoutLayoutObjectEnabled() ||
+              have_layout_object) {
             ExitNode();
           }
           if (text_state_.PositionNode()) {
@@ -462,8 +474,6 @@ void TextIteratorAlgorithm<Strategy>::Advance() {
           const auto* shadow_root = DynamicTo<ShadowRoot>(node_);
           if (!shadow_root) {
             NOTREACHED();
-            should_stop_ = true;
-            return;
           }
           if (shadow_root->IsOpen()) {
             // We are the shadow root; exit from here and go back to
@@ -477,7 +487,7 @@ void TextIteratorAlgorithm<Strategy>::Advance() {
             // to the host.
             // TODO(kochi): Make sure we treat closed shadow as user agent
             // shadow here.
-            DCHECK(shadow_root->GetType() == ShadowRootType::kClosed ||
+            DCHECK(shadow_root->GetMode() == ShadowRootMode::kClosed ||
                    shadow_root->IsUserAgent());
             node_ = &shadow_root->host();
             iteration_progress_ = kHandledUserAgentShadowRoot;
@@ -672,8 +682,7 @@ static bool ShouldEmitNewlinesBeforeAndAfterNode(const Node& node) {
   }
 
   return !r->IsInline() && r->IsLayoutBlock() &&
-         !r->IsFloatingOrOutOfFlowPositioned() && !r->IsBody() &&
-         !r->IsRubyText();
+         !r->IsFloatingOrOutOfFlowPositioned() && !r->IsBody();
 }
 
 template <typename Strategy>

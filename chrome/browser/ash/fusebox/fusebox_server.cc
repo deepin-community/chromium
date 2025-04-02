@@ -13,6 +13,7 @@
 #include "base/files/file_util.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
+#include "base/strings/escape.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -36,6 +37,7 @@
 #include "storage/browser/file_system/file_system_url.h"
 #include "storage/common/file_system/file_system_util.h"
 #include "third_party/cros_system_api/dbus/fusebox/dbus-constants.h"
+#include "url/url_util.h"
 
 // This file provides the "business logic" half of the FuseBox server, coupled
 // with the "D-Bus protocol logic" half in fusebox_service_provider.cc.
@@ -46,7 +48,7 @@ namespace {
 
 Server* g_server_instance = nullptr;
 
-bool UseTempFile(const std::string_view fs_url_as_string) {
+bool UseTempFile(std::string_view fs_url_as_string) {
   // MTP (the protocol) does not support incremental writes. When creating an
   // MTP file (via FuseBox), we need to supply its contents as a whole. Up
   // until that transfer, spool incremental writes to a temporary file.
@@ -54,7 +56,7 @@ bool UseTempFile(const std::string_view fs_url_as_string) {
                           file_manager::util::kFuseBoxSubdirPrefixMTP);
 }
 
-bool UseEmptyTruncateWorkaround(const std::string_view fs_url_as_string,
+bool UseEmptyTruncateWorkaround(std::string_view fs_url_as_string,
                                 int64_t length) {
   // Not all storage::AsyncFileUtil back-ends implement the CreateFile or
   // Truncate methods. When they don't, and truncating to a zero length, work
@@ -140,13 +142,31 @@ base::expected<Parsed, ParseError> ParseFileSystemURL(
     return base::unexpected(ParseError(EFAULT));
   }
 
+  // encoded is fs_url_as_string transformed such that "fsp.hash/x/y#z.txt"
+  // becomes "fsp.hash/x%2Fy%23z.txt". The "#" in particular would otherwise be
+  // problematic, since the conversion from string to GURL does not consider
+  // the "#y.txt" part of the URL path, even though "#" is a valid character
+  // for ChromeOS (Linux) file names.
+  //
+  // The initial "/" stays a slash, not a "%2F", since that is what
+  // ResolvePrefixMap and MonikerMap::ExtractToken expects to find.
+  std::string encoded;
+  size_t slash = fs_url_as_string.find('/');
+  if (slash == std::string::npos) {
+    encoded = fs_url_as_string;
+  } else {
+    url::RawCanonOutputT<char> canon_output;
+    url::EncodeURIComponent(fs_url_as_string.substr(slash + 1), &canon_output);
+    encoded = base::StrCat(
+        {fs_url_as_string.substr(0, slash + 1), canon_output.view()});
+  }
+
   storage::FileSystemURL fs_url;
   bool read_only = false;
 
   // Intercept any moniker names and replace them by their linked target.
   using ResultType = fusebox::MonikerMap::ExtractTokenResult::ResultType;
-  auto extract_token_result =
-      fusebox::MonikerMap::ExtractToken(fs_url_as_string);
+  auto extract_token_result = fusebox::MonikerMap::ExtractToken(encoded);
   switch (extract_token_result.result_type) {
     case ResultType::OK: {
       auto resolved = moniker_map.Resolve(extract_token_result.token);
@@ -159,7 +179,7 @@ base::expected<Parsed, ParseError> ParseFileSystemURL(
       break;
     }
     case ResultType::NOT_A_MONIKER_FS_URL: {
-      auto resolved = ResolvePrefixMap(prefix_map, fs_url_as_string);
+      auto resolved = ResolvePrefixMap(prefix_map, encoded);
       if (resolved.first.empty()) {
         LOG(ERROR) << "Unresolvable Prefix";
         return base::unexpected(ParseError(ENOENT));
@@ -817,9 +837,13 @@ base::FilePath Server::InverseResolveFSURL(
   }
 
   if (best_size > 0) {
+    const std::string relative_path = base::UnescapeURLComponent(
+        fs_url_as_string.substr(best_size),
+        base::UnescapeRule::SPACES |
+            base::UnescapeRule::URL_SPECIAL_CHARS_EXCEPT_PATH_SEPARATORS);
     return storage::StringToFilePath(
         base::StrCat({file_manager::util::kFuseBoxMediaSlashPath, best_subdir,
-                      fs_url_as_string.substr(best_size)}));
+                      relative_path}));
   }
 
   return base::FilePath();
@@ -1058,7 +1082,8 @@ void Server::Read2(const Read2RequestProto& request_proto,
     response_proto.set_posix_error_code(ENOENT);
     std::move(callback).Run(response_proto);
     return;
-  } else if (!iter->second.readable_) {
+  }
+  if (!iter->second.readable_) {
     Read2ResponseProto response_proto;
     response_proto.set_posix_error_code(EACCES);
     std::move(callback).Run(response_proto);

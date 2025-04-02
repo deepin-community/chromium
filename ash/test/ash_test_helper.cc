@@ -29,8 +29,8 @@
 #include "ash/shell_init_params.h"
 #include "ash/style/dark_light_mode_controller_impl.h"
 #include "ash/system/geolocation/test_geolocation_url_loader_factory.h"
-#include "ash/system/notification_center/session_state_notification_blocker.h"
 #include "ash/system/model/system_tray_model.h"
+#include "ash/system/notification_center/session_state_notification_blocker.h"
 #include "ash/system/screen_layout_observer.h"
 #include "ash/test/ash_test_views_delegate.h"
 #include "ash/test/pixel/ash_pixel_test_helper.h"
@@ -46,8 +46,11 @@
 #include "base/system/system_monitor.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
 #include "chromeos/ash/components/dbus/audio/cras_audio_client.h"
+#include "chromeos/ash/components/dbus/dlcservice/dlcservice_client.h"
+#include "chromeos/ash/components/dbus/dlcservice/fake_dlcservice_client.h"
 #include "chromeos/ash/components/dbus/rgbkbd/rgbkbd_client.h"
 #include "chromeos/ash/components/dbus/typecd/typecd_client.h"
+#include "chromeos/ash/components/fwupd/fake_fwupd_download_client.h"
 #include "chromeos/ash/components/login/login_state/login_state.h"
 #include "chromeos/ash/services/bluetooth_config/in_process_instance.h"
 #include "chromeos/ash/services/hotspot_config/public/cpp/cros_hotspot_config_test_helper.h"
@@ -162,10 +165,12 @@ AshTestHelper::~AshTestHelper() {
 
   SimpleGeolocationProvider::DestroyForTesting();
 
-  // Ensure the next test starts with a null display::Screen.  This must be done
-  // here instead of in TearDown() since some tests test access to the Screen
-  // after the shell shuts down (which they use TearDown() to trigger).
-  ScreenAsh::DeleteScreenForShutdown();
+  if (destroy_screen_) {
+    // Ensure the next test starts with a null display::Screen.  This must be
+    // done here instead of in TearDown() since some tests test access to the
+    // Screen after the shell shuts down (which they use TearDown() to trigger).
+    ScreenAsh::DeleteScreenForShutdown();
+  }
 
   // This should never have a meaningful effect, since either there is no
   // ViewsTestHelperAura instance or the instance is currently in its
@@ -178,7 +183,8 @@ void AshTestHelper::SetUp() {
 }
 
 void AshTestHelper::TearDown() {
-  saved_desk_test_helper_.reset();
+  fwupd_download_client_.reset();
+  saved_desk_test_helper_->Shutdown();
 
   ambient_ash_test_helper_.reset();
 
@@ -216,8 +222,9 @@ void AshTestHelper::TearDown() {
   cros_hotspot_config_test_helper_.reset();
   test_keyboard_controller_observer_.reset();
   session_controller_client_.reset();
+  dlc_service_client_.reset();
   test_views_delegate_.reset();
-  new_window_delegate_provider_.reset();
+  new_window_delegate_.reset();
   bluez_dbus_manager_initializer_.reset();
   floss_dbus_manager_initializer_.reset();
   system_tray_client_.reset();
@@ -227,6 +234,7 @@ void AshTestHelper::TearDown() {
   statistics_provider_.reset();
   command_line_.reset();
   quick_pair_browser_delegate_.reset();
+  saved_desk_test_helper_.reset();
 
   // Purge ColorProviderManager between tests so that we don't accumulate
   // ColorProviderInitializers. crbug.com/1349232.
@@ -279,6 +287,7 @@ void AshTestHelper::SetUp(InitParams init_params) {
   create_global_cras_audio_handler_ =
       init_params.create_global_cras_audio_handler;
   create_quick_pair_mediator_ = init_params.create_quick_pair_mediator;
+  destroy_screen_ = init_params.destroy_screen;
 
   if (create_global_cras_audio_handler_) {
     // Create `CrasAudioHandler` for testing since `g_browser_process` is not
@@ -331,19 +340,18 @@ void AshTestHelper::SetUp(InitParams init_params) {
   }
 
   if (!NewWindowDelegate::GetInstance()) {
-    new_window_delegate_provider_ =
-        std::make_unique<TestNewWindowDelegateProvider>(
-            std::make_unique<TestNewWindowDelegate>());
+    new_window_delegate_ = std::make_unique<TestNewWindowDelegate>();
   }
   if (!views::ViewsDelegate::GetInstance()) {
     test_views_delegate_ = MakeTestViewsDelegate();
   }
-
-  if (features::IsHotspotEnabled()) {
-    cros_hotspot_config_test_helper_ =
-        std::make_unique<hotspot_config::CrosHotspotConfigTestHelper>(
-            /*use_fake_implementation=*/true);
+  if (!DlcserviceClient::Get()) {
+    dlc_service_client_ = std::make_unique<FakeDlcserviceClient>();
   }
+
+  cros_hotspot_config_test_helper_ =
+      std::make_unique<hotspot_config::CrosHotspotConfigTestHelper>(
+          /*use_fake_implementation=*/true);
 
   LoginState::Initialize();
 
@@ -390,19 +398,37 @@ void AshTestHelper::SetUp(InitParams init_params) {
   shell->assistant_controller()->SetAssistant(assistant_service_.get());
 
   shell->system_tray_model()->SetClient(system_tray_client_.get());
-
+  prefs_provider_ = std::make_unique<TestPrefServiceProvider>();
   session_controller_client_ = std::make_unique<TestSessionControllerClient>(
-      shell->session_controller(), prefs_provider_.get());
+      shell->session_controller(), prefs_provider_.get(),
+      init_params.create_signin_pref_service);
+  session_controller_client_->set_default_provide_pref_service(
+      init_params.auto_create_prefs_services);
   session_controller_client_->InitializeAndSetClient();
-  if (init_params.start_session) {
-    session_controller_client_->CreatePredefinedUserSessions(1);
-  }
 
   // Requires the AppListController the Shell creates.
   app_list_test_helper_ = std::make_unique<AppListTestHelper>();
 
+  // SavedDeskTestHelper depends on account.
+  saved_desk_test_helper_ = std::make_unique<SavedDeskTestHelper>();
+
   Shell::GetPrimaryRootWindow()->Show();
   Shell::GetPrimaryRootWindow()->GetHost()->Show();
+
+  // Sign-in after UI is shown.
+  if (init_params.start_session) {
+    // TODO(crbug.com/383441831): Remove Reset();
+    session_controller_client_->Reset();
+
+    auto account_id = AccountId::FromUserEmail("user0@tray");
+    // TODO((crbug.com/383441831): Use SimulateUserLogin.
+    session_controller_client_->AddUserSession(
+        account_id, account_id.GetUserEmail(),
+        user_manager::UserType::kRegular);
+    session_controller_client_->SwitchActiveUser(account_id);
+    session_controller_client_->SetSessionState(
+        session_manager::SessionState::ACTIVE);
+  }
 
   // Don't change the display size due to host size resize.
   display::test::DisplayManagerTestApi(shell->display_manager())
@@ -459,7 +485,7 @@ void AshTestHelper::SetUp(InitParams init_params) {
     StabilizeUIForPixelTest();
   }
 
-  saved_desk_test_helper_ = std::make_unique<SavedDeskTestHelper>();
+  fwupd_download_client_ = std::make_unique<FakeFwupdDownloadClient>();
 }
 
 display::Display AshTestHelper::GetSecondaryDisplay() const {
@@ -467,12 +493,20 @@ display::Display AshTestHelper::GetSecondaryDisplay() const {
       .GetSecondaryDisplay();
 }
 
-void AshTestHelper::SimulateUserLogin(const AccountId& account_id,
-                                      user_manager::UserType user_type,
-                                      bool is_new_profile) {
+void AshTestHelper::SimulateUserLogin(
+    const AccountId& account_id,
+    user_manager::UserType user_type,
+    bool is_new_profile,
+    std::unique_ptr<PrefService> pref_service) {
+  std::variant<bool, std::unique_ptr<PrefService>> provide_or_pref_service =
+      true;
+  if (pref_service) {
+    provide_or_pref_service = std::move(pref_service);
+  }
+
   session_controller_client_->AddUserSession(
       account_id, account_id.GetUserEmail(), user_type,
-      /*provide_pref_service=*/true, is_new_profile);
+      std::move(provide_or_pref_service), is_new_profile);
   session_controller_client_->SwitchActiveUser(account_id);
   session_controller_client_->SetSessionState(
       session_manager::SessionState::ACTIVE);

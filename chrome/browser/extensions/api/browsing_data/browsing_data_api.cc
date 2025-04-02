@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 // Defines the Chrome Extensions BrowsingData API functions, which entail
 // clearing browsing data, and clearing the browser's cache (which, let's be
 // honest, are the same thing), as specified in the extension API JSON.
@@ -19,7 +24,6 @@
 #include "chrome/browser/signin/account_reconcilor_factory.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/sync_ui_util.h"
-#include "chrome/browser/ui/browser.h"
 #include "components/browsing_data/content/browsing_data_helper.h"
 #include "components/browsing_data/core/pref_names.h"
 #include "components/history/core/common/pref_names.h"
@@ -29,6 +33,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/browsing_data_filter_builder.h"
 #include "content/public/browser/browsing_data_remover.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/error_utils.h"
 #include "extensions/common/extension.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
@@ -121,7 +126,7 @@ ExtensionFunction::ResponseAction BrowsingDataSettingsFunction::Run() {
   // extension data.
   base::Value::Dict origin_types;
   origin_types.Set(extension_browsing_data_api_constants::kUnprotectedWebKey,
-                   isDataTypeSelected(BrowsingDataType::COOKIES, tab));
+                   isDataTypeSelected(BrowsingDataType::SITE_DATA, tab));
   origin_types.Set(extension_browsing_data_api_constants::kProtectedWebKey,
                    isDataTypeSelected(BrowsingDataType::HOSTED_APPS_DATA, tab));
   origin_types.Set(extension_browsing_data_api_constants::kExtensionsKey,
@@ -149,7 +154,7 @@ ExtensionFunction::ResponseAction BrowsingDataSettingsFunction::Run() {
   base::Value::Dict permitted;
 
   bool delete_site_data =
-      isDataTypeSelected(BrowsingDataType::COOKIES, tab) ||
+      isDataTypeSelected(BrowsingDataType::SITE_DATA, tab) ||
       isDataTypeSelected(BrowsingDataType::HOSTED_APPS_DATA, tab);
 
   SetDetails(&selected, &permitted,
@@ -270,6 +275,8 @@ ExtensionFunction::ResponseAction BrowsingDataRemoverFunction::Run() {
     if (!result.has_value()) {
       return RespondNow(std::move(result.error()));
     }
+    EXTENSION_FUNCTION_VALIDATE(!result->empty());
+
     origins_ = std::move(*result);
   } else if (exclude_origins) {
     OriginParsingResult result = ParseOrigins(*exclude_origins);

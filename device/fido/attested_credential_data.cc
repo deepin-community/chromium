@@ -4,11 +4,11 @@
 
 #include "device/fido/attested_credential_data.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/memory/raw_ptr_exclusion.h"
 #include "base/numerics/safe_math.h"
-#include "base/ranges/algorithm.h"
 #include "components/cbor/reader.h"
 #include "components/device_event_log/device_event_log.h"
 #include "device/fido/cbor_extract.h"
@@ -172,9 +172,9 @@ std::optional<AttestedCredentialData>
 AttestedCredentialData::CreateFromU2fRegisterResponse(
     base::span<const uint8_t> u2f_data,
     std::unique_ptr<PublicKey> public_key) {
-  // TODO(crbug/799075): Introduce a CredentialID class to do this extraction.
-  // Extract the length of the credential (i.e. of the U2FResponse key
-  // handle). Length is big endian.
+  // TODO(crbug.com/41363164): Introduce a CredentialID class to do this
+  // extraction. Extract the length of the credential (i.e. of the U2FResponse
+  // key handle). Length is big endian.
   std::vector<uint8_t> extracted_length =
       fido_parsing_utils::Extract(u2f_data, kU2fKeyHandleLengthOffset, 1);
 
@@ -243,7 +243,7 @@ AttestedCredentialData& AttestedCredentialData::operator=(
 AttestedCredentialData::~AttestedCredentialData() = default;
 
 bool AttestedCredentialData::IsAaguidZero() const {
-  return base::ranges::all_of(aaguid_, [](uint8_t v) { return v == 0; });
+  return std::ranges::all_of(aaguid_, [](uint8_t v) { return v == 0; });
 }
 
 bool AttestedCredentialData::DeleteAaguid() {

@@ -26,6 +26,7 @@ using PasswordProtectionUIType = safe_browsing::WarningUIType;
 using PasswordProtectionUIAction = safe_browsing::WarningAction;
 
 const base::TimeDelta kPasswordChangeInactivity = base::Minutes(30);
+const base::TimeDelta kSafetyHubSurveyDelay = base::Minutes(10);
 
 // Service which receives events from Trust & Safety features and determines
 // whether or not to launch a HaTS survey on the NTP for the user.
@@ -125,19 +126,17 @@ class TrustSafetySentimentService
     kBrowsingData = 12,
     kPrivacyGuide = 13,
     kControlGroup = 14,
-    kPrivacySandbox4ConsentAccept = 15,
-    kPrivacySandbox4ConsentDecline = 16,
-    kPrivacySandbox4NoticeOk = 17,
-    kPrivacySandbox4NoticeSettings = 18,
+    // kPrivacySandbox4ConsentAccept = 15, // DEPRECATED.
+    // kPrivacySandbox4ConsentDecline = 16, // DEPRECATED.
+    // kPrivacySandbox4NoticeOk = 17, // DEPRECATED.
+    // kPrivacySandbox4NoticeSettings = 18, // DEPRECATED.
     kSafeBrowsingInterstitial = 19,
     kDownloadWarningUI = 20,
     kPasswordProtectionUI = 21,
-    kMaxValue = kPasswordProtectionUI,
+    kSafetyHubNotification = 22,
+    kSafetyHubInteracted = 23,
+    kMaxValue = kSafetyHubInteracted,
   };
-
-  // Called when the user interacts with Privacy Sandbox 4, `feature_area`
-  // specifies what type of interaction occurred.
-  virtual void InteractedWithPrivacySandbox4(FeatureArea feature_area);
 
   // Called when the user interacts with a safe browsing blocking page.
   virtual void InteractedWithSafeBrowsingInterstitial(
@@ -176,6 +175,12 @@ class TrustSafetySentimentService
   // Returns true if succeeds, else false.
   static bool ProbabilityCheck(FeatureArea feature_area);
 
+  // Triggers a survey for Safety Hub for the given feature area (visiting SH or
+  // seeing a notification).
+  virtual void TriggerSafetyHubSurvey(
+      TrustSafetySentimentService::FeatureArea feature_area,
+      std::map<std::string, bool> product_specific_data);
+
  private:
   friend class TrustSafetySentimentServiceTest;
   FRIEND_TEST_ALL_PREFIXES(TrustSafetySentimentServiceTest,
@@ -201,6 +206,8 @@ class TrustSafetySentimentService
                            V2_BrowsingData_NotInterested);
   FRIEND_TEST_ALL_PREFIXES(TrustSafetySentimentServiceTest, V2_PrivacyGuide);
   FRIEND_TEST_ALL_PREFIXES(TrustSafetySentimentServiceTest, V2_ControlGroup);
+  FRIEND_TEST_ALL_PREFIXES(TrustSafetySentimentServiceTest,
+                           SafetyHubInteractionState);
 
   // Struct representing a trigger (user action relevant to T&S) that previously
   // occurred, and is awaiting the appropriate eligibility steps before causing

@@ -4,17 +4,19 @@
 
 #include "ui/display/display_layout.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "base/check.h"
 #include "base/check_op.h"
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase_vector.h"
 #include "base/logging.h"
-#include "base/ranges/algorithm.h"
+#include "base/not_fatal_until.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "components/device_event_log/device_event_log.h"
@@ -53,7 +55,7 @@ DisplayIdList DisplayListToDisplayIdList(const Displays& displays) {
 
 // Returns nullptr if display with |id| is not found.
 Display* FindDisplayById(Displays* display_list, int64_t id) {
-  auto iter = base::ranges::find(*display_list, id, &Display::id);
+  auto iter = std::ranges::find(*display_list, id, &Display::id);
   return iter == display_list->end() ? nullptr : &(*iter);
 }
 
@@ -156,9 +158,10 @@ void MaybeReparentTargetDisplay(
     Display* parent_display = FindDisplayById(display_list, parent_display_id);
     DCHECK(parent_display);
 
-    auto target_display_placement_itr = base::ranges::find(
+    auto target_display_placement_itr = std::ranges::find(
         *placement_list, target_display->id(), &DisplayPlacement::display_id);
-    DCHECK(target_display_placement_itr != placement_list->end());
+    CHECK(target_display_placement_itr != placement_list->end(),
+          base::NotFatalUntil::M130);
     target_display_placement = &(*target_display_placement_itr);
     if (AreDisplaysTouching(*target_display, *parent_display,
                             target_display_placement->position)) {
@@ -453,7 +456,7 @@ std::string DisplayPlacement::PositionToString(Position position) {
 }
 
 // static
-bool DisplayPlacement::StringToPosition(const base::StringPiece& string,
+bool DisplayPlacement::StringToPosition(std::string_view string,
                                         Position* position) {
   if (string == kTop) {
     *position = TOP;
@@ -621,7 +624,7 @@ bool DisplayLayout::HasSamePlacementList(const DisplayLayout& layout) const {
 }
 
 void DisplayLayout::RemoveDisplayPlacements(const DisplayIdList& list) {
-  base::EraseIf(placement_list, [&list](const DisplayPlacement& placement) {
+  std::erase_if(placement_list, [&list](const DisplayPlacement& placement) {
     return base::Contains(list, placement.display_id);
   });
   for (DisplayPlacement& placement : placement_list) {
@@ -647,8 +650,8 @@ std::string DisplayLayout::ToString() const {
 }
 
 DisplayPlacement DisplayLayout::FindPlacementById(int64_t display_id) const {
-  const auto iter = base::ranges::find(placement_list, display_id,
-                                       &DisplayPlacement::display_id);
+  const auto iter = std::ranges::find(placement_list, display_id,
+                                      &DisplayPlacement::display_id);
   return (iter == placement_list.end()) ? DisplayPlacement()
                                         : DisplayPlacement(*iter);
 }

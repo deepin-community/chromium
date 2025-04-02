@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import m from 'mithril';
-
 import {checkHotkey, Hotkey} from '../base/hotkeys';
 
 export interface HotkeyConfig {
@@ -59,6 +58,7 @@ export class HotkeyContext implements m.ClassComponent<HotkeyContextAttrs> {
         if (checkHotkey(hotkey, e)) {
           e.preventDefault();
           callback();
+          m.redraw();
         }
       });
     }

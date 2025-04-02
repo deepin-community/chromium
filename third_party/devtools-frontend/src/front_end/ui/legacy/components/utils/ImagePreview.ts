@@ -55,6 +55,17 @@ export interface PrecomputedFeatures {
   currentSrc?: Platform.DevToolsPath.UrlString;
 }
 
+export const enum Align {
+  // 'start' means the table content will be start-aligned. For example:
+  // title1       Description1
+  // title22222   Description2222222222222
+  START = 'start',
+  // 'center' means the table content will be center-aligned. For example:
+  //       title1 Description1
+  //   title22222 Description2222222222222
+  CENTER = 'center',
+}
+
 function isImageResource(resource: SDK.Resource.Resource|null): boolean {
   return resource !== null && resource.resourceType() === Common.ResourceType.resourceTypes.Image;
 }
@@ -64,8 +75,11 @@ export class ImagePreview {
       target: SDK.Target.Target, originalImageURL: Platform.DevToolsPath.UrlString, showDimensions: boolean, options: {
         precomputedFeatures: (PrecomputedFeatures|undefined),
         imageAltText: (string|undefined),
-      }|undefined = {precomputedFeatures: undefined, imageAltText: undefined}): Promise<Element|null> {
-    const {precomputedFeatures, imageAltText} = options;
+        align: Align,
+        hideFileData?: boolean,
+      }|undefined = {precomputedFeatures: undefined, imageAltText: undefined, align: Align.CENTER}):
+      Promise<Element|null> {
+    const {precomputedFeatures, imageAltText, align} = options;
     const resourceTreeModel = target.model(SDK.ResourceTreeModel.ResourceTreeModel);
     if (!resourceTreeModel) {
       return null;
@@ -87,7 +101,7 @@ export class ImagePreview {
     const content = resource.content ? resource.content : resource.url.split('base64,')[1];
     const contentSize = resource.contentSize();
     const resourceSize = contentSize ? contentSize : Platform.StringUtilities.base64ToSize(content);
-    const resourceSizeText = resourceSize > 0 ? Platform.NumberUtilities.bytesToString(resourceSize) : '';
+    const resourceSizeText = resourceSize > 0 ? i18n.ByteUtilities.bytesToString(resourceSize) : '';
 
     return new Promise(resolve => {
       const imageElement = document.createElement('img');
@@ -101,14 +115,14 @@ export class ImagePreview {
       function buildContent(): void {
         const shadowBoundary = document.createElement('div');
         const shadowRoot = shadowBoundary.attachShadow({mode: 'open'});
-        shadowRoot.adoptedStyleSheets = [imagePreviewStyles];
+        shadowRoot.createChild('style').textContent = imagePreviewStyles.cssContent;
         const container = shadowRoot.createChild('table');
         container.className = 'image-preview-container';
 
-        const imageRow = (container.createChild('tr').createChild('td', 'image-container') as HTMLTableDataCellElement);
+        const imageRow = container.createChild('tr').createChild('td', 'image-container');
         imageRow.colSpan = 2;
 
-        const link = (imageRow.createChild('div') as HTMLLinkElement);
+        const link = imageRow.createChild('div', ` ${align}`);
         link.title = displayName;
         link.appendChild(imageElement);
 
@@ -124,43 +138,46 @@ export class ImagePreview {
         if (showDimensions) {
           const renderedRow = container.createChild('tr', 'row');
 
-          renderedRow.createChild('td', 'title').textContent = i18nString(UIStrings.renderedSize);
+          renderedRow.createChild('td', `title ${align}`).textContent = i18nString(UIStrings.renderedSize);
           renderedRow.createChild('td', 'description').textContent = `${renderedWidth} × ${renderedHeight} px`;
 
           const aspectRatioRow = container.createChild('tr', 'row');
-          aspectRatioRow.createChild('td', 'title').textContent = i18nString(UIStrings.renderedAspectRatio);
+          aspectRatioRow.createChild('td', `title ${align}`).textContent = i18nString(UIStrings.renderedAspectRatio);
           aspectRatioRow.createChild('td', 'description').textContent =
               Platform.NumberUtilities.aspectRatio(renderedWidth, renderedHeight);
 
           if (renderedHeight !== intrinsicHeight || renderedWidth !== intrinsicWidth) {
             const intrinsicRow = container.createChild('tr', 'row');
-            intrinsicRow.createChild('td', 'title').textContent = i18nString(UIStrings.intrinsicSize);
+            intrinsicRow.createChild('td', `title ${align}`).textContent = i18nString(UIStrings.intrinsicSize);
             intrinsicRow.createChild('td', 'description').textContent = `${intrinsicWidth} × ${intrinsicHeight} px`;
 
             const intrinsicAspectRatioRow = container.createChild('tr', 'row');
-            intrinsicAspectRatioRow.createChild('td', 'title').textContent = i18nString(UIStrings.intrinsicAspectRatio);
+            intrinsicAspectRatioRow.createChild('td', `title ${align}`).textContent =
+                i18nString(UIStrings.intrinsicAspectRatio);
             intrinsicAspectRatioRow.createChild('td', 'description').textContent =
                 Platform.NumberUtilities.aspectRatio(intrinsicWidth, intrinsicHeight);
           }
         }
 
-        // File size
-        const fileRow = container.createChild('tr', 'row');
-        fileRow.createChild('td', 'title').textContent = i18nString(UIStrings.fileSize);
-        fileRow.createChild('td', 'description').textContent = resourceSizeText;
+        if (!options.hideFileData) {
+          // File size
+          const fileRow = container.createChild('tr', 'row');
+          fileRow.createChild('td', `title ${align}`).textContent = i18nString(UIStrings.fileSize);
+          fileRow.createChild('td', 'description').textContent = resourceSizeText;
 
-        // Current source
-        const originalRow = container.createChild('tr', 'row');
-        originalRow.createChild('td', 'title').textContent = i18nString(UIStrings.currentSource);
+          // Current source
+          const originalRow = container.createChild('tr', 'row');
+          originalRow.createChild('td', `title ${align}`).textContent = i18nString(UIStrings.currentSource);
 
-        const sourceText = Platform.StringUtilities.trimMiddle(imageURL, 100);
-        const sourceLink =
-            (originalRow.createChild('td', 'description description-link').createChild('span', 'source-link') as
-             HTMLLinkElement);
-        sourceLink.textContent = sourceText;
-        sourceLink.addEventListener('click', () => {
-          Host.InspectorFrontendHost.InspectorFrontendHostInstance.openInNewTab(imageURL);
-        });
+          const sourceText = Platform.StringUtilities.trimMiddle(imageURL, 100);
+          const sourceLink =
+              (originalRow.createChild('td', 'description description-link').createChild('span', 'source-link') as
+               HTMLLinkElement);
+          sourceLink.textContent = sourceText;
+          sourceLink.addEventListener('click', () => {
+            Host.InspectorFrontendHost.InspectorFrontendHostInstance.openInNewTab(imageURL);
+          });
+        }
         resolve(shadowBoundary);
       }
     });

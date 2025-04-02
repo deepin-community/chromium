@@ -23,6 +23,7 @@
 #include "content/public/common/content_client.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "services/device/public/cpp/device_features.h"
 #include "third_party/blink/public/mojom/permissions_policy/permissions_policy.mojom.h"
 
 namespace content {
@@ -130,7 +131,7 @@ void HidService::Create(
   CHECK(render_frame_host);
 
   if (!render_frame_host->IsFeatureEnabled(
-          blink::mojom::PermissionsPolicyFeature::kHid)) {
+          network::mojom::PermissionsPolicyFeature::kHid)) {
     mojo::ReportBadMessage("Permissions policy blocks access to HID.");
     return;
   }
@@ -191,7 +192,15 @@ void HidService::Create(
 
 // static
 void HidService::RemoveProtectedReports(device::mojom::HidDeviceInfo& device,
+                                        bool is_known_security_key,
                                         bool is_fido_allowed) {
+  // If the origin is allowed to access FIDO and `device` is a known FIDO U2F
+  // security key, do not remove any reports.
+  if (base::FeatureList::IsEnabled(
+          features::kSecurityKeyHidInterfacesAreFido) &&
+      is_known_security_key && is_fido_allowed) {
+    return;
+  }
   std::vector<device::mojom::HidCollectionInfoPtr> collections;
   for (auto& collection : device.collections) {
     const bool is_fido =
@@ -308,7 +317,8 @@ void HidService::Connect(
 
   auto* device_info = delegate->GetDeviceInfo(browser_context, device_guid);
   if (!device_info ||
-      !delegate->HasDevicePermission(browser_context, origin_, *device_info)) {
+      !delegate->HasDevicePermission(browser_context, render_frame_host_,
+                                     origin_, *device_info)) {
     std::move(callback).Run(mojo::NullRemote());
     return;
   }
@@ -339,7 +349,7 @@ void HidService::Forget(device::mojom::HidDeviceInfoPtr device_info,
 
   if (browser_context) {
     GetContentClient()->browser()->GetHidDelegate()->RevokeDevicePermission(
-        browser_context, origin_, *device_info);
+        browser_context, render_frame_host_, origin_, *device_info);
   }
   std::move(callback).Run();
 }
@@ -396,12 +406,15 @@ void HidService::OnDeviceAdded(
     const device::mojom::HidDeviceInfo& device_info) {
   auto* browser_context = GetBrowserContext();
   auto* delegate = GetContentClient()->browser()->GetHidDelegate();
-  if (!delegate->HasDevicePermission(browser_context, origin_, device_info))
+  if (!delegate->HasDevicePermission(browser_context, render_frame_host_,
+                                     origin_, device_info)) {
     return;
+  }
 
   auto filtered_device_info = device_info.Clone();
   RemoveProtectedReports(
       *filtered_device_info,
+      delegate->IsKnownSecurityKey(browser_context, device_info),
       delegate->IsFidoAllowedForOrigin(browser_context, origin_));
   if (filtered_device_info->collections.empty())
     return;
@@ -427,13 +440,15 @@ void HidService::OnDeviceRemoved(
 
   auto* browser_context = GetBrowserContext();
   auto* delegate = GetContentClient()->browser()->GetHidDelegate();
-  if (!delegate->HasDevicePermission(browser_context, origin_, device_info)) {
+  if (!delegate->HasDevicePermission(browser_context, render_frame_host_,
+                                     origin_, device_info)) {
     return;
   }
 
   auto filtered_device_info = device_info.Clone();
   RemoveProtectedReports(
       *filtered_device_info,
+      delegate->IsKnownSecurityKey(browser_context, device_info),
       delegate->IsFidoAllowedForOrigin(browser_context, origin_));
   if (filtered_device_info->collections.empty())
     return;
@@ -446,14 +461,15 @@ void HidService::OnDeviceChanged(
     const device::mojom::HidDeviceInfo& device_info) {
   auto* browser_context = GetBrowserContext();
   auto* delegate = GetContentClient()->browser()->GetHidDelegate();
-  const bool has_device_permission =
-      delegate->HasDevicePermission(browser_context, origin_, device_info);
+  const bool has_device_permission = delegate->HasDevicePermission(
+      browser_context, render_frame_host_, origin_, device_info);
 
   device::mojom::HidDeviceInfoPtr filtered_device_info;
   if (has_device_permission) {
     filtered_device_info = device_info.Clone();
     RemoveProtectedReports(
         *filtered_device_info,
+        delegate->IsKnownSecurityKey(browser_context, device_info),
         delegate->IsFidoAllowedForOrigin(browser_context, origin_));
   }
 
@@ -499,8 +515,8 @@ void HidService::OnPermissionRevoked(const url::Origin& origin) {
         if (!device_info)
           return true;
 
-        if (delegate->HasDevicePermission(browser_context, origin_,
-                                          *device_info)) {
+        if (delegate->HasDevicePermission(browser_context, render_frame_host_,
+                                          origin_, *device_info)) {
           return false;
         }
 
@@ -523,12 +539,16 @@ void HidService::FinishGetDevices(
       delegate->IsFidoAllowedForOrigin(browser_context, origin_);
   std::vector<device::mojom::HidDeviceInfoPtr> result;
   for (auto& device : devices) {
-    RemoveProtectedReports(*device, is_fido_allowed);
+    RemoveProtectedReports(
+        *device, delegate->IsKnownSecurityKey(browser_context, *device),
+        is_fido_allowed);
     if (device->collections.empty())
       continue;
 
-    if (delegate->HasDevicePermission(browser_context, origin_, *device))
+    if (delegate->HasDevicePermission(browser_context, render_frame_host_,
+                                      origin_, *device)) {
       result.push_back(std::move(device));
+    }
   }
 
   std::move(callback).Run(std::move(result));

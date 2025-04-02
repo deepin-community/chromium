@@ -6,17 +6,12 @@
 
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <vector>
 
 #include "ash/app_list/app_list_model_provider.h"
 #include "ash/app_list/model/app_list_item.h"
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/mojom/app.mojom.h"
-#include "ash/components/arc/session/connection_holder.h"
-#include "ash/components/arc/test/arc_util_test_support.h"
-#include "ash/components/arc/test/connection_holder_util.h"
-#include "ash/components/arc/test/fake_app_instance.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/app_list/app_list_types.h"
@@ -24,7 +19,9 @@
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_types.h"
 #include "base/memory/raw_ptr.h"
+#include "base/metrics/histogram_base.h"
 #include "base/test/bind.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/apps/app_service/app_service_proxy.h"
 #include "chrome/browser/apps/app_service/app_service_proxy_ash.h"
@@ -52,6 +49,12 @@
 #include "chrome/browser/ui/ash/shelf/shelf_controller_helper.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
+#include "chromeos/ash/experiences/arc/session/connection_holder.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
+#include "chromeos/ash/experiences/arc/test/connection_holder_util.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
 #include "components/services/app_service/public/cpp/app_types.h"
 #include "components/services/app_service/public/cpp/package_id.h"
 #include "components/sync/model/string_ordinal.h"
@@ -65,7 +68,7 @@
 namespace apps {
 
 const apps::PackageId kTestPackageId =
-    apps::PackageId(apps::AppType::kArc, "com.test.package");
+    apps::PackageId(apps::PackageType::kArc, "com.test.package");
 
 ash::AppListItem* GetAppListItem(const std::string& id) {
   return ash::AppListModelProvider::Get()->model()->FindItem(id);
@@ -74,10 +77,10 @@ ash::AppListItem* GetAppListItem(const std::string& id) {
 bool IsItemPinned(const std::string& item_id) {
   const auto& shelf_items = ash::ShelfModel::Get()->items();
   auto pinned_item =
-      base::ranges::find_if(shelf_items, [&item_id](const auto& shelf_item) {
+      std::ranges::find_if(shelf_items, [&item_id](const auto& shelf_item) {
         return shelf_item.id.app_id == item_id;
       });
-  return pinned_item != base::ranges::end(shelf_items);
+  return pinned_item != std::ranges::end(shelf_items);
 }
 
 class AppServicePromiseAppItemBrowserTest
@@ -147,6 +150,7 @@ class AppServicePromiseAppItemBrowserTest
   }
 
   void TearDownOnMainThread() override {
+    app_list_syncable_service()->StopSyncing(syncer::APP_LIST);
     arc_app_list_pref_->app_connection_holder()->CloseInstance(
         app_instance_.get());
     app_instance_.reset();
@@ -364,7 +368,7 @@ IN_PROC_BROWSER_TEST_F(AppServicePromiseAppItemBrowserTest,
                        CompleteAppInstallationRemovesPromiseAppItem) {
   AppType app_type = AppType::kArc;
   std::string identifier = "test.com.example";
-  PackageId package_id(app_type, identifier);
+  PackageId package_id(PackageType::kArc, identifier);
 
   // Register a promise app in the promise app registry cache.
   apps::PromiseAppPtr promise_app = std::make_unique<PromiseApp>(package_id);
@@ -681,9 +685,8 @@ IN_PROC_BROWSER_TEST_F(AppServicePromiseAppItemBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AppServicePromiseAppItemBrowserTest,
                        InstalledAppPinnedWhenPinningPromiseApp) {
-  AppType app_type = AppType::kArc;
   std::string identifier = "test.com.example";
-  PackageId package_id(app_type, identifier);
+  PackageId package_id(PackageType::kArc, identifier);
 
   // Register a promise app in the promise app registry cache.
   apps::PromiseAppPtr promise_app = std::make_unique<PromiseApp>(package_id);
@@ -1051,7 +1054,7 @@ IN_PROC_BROWSER_TEST_F(AppServicePromiseAppItemBrowserTest,
   const std::string app_name = "TestApp";
   const std::string activity_name = "TestActivity";
   const apps::PackageId package_id =
-      apps::PackageId(apps::AppType::kArc, package_name);
+      apps::PackageId(apps::PackageType::kArc, package_name);
   const std::string app_id =
       ArcAppListPrefs::GetAppId(package_name, activity_name);
 
@@ -1141,7 +1144,7 @@ IN_PROC_BROWSER_TEST_F(AppServicePromiseAppItemBrowserTest,
   const std::string app_name = "TestApp";
   const std::string activity_name = "TestActivity";
   const apps::PackageId package_id =
-      apps::PackageId(apps::AppType::kArc, package_name);
+      apps::PackageId(apps::PackageType::kArc, package_name);
 
   // Skip check for official API key.
   app_service_proxy()->PromiseAppService()->SetSkipApiKeyCheckForTesting(true);
@@ -1173,7 +1176,7 @@ IN_PROC_BROWSER_TEST_F(AppServicePromiseAppItemBrowserTest,
   const std::string app_name = "TestApp";
   const std::string activity_name = "TestActivity";
   const apps::PackageId package_id =
-      apps::PackageId(apps::AppType::kArc, package_name);
+      apps::PackageId(apps::PackageType::kArc, package_name);
 
   // Skip check for official API key.
   app_service_proxy()->PromiseAppService()->SetSkipApiKeyCheckForTesting(true);
@@ -1212,7 +1215,7 @@ IN_PROC_BROWSER_TEST_F(AppServicePromiseAppItemBrowserTest,
   const std::string app_name = "TestApp";
   const std::string activity_name = "TestActivity";
   const apps::PackageId package_id =
-      apps::PackageId(apps::AppType::kArc, package_name);
+      apps::PackageId(apps::PackageType::kArc, package_name);
 
   // Skip check for official API key.
   app_service_proxy()->PromiseAppService()->SetSkipApiKeyCheckForTesting(true);
@@ -1248,7 +1251,7 @@ IN_PROC_BROWSER_TEST_F(AppServicePromiseAppItemBrowserTest,
   const std::string app_name = "TestApp";
   const std::string activity_name = "TestActivity";
   const apps::PackageId package_id =
-      apps::PackageId(apps::AppType::kArc, package_name);
+      apps::PackageId(apps::PackageType::kArc, package_name);
 
   // Skip check for official API key.
   app_service_proxy()->PromiseAppService()->SetSkipApiKeyCheckForTesting(true);
@@ -1280,6 +1283,42 @@ IN_PROC_BROWSER_TEST_F(AppServicePromiseAppItemBrowserTest,
             arc_app_list_pref()
                 ->GetInstallPriorityHandler()
                 ->GetInstallPriorityForTesting(package_name));
+}
+
+IN_PROC_BROWSER_TEST_F(AppServicePromiseAppItemBrowserTest,
+                       CheckArcPromiseAppIconWhenArcConnectionClosed) {
+  // Test package details.
+  std::string package_name = "com.test.app";
+  const std::string app_name = "TestApp";
+  const std::string activity_name = "TestActivity";
+  const apps::PackageId package_id =
+      apps::PackageId(apps::PackageType::kArc, package_name);
+  const std::string app_id =
+      ArcAppListPrefs::GetAppId(package_name, activity_name);
+
+  // Skip check for official API key.
+  app_service_proxy()->PromiseAppService()->SetSkipApiKeyCheckForTesting(true);
+
+  // Test:
+  // 1) Start the installation.
+  // Expect 2 updates: Promise app registration, then Almanac response update.
+  // Note: As the Almanac response is not mocked, the promise icon will fallback
+  // to using a placeholder image.
+  ExpectNumUpdates(/*num_updates=*/2);
+  app_instance()->SendInstallationStarted(package_name);
+  WaitForPromiseAppUpdates();
+
+  // Confirm that the promise icon gets generated with the correct label.
+  ash::AppListItem* launcher_item = GetAppListItem(package_id.ToString());
+  ASSERT_TRUE(launcher_item);
+  EXPECT_EQ(launcher_item->name(), "Waiting…");
+  EXPECT_EQ(launcher_item->progress(), 0);
+  // Close ARC connection.
+  arc_app_list_pref()->app_connection_holder()->CloseInstance(app_instance());
+
+  // Confirm that the promise icon is deleted when ARC connection is closed.
+  launcher_item = GetAppListItem(package_id.ToString());
+  ASSERT_FALSE(launcher_item);
 }
 
 }  // namespace apps

@@ -10,9 +10,8 @@
 #include <vector>
 
 #include "base/time/time.h"
-#include "build/chromeos_buildflags.h"
 #include "components/signin/public/base/gaia_id_hash.h"
-#include "components/sync/base/model_type.h"
+#include "components/sync/base/data_type.h"
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/base/user_selectable_type.h"
 
@@ -20,10 +19,10 @@ namespace syncer {
 
 class Nigori;
 
-// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.components.sync
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
 enum class SyncFirstSetupCompleteSource {
   BASIC_FLOW = 0,
   ADVANCED_FLOW_CONFIRM = 1,
@@ -33,11 +32,21 @@ enum class SyncFirstSetupCompleteSource {
   ANDROID_BACKUP_RESTORE = 5,
   kMaxValue = ANDROID_BACKUP_RESTORE,
 };
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
 // This class encapsulates all the user-configurable bits of Sync.
 class SyncUserSettings {
  public:
+  enum class UserSelectableTypePrefState {
+    // UserSelectableType is disabled by the user.
+    kDisabled,
+    // UserSelectableType is enabled by the user, or no user choice affected it.
+    kEnabledOrDefault,
+    // The type state is not available; when sync-the-feature is enabled, or the
+    // user is signed out.
+    kNotApplicable,
+  };
+
   virtual ~SyncUserSettings() = default;
 
   // Whether the initial Sync Feature setup has been completed, meaning the
@@ -46,10 +55,10 @@ class SyncUserSettings {
   // anything.
   virtual bool IsInitialSyncFeatureSetupComplete() const = 0;
 
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
   virtual void SetInitialSyncFeatureSetupComplete(
       SyncFirstSetupCompleteSource source) = 0;
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
 
   // Getting selected types, for both Sync-the-feature and Sync-the-transport
   // users.
@@ -57,10 +66,18 @@ class SyncUserSettings {
   virtual bool IsTypeManagedByPolicy(UserSelectableType type) const = 0;
   virtual bool IsTypeManagedByCustodian(UserSelectableType type) const = 0;
 
+  // Returns UserSelectableTypePrefState::kDisabled if the type is disabled by a
+  // user choice. Otherwise, returns
+  // UserSelectableTypePrefState::kEnabledOrDefault if no value exists for the
+  // type pref (default), or if it was enabled. Note: this method checks the
+  // actual pref value.
+  virtual SyncUserSettings::UserSelectableTypePrefState
+  GetTypePrefStateForAccount(UserSelectableType type) const = 0;
+
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
   // On Desktop, kPasswords isn't considered "selected" by default in transport
   // mode. This method returns how many accounts selected (enabled) the type.
-  // TODO(crbug.com/1503669): Remove this once the type is enabled by default.
+  // TODO(crbug.com/40944135): Remove this once the type is enabled by default.
   virtual int GetNumberOfAccountsWithPasswordsSelected() const = 0;
 #endif
 
@@ -80,20 +97,15 @@ class SyncUserSettings {
   virtual void SetSelectedType(UserSelectableType type, bool is_type_on) = 0;
 
   // Clears per account prefs for all users *except* the ones in the passed-in
-  // |available_gaia_ids|.
+  // `available_gaia_ids`.
   virtual void KeepAccountSettingsPrefsOnlyForUsers(
       const std::vector<signin::GaiaIdHash>& available_gaia_ids) = 0;
 
-#if BUILDFLAG(IS_IOS)
-  // Enables the account storage for bookmark and reading list datatype.
-  virtual void SetBookmarksAndReadingListAccountStorageOptIn(bool value) = 0;
-#endif  // BUILDFLAG(IS_IOS)
-
-  // Registered user selectable types are derived from registered model types.
-  // A UserSelectableType is registered if any of its ModelTypes is registered.
+  // Registered user selectable types are derived from registered data types.
+  // A UserSelectableType is registered if any of its DataTypes is registered.
   virtual UserSelectableTypeSet GetRegisteredSelectableTypes() const = 0;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Relevant only on ChromeOS (Ash), since the state is unreachable otherwise.
   // Returns if sync-the-feature is disabled because the user cleared data from
   // the Sync dashboard.
@@ -107,13 +119,7 @@ class SyncUserSettings {
   virtual void SetSelectedOsTypes(bool sync_all_os_types,
                                   UserSelectableOsTypeSet types) = 0;
   virtual UserSelectableOsTypeSet GetRegisteredSelectableOsTypes() const = 0;
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  // On Lacros, apps sync in the primary profile is controlled by the OS Sync
-  // settings.
-  virtual void SetAppsSyncEnabledByOs(bool apps_sync_enabled) = 0;
-#endif  // BUILDFLAG(IS_CHROMEOS_LACROS)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Encryption state.
 
@@ -135,13 +141,13 @@ class SyncUserSettings {
 
   // NOTE: All of the state below may only be queried or modified if the Sync
   // engine is initialized.
-  // TODO(crbug.com/1466401): Make it possible to call these APIs even without
+  // TODO(crbug.com/40923935): Make it possible to call these APIs even without
   // the engine being initialized.
 
   // Whether we are currently set to encrypt all the Sync data.
   virtual bool IsEncryptEverythingEnabled() const = 0;
   // The current set of encrypted data types.
-  virtual ModelTypeSet GetEncryptedDataTypes() const = 0;
+  virtual DataTypeSet GetAllEncryptedDataTypes() const = 0;
   // Whether a passphrase is required for encryption or decryption to proceed.
   // Note that Sync might still be working fine if the user has disabled all
   // encrypted data types.
@@ -163,17 +169,17 @@ class SyncUserSettings {
   // passphrase is in use, or no time is available, returns an unset base::Time.
   virtual base::Time GetExplicitPassphraseTime() const = 0;
 
-  // Asynchronously sets the passphrase to |passphrase| for encryption.
+  // Asynchronously sets the passphrase to `passphrase` for encryption.
   virtual void SetEncryptionPassphrase(const std::string& passphrase) = 0;
-  // Asynchronously decrypts pending keys using |passphrase|. Returns false
+  // Asynchronously decrypts pending keys using `passphrase`. Returns false
   // immediately if the passphrase could not be used to decrypt a locally cached
   // copy of encrypted keys; returns true otherwise. This method shouldn't be
   // called when passphrase isn't required.
   [[nodiscard]] virtual bool SetDecryptionPassphrase(
       const std::string& passphrase) = 0;
 
-  // Asynchronously decrypts pending keys using |nigori|. |nigori| must not be
-  // null. It's safe to call this method with wrong |nigori| and, unlike
+  // Asynchronously decrypts pending keys using `nigori`. `nigori` must not be
+  // null. It's safe to call this method with wrong `nigori` and, unlike
   // SetDecryptionPassphrase(), when passphrase isn't required.
   virtual void SetExplicitPassphraseDecryptionNigoriKey(
       std::unique_ptr<Nigori> nigori) = 0;

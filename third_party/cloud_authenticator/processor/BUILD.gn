@@ -11,7 +11,8 @@ rust_static_library("processor") {
     "src/lib.rs",
     "src/macros.rs",
     "src/passkeys.rs",
-    "src/recoverable_key_store.rs",
+    "src/pin.rs",
+    "src/recovery_key_store.rs",
     "src/spki.rs",
   ]
   deps = [
@@ -21,9 +22,12 @@ rust_static_library("processor") {
     "//third_party/rust/base64/v0_13:lib",
     "//third_party/rust/bytes/v1:lib",
     "//third_party/rust/lazy_static/v1:lib",
-    "//third_party/rust/prost/v0_12:lib",
+    "//third_party/rust/prost/v0_13:lib",
     "//third_party/rust/static_assertions/v1:lib",
   ]
   no_chromium_prelude = true
   testonly = true
+
+  # Switches to using test keys for the recovery key store.
+  features = [ "chromium_integration_test" ]
 }

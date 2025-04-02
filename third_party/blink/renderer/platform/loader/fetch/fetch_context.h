@@ -57,6 +57,7 @@ namespace blink {
 enum class ResourceType : uint8_t;
 class PermissionsPolicy;
 class KURL;
+class Resource;
 struct ResourceLoaderOptions;
 class SecurityOrigin;
 class WebScopedVirtualTimePauser;
@@ -106,7 +107,7 @@ class PLATFORM_EXPORT FetchContext : public GarbageCollected<FetchContext> {
 
   virtual void AddResourceTiming(mojom::blink::ResourceTimingInfoPtr,
                                  const AtomicString& initiator_type);
-  virtual bool AllowImage(bool, const KURL&) const { return false; }
+  virtual bool AllowImage() const { return false; }
   virtual std::optional<ResourceRequestBlockedReason> CanRequest(
       ResourceType,
       const ResourceRequest&,
@@ -141,14 +142,42 @@ class PLATFORM_EXPORT FetchContext : public GarbageCollected<FetchContext> {
     return ResourceRequestBlockedReason::kOther;
   }
 
-  // Populates the ResourceRequest using the given values and information
-  // stored in the FetchContext implementation. Used by ResourceFetcher to
-  // prepare a ResourceRequest instance at the start of resource loading.
-  virtual void PopulateResourceRequest(
+  virtual std::optional<ResourceRequestBlockedReason>
+  CheckAndEnforceCSPForRequest(
+      mojom::blink::RequestContextType,
+      network::mojom::RequestDestination request_destination,
+      const KURL&,
+      const ResourceLoaderOptions&,
+      ReportingDisposition,
+      const KURL& url_before_redirects,
+      ResourceRequest::RedirectStatus) const {
+    return ResourceRequestBlockedReason::kOther;
+  }
+
+  // Populates the ResourceRequest with enough information for a cache lookup.
+  // If the resource requires a load, then UpgradeResourceRequestForLoader() is
+  // called.
+  virtual void PopulateResourceRequestBeforeCacheAccess(
+      const ResourceLoaderOptions& options,
+      ResourceRequest& request) {}
+
+  // Called after csp checks to potentially override the URL of the request.
+  virtual void WillSendRequest(ResourceRequest& request) {}
+
+  // Called if a resource request needs to be loaded (vs served from the cache).
+  // This adds additional information to the ResourceRequest needed for
+  // loading. This is called after PopulateResourceRequestBeforeCacheAccess().
+  // This function may be called in some circumstances when still served from
+  // the cache. For example, if the right probes are present, then this is
+  // always called.
+  virtual void UpgradeResourceRequestForLoader(
       ResourceType,
       const std::optional<float> resource_width,
       ResourceRequest&,
       const ResourceLoaderOptions&);
+
+  virtual bool StartSpeculativeImageDecode(Resource* resource,
+                                           base::OnceClosure callback);
 
   // Called when the underlying context is detached. Note that some
   // FetchContexts continue working after detached (e.g., for fetch() operations
@@ -189,11 +218,36 @@ class PLATFORM_EXPORT FetchContext : public GarbageCollected<FetchContext> {
   // Returns true iff we have LCPP hint data for the fetch context.
   virtual bool DoesLCPPHaveAnyHintData() { return false; }
 
+  // Returns true iff we have LCP element locator hint data for the fetch
+  // context.
+  virtual bool DoesLCPPHaveLcpElementLocatorHintData() { return false; }
+
   // Returns the origin of the top frame in the document or the dedicated
   // worker. This returns nullptr for Shared Workers and Service Workers.
   virtual scoped_refptr<const SecurityOrigin> GetTopFrameOrigin() const {
     return nullptr;
   }
+
+  // Returns the list of potentially unused preload URLs flagged by the LCP
+  // predcitor, which is attached to the frame. This returns an empty Vector for
+  // Shared Workers and Service Workers.
+  virtual const Vector<KURL>& GetPotentiallyUnusedPreloads() const {
+    return empty_unused_preloads_;
+  }
+
+  virtual void AddLcpPredictedCallback(base::OnceClosure callback) {
+    NOTIMPLEMENTED();
+  }
+
+  virtual HashSet<HashAlgorithm> CSPHashesToReport() const {
+    return HashSet<HashAlgorithm>();
+  }
+  virtual void AddCSPHashReport(
+      const String& url,
+      const HashMap<HashAlgorithm, String>& integrity_hashes) {}
+
+ protected:
+  const Vector<KURL> empty_unused_preloads_;
 };
 
 }  // namespace blink

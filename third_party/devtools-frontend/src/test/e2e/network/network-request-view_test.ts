@@ -15,6 +15,7 @@ import {
   getResourcesPath,
   getTextContent,
   pasteText,
+  readClipboard,
   step,
   typeText,
   waitFor,
@@ -22,7 +23,6 @@ import {
   waitForElementWithTextContent,
   waitForFunction,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {CONSOLE_TAB_SELECTOR, focusConsolePrompt} from '../helpers/console-helpers.js';
 import {triggerLocalFindDialog} from '../helpers/memory-helpers.js';
 import {
@@ -38,19 +38,21 @@ const SIMPLE_PAGE_URL = `requests.html?num=${SIMPLE_PAGE_REQUEST_NUMBER}`;
 
 const configureAndCheckHeaderOverrides = async () => {
   const infoBar = await waitForAria('Select a folder to store override files in.');
+  // Allow time for infobar to animate in before clicking the button
+  await new Promise<void>(resolve => setTimeout(resolve, 550));
   await click('.infobar-main-row .infobar-button', {
     root: infoBar,
   });
 
   let networkView = await waitFor('.network-item-view');
-  await click('#tab-headersComponent', {
+  await click('#tab-headers-component', {
     root: networkView,
   });
-  await waitFor('#tab-headersComponent[role=tab][aria-selected=true]', networkView);
+  await waitFor('#tab-headers-component[role=tab][aria-selected=true]', networkView);
   let responseHeaderSection = await waitFor('[aria-label="Response Headers"]', networkView);
 
   let row = await waitFor('.row', responseHeaderSection);
-  assert.deepStrictEqual(await getTextFromHeadersRow(row), ['cache-control:', 'max-age=3600']);
+  assert.deepEqual(await getTextFromHeadersRow(row), ['cache-control:', 'max-age=3600']);
 
   await waitForFunction(async () => {
     await click('.header-name', {root: row});
@@ -63,21 +65,21 @@ const configureAndCheckHeaderOverrides = async () => {
 
   const headersView = await waitFor('devtools-sources-headers-view');
   const headersViewRow = await waitFor('.row.padded', headersView);
-  assert.deepStrictEqual(await getTextFromHeadersRow(headersViewRow), ['cache-control', 'Foo']);
+  assert.deepEqual(await getTextFromHeadersRow(headersViewRow), ['cache-control', 'Foo']);
 
   await navigateToNetworkTab('hello.html');
   await selectRequestByName('hello.html');
   networkView = await waitFor('.network-item-view');
-  await click('#tab-headersComponent', {
+  await click('#tab-headers-component', {
     root: networkView,
   });
 
   responseHeaderSection = await waitFor('[aria-label="Response Headers"]');
   row = await waitFor('.row.header-overridden', responseHeaderSection);
-  assert.deepStrictEqual(await getTextFromHeadersRow(row), ['cache-control:', 'Foo']);
+  assert.deepEqual(await getTextFromHeadersRow(row), ['cache-control:', 'Foo']);
 };
 
-describe('The Network Request view', async () => {
+describe('The Network Request view', () => {
   it('re-opens the same tab after switching to another panel and navigating back to the "Network" tab (https://crbug.com/1184578)',
      async () => {
        await navigateToNetworkTab(SIMPLE_PAGE_URL);
@@ -135,8 +137,7 @@ describe('The Network Request view', async () => {
     await waitForElementWithTextContent('uuid-in-package:020111b3-437a-4c5c-ae07-adb6bbffb720', networkView);
   });
 
-  // failing test blocking the roll
-  it.skip('[crbug.com/1518454]: prevents requests on the preview tab.', async () => {
+  it('prevents requests on the preview tab.', async () => {
     await navigateToNetworkTab('embedded_requests.html');
 
     // For the issue to manifest it's mandatory to load the stylesheet by absolute URL. A relative URL would be treated
@@ -176,8 +177,7 @@ describe('The Network Request view', async () => {
     await waitForFunction(async () => await styleSrcError.caught);
   });
 
-  // failing test blocking the roll
-  it.skip('[crbug.com/1518454]: permits inline styles on the preview tab.', async () => {
+  it('permits inline styles on the preview tab.', async () => {
     await navigateToNetworkTab('embedded_requests.html');
     const contents = '<head><style>p { color: red; }</style></head><body><p>Content</p></body>';
     const {target} = getBrowserAndPages();
@@ -279,7 +279,7 @@ describe('The Network Request view', async () => {
     let messages = await waitForMessages(messagesView, 3);
     await assertBaseState(messagesView);
 
-    const inputSelector = '[aria-placeholder="Enter regex, for example: https?';
+    const inputSelector = '[aria-placeholder="Filter using regex (example: https?)';
 
     const filterInput = await waitFor(inputSelector, messagesView);
 
@@ -290,7 +290,7 @@ describe('The Network Request view', async () => {
     assertMessage(messages[0], knownMessages[0]);
 
     // clear
-    await click('[title="Clear input"]', {
+    await click('[title="Clear"]', {
       root: messagesView,
     });
     await assertBaseState(messagesView);
@@ -348,9 +348,9 @@ describe('The Network Request view', async () => {
     let messages = await waitForMessages(4);
 
     const filterInput =
-        await waitFor('[aria-label="Enter regex, for example: (web)?socket"][role=textbox]', messagesView);
+        await waitFor('[aria-label="Filter using regex (example: (web)?socket)"][role=textbox]', messagesView);
     await filterInput.focus();
-    await typeText('ping');
+    await typeText('p[ai]ng');
 
     messages = await waitForMessages(2);
     assert.deepEqual(messages, ['ping', 'ping']);
@@ -489,6 +489,20 @@ describe('The Network Request view', async () => {
     ].flat();
 
     assertOutlineMatches(expectedPayloadContent, payloadOutlineText);
+
+    // Context menu to copy single parsed entry.
+    const parsedEntry = await waitForElementWithTextContent('alpha');
+    await parsedEntry.click({button: 'right'});
+    await (await waitForElementWithTextContent('Copy value')).click();
+    assert.strictEqual(await readClipboard(), 'alpha');
+
+    // Context menu to copy the raw payload.
+    const viewSource = await waitForElementWithTextContent('view source');
+    await viewSource.click();
+    const source = await waitForElementWithTextContent('id=42&param=a%20b');
+    await source.click({button: 'right'});
+    await (await waitForElementWithTextContent('Copy')).click();
+    assert.strictEqual(await readClipboard(), 'id=42&param=a%20b');
   });
 
   it('shows raw headers', async () => {
@@ -628,7 +642,7 @@ describe('The Network Request view', async () => {
     await selectRequestByName('hello.html');
 
     const networkView = await waitFor('.network-item-view');
-    await click('#tab-headersComponent', {
+    await click('#tab-headers-component', {
       root: networkView,
     });
 
@@ -642,7 +656,7 @@ describe('The Network Request view', async () => {
     await waitForSomeRequestsToAppear(2);
 
     await selectRequestByName('image.svg?id=42&param=a%20b');
-    const SEARCH_QUERY = '[aria-label="Search Query"]';
+    const SEARCH_QUERY = '[aria-label="Find"]';
     const SEARCH_RESULT = '.search-result';
     const {frontend} = getBrowserAndPages();
 

@@ -10,6 +10,7 @@
 
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "components/input/render_widget_host_input_event_router.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "components/viz/host/host_frame_sink_manager.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
@@ -19,7 +20,6 @@
 #include "content/browser/dom_storage/session_storage_namespace_impl.h"
 #include "content/browser/renderer_host/data_transfer_util.h"
 #include "content/browser/renderer_host/render_frame_proxy_host.h"
-#include "content/browser/renderer_host/render_widget_host_input_event_router.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/common/input/synthetic_gesture_target.h"
 #include "content/public/browser/browser_context.h"
@@ -107,7 +107,6 @@ ui::TextInputClient* TestRenderWidgetHostView::GetTextInputClient() {
   return &text_input_client_;
 #else
   NOTREACHED();
-  return nullptr;
 #endif
 }
 
@@ -198,6 +197,12 @@ uint64_t TestRenderWidgetHostView::GetNSViewId() const {
 
 gfx::Rect TestRenderWidgetHostView::GetBoundsInRootWindow() {
   return gfx::Rect();
+}
+
+const viz::LocalSurfaceId&
+TestRenderWidgetHostView::IncrementSurfaceIdForNavigation() {
+  static constexpr viz::LocalSurfaceId kInvalidId;
+  return kInvalidId;
 }
 
 void TestRenderWidgetHostView::ClearFallbackSurfaceForCommitPending() {
@@ -326,7 +331,7 @@ ui::Compositor* TestRenderWidgetHostView::GetCompositor() {
   return compositor_;
 }
 
-CursorManager* TestRenderWidgetHostView::GetCursorManager() {
+input::CursorManager* TestRenderWidgetHostView::GetCursorManager() {
   return &cursor_manager_;
 }
 
@@ -414,11 +419,11 @@ bool TestRenderViewHost::CreateRenderView(
   RenderFrameHostImpl* main_frame = nullptr;
   RenderFrameProxyHost* proxy_host = nullptr;
   if (main_frame_routing_id_ != MSG_ROUTING_NONE) {
-    main_frame = RenderFrameHostImpl::FromID(GetProcess()->GetID(),
+    main_frame = RenderFrameHostImpl::FromID(GetProcess()->GetDeprecatedID(),
                                              main_frame_routing_id_);
   } else {
-    proxy_host =
-        RenderFrameProxyHost::FromID(GetProcess()->GetID(), proxy_route_id);
+    proxy_host = RenderFrameProxyHost::FromID(GetProcess()->GetDeprecatedID(),
+                                              proxy_route_id);
   }
 
   if (!GetWidget()->view_is_frame_sink_id_owner()) {
@@ -488,8 +493,10 @@ void TestRenderViewHost::SimulateWasShown() {
 
 blink::web_pref::WebPreferences
 TestRenderViewHost::TestComputeWebPreferences() {
-  return static_cast<WebContentsImpl*>(WebContents::FromRenderViewHost(this))
-      ->ComputeWebPreferences();
+  auto* web_contents_impl =
+      static_cast<WebContentsImpl*>(WebContents::FromRenderViewHost(this));
+  return web_contents_impl->ComputeWebPreferences(
+      web_contents_impl->GetPrimaryMainFrame());
 }
 
 bool TestRenderViewHost::IsTestRenderViewHost() const {
@@ -503,7 +510,7 @@ void TestRenderViewHost::TestStartDragging(const DropData& drop_data,
   GetMainRenderFrameHost()->StartDragging(
       DropDataToDragData(
           drop_data, storage_partition->GetFileSystemAccessManager(),
-          GetProcess()->GetID(),
+          GetProcess()->GetDeprecatedID(),
           ChromeBlobStorageContext::GetFor(GetProcess()->GetBrowserContext())),
       blink::kDragOperationEvery, std::move(bitmap), gfx::Vector2d(),
       gfx::Rect(), blink::mojom::DragEventSourceInfo::New());

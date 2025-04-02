@@ -24,7 +24,6 @@
 #include "build/build_config.h"
 #include "content/browser/renderer_host/browsing_context_state.h"
 #include "content/browser/renderer_host/frame_tree.h"
-#include "content/browser/renderer_host/input/input_device_change_observer.h"
 #include "content/browser/renderer_host/page_lifecycle_state_manager.h"
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_owner_delegate.h"
@@ -44,8 +43,6 @@
 #include "third_party/perfetto/include/perfetto/tracing/traced_value_forward.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/window_open_disposition.h"
-#include "ui/gl/gpu_preference.h"
-#include "ui/gl/gpu_switching_observer.h"
 
 namespace blink {
 namespace web_pref {
@@ -97,7 +94,6 @@ class CONTENT_EXPORT RenderViewHostImpl
     : public RenderViewHost,
       public RenderWidgetHostOwnerDelegate,
       public RenderProcessHostObserver,
-      public ui::GpuSwitchingObserver,
       public IPC::Listener,
       public base::RefCounted<RenderViewHostImpl> {
  public:
@@ -111,7 +107,7 @@ class CONTENT_EXPORT RenderViewHostImpl
 
   // Checks whether any RenderViewHostImpl instance associated with a given
   // process is not currently in the back-forward cache.
-  // TODO(https://crbug.com/1125996): Remove once a well-behaved frozen
+  // TODO(crbug.com/40147948): Remove once a well-behaved frozen
   // RenderFrame never send IPCs messages, even if there are active pages in the
   // process.
   static bool HasNonBackForwardCachedInstancesForProcess(
@@ -147,9 +143,6 @@ class CONTENT_EXPORT RenderViewHostImpl
   void RenderProcessExited(RenderProcessHost* host,
                            const ChildProcessTerminationInfo& info) override;
 
-  // GpuSwitchingObserver implementation.
-  void OnGpuSwitched(gl::GpuPreference active_gpu_heuristic) override;
-
   // Set up the `blink::WebView` child process. Virtual because it is overridden
   // by TestRenderViewHost.
   // `opener_route_id` parameter indicates which `blink::WebView` created this
@@ -171,9 +164,13 @@ class CONTENT_EXPORT RenderViewHostImpl
   void set_is_speculative(bool is_speculative) {
     is_speculative_ = is_speculative;
   }
+
+  bool is_registered_with_frame_tree() { return registered_with_frame_tree_; }
   void set_is_registered_with_frame_tree(bool is_registered) {
     registered_with_frame_tree_ = is_registered;
   }
+
+  bool renderer_view_created() const { return renderer_view_created_; }
 
   FrameTree::RenderViewHostMapId rvh_map_id() const {
     return render_view_host_map_id_;
@@ -185,6 +182,7 @@ class CONTENT_EXPORT RenderViewHostImpl
   // pending unload or unloaded), according to its main frame
   // RenderFrameHost.
   bool is_active() const { return main_frame_routing_id_ != MSG_ROUTING_NONE; }
+  int main_frame_routing_id() const { return main_frame_routing_id_; }
 
   // Returns true if the `blink::WebView` is active and has not crashed.
   bool IsRenderViewLive() const;
@@ -231,12 +229,6 @@ class CONTENT_EXPORT RenderViewHostImpl
   // Send RenderViewReady to observers once the process is launched, but not
   // re-entrantly.
   void PostRenderViewReady();
-
-  // Passes current web preferences to the renderer after recomputing all of
-  // them, including the slow-to-compute hardware preferences.
-  // (WebContents::OnWebPreferencesChanged is a faster alternate that avoids
-  // slow recomputations.)
-  void OnHardwareConfigurationChanged();
 
   // Sets the routing id for the main frame. When set to MSG_ROUTING_NONE, the
   // view is not considered active.
@@ -312,7 +304,7 @@ class CONTENT_EXPORT RenderViewHostImpl
   // trigger an eviction of this page.
   void PrepareToLeaveBackForwardCache(base::OnceClosure done_cb);
 
-  // TODO(https://crbug.com/1179502): FrameTree and FrameTreeNode will not be
+  // TODO(crbug.com/40169570): FrameTree and FrameTreeNode will not be
   // const as with prerenderer activation the page needs to move between
   // FrameTreeNodes and FrameTrees. As it's hard to make sure that all places
   // handle this transition correctly, MPArch will remove references from this
@@ -332,6 +324,9 @@ class CONTENT_EXPORT RenderViewHostImpl
     return &*site_instance_group_;
   }
 
+  bool MayRenderWidgetForwardKeyboardEvent(
+      const input::NativeWebKeyboardEvent& key_event) override;
+
   // NOTE: Do not add functions that just send an IPC message that are called in
   // one or two places. Have the caller send the IPC message directly (unless
   // the caller places are in different platforms, in which case it's better
@@ -346,8 +341,7 @@ class CONTENT_EXPORT RenderViewHostImpl
   void RenderWidgetLostFocus() override;
   void RenderWidgetDidForwardMouseEvent(
       const blink::WebMouseEvent& mouse_event) override;
-  bool MayRenderWidgetForwardKeyboardEvent(
-      const NativeWebKeyboardEvent& key_event) override;
+
   bool ShouldContributePriorityToProcess() override;
   void SetBackgroundOpaque(bool opaque) override;
   bool IsMainFrameActive() override;
@@ -394,7 +388,7 @@ class CONTENT_EXPORT RenderViewHostImpl
   FrameTree::RenderViewHostMapId render_view_host_map_id_;
 
   // The SiteInstanceGroup this RenderViewHostImpl belongs to.
-  // TODO(https://crbug.com/1420333) Turn this into base::SafeRef
+  // TODO(crbug.com/40258727) Turn this into base::SafeRef
   base::WeakPtr<SiteInstanceGroup> site_instance_group_;
 
   // Provides information for selecting the session storage namespace for this
@@ -412,9 +406,6 @@ class CONTENT_EXPORT RenderViewHostImpl
   int main_frame_routing_id_;
 
   std::optional<mojom::ViewWidgetType> view_widget_type_;
-
-  // This monitors input changes so they can be reflected to the interaction MQ.
-  std::unique_ptr<InputDeviceChangeObserver> input_device_change_observer_;
 
   // This controls the lifecycle change and notify the renderer.
   std::unique_ptr<PageLifecycleStateManager> page_lifecycle_state_manager_;
@@ -445,7 +436,7 @@ class CONTENT_EXPORT RenderViewHostImpl
 
   // Whether the RenderViewHost is a speculative RenderViewHost or not.
   // Currently this is never set, as the feature is not implemented yet.
-  // TODO(https://crbug.com/1336305): Actually set this value for speculative
+  // TODO(crbug.com/40228869): Actually set this value for speculative
   // RenderViewHosts.
   bool is_speculative_ = false;
 

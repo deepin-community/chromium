@@ -49,11 +49,13 @@ class V8_EXPORT_PRIVATE ConstantExpressionInterface {
 
   ConstantExpressionInterface(
       const WasmModule* module, Isolate* isolate,
-      Handle<WasmTrustedInstanceData> trusted_instance_data)
+      Handle<WasmTrustedInstanceData> trusted_instance_data,
+      Handle<WasmTrustedInstanceData> shared_trusted_instance_data)
       : module_(module),
         outer_module_(nullptr),
         isolate_(isolate),
-        trusted_instance_data_(trusted_instance_data) {
+        trusted_instance_data_(trusted_instance_data),
+        shared_trusted_instance_data_(shared_trusted_instance_data) {
     DCHECK_NOT_NULL(isolate);
   }
 
@@ -77,19 +79,21 @@ class V8_EXPORT_PRIVATE ConstantExpressionInterface {
   WasmValue computed_value() const {
     DCHECK(generate_value());
     // The value has to be initialized.
-    DCHECK_NE(computed_value_.type(), kWasmVoid);
+    DCHECK_NE(computed_value_.type(), CanonicalValueType::Primitive(kVoid));
     return computed_value_;
   }
   bool end_found() const { return end_found_; }
   bool has_error() const { return error_ != MessageTemplate::kNone; }
   MessageTemplate error() const {
     DCHECK(has_error());
-    DCHECK_EQ(computed_value_.type(), kWasmVoid);
+    DCHECK_EQ(computed_value_.type(), CanonicalValueType::Primitive(kVoid));
     return error_;
   }
 
  private:
   bool generate_value() const { return isolate_ != nullptr && !has_error(); }
+  DirectHandle<WasmTrustedInstanceData> GetTrustedInstanceDataForTypeIndex(
+      ModuleTypeIndex index);
 
   bool end_found_ = false;
   WasmValue computed_value_;
@@ -98,6 +102,7 @@ class V8_EXPORT_PRIVATE ConstantExpressionInterface {
   WasmModule* outer_module_;
   Isolate* isolate_;
   Handle<WasmTrustedInstanceData> trusted_instance_data_;
+  Handle<WasmTrustedInstanceData> shared_trusted_instance_data_;
 };
 
 }  // namespace wasm

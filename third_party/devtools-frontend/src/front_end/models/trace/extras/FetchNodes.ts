@@ -2,19 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import type * as Protocol from '../../../generated/protocol.js';
 import * as SDK from '../../../core/sdk/sdk.js';
+import type * as Protocol from '../../../generated/protocol.js';
 import type * as Handlers from '../handlers/handlers.js';
-import type * as Types from '../types/types.js';
+import * as Types from '../types/types.js';
 
 const domLookUpSingleNodeCache =
-    new Map<Handlers.Types.TraceParseData, Map<Protocol.DOM.BackendNodeId, SDK.DOMModel.DOMNode|null>>();
+    new Map<Handlers.Types.ParsedTrace, Map<Protocol.DOM.BackendNodeId, SDK.DOMModel.DOMNode|null>>();
 const domLookUpBatchNodesCache = new Map<
-    Handlers.Types.TraceParseData,
-    Map<Set<Protocol.DOM.BackendNodeId>, Map<Protocol.DOM.BackendNodeId, SDK.DOMModel.DOMNode|null>>>();
+    Handlers.Types.ParsedTrace,
+    Map<Array<Protocol.DOM.BackendNodeId>, Map<Protocol.DOM.BackendNodeId, SDK.DOMModel.DOMNode|null>>>();
 
-// eslint-disable-next-line @typescript-eslint/naming-convention
-export function _TEST_clearCache(): void {
+export function clearCacheForTesting(): void {
   domLookUpSingleNodeCache.clear();
   domLookUpBatchNodesCache.clear();
   layoutShiftSourcesCache.clear();
@@ -23,11 +22,11 @@ export function _TEST_clearCache(): void {
 
 /**
  * Looks up the DOM Node on the page for the given BackendNodeId. Uses the
- * provided TraceParseData as the cache and will cache the result after the
+ * provided ParsedTrace as the cache and will cache the result after the
  * first lookup.
  */
 export async function domNodeForBackendNodeID(
-    modelData: Handlers.Types.TraceParseData, nodeId: Protocol.DOM.BackendNodeId): Promise<SDK.DOMModel.DOMNode|null> {
+    modelData: Handlers.Types.ParsedTrace, nodeId: Protocol.DOM.BackendNodeId): Promise<SDK.DOMModel.DOMNode|null> {
   const fromCache = domLookUpSingleNodeCache.get(modelData)?.get(nodeId);
   if (fromCache !== undefined) {
     return fromCache;
@@ -50,13 +49,81 @@ export async function domNodeForBackendNodeID(
   return result;
 }
 
+const nodeIdsForEventCache = new WeakMap<Types.Events.Event, Set<Protocol.DOM.BackendNodeId>>();
+/**
+ * Extracts a set of NodeIds for a given event.
+ * NOTE: you probably don't want to call this and instead use
+ * `extractRelatedDOMNodesFromEvent`, which will fetch the nodes over CDP.
+ * This method is primarily exported so we can test the logic more easily
+ * without having to mock the CDP layer.
+ **/
+export function nodeIdsForEvent(
+    modelData: Handlers.Types.ParsedTrace,
+    event: Types.Events.Event,
+    ): Set<Protocol.DOM.BackendNodeId> {
+  const fromCache = nodeIdsForEventCache.get(event);
+  if (fromCache) {
+    return fromCache;
+  }
+  const foundIds = new Set<Protocol.DOM.BackendNodeId>();
+
+  if (Types.Events.isLayout(event)) {
+    event.args.endData?.layoutRoots.forEach(root => foundIds.add(root.nodeId));
+  } else if (Types.Events.isSyntheticLayoutShift(event) && event.args.data?.impacted_nodes) {
+    event.args.data.impacted_nodes.forEach(node => foundIds.add(node.node_id));
+  } else if (Types.Events.isLargestContentfulPaintCandidate(event) && typeof event.args.data?.nodeId !== 'undefined') {
+    foundIds.add(event.args.data.nodeId);
+  } else if (Types.Events.isPaint(event) && typeof event.args.data.nodeId !== 'undefined') {
+    foundIds.add(event.args.data.nodeId);
+  } else if (Types.Events.isPaintImage(event) && typeof event.args.data.nodeId !== 'undefined') {
+    foundIds.add(event.args.data.nodeId);
+  } else if (Types.Events.isScrollLayer(event) && typeof event.args.data.nodeId !== 'undefined') {
+    foundIds.add(event.args.data.nodeId);
+  } else if (
+      Types.Events.isSyntheticAnimation(event) && typeof event.args.data.beginEvent.args.data.nodeId !== 'undefined') {
+    foundIds.add(event.args.data.beginEvent.args.data.nodeId);
+  } else if (Types.Events.isDecodeImage(event)) {
+    // For a DecodeImage event, we can use the ImagePaintingHandler, which has
+    // done the work to build the relationship between a DecodeImage event and
+    // the corresponding PaintImage event.
+    const paintImageEvent = modelData.ImagePainting.paintImageForEvent.get(event);
+    if (paintImageEvent && typeof paintImageEvent.args.data.nodeId !== 'undefined') {
+      foundIds.add(paintImageEvent.args.data.nodeId);
+    }
+  } else if (Types.Events.isDrawLazyPixelRef(event) && event.args?.LazyPixelRef) {
+    const paintImageEvent = modelData.ImagePainting.paintImageByDrawLazyPixelRef.get(event.args.LazyPixelRef);
+    if (paintImageEvent && typeof paintImageEvent.args.data.nodeId !== 'undefined') {
+      foundIds.add(paintImageEvent.args.data.nodeId);
+    }
+  } else if (Types.Events.isParseMetaViewport(event) && typeof event.args?.data.node_id !== 'undefined') {
+    foundIds.add(event.args.data.node_id);
+  }
+  nodeIdsForEventCache.set(event, foundIds);
+  return foundIds;
+}
+
+/**
+ * Looks up for backend node ids in different types of trace events
+ * and resolves them into related DOM nodes.
+ * This method should be progressively updated to support more events
+ * containing node ids which we want to resolve.
+ */
+export async function extractRelatedDOMNodesFromEvent(modelData: Handlers.Types.ParsedTrace, event: Types.Events.Event):
+    Promise<Map<Protocol.DOM.BackendNodeId, SDK.DOMModel.DOMNode|null>|null> {
+  const nodeIds = nodeIdsForEvent(modelData, event);
+  if (nodeIds.size) {
+    return domNodesForMultipleBackendNodeIds(modelData, Array.from(nodeIds));
+  }
+  return null;
+}
+
 /**
  * Takes a set of Protocol.DOM.BackendNodeId ids and will return a map of NodeId=>DOMNode.
- * Results are cached based on 1) the provided TraceParseData and 2) the provided set of IDs.
+ * Results are cached based on 1) the provided ParsedTrace and 2) the provided set of IDs.
  */
 export async function domNodesForMultipleBackendNodeIds(
-    modelData: Handlers.Types.TraceParseData,
-    nodeIds: Set<Protocol.DOM.BackendNodeId>): Promise<Map<Protocol.DOM.BackendNodeId, SDK.DOMModel.DOMNode|null>> {
+    modelData: Handlers.Types.ParsedTrace,
+    nodeIds: Array<Protocol.DOM.BackendNodeId>): Promise<Map<Protocol.DOM.BackendNodeId, SDK.DOMModel.DOMNode|null>> {
   const fromCache = domLookUpBatchNodesCache.get(modelData)?.get(nodeIds);
   if (fromCache) {
     return fromCache;
@@ -67,22 +134,21 @@ export async function domNodesForMultipleBackendNodeIds(
     return new Map();
   }
 
-  const domNodesMap = await domModel.pushNodesByBackendIdsToFrontend(nodeIds) || new Map();
+  const domNodesMap = await domModel.pushNodesByBackendIdsToFrontend(new Set(nodeIds)) || new Map();
 
   const cacheForModel = domLookUpBatchNodesCache.get(modelData) ||
-      new Map<Set<Protocol.DOM.BackendNodeId>, Map<Protocol.DOM.BackendNodeId, SDK.DOMModel.DOMNode|null>>();
+      new Map<Array<Protocol.DOM.BackendNodeId>, Map<Protocol.DOM.BackendNodeId, SDK.DOMModel.DOMNode|null>>();
   cacheForModel.set(nodeIds, domNodesMap);
   domLookUpBatchNodesCache.set(modelData, cacheForModel);
 
   return domNodesMap;
 }
 
-const layoutShiftSourcesCache = new Map<
-    Handlers.Types.TraceParseData, Map<Types.TraceEvents.TraceEventLayoutShift, readonly LayoutShiftSource[]>>();
+const layoutShiftSourcesCache =
+    new Map<Handlers.Types.ParsedTrace, Map<Types.Events.LayoutShift, readonly LayoutShiftSource[]>>();
 
-const normalizedLayoutShiftNodesCache = new Map<
-    Handlers.Types.TraceParseData,
-    Map<Types.TraceEvents.TraceEventLayoutShift, readonly Types.TraceEvents.TraceImpactedNode[]>>();
+const normalizedLayoutShiftNodesCache =
+    new Map<Handlers.Types.ParsedTrace, Map<Types.Events.LayoutShift, readonly Types.Events.TraceImpactedNode[]>>();
 
 export interface LayoutShiftSource {
   previousRect: DOMRect;
@@ -102,8 +168,7 @@ export interface LayoutShiftSource {
  * shift, so it is is safe to call multiple times with the same input.
  */
 export async function sourcesForLayoutShift(
-    modelData: Handlers.Types.TraceParseData,
-    event: Types.TraceEvents.TraceEventLayoutShift): Promise<readonly LayoutShiftSource[]> {
+    modelData: Handlers.Types.ParsedTrace, event: Types.Events.LayoutShift): Promise<readonly LayoutShiftSource[]> {
   const fromCache = layoutShiftSourcesCache.get(modelData)?.get(event);
   if (fromCache) {
     return fromCache;
@@ -124,7 +189,7 @@ export async function sourcesForLayoutShift(
     }
   }));
   const cacheForModel =
-      layoutShiftSourcesCache.get(modelData) || new Map<Types.TraceEvents.TraceEventLayoutShift, LayoutShiftSource[]>();
+      layoutShiftSourcesCache.get(modelData) || new Map<Types.Events.LayoutShift, LayoutShiftSource[]>();
   cacheForModel.set(event, sources);
   layoutShiftSourcesCache.set(modelData, cacheForModel);
   return sources;
@@ -143,8 +208,8 @@ export async function sourcesForLayoutShift(
  * See https://crbug.com/1300309 for details.
  */
 export async function normalizedImpactedNodesForLayoutShift(
-    modelData: Handlers.Types.TraceParseData,
-    event: Types.TraceEvents.TraceEventLayoutShift): Promise<readonly Types.TraceEvents.TraceImpactedNode[]> {
+    modelData: Handlers.Types.ParsedTrace,
+    event: Types.Events.LayoutShift): Promise<readonly Types.Events.TraceImpactedNode[]> {
   const fromCache = normalizedLayoutShiftNodesCache.get(modelData)?.get(event);
   if (fromCache) {
     return fromCache;
@@ -168,7 +233,7 @@ export async function normalizedImpactedNodesForLayoutShift(
     return impactedNodes;
   }
 
-  const normalizedNodes: Types.TraceEvents.TraceImpactedNode[] = [];
+  const normalizedNodes: Types.Events.TraceImpactedNode[] = [];
   for (const impactedNode of impactedNodes) {
     const newNode = {...impactedNode};
     for (let i = 0; i < impactedNode.old_rect.length; i++) {
@@ -181,7 +246,7 @@ export async function normalizedImpactedNodesForLayoutShift(
   }
 
   const cacheForModel = normalizedLayoutShiftNodesCache.get(modelData) ||
-      new Map<Types.TraceEvents.TraceEventLayoutShift, readonly Types.TraceEvents.TraceImpactedNode[]>();
+      new Map<Types.Events.LayoutShift, readonly Types.Events.TraceImpactedNode[]>();
   cacheForModel.set(event, normalizedNodes);
   normalizedLayoutShiftNodesCache.set(modelData, cacheForModel);
 

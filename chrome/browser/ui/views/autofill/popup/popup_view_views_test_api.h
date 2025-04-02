@@ -5,8 +5,10 @@
 #ifndef CHROME_BROWSER_UI_VIEWS_AUTOFILL_POPUP_POPUP_VIEW_VIEWS_TEST_API_H_
 #define CHROME_BROWSER_UI_VIEWS_AUTOFILL_POPUP_POPUP_VIEW_VIEWS_TEST_API_H_
 
+#include <string>
 #include <vector>
 
+#include "base/functional/callback_forward.h"
 #include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/views/autofill/popup/popup_view_views.h"
@@ -23,13 +25,20 @@ namespace autofill {
 
 class PopupViewViewsTestApi {
  public:
+  using A11yAnnouncer =
+      base::RepeatingCallback<void(const std::u16string&, bool)>;
+
   explicit PopupViewViewsTestApi(PopupViewViews* view) : view_(*view) {}
+
+  void SetA11yAnnouncer(A11yAnnouncer announcer) {
+    view_->a11y_announcer_ = announcer;
+  }
 
   bool CanShowDropdownInBounds(const gfx::Rect& bounds) const&& {
     return view_->CanShowDropdownInBounds(bounds);
   }
 
-  bool HandleKeyPressEvent(const content::NativeWebKeyboardEvent& event) && {
+  bool HandleKeyPressEvent(const input::NativeWebKeyboardEvent& event) && {
     return view_->HandleKeyPressEvent(event);
   }
 
@@ -39,6 +48,10 @@ class PopupViewViewsTestApi {
 
   const std::vector<PopupViewViews::RowPointer>& rows() const&& {
     return view_->rows_;
+  }
+
+  void SetSearchQuery(const std::u16string& query) {
+    view_->search_bar_->SetInputTextForTesting(query);
   }
 
   base::WeakPtr<PopupViewViews> GetWeakPtr() {

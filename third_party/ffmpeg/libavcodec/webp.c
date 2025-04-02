@@ -41,6 +41,7 @@
  */
 
 #include "libavutil/imgutils.h"
+#include "libavutil/mem.h"
 
 #define BITSTREAM_READER_LE
 #include "avcodec.h"
@@ -702,6 +703,9 @@ static int decode_entropy_coded_image(WebPContext *s, enum ImageRole role,
             }
             ref_x = FFMAX(0, ref_x);
             ref_y = FFMAX(0, ref_y);
+
+            if (ref_y == y && ref_x >= x)
+                return AVERROR_INVALIDDATA;
 
             /* copy pixels
              * source and dest regions can overlap and wrap lines, so just
@@ -1500,11 +1504,16 @@ exif_end:
                        "VP8X header\n");
 
             s->has_iccp = 1;
-            sd = av_frame_new_side_data(p, AV_FRAME_DATA_ICC_PROFILE, chunk_size);
-            if (!sd)
-                return AVERROR(ENOMEM);
 
-            bytestream2_get_buffer(&gb, sd->data, chunk_size);
+            ret = ff_frame_new_side_data(avctx, p, AV_FRAME_DATA_ICC_PROFILE, chunk_size, &sd);
+            if (ret < 0)
+                return ret;
+
+            if (sd) {
+                bytestream2_get_buffer(&gb, sd->data, chunk_size);
+            } else {
+                bytestream2_skip(&gb, chunk_size);
+            }
             break;
         }
         case MKTAG('A', 'N', 'I', 'M'):
@@ -1565,5 +1574,6 @@ const FFCodec ff_webp_decoder = {
     FF_CODEC_DECODE_CB(webp_decode_frame),
     .close          = webp_decode_close,
     .p.capabilities = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_FRAME_THREADS,
-    .caps_internal  = FF_CODEC_CAP_ICC_PROFILES,
+    .caps_internal  = FF_CODEC_CAP_ICC_PROFILES |
+                      FF_CODEC_CAP_USES_PROGRESSFRAMES,
 };

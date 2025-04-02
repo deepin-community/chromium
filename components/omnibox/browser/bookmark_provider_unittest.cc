@@ -4,6 +4,13 @@
 
 #include "components/omnibox/browser/bookmark_provider.h"
 
+#include "components/query_parser/query_parser.h"
+#include "third_party/omnibox_proto/groups.pb.h"
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <stddef.h>
 
 #include <memory>
@@ -24,6 +31,7 @@
 #include "components/omnibox/browser/test_scheme_classifier.h"
 #include "components/omnibox/browser/titled_url_match_utils.h"
 #include "components/omnibox/common/omnibox_features.h"
+#include "components/search_engines/search_engines_test_environment.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/search_engines/template_url_starter_pack_data.h"
@@ -181,6 +189,7 @@ class BookmarkProviderTest : public testing::Test {
   // provided.
   [[nodiscard]] size_t GetNumMatches(std::string input_text);
 
+  search_engines::SearchEnginesTestEnvironment search_engines_test_environment_;
   std::unique_ptr<MockAutocompleteProviderClient> provider_client_;
   std::unique_ptr<BookmarkModel> local_or_syncable_model_;
   scoped_refptr<BookmarkProvider> provider_;
@@ -193,13 +202,13 @@ BookmarkProviderTest::BookmarkProviderTest() {
 
 void BookmarkProviderTest::SetUp() {
   provider_client_ = std::make_unique<MockAutocompleteProviderClient>();
-  ON_CALL(*provider_client_, GetLocalOrSyncableBookmarkModel())
+  ON_CALL(*provider_client_, GetBookmarkModel())
       .WillByDefault(testing::Return(local_or_syncable_model_.get()));
   ON_CALL(*provider_client_, GetSchemeClassifier())
       .WillByDefault(testing::ReturnRef(classifier_));
 
   provider_client_->set_template_url_service(
-      std::make_unique<TemplateURLService>(nullptr, 0));
+      search_engines_test_environment_.template_url_service());
 
   ResetProvider();
 
@@ -324,7 +333,7 @@ TEST_F(BookmarkProviderTest, Rankings) {
     // |matches| specifies the titles for all bookmarks expected to be matched
     // by the |query|
     const std::string matches[3];
-  } query_data[] = {
+  } query_datas[] = {
       // Basic ranking test.
       {"abc",
        3,
@@ -370,30 +379,30 @@ TEST_F(BookmarkProviderTest, Rankings) {
         "burning worms #2"}},  // not boosted
   };
 
-  for (size_t i = 0; i < std::size(query_data); ++i) {
-    AutocompleteInput input(base::ASCIIToUTF16(query_data[i].query),
+  for (auto& query_data : query_datas) {
+    AutocompleteInput input(base::ASCIIToUTF16(query_data.query),
                             metrics::OmniboxEventProto::OTHER,
                             TestSchemeClassifier());
     provider_->Start(input, /*minimal_changes=*/false);
     const ACMatches& matches(provider_->matches());
     // Validate number and content of results is as expected.
-    for (size_t j = 0; j < std::max(query_data[i].match_count, matches.size());
+    for (size_t j = 0; j < std::max(query_data.match_count, matches.size());
          ++j) {
-      EXPECT_LT(j, query_data[i].match_count)
+      EXPECT_LT(j, query_data.match_count)
           << "    Unexpected match '"
           << base::UTF16ToUTF8(matches[j].description) << "' for query: '"
-          << query_data[i].query << "'.";
-      if (j >= query_data[i].match_count)
+          << query_data.query << "'.";
+      if (j >= query_data.match_count)
         continue;
       EXPECT_LT(j, matches.size())
-          << "    Missing match '" << query_data[i].matches[j]
-          << "' for query: '" << query_data[i].query << "'.";
+          << "    Missing match '" << query_data.matches[j] << "' for query: '"
+          << query_data.query << "'.";
       if (j >= matches.size())
         continue;
-      EXPECT_EQ(query_data[i].matches[j],
+      EXPECT_EQ(query_data.matches[j],
                 base::UTF16ToUTF8(matches[j].description))
           << "    Mismatch at [" << base::NumberToString(j) << "] for query '"
-          << query_data[i].query << "'.";
+          << query_data.query << "'.";
     }
   }
 }
@@ -556,41 +565,37 @@ TEST_F(BookmarkProviderTest, KeywordModeExtractUserInput) {
 
   ACMatches matches = provider_->matches();
   ASSERT_GT(matches.size(), 0u);
-  EXPECT_EQ(u"domain", matches[0].description);
+  EXPECT_EQ(matches[0].description, u"domain");
 
-  // Test result for "@bookmarks" and "@bookmarks domain" while NOT in keyword
-  // mode, we should get a result for the @bookmarks bookmark and not for the
-  // domain bookmark since we're searching for the whole input text including
-  // "@bookmarks".
+  // Test result for "@bookmarks" while NOT in keyword mode, we shouldn't get a
+  // result because the input starts with "@".
   AutocompleteInput input2(u"@bookmarks", metrics::OmniboxEventProto::OTHER,
                            TestSchemeClassifier());
   provider_->Start(input2, /*minimal_changes=*/false);
+  EXPECT_TRUE(provider_->matches().empty());
 
-  matches = provider_->matches();
-  ASSERT_GT(matches.size(), 0u);
-  EXPECT_EQ(u"@bookmarks", matches[0].description);
-
-  AutocompleteInput input3(u"@bookmarks domain",
+  // Test result for "domain @bookmarks" while NOT in keyword mode, we should
+  // get a result. Although the input contains "@", it doesn't start with it.
+  AutocompleteInput input3(u"domain @bookmarks",
                            metrics::OmniboxEventProto::OTHER,
                            TestSchemeClassifier());
   provider_->Start(input3, /*minimal_changes=*/false);
+  EXPECT_EQ(provider_->matches().size(), 1u);
+  EXPECT_EQ(matches[0].description, u"domain");
 
-  matches = provider_->matches();
-
-  // TODO(https://crbug.com/1417053): This used to be 0u. Is 1u OK?
-  ASSERT_EQ(matches.size(), 1u);
-
-  // Turn on keyword mode, test result again, we should only get back the result
-  // for the domain bookmark since we're searching only for the user text after
-  // the keyword.
-  input3.set_prefer_keyword(true);
-  input3.set_keyword_mode_entry_method(
+  // In keyword mode, "@bookmarks domain" should match since we're only trying
+  // to match "domain".
+  AutocompleteInput input4(u"@bookmarks domain",
+                           metrics::OmniboxEventProto::OTHER,
+                           TestSchemeClassifier());
+  input4.set_prefer_keyword(true);
+  input4.set_keyword_mode_entry_method(
       metrics::OmniboxEventProto_KeywordModeEntryMethod_TAB);
-  provider_->Start(input3, /*minimal_changes=*/false);
+  provider_->Start(input4, /*minimal_changes=*/false);
 
   matches = provider_->matches();
   ASSERT_EQ(matches.size(), 1u);
-  EXPECT_EQ(u"domain", matches[0].description);
+  EXPECT_EQ(matches[0].description, u"domain");
 
   // Ensure keyword and transition are set properly to keep user in keyword
   // mode.
@@ -658,29 +663,27 @@ TEST_F(BookmarkProviderTest, MaxMatches) {
   EXPECT_EQ(matches.size(), 9u);
 }
 
-TEST_F(BookmarkProviderTest, AccountBookmarkModel) {
-  const std::string kInputText = "abcd";
-  const size_t kMatchesInLocalOrSyncableModel = 2;
+TEST_F(BookmarkProviderTest, SetsGroupForHubSearch) {
+  AutocompleteInput input(u"foo", metrics::OmniboxEventProto::ANDROID_HUB,
+                          TestSchemeClassifier());
+  provider_->Start(input, /*minimal_changes=*/false);
+  EXPECT_FALSE(provider_->matches().empty());
+  EXPECT_EQ(omnibox::GROUP_MOBILE_BOOKMARKS,
+            provider_->matches()[0].suggestion_group_id);
+}
 
-  // With no account bookmark model, the input text hits 2 results in the
-  // local-or-syncable instance.
-  ASSERT_EQ(GetNumMatches(kInputText), kMatchesInLocalOrSyncableModel);
+TEST_F(BookmarkProviderTest, NoMaxMatchesForHubSearch) {
+  AutocompleteInput input(u"zyx", metrics::OmniboxEventProto::ANDROID_HUB,
+                          TestSchemeClassifier());
+  provider_->Start(input, /*minimal_changes=*/false);
+  EXPECT_EQ(3u, provider_->provider_max_matches());
+  EXPECT_FALSE(provider_->matches().empty());
+  EXPECT_GT(provider_->matches().size(), 3u);
+}
 
-  // Plumb an account bookmark model.
-  std::unique_ptr<BookmarkModel> account_model =
-      bookmarks::TestBookmarkClient::CreateModel();
-  ON_CALL(*provider_client_, GetAccountBookmarkModel())
-      .WillByDefault(testing::Return(account_model.get()));
-  ResetProvider();
-
-  // The account model is initially empty, so the matches remain unchanged.
-  ASSERT_EQ(GetNumMatches(kInputText), kMatchesInLocalOrSyncableModel);
-
-  // Populate the account bookmark model with some data that matches the query.
-  const BookmarkNode* other_node = account_model->other_node();
-  account_model->AddURL(other_node, other_node->children().size(),
-                        base::ASCIIToUTF16(kInputText), GURL("http://foo.com"));
-
-  // There should be one extra match now.
-  EXPECT_EQ(GetNumMatches(kInputText), kMatchesInLocalOrSyncableModel + 1);
+TEST_F(BookmarkProviderTest, MatchingAlgorithmForHubSearch) {
+  AutocompleteInput input(u"foo", metrics::OmniboxEventProto::ANDROID_HUB,
+                          TestSchemeClassifier());
+  EXPECT_EQ(query_parser::MatchingAlgorithm::ALWAYS_PREFIX_SEARCH,
+            provider_->GetMatchingAlgorithm(input));
 }

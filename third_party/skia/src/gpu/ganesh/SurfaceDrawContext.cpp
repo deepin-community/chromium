@@ -4,52 +4,70 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
-
 #include "src/gpu/ganesh/SurfaceDrawContext.h"
 
+#include "include/core/SkAlphaType.h"
+#include "include/core/SkArc.h"
+#include "include/core/SkBlendMode.h"
 #include "include/core/SkColorSpace.h"
 #include "include/core/SkDrawable.h"
+#include "include/core/SkMesh.h"
+#include "include/core/SkPath.h"
+#include "include/core/SkPathTypes.h"
+#include "include/core/SkPoint3.h"
+#include "include/core/SkRRect.h"
+#include "include/core/SkSamplingOptions.h"
+#include "include/core/SkScalar.h"
+#include "include/core/SkSize.h"
 #include "include/core/SkTypes.h"
 #include "include/core/SkVertices.h"
-#include "include/gpu/GrBackendSemaphore.h"
-#include "include/gpu/GrDirectContext.h"
-#include "include/gpu/GrRecordingContext.h"
-#include "include/private/gpu/ganesh/GrImageContext.h"
+#include "include/gpu/ganesh/GrBackendSemaphore.h"
+#include "include/gpu/ganesh/GrBackendSurface.h"
+#include "include/gpu/ganesh/GrDirectContext.h"
+#include "include/gpu/ganesh/GrRecordingContext.h"
+#include "include/private/base/SingleOwner.h"
+#include "include/private/base/SkDebug.h"
+#include "include/private/base/SkFloatingPoint.h"
+#include "include/private/base/SkTemplates.h"
+#include "include/private/base/SkTo.h"
 #include "include/utils/SkShadowUtils.h"
-#include "src/base/SkVx.h"
-#include "src/core/SkAutoPixmapStorage.h"
-#include "src/core/SkBlendModePriv.h"
-#include "src/core/SkConvertPixels.h"
+#include "src/core/SkDevice.h"
 #include "src/core/SkDrawProcs.h"
 #include "src/core/SkDrawShadowInfo.h"
 #include "src/core/SkLatticeIter.h"
-#include "src/core/SkMatrixPriv.h"
 #include "src/core/SkMeshPriv.h"
 #include "src/core/SkPointPriv.h"
 #include "src/core/SkRRectPriv.h"
-#include "src/core/SkStrikeCache.h"
+#include "src/core/SkTraceEvent.h"
+#include "src/gpu/RefCntedCallback.h"
+#include "src/gpu/SkBackingFit.h"
+#include "src/gpu/Swizzle.h"
 #include "src/gpu/ganesh/GrAppliedClip.h"
-#include "src/gpu/ganesh/GrAttachment.h"
+#include "src/gpu/ganesh/GrAuditTrail.h"
 #include "src/gpu/ganesh/GrCaps.h"
 #include "src/gpu/ganesh/GrClip.h"
 #include "src/gpu/ganesh/GrColor.h"
+#include "src/gpu/ganesh/GrColorInfo.h"
 #include "src/gpu/ganesh/GrColorSpaceXform.h"
-#include "src/gpu/ganesh/GrDataUtils.h"
 #include "src/gpu/ganesh/GrDirectContextPriv.h"
 #include "src/gpu/ganesh/GrDrawingManager.h"
-#include "src/gpu/ganesh/GrGpuResourcePriv.h"
-#include "src/gpu/ganesh/GrImageContextPriv.h"
-#include "src/gpu/ganesh/GrImageInfo.h"
-#include "src/gpu/ganesh/GrMemoryPool.h"
+#include "src/gpu/ganesh/GrDstProxyView.h"
+#include "src/gpu/ganesh/GrFragmentProcessor.h"
+#include "src/gpu/ganesh/GrProcessorSet.h"
 #include "src/gpu/ganesh/GrProxyProvider.h"
-#include "src/gpu/ganesh/GrRenderTarget.h"
+#include "src/gpu/ganesh/GrRecordingContextPriv.h"
 #include "src/gpu/ganesh/GrResourceProvider.h"
+#include "src/gpu/ganesh/GrScissorState.h"
 #include "src/gpu/ganesh/GrSemaphore.h"
 #include "src/gpu/ganesh/GrStencilSettings.h"
 #include "src/gpu/ganesh/GrStyle.h"
+#include "src/gpu/ganesh/GrTextureProxy.h"
+#include "src/gpu/ganesh/GrTextureResolveManager.h"
 #include "src/gpu/ganesh/GrTracing.h"
+#include "src/gpu/ganesh/GrUserStencilSettings.h"
 #include "src/gpu/ganesh/GrXferProcessor.h"
 #include "src/gpu/ganesh/PathRenderer.h"
+#include "src/gpu/ganesh/PathRendererChain.h"
 #include "src/gpu/ganesh/SkGr.h"
 #include "src/gpu/ganesh/effects/GrBlendFragmentProcessor.h"
 #include "src/gpu/ganesh/effects/GrDisableColorXP.h"
@@ -71,8 +89,14 @@
 #include "src/gpu/ganesh/ops/ShadowRRectOp.h"
 #include "src/gpu/ganesh/ops/StrokeRectOp.h"
 #include "src/gpu/ganesh/ops/TextureOp.h"
-#include "src/text/gpu/SDFTControl.h"
+#include "src/text/gpu/SubRunContainer.h"
 #include "src/text/gpu/TextBlobRedrawCoordinator.h"
+
+#include <algorithm>
+#include <map>
+#include <string>
+
+struct GrShaderCaps;
 
 #define ASSERT_OWNED_RESOURCE(R) SkASSERT(!(R) || (R)->getContext() == this->drawingManager()->getContext())
 #define ASSERT_SINGLE_OWNER        SKGPU_ASSERT_SINGLE_OWNER(this->singleOwner())
@@ -116,17 +140,6 @@ void op_bounds(SkRect* bounds, const GrOp* op) {
 namespace skgpu::ganesh {
 
 using DoSimplify = GrStyledShape::DoSimplify;
-
-class AutoCheckFlush {
-public:
-    AutoCheckFlush(GrDrawingManager* drawingManager) : fDrawingManager(drawingManager) {
-        SkASSERT(fDrawingManager);
-    }
-    ~AutoCheckFlush() { fDrawingManager->flushIfNecessary(); }
-
-private:
-    GrDrawingManager* fDrawingManager;
-};
 
 std::unique_ptr<SurfaceDrawContext> SurfaceDrawContext::Make(GrRecordingContext* rContext,
                                                              GrColorType colorType,
@@ -321,7 +334,7 @@ void SurfaceDrawContext::willReplaceOpsTask(OpsTask* prevTask, OpsTask* nextTask
         // values?
         nextTask->setInitialStencilContent(OpsTask::StencilContent::kPreserved);
     }
-#if GR_GPU_STATS && defined(GR_TEST_UTILS)
+#if GR_GPU_STATS && defined(GPU_TEST_UTILS)
     if (fCanUseDynamicMSAA) {
         fContext->priv().dmsaaStats().fNumRenderPasses++;
     }
@@ -552,8 +565,6 @@ void SurfaceDrawContext::drawFilledQuad(const GrClip* clip,
     SkDEBUGCODE(this->validate();)
     GR_CREATE_TRACE_MARKER_CONTEXT("SurfaceDrawContext", "drawFilledQuad", fContext);
 
-    AutoCheckFlush acf(this->drawingManager());
-
     QuadOptimization opt = this->attemptQuadOptimization(clip, ss, quad, &paint);
     if (opt >= QuadOptimization::kClipApplied) {
         // These optimizations require caller to add an op themselves
@@ -593,6 +604,18 @@ void SurfaceDrawContext::drawTexture(const GrClip* clip,
     // If we are using dmsaa then go through FillRRectOp (via fillRectToRect).
     if ((this->alwaysAntialias() || this->caps()->reducedShaderMode()) &&
         edgeAA != GrQuadAAFlags::kNone) {
+        auto [mustFilter, mustMM] = FilterAndMipmapHaveNoEffect(
+                GrQuad::MakeFromRect(dstRect, viewMatrix), GrQuad(srcRect));
+        if (!mustFilter) {
+            // Chromeos-jacuzzi devices (ARM Mali-G72 MP3) have issues with blitting with linear
+            // filtering. Likely some optimization or quantization causes fragments to be produced
+            // with small offset/error. This will result in a slight blending of pixels when
+            // sampling. Normally in most application this would be completely unnoticeable but when
+            // trying to use the gpu as a per pixel blit we will end up with slightly blurry
+            // results.
+            // See https://crbug.com/326980863
+            filter = GrSamplerState::Filter::kNearest;
+        }
 
         GrPaint paint;
         paint.setColor4f(color);
@@ -640,8 +663,6 @@ void SurfaceDrawContext::drawTexturedQuad(const GrClip* clip,
     SkASSERT(proxyView.asTextureProxy());
     GR_CREATE_TRACE_MARKER_CONTEXT("SurfaceDrawContext", "drawTexturedQuad", fContext);
 
-    AutoCheckFlush acf(this->drawingManager());
-
     // Functionally this is very similar to drawFilledQuad except that there's no constColor to
     // enable the kSubmitted optimizations, no stencil settings support, and its a TextureOp.
     QuadOptimization opt = this->attemptQuadOptimization(clip, nullptr/*stencil*/, quad,
@@ -680,8 +701,6 @@ void SurfaceDrawContext::drawRect(const GrClip* clip,
 
     // Path effects should've been devolved to a path in SkGpuDevice
     SkASSERT(!style->pathEffect());
-
-    AutoCheckFlush acf(this->drawingManager());
 
     const SkStrokeRec& stroke = style->strokeRec();
     if (stroke.getStyle() == SkStrokeRec::kFill_Style) {
@@ -789,7 +808,7 @@ int SurfaceDrawContext::maxWindowRectangles() const {
 }
 
 OpsTask::CanDiscardPreviousOps SurfaceDrawContext::canDiscardPreviousOpsOnFullClear() const {
-#if defined(GR_TEST_UTILS)
+#if defined(GPU_TEST_UTILS)
     if (fPreserveOpsOnFullClear_TestingOnly) {
         return OpsTask::CanDiscardPreviousOps::kNo;
     }
@@ -901,7 +920,6 @@ void SurfaceDrawContext::drawTextureSet(const GrClip* clip,
 
     // Create the minimum number of GrTextureOps needed to draw this set. Individual
     // GrTextureOps can rebind the texture between draws thus avoiding GrPaint (re)creation.
-    AutoCheckFlush acf(this->drawingManager());
     GrAAType aaType = this->chooseAAType(GrAA::kYes);
     auto clampType = GrColorTypeClampType(this->colorInfo().colorType());
     auto saturate = clampType == GrClampType::kManual ? ganesh::TextureOp::Saturate::kYes
@@ -921,8 +939,6 @@ void SurfaceDrawContext::drawVertices(const GrClip* clip,
     RETURN_IF_ABANDONED
     SkDEBUGCODE(this->validate();)
     GR_CREATE_TRACE_MARKER_CONTEXT("SurfaceDrawContext", "drawVertices", fContext);
-
-    AutoCheckFlush acf(this->drawingManager());
 
     SkASSERT(vertices);
     auto xform = skipColorXform ? nullptr : this->colorInfo().refColorSpaceXformFromSRGB();
@@ -946,8 +962,6 @@ void SurfaceDrawContext::drawMesh(const GrClip* clip,
     RETURN_IF_ABANDONED
     SkDEBUGCODE(this->validate();)
     GR_CREATE_TRACE_MARKER_CONTEXT("SurfaceDrawContext", "drawMesh", fContext);
-
-    AutoCheckFlush acf(this->drawingManager());
 
     SkASSERT(mesh.isValid());
 
@@ -979,8 +993,6 @@ void SurfaceDrawContext::drawAtlas(const GrClip* clip,
     RETURN_IF_ABANDONED
     SkDEBUGCODE(this->validate();)
     GR_CREATE_TRACE_MARKER_CONTEXT("SurfaceDrawContext", "drawAtlas", fContext);
-
-    AutoCheckFlush acf(this->drawingManager());
 
     GrAAType aaType = this->chooseAAType(GrAA::kNo);
     GrOp::Owner op = DrawAtlasOp::Make(fContext, std::move(paint), viewMatrix,
@@ -1046,8 +1058,6 @@ void SurfaceDrawContext::drawRRect(const GrClip* origClip,
         }
     }
 #endif
-
-    AutoCheckFlush acf(this->drawingManager());
 
     GrAAType aaType = this->chooseAAType(aa);
 
@@ -1131,8 +1141,6 @@ bool SurfaceDrawContext::drawFastShadow(const GrClip* clip,
     if (rrect.isEmpty()) {
         return true;
     }
-
-    AutoCheckFlush acf(this->drawingManager());
 
     SkPoint3 devLightPos = rec.fLightPos;
     bool directional = SkToBool(rec.fFlags & kDirectionalLight_ShadowFlag);
@@ -1357,8 +1365,6 @@ void SurfaceDrawContext::drawOval(const GrClip* clip,
         return;
     }
 
-    AutoCheckFlush acf(this->drawingManager());
-
     GrAAType aaType = this->chooseAAType(aa);
 
     GrOp::Owner op;
@@ -1407,17 +1413,12 @@ void SurfaceDrawContext::drawArc(const GrClip* clip,
                                  GrPaint&& paint,
                                  GrAA aa,
                                  const SkMatrix& viewMatrix,
-                                 const SkRect& oval,
-                                 SkScalar startAngle,
-                                 SkScalar sweepAngle,
-                                 bool useCenter,
+                                 const SkArc& arc,
                                  const GrStyle& style) {
     ASSERT_SINGLE_OWNER
     RETURN_IF_ABANDONED
     SkDEBUGCODE(this->validate();)
             GR_CREATE_TRACE_MARKER_CONTEXT("SurfaceDrawContext", "drawArc", fContext);
-
-    AutoCheckFlush acf(this->drawingManager());
 
 #ifndef SK_ENABLE_OPTIMIZE_SIZE
     GrAAType aaType = this->chooseAAType(aa);
@@ -1426,10 +1427,10 @@ void SurfaceDrawContext::drawArc(const GrClip* clip,
         GrOp::Owner op = GrOvalOpFactory::MakeArcOp(fContext,
                                                     std::move(paint),
                                                     viewMatrix,
-                                                    oval,
-                                                    startAngle,
-                                                    sweepAngle,
-                                                    useCenter,
+                                                    arc.fOval,
+                                                    arc.fStartAngle,
+                                                    arc.fSweepAngle,
+                                                    arc.isWedge(),
                                                     style,
                                                     shaderCaps);
         if (op) {
@@ -1439,9 +1440,11 @@ void SurfaceDrawContext::drawArc(const GrClip* clip,
         assert_alive(paint);
     }
 #endif
-    this->drawShapeUsingPathRenderer(clip, std::move(paint), aa, viewMatrix,
-                                     GrStyledShape::MakeArc(oval, startAngle, sweepAngle, useCenter,
-                                                            style, DoSimplify::kNo));
+    this->drawShapeUsingPathRenderer(clip,
+                                     std::move(paint),
+                                     aa,
+                                     viewMatrix,
+                                     GrStyledShape::MakeArc(arc, style, DoSimplify::kNo));
 }
 
 void SurfaceDrawContext::drawImageLattice(const GrClip* clip,
@@ -1457,8 +1460,6 @@ void SurfaceDrawContext::drawImageLattice(const GrClip* clip,
     RETURN_IF_ABANDONED
     SkDEBUGCODE(this->validate();)
     GR_CREATE_TRACE_MARKER_CONTEXT("SurfaceDrawContext", "drawImageLattice", fContext);
-
-    AutoCheckFlush acf(this->drawingManager());
 
     GrOp::Owner op =
               LatticeOp::MakeNonAA(fContext, std::move(paint), viewMatrix, std::move(view),
@@ -1502,8 +1503,6 @@ bool SurfaceDrawContext::waitOnSemaphores(int numSemaphores,
     RETURN_FALSE_IF_ABANDONED
     SkDEBUGCODE(this->validate();)
     GR_CREATE_TRACE_MARKER_CONTEXT("SurfaceDrawContext", "waitOnSemaphores", fContext);
-
-    AutoCheckFlush acf(this->drawingManager());
 
     if (numSemaphores && !this->caps()->backendSemaphoreSupport()) {
         return false;
@@ -1563,8 +1562,6 @@ void SurfaceDrawContext::drawShape(const GrClip* clip,
         return;
     }
 
-    AutoCheckFlush acf(this->drawingManager());
-
     // If we get here in drawShape(), we definitely need to use path rendering
     this->drawShapeUsingPathRenderer(clip, std::move(paint), aa, viewMatrix, std::move(shape),
                                      /* attemptDrawSimple */ true);
@@ -1593,8 +1590,6 @@ bool SurfaceDrawContext::drawAndStencilPath(const GrHardClip* clip,
                           SkRect::Make(this->dimensions()));
         return true;
     }
-
-    AutoCheckFlush acf(this->drawingManager());
 
     // An Assumption here is that path renderer would use some form of tweaking
     // the src color (either the input alpha or in the frag shader) to implement
@@ -1755,7 +1750,7 @@ bool SurfaceDrawContext::drawSimpleShape(const GrClip* clip,
                                       shape.style().strokeRec());
                 return true;
             }
-        } else if (shape.asRRect(&rrect, nullptr, nullptr, &inverted) && !inverted) {
+        } else if (shape.asRRect(&rrect, &inverted) && !inverted) {
             if (rrect.isRect()) {
                 this->drawRect(clip, std::move(*paint), aa, viewMatrix, rrect.rect(),
                                &shape.style());
@@ -2006,7 +2001,7 @@ void SurfaceDrawContext::addDrawOp(const GrClip* clip,
         this->setNeedsStencil();
     }
 
-#if GR_GPU_STATS && defined(GR_TEST_UTILS)
+#if GR_GPU_STATS && defined(GPU_TEST_UTILS)
     if (fCanUseDynamicMSAA && drawNeedsMSAA) {
         if (!opsTask->usesMSAASurface()) {
             fContext->priv().dmsaaStats().fNumMultisampleRenderPasses++;

@@ -26,6 +26,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_HTML_COLLECTION_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/live_node_list_base.h"
 #include "third_party/blink/renderer/core/html/collection_items_cache.h"
 #include "third_party/blink/renderer/core/html/collection_type.h"
@@ -93,6 +94,7 @@ class CORE_EXPORT HTMLCollection : public ScriptWrappable,
 
   // Non-DOM API
   void NamedItems(const AtomicString& name, HeapVector<Member<Element>>&) const;
+  bool HasNamedItems(const AtomicString& name) const;
   bool IsEmpty() const { return collection_items_cache_.IsEmpty(*this); }
   bool HasExactlyOneItem() const {
     return collection_items_cache_.HasExactlyOneNode(*this);
@@ -115,6 +117,11 @@ class CORE_EXPORT HTMLCollection : public ScriptWrappable,
   Iterator end() const { return Iterator::CreateEnd(this); }
 
   void Trace(Visitor*) const override;
+
+  bool NamedItemsEmpty() const {
+    UpdateIdNameCache();
+    return !GetNamedItemCache().empty();
+  }
 
  protected:
   class NamedItemCache final : public GarbageCollected<NamedItemCache> {
@@ -147,6 +154,8 @@ class CORE_EXPORT HTMLCollection : public ScriptWrappable,
       visitor->Trace(name_cache_);
     }
 
+    bool empty() const { return id_cache_.empty() && name_cache_.empty(); }
+
    private:
     typedef HeapHashMap<AtomicString, Member<HeapVector<Member<Element>>>>
         StringToElementsMap;
@@ -171,7 +180,7 @@ class CORE_EXPORT HTMLCollection : public ScriptWrappable,
   virtual void SupportedPropertyNames(Vector<String>& names);
 
   virtual void UpdateIdNameCache() const;
-  bool HasValidIdNameCache() const { return named_item_cache_ != nullptr; }
+  bool HasValidIdNameCache() const { return named_item_cache_; }
 
   void SetNamedItemCache(NamedItemCache* cache) const {
     DCHECK(!named_item_cache_);

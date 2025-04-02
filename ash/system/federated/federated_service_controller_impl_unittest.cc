@@ -22,10 +22,6 @@ class FederatedServiceControllerImplTestBase : public NoSessionAshTestBase {
   FederatedServiceControllerImplTestBase()
       : NoSessionAshTestBase(
             base::test::TaskEnvironment::TimeSource::MOCK_TIME) {
-    scoped_feature_list_.InitWithFeatures(
-        /*enabled_features=*/{features::kFederatedService,
-                              features::kFederatedServiceScheduleTasks},
-        /*disabled_features=*/{});
   }
 
   FederatedServiceControllerImplTestBase(
@@ -44,9 +40,6 @@ class FederatedServiceControllerImplTestBase : public NoSessionAshTestBase {
  protected:
   raw_ptr<FederatedServiceControllerImpl, DanglingUntriaged> controller_ =
       nullptr;
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 TEST_F(FederatedServiceControllerImplTestBase, NormalUserLogin) {
@@ -80,7 +73,7 @@ TEST_F(FederatedServiceControllerImplTestBase, InvalidLoginStatusAndUserType) {
   EXPECT_FALSE(controller_->IsServiceAvailable());
   ClearLogin();
 
-  SimulateKioskMode(user_manager::UserType::kArcKioskApp);
+  SimulateKioskMode(user_manager::UserType::kWebKioskApp);
 
   EXPECT_FALSE(controller_->IsServiceAvailable());
   ClearLogin();

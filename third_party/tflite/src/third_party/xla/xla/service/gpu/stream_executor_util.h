@@ -16,26 +16,43 @@ limitations under the License.
 #ifndef XLA_SERVICE_GPU_STREAM_EXECUTOR_UTIL_H_
 #define XLA_SERVICE_GPU_STREAM_EXECUTOR_UTIL_H_
 
-#include <string_view>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <tuple>
 
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/types/span.h"
 #include "xla/autotuning.pb.h"
 #include "xla/layout.h"
 #include "xla/service/gpu/cublas_cudnn.h"
 #include "xla/service/gpu/launch_dimensions.h"
 #include "xla/service/hlo_module_config.h"
-#include "xla/statusor.h"
+#include "xla/stream_executor/device_memory.h"
+#include "xla/stream_executor/dnn.h"
 #include "xla/stream_executor/kernel_spec.h"
 #include "xla/stream_executor/launch_dim.h"
 #include "xla/stream_executor/stream_executor.h"
-#include "xla/types.h"
+#include "xla/tsl/protobuf/dnn.pb.h"
 #include "xla/xla_data.pb.h"
 
 // Helper functions for interacting with StreamExecutor.
 
 namespace xla {
 namespace gpu {
+
+// Returns DNN version info from provided stream executor.
+absl::StatusOr<se::dnn::VersionInfo> GetDnnVersionInfo(
+    stream_executor::StreamExecutor* stream_exec);
+
+// Returns DNN version info from provided stream executor when possible,
+// fallback version otherwise.
+se::dnn::VersionInfo GetDnnVersionInfoOrDefault(
+    stream_executor::StreamExecutor* stream_exec,
+    se::dnn::VersionInfo fallback_version = se::dnn::VersionInfo{0, 0, 0});
 
 // Returns (input, filter, output) XLA Layout protos given the StreamExecutor
 // layouts.
@@ -87,13 +104,13 @@ absl::StatusOr<std::unique_ptr<se::Kernel>> CreateKernel(
     uint32_t shared_mem_bytes = 0);
 
 // Runs loaded kernel on the stream with the provided arguments.
-absl::Status ExecuteKernelOnStream(const se::Kernel& kernel,
+absl::Status ExecuteKernelOnStream(se::Kernel& kernel,
                                    absl::Span<const se::DeviceMemoryBase> args,
                                    const LaunchDimensions& dims,
                                    se::Stream* stream);
 
 // Runs loaded kernel on the stream with the provided arguments.
-absl::Status ExecuteKernelOnStream(const se::Kernel& kernel,
+absl::Status ExecuteKernelOnStream(se::Kernel& kernel,
                                    absl::Span<const se::DeviceMemoryBase> args,
                                    const LaunchDimensions& dims,
                                    const se::ClusterDim& cluster_dim,
@@ -111,8 +128,11 @@ void InitializeBuffer(se::Stream* stream, PrimitiveType buffer_type,
 absl::StatusOr<se::dnn::ConvolutionKind> GetDNNConvKindFromCudnnConvKind(
     CudnnConvKind kind);
 
-absl::StatusOr<se::dnn::FusedMHAKind> GetDNNFusedMHAKindFromCudnnfMHAKind(
-    CudnnfMHAKind kind);
+absl::StatusOr<se::dnn::NormKind> GetDNNNormKindFromCudnnNormKind(
+    CudnnNormKind kind);
+
+absl::StatusOr<se::dnn::FMHAMaskKind> GetDNNFmhaMaskKindFromCudnnFmhaMaskKind(
+    CudnnfMHAMaskKind kind);
 
 absl::StatusOr<se::dnn::DataType> GetDNNDataTypeFromPrimitiveType(
     PrimitiveType type);
@@ -121,7 +141,7 @@ absl::StatusOr<se::dnn::DataType> GetDNNDataTypeFromPrimitiveType(
 // If deterministic output is requested, returns first (not failing) result.
 absl::StatusOr<AutotuneResult> PickBestResult(
     absl::Span<AutotuneResult const> profile_results,
-    std::optional<std::string_view> instr_str,
+    std::optional<absl::string_view> instr_str,
     HloModuleConfig hlo_module_config);
 
 // Returns whether determinism is required.

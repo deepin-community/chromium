@@ -27,13 +27,12 @@
 #include "base/i18n/rtl.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chromeos/dbus/power/power_manager_client.h"
 #include "components/user_manager/user_type.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/models/menu_separator_types.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/chromeos/styles/cros_tokens_color_mappings.h"
 #include "ui/color/color_id.h"
 #include "ui/color/color_provider.h"
@@ -43,6 +42,7 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rounded_corners_f.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/context_menu_controller.h"
 #include "ui/views/controls/focus_ring.h"
@@ -137,8 +137,8 @@ bool ShouldShowEmailMenuItem() {
     case user_manager::UserType::kGuest:
     case user_manager::UserType::kPublicAccount:
     case user_manager::UserType::kKioskApp:
-    case user_manager::UserType::kArcKioskApp:
     case user_manager::UserType::kWebKioskApp:
+    case user_manager::UserType::kKioskIWA:
       return false;
   }
 }
@@ -201,18 +201,18 @@ class PowerButton::MenuController : public ui::SimpleMenuModel::Delegate,
       case VIEW_ID_QS_POWER_OFF_MENU_BUTTON:
         quick_settings_metrics_util::RecordQsButtonActivated(
             QsButtonCatalogName::kPowerOffMenuButton);
-        Shell::Get()->lock_state_controller()->StartShutdownAnimation(
+        Shell::Get()->lock_state_controller()->RequestShutdown(
             ShutdownReason::TRAY_SHUT_DOWN_BUTTON);
         break;
       case VIEW_ID_QS_POWER_SIGNOUT_MENU_BUTTON:
         quick_settings_metrics_util::RecordQsButtonActivated(
             QsButtonCatalogName::kPowerSignoutMenuButton);
-        Shell::Get()->session_controller()->RequestSignOut();
+        Shell::Get()->lock_state_controller()->RequestSignOut();
         break;
       case VIEW_ID_QS_POWER_RESTART_MENU_BUTTON:
         quick_settings_metrics_util::RecordQsButtonActivated(
             QsButtonCatalogName::kPowerRestartMenuButton);
-        chromeos::PowerManagerClient::Get()->RequestRestart(
+        Shell::Get()->lock_state_controller()->RequestRestart(
             power_manager::REQUEST_RESTART_FOR_USER, "Reboot by user");
         break;
       case VIEW_ID_QS_POWER_LOCK_MENU_BUTTON:
@@ -226,9 +226,10 @@ class PowerButton::MenuController : public ui::SimpleMenuModel::Delegate,
   }
 
   // views::ContextMenuController:
-  void ShowContextMenuForViewImpl(views::View* source,
-                                  const gfx::Point& point,
-                                  ui::MenuSourceType source_type) override {
+  void ShowContextMenuForViewImpl(
+      views::View* source,
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type) override {
     // Build the menu model and save it to `context_menu_model_`.
     BuildMenuModel();
     menu_model_adapter_ = std::make_unique<views::MenuModelAdapter>(
@@ -361,7 +362,8 @@ PowerButtonContainer::PowerButtonContainer(PressedCallback callback)
   SetPaintToLayer();
   layer()->SetFillsBoundsOpaquely(false);
 
-  SetAccessibleName(l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_POWER_MENU));
+  GetViewAccessibility().SetName(
+      l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_POWER_MENU));
   SetTooltipText(l10n_util::GetStringUTF16(IDS_ASH_STATUS_TRAY_POWER_MENU));
 }
 
@@ -396,7 +398,6 @@ PowerButton::PowerButton(UnifiedSystemTrayController* tray_controller)
   background_view_->SetPaintToLayer(ui::LAYER_SOLID_COLOR);
   auto* background_layer = background_view_->layer();
   background_layer->SetRoundedCornerRadius(kAllRoundedCorners);
-  background_layer->SetFillsBoundsOpaquely(false);
   background_layer->SetIsFastRoundedCorner(true);
 
   set_context_menu_controller(context_menu_.get());
@@ -464,16 +465,16 @@ void PowerButton::UpdateRoundedCorners() {
 void PowerButton::OnButtonActivated(const ui::Event& event) {
   quick_settings_metrics_util::RecordQsButtonActivated(
       QsButtonCatalogName::kPowerButton);
-  ui::MenuSourceType type;
+  ui::mojom::MenuSourceType type;
 
   if (event.IsMouseEvent()) {
-    type = ui::MENU_SOURCE_MOUSE;
+    type = ui::mojom::MenuSourceType::kMouse;
   } else if (event.IsTouchEvent()) {
-    type = ui::MENU_SOURCE_TOUCH;
+    type = ui::mojom::MenuSourceType::kTouch;
   } else if (event.IsKeyEvent()) {
-    type = ui::MENU_SOURCE_KEYBOARD;
+    type = ui::mojom::MenuSourceType::kKeyboard;
   } else {
-    type = ui::MENU_SOURCE_STYLUS;
+    type = ui::mojom::MenuSourceType::kStylus;
   }
 
   context_menu_->ShowContextMenuForView(

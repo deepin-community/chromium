@@ -24,7 +24,7 @@ namespace errors = manifest_errors;
 using FileHandlersManifestTest = ManifestTest;
 
 TEST_F(FileHandlersManifestTest, InvalidFileHandlers) {
-  Testcase testcases[] = {
+  const Testcase testcases[] = {
       Testcase("file_handlers_invalid_handlers.json",
                errors::kInvalidFileHandlers),
       Testcase("file_handlers_invalid_type.json",
@@ -44,7 +44,7 @@ TEST_F(FileHandlersManifestTest, InvalidFileHandlers) {
       Testcase("file_handlers_invalid_verb.json",
                errors::kInvalidFileHandlerVerb),
   };
-  RunTestcases(testcases, std::size(testcases), EXPECT_TYPE_ERROR);
+  RunTestcases(testcases, EXPECT_TYPE_ERROR);
 }
 
 TEST_F(FileHandlersManifestTest, ValidFileHandlers) {
@@ -479,7 +479,7 @@ TEST_F(WebFileHandlersTest, IconErrors) {
   }
 }
 
-// TODO(crbug/1179530): Add tests for MV2, MV3, and missing the flag.
+// TODO(crbug.com/40169582): Add tests for MV2, MV3, and missing the flag.
 // crrev.com/c/4215992/comment/5c5148e7_2b24c9d3
 
 }  // namespace extensions

@@ -31,10 +31,6 @@
 #define MAX_SLICES  1024
 #define INVALID_REF 0xffff
 
-#define REF_RESOURCE(index) if (index != INVALID_REF) { \
-    ctx->ref_resources[index] = frames_hwctx->texture_infos[index].texture; \
-}
-
 typedef struct D3D12DecodePictureContext {
     DXVA_PictureParameters  pp;
     DXVA_QmatrixData        qm;
@@ -48,7 +44,7 @@ static int d3d12va_mpeg2_start_frame(AVCodecContext *avctx, av_unused const uint
 {
     const MpegEncContext      *s       = avctx->priv_data;
     D3D12VADecodeContext      *ctx     = D3D12VA_DECODE_CONTEXT(avctx);
-    D3D12DecodePictureContext *ctx_pic = s->current_picture_ptr->hwaccel_picture_private;
+    D3D12DecodePictureContext *ctx_pic = s->cur_pic.ptr->hwaccel_picture_private;
 
     if (!ctx)
         return -1;
@@ -73,7 +69,7 @@ static int d3d12va_mpeg2_start_frame(AVCodecContext *avctx, av_unused const uint
 static int d3d12va_mpeg2_decode_slice(AVCodecContext *avctx, const uint8_t *buffer, uint32_t size)
 {
     const MpegEncContext      *s       = avctx->priv_data;
-    D3D12DecodePictureContext *ctx_pic = s->current_picture_ptr->hwaccel_picture_private;
+    D3D12DecodePictureContext *ctx_pic = s->cur_pic.ptr->hwaccel_picture_private;
 
     if (ctx_pic->slice_count >= MAX_SLICES) {
         return AVERROR(ERANGE);
@@ -92,7 +88,7 @@ static int d3d12va_mpeg2_decode_slice(AVCodecContext *avctx, const uint8_t *buff
 static int update_input_arguments(AVCodecContext *avctx, D3D12_VIDEO_DECODE_INPUT_STREAM_ARGUMENTS *input_args, ID3D12Resource *buffer)
 {
     const MpegEncContext      *s            = avctx->priv_data;
-    D3D12DecodePictureContext *ctx_pic      = s->current_picture_ptr->hwaccel_picture_private;
+    D3D12DecodePictureContext *ctx_pic      = s->cur_pic.ptr->hwaccel_picture_private;
 
     const int is_field = s->picture_structure != PICT_FRAME;
     const unsigned mb_count = s->mb_width * (s->mb_height >> is_field);
@@ -141,12 +137,12 @@ static int d3d12va_mpeg2_end_frame(AVCodecContext *avctx)
 {
     int ret;
     MpegEncContext            *s       = avctx->priv_data;
-    D3D12DecodePictureContext *ctx_pic = s->current_picture_ptr->hwaccel_picture_private;
+    D3D12DecodePictureContext *ctx_pic = s->cur_pic.ptr->hwaccel_picture_private;
 
     if (ctx_pic->slice_count <= 0 || ctx_pic->bitstream_size <= 0)
         return -1;
 
-    ret = ff_d3d12va_common_end_frame(avctx, s->current_picture_ptr->f, &ctx_pic->pp, sizeof(ctx_pic->pp),
+    ret = ff_d3d12va_common_end_frame(avctx, s->cur_pic.ptr->f, &ctx_pic->pp, sizeof(ctx_pic->pp),
                                       &ctx_pic->qm, sizeof(ctx_pic->qm), update_input_arguments);
     if (!ret)
         ff_mpeg_draw_horiz_band(s, 0, avctx->height);

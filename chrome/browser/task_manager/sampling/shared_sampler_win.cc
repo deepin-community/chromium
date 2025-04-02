@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/task_manager/sampling/shared_sampler.h"
 
 #include <windows.h>
+
 #include <winternl.h>
 
 #include <algorithm>
@@ -52,7 +58,7 @@ class ByteBuffer {
   ByteBuffer(const ByteBuffer&) = delete;
   ByteBuffer& operator=(const ByteBuffer&) = delete;
 
-  ~ByteBuffer() {}
+  ~ByteBuffer() = default;
 
   BYTE* data() { return data_.get(); }
 
@@ -82,7 +88,6 @@ bool QuerySystemProcessInformation(ByteBuffer* buffer) {
   HMODULE ntdll = ::GetModuleHandle(L"ntdll.dll");
   if (!ntdll) {
     NOTREACHED();
-    return false;
   }
 
   NTQUERYSYSTEMINFORMATION nt_query_system_information_ptr =
@@ -90,7 +95,6 @@ bool QuerySystemProcessInformation(ByteBuffer* buffer) {
           ::GetProcAddress(ntdll, "NtQuerySystemInformation"));
   if (!nt_query_system_information_ptr) {
     NOTREACHED();
-    return false;
   }
 
   NTSTATUS result;
@@ -102,8 +106,8 @@ bool QuerySystemProcessInformation(ByteBuffer* buffer) {
     ULONG buffer_size = static_cast<ULONG>(buffer->capacity());
 
     if (g_query_system_information_for_test) {
-      data_size =
-          g_query_system_information_for_test(buffer->data(), buffer_size);
+      data_size = g_query_system_information_for_test(  // IN-TEST
+          base::span(buffer->data(), buffer_size));
       result =
           (data_size > buffer_size) ? STATUS_BUFFER_TOO_SMALL : STATUS_SUCCESS;
     } else {
@@ -247,7 +251,7 @@ SharedSampler::SharedSampler(
   DETACH_FROM_SEQUENCE(worker_pool_sequenced_checker_);
 }
 
-SharedSampler::~SharedSampler() {}
+SharedSampler::~SharedSampler() = default;
 
 int64_t SharedSampler::GetSupportedFlags() const {
   return REFRESH_TYPE_IDLE_WAKEUPS | REFRESH_TYPE_START_TIME |

@@ -8,10 +8,8 @@ import datetime as dt
 from typing import Optional
 from unittest import mock
 
-import hjson
-
 from crossbench.benchmarks.manual.manual_benchmark import ManualBenchmark
-from crossbench.env import HostEnvironmentConfig, ValidationMode
+from crossbench.env import EnvironmentConfig, ValidationMode
 from crossbench.runner.runner import Runner
 from tests import test_helper
 from tests.crossbench.benchmarks.helper import BaseBenchmarkTestCase
@@ -24,7 +22,7 @@ class TestManualBenchmark(BaseBenchmarkTestCase):
     return ManualBenchmark
 
   def test_run_default(self):
-    with mock.patch('builtins.input', lambda *args: 'y'):
+    with mock.patch("builtins.input", lambda *args: "y"):
       self._test_run()
     for browser in self.browsers:
       urls = self.filter_splashscreen_urls(browser.url_list)
@@ -32,7 +30,7 @@ class TestManualBenchmark(BaseBenchmarkTestCase):
       self.assertFalse(urls)
 
   def test_run_auto_start(self):
-    with mock.patch('builtins.input', lambda *args: 'y'):
+    with mock.patch("builtins.input", lambda *args: "y"):
       self._test_run(start_after=dt.timedelta(seconds=0.2))
     for browser in self.browsers:
       urls = self.filter_splashscreen_urls(browser.url_list)
@@ -40,7 +38,7 @@ class TestManualBenchmark(BaseBenchmarkTestCase):
       self.assertFalse(urls)
 
   def test_run_custom_duration(self):
-    with mock.patch('builtins.input', lambda *args: 'y'):
+    with mock.patch("builtins.input", lambda *args: "y"):
       self._test_run(run_for=dt.timedelta(seconds=0.2))
     for browser in self.browsers:
       urls = self.filter_splashscreen_urls(browser.url_list)
@@ -57,13 +55,13 @@ class TestManualBenchmark(BaseBenchmarkTestCase):
         self.out_dir,
         self.browsers,
         benchmark,
-        env_config=HostEnvironmentConfig(),
+        env_config=EnvironmentConfig(),
         env_validation_mode=ValidationMode.SKIP,
         platform=self.platform,
         repetitions=repetitions,
         throw=True)
 
-    with self.assertLogs(level='INFO') as cm:
+    with self.assertLogs(level="INFO") as cm:
       runner.run()
     output = "\n".join(cm.output)
     self.assertIn("Starting Manual Benchmark", output)

@@ -4,10 +4,16 @@
 
 #include "ash/capture_mode/capture_mode_session_test_api.h"
 
+#include "ash/capture_mode/action_button_container_view.h"
+#include "ash/capture_mode/action_button_view.h"
 #include "ash/capture_mode/capture_mode_controller.h"
 #include "ash/capture_mode/capture_mode_session.h"
 #include "ash/capture_mode/capture_mode_types.h"
+#include "ash/capture_mode/capture_region_overlay_controller.h"
 #include "ash/capture_mode/recording_type_menu_view.h"
+#include "ui/views/layout/box_layout_view.h"
+#include "ui/views/view_utils.h"
+#include "ui/views/widget/widget.h"
 
 namespace ash {
 
@@ -59,12 +65,24 @@ views::Widget* CaptureModeSessionTestApi::GetCaptureLabelWidget() {
   return session_->capture_label_widget_.get();
 }
 
+views::Widget* CaptureModeSessionTestApi::GetActionContainerWidget() {
+  return session_->action_container_widget_.get();
+}
+
+views::Widget* CaptureModeSessionTestApi::GetDisclaimerWidget() {
+  return session_->disclaimer_.get();
+}
+
 views::Widget* CaptureModeSessionTestApi::GetRecordingTypeMenuWidget() {
   return session_->recording_type_menu_widget_.get();
 }
 
 views::Widget* CaptureModeSessionTestApi::GetDimensionsLabelWidget() {
   return session_->dimensions_label_widget_.get();
+}
+
+views::Widget* CaptureModeSessionTestApi::GetFeedbackButtonWidget() {
+  return session_->feedback_button_widget_.get();
 }
 
 UserNudgeController* CaptureModeSessionTestApi::GetUserNudgeController() {
@@ -116,6 +134,42 @@ bool CaptureModeSessionTestApi::AreAllUisVisible() {
 
 gfx::Rect CaptureModeSessionTestApi::GetSelectedWindowTargetBounds() {
   return session_->GetSelectedWindowTargetBounds();
+}
+
+std::vector<ActionButtonView*> CaptureModeSessionTestApi::GetActionButtons()
+    const {
+  std::vector<ActionButtonView*> action_buttons;
+
+  // The action container widget, and thus the container view, may not have been
+  // created yet when this function is called. In this case, return an empty
+  // vector.
+  if (session_->action_container_widget_) {
+    CHECK(session_->action_container_view_);
+    for (views::View* button :
+         session_->action_container_view_->GetActionButtons()) {
+      action_buttons.emplace_back(views::AsViewClass<ActionButtonView>(button));
+    }
+  }
+
+  return action_buttons;
+}
+
+ActionButtonView* CaptureModeSessionTestApi::GetButtonWithViewID(
+    ActionButtonViewID id) const {
+  raw_ptr<ActionButtonContainerView> container =
+      session_->action_container_view_;
+  return container
+             ? views::AsViewClass<ActionButtonView>(container->GetViewByID(id))
+             : nullptr;
+}
+
+CaptureRegionOverlayController*
+CaptureModeSessionTestApi::GetCaptureRegionOverlayController() const {
+  return session_->capture_region_overlay_controller_.get();
+}
+
+PillButton* CaptureModeSessionTestApi::GetFeedbackButton() {
+  return session_->feedback_button_.get();
 }
 
 }  // namespace ash

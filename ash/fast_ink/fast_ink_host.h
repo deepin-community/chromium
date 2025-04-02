@@ -18,7 +18,6 @@ class CompositorFrame;
 }  // namespace viz
 
 namespace gfx {
-class GpuMemoryBuffer;
 class Rect;
 }  // namespace gfx
 
@@ -34,7 +33,7 @@ namespace ash {
 // when possible and trigger continuous updates.
 class ASH_EXPORT FastInkHost : public FrameSinkHost {
  public:
-  // Provides flicker free painting to a GPU memory buffer.
+  // Provides flicker free painting to a mappable SharedImage.
   class ScopedPaint {
    public:
     ScopedPaint(const FastInkHost* host,
@@ -69,10 +68,6 @@ class ASH_EXPORT FastInkHost : public FrameSinkHost {
     return window_to_buffer_transform_;
   }
 
-  gfx::GpuMemoryBuffer* gpu_memory_buffer_for_test() {
-    return gpu_memory_buffer_.get();
-  }
-
   gpu::ClientSharedImage* client_si_for_test() const {
     return client_shared_image_.get();
   }
@@ -83,9 +78,8 @@ class ASH_EXPORT FastInkHost : public FrameSinkHost {
 
   // FrameSinkHost:
   void Init(aura::Window* host_window) override;
-  void InitForTesting(
-      aura::Window* host_window,
-      std::unique_ptr<cc::LayerTreeFrameSink> layer_tree_frame_sink) override;
+  void InitForTesting(aura::Window* host_window,
+                      FrameSinkFactory frame_sink_factory) override;
 
  protected:
   // FrameSinkHost:
@@ -103,8 +97,6 @@ class ASH_EXPORT FastInkHost : public FrameSinkHost {
   gfx::Rect BufferRectFromWindowRect(const gfx::Rect& rect_in_window) const;
   void Draw(SkBitmap bitmap, const gfx::Rect& damage_rect);
   void DrawBitmap(SkBitmap bitmap, const gfx::Rect& damage_rect);
-
-  std::unique_ptr<gfx::GpuMemoryBuffer> gpu_memory_buffer_;
 
   gfx::Transform window_to_buffer_transform_;
 

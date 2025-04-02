@@ -3,11 +3,10 @@
 // found in the LICENSE file.
 
 import {goToResource} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {expandIssue, navigateToIssuesTab, revealViolatingSourcesLines} from '../helpers/issues-helpers.js';
 import {waitForHighlightedLine} from '../helpers/sources-helpers.js';
 
-describe('The Issues tab', async () => {
+describe('The Issues tab', () => {
   it('should highlight the blocked inline <script> in the Sources panel when the link is clicked', async () => {
     await goToResource('sources/csp-blocked-inline-script.html');
 

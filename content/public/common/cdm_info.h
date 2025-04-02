@@ -14,10 +14,10 @@
 #include "base/version.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
+#include "media/base/cdm_capability.h"
 #include "media/base/content_decryption_module.h"
 #include "media/base/encryption_scheme.h"
 #include "media/base/video_codecs.h"
-#include "media/cdm/cdm_capability.h"
 #include "media/cdm/cdm_type.h"
 
 namespace content {
@@ -80,6 +80,11 @@ struct CONTENT_EXPORT CdmInfo {
 
   // CDM capability, e.g. video codecs, encryption schemes and session types.
   std::optional<media::CdmCapability> capability;
+
+  // Status of the CDM capability query. Optional since this is done only by a
+  // lazy capability query. Used to inspect the reason when no capability
+  // reported.
+  std::optional<media::CdmCapabilityQueryStatus> capability_query_status;
 
   // Whether the CdmInfo is enabled etc. This only affects capability query.
   Status status = Status::kEnabled;

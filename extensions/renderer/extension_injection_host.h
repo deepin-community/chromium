@@ -5,6 +5,9 @@
 #ifndef EXTENSIONS_RENDERER_EXTENSION_INJECTION_HOST_H_
 #define EXTENSIONS_RENDERER_EXTENSION_INJECTION_HOST_H_
 
+#include <optional>
+#include <string>
+
 #include "base/memory/raw_ptr.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_id.h"
@@ -39,7 +42,10 @@ class ExtensionInjectionHost : public InjectionHost {
       int tab_id,
       bool is_declarative) const override;
 
-  raw_ptr<const Extension, ExperimentalRenderer> extension_;
+  raw_ptr<const Extension, DanglingUntriaged> extension_;
+
+  // The isolated world CSP, cached to avoid duplication.
+  const std::optional<std::string> isolated_world_csp_;
 };
 
 }  // namespace extesions

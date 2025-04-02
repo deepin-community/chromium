@@ -10,9 +10,11 @@
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/extensions/api/preference/cookie_controls_mode_transformer.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/prefetch/pref_names.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
@@ -29,6 +31,7 @@
 #include "components/keep_alive_registry/scoped_keep_alive.h"
 #include "components/password_manager/core/common/password_manager_pref_names.h"
 #include "components/prefs/pref_service.h"
+#include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
 #include "components/translate/core/browser/translate_pref_names.h"
@@ -44,7 +47,7 @@
 
 using CookieControlsMode = content_settings::CookieControlsMode;
 
-using ContextType = extensions::ExtensionBrowserTest::ContextType;
+using ContextType = extensions::browser_test_util::ContextType;
 
 class ExtensionPreferenceApiTest
     : public extensions::ExtensionApiTest,
@@ -78,7 +81,7 @@ class ExtensionPreferenceApiTest
     EXPECT_TRUE(prefs->GetBoolean(autofill::prefs::kAutofillEnabledDeprecated));
     EXPECT_TRUE(prefs->GetBoolean(autofill::prefs::kAutofillCreditCardEnabled));
     EXPECT_TRUE(prefs->GetBoolean(autofill::prefs::kAutofillProfileEnabled));
-    EXPECT_EQ(CookieControlsMode::kOff, GetCookieControlsMode(prefs));
+    EXPECT_EQ(GetCookieControlsMode(prefs), CookieControlsMode::kOff);
     EXPECT_TRUE(prefs->GetBoolean(prefs::kEnableHyperlinkAuditing));
     EXPECT_TRUE(prefs->GetBoolean(prefs::kEnableReferrers));
     EXPECT_TRUE(prefs->GetBoolean(translate::prefs::kOfferTranslateEnabled));
@@ -115,8 +118,8 @@ class ExtensionPreferenceApiTest
     EXPECT_FALSE(
         prefs->GetBoolean(autofill::prefs::kAutofillCreditCardEnabled));
     EXPECT_FALSE(prefs->GetBoolean(autofill::prefs::kAutofillProfileEnabled));
-    EXPECT_EQ(CookieControlsMode::kBlockThirdParty,
-              GetCookieControlsMode(prefs));
+    EXPECT_EQ(GetCookieControlsMode(prefs),
+              CookieControlsMode::kBlockThirdParty);
     EXPECT_FALSE(prefs->GetBoolean(prefs::kEnableHyperlinkAuditing));
     EXPECT_FALSE(prefs->GetBoolean(prefs::kEnableReferrers));
     EXPECT_FALSE(prefs->GetBoolean(translate::prefs::kOfferTranslateEnabled));
@@ -407,15 +410,15 @@ IN_PROC_BROWSER_TEST_P(ExtensionPreferenceApiTest, OnChangeSplit) {
   ASSERT_TRUE(LoadExtension(extension_data_dir, {.allow_in_incognito = true}));
 
   // Test 1 - changeDefault
-  EXPECT_TRUE(listener1.WaitUntilSatisfied()); // Regular ready
-  EXPECT_TRUE(listener_incognito1.WaitUntilSatisfied()); // Incognito ready
+  EXPECT_TRUE(listener1.WaitUntilSatisfied());            // Regular ready
+  EXPECT_TRUE(listener_incognito1.WaitUntilSatisfied());  // Incognito ready
   listener1.Reply("ok");
   listener_incognito1.Reply("ok");
 
   // Test 2 - changeIncognitoOnly
-  EXPECT_TRUE(listener2.WaitUntilSatisfied()); // Regular ready
-  EXPECT_TRUE(listener_incognito2.WaitUntilSatisfied()); // Incognito ready
-  EXPECT_TRUE(listener3.WaitUntilSatisfied()); // Regular listening
+  EXPECT_TRUE(listener2.WaitUntilSatisfied());            // Regular ready
+  EXPECT_TRUE(listener_incognito2.WaitUntilSatisfied());  // Incognito ready
+  EXPECT_TRUE(listener3.WaitUntilSatisfied());            // Regular listening
   listener2.Reply("ok");
   listener_incognito2.Reply("ok");
   // Incognito preference set -- notify the regular listener
@@ -423,9 +426,9 @@ IN_PROC_BROWSER_TEST_P(ExtensionPreferenceApiTest, OnChangeSplit) {
   listener3.Reply("ok");
 
   // Test 3 - changeDefaultOnly
-  EXPECT_TRUE(listener4.WaitUntilSatisfied()); // Regular ready
-  EXPECT_TRUE(listener_incognito4.WaitUntilSatisfied()); // Incognito ready
-  EXPECT_TRUE(listener_incognito5.WaitUntilSatisfied()); // Incognito listening
+  EXPECT_TRUE(listener4.WaitUntilSatisfied());            // Regular ready
+  EXPECT_TRUE(listener_incognito4.WaitUntilSatisfied());  // Incognito ready
+  EXPECT_TRUE(listener_incognito5.WaitUntilSatisfied());  // Incognito listening
   listener4.Reply("ok");
   listener_incognito4.Reply("ok");
   // Regular preference set - notify the incognito listener
@@ -433,9 +436,9 @@ IN_PROC_BROWSER_TEST_P(ExtensionPreferenceApiTest, OnChangeSplit) {
   listener_incognito5.Reply("ok");
 
   // Test 4 - changeIncognitoOnlyBack
-  EXPECT_TRUE(listener6.WaitUntilSatisfied()); // Regular ready
-  EXPECT_TRUE(listener_incognito6.WaitUntilSatisfied()); // Incognito ready
-  EXPECT_TRUE(listener7.WaitUntilSatisfied()); // Regular listening
+  EXPECT_TRUE(listener6.WaitUntilSatisfied());            // Regular ready
+  EXPECT_TRUE(listener_incognito6.WaitUntilSatisfied());  // Incognito ready
+  EXPECT_TRUE(listener7.WaitUntilSatisfied());            // Regular listening
   listener6.Reply("ok");
   listener_incognito6.Reply("ok");
   // Incognito preference set -- notify the regular listener
@@ -443,9 +446,9 @@ IN_PROC_BROWSER_TEST_P(ExtensionPreferenceApiTest, OnChangeSplit) {
   listener7.Reply("ok");
 
   // Test 5 - clearIncognito
-  EXPECT_TRUE(listener8.WaitUntilSatisfied()); // Regular ready
-  EXPECT_TRUE(listener_incognito8.WaitUntilSatisfied()); // Incognito ready
-  EXPECT_TRUE(listener9.WaitUntilSatisfied()); // Regular listening
+  EXPECT_TRUE(listener8.WaitUntilSatisfied());            // Regular ready
+  EXPECT_TRUE(listener_incognito8.WaitUntilSatisfied());  // Incognito ready
+  EXPECT_TRUE(listener9.WaitUntilSatisfied());            // Regular listening
   listener8.Reply("ok");
   listener_incognito8.Reply("ok");
   // Incognito preference cleared -- notify the regular listener
@@ -453,8 +456,8 @@ IN_PROC_BROWSER_TEST_P(ExtensionPreferenceApiTest, OnChangeSplit) {
   listener9.Reply("ok");
 
   // Test 6 - clearDefault
-  EXPECT_TRUE(listener10.WaitUntilSatisfied()); // Regular ready
-  EXPECT_TRUE(listener_incognito10.WaitUntilSatisfied()); // Incognito ready
+  EXPECT_TRUE(listener10.WaitUntilSatisfied());            // Regular ready
+  EXPECT_TRUE(listener_incognito10.WaitUntilSatisfied());  // Incognito ready
   listener10.Reply("ok");
   listener_incognito10.Reply("ok");
 
@@ -635,3 +638,37 @@ IN_PROC_BROWSER_TEST_P(ExtensionPreferenceApiTest, ThirdPartyCookiesAllowed) {
           content_settings::CookieControlsMode::kIncognitoOnly)),
       /* expected_controlled */ false);
 }
+
+class AlwaysBlock3pcsIncognitoExtensionApiTest
+    : public extensions::ExtensionApiTest,
+      public testing::WithParamInterface<bool> {
+ public:
+  AlwaysBlock3pcsIncognitoExtensionApiTest() {
+    if (GetParam()) {
+      feature_list_.InitAndEnableFeature(
+          privacy_sandbox::kAlwaysBlock3pcsIncognito);
+    } else {
+      feature_list_.InitAndDisableFeature(
+          privacy_sandbox::kAlwaysBlock3pcsIncognito);
+    }
+  }
+
+ private:
+  base::test::ScopedFeatureList feature_list_;
+};
+
+IN_PROC_BROWSER_TEST_P(AlwaysBlock3pcsIncognitoExtensionApiTest,
+                       Blocks3pcsWhenInIncognitoWithCookieControlsModeOff) {
+  bool feature_enabled = GetParam();
+  EXPECT_EQ(extensions::CookieControlsModeTransformer()
+                .BrowserToExtensionPref(
+                    base::Value(static_cast<int>(
+                        content_settings::CookieControlsMode::kOff)),
+                    /*is_incognito_profile=*/true)
+                ->GetBool(),
+            !feature_enabled);
+}
+
+INSTANTIATE_TEST_SUITE_P(TestAlwaysBlock3pcsIncognito,
+                         AlwaysBlock3pcsIncognitoExtensionApiTest,
+                         testing::Bool());

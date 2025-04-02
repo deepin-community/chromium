@@ -194,7 +194,7 @@ AudioWorkletNode* AudioWorkletNode::Create(
   {
     // The node should be manually added to the automatic pull node list,
     // even without a `connect()` call.
-    BaseAudioContext::GraphAutoLocker locker(context);
+    DeferredTaskHandler::GraphAutoLocker locker(context);
     node->Handler().UpdatePullStatusIfNeeded();
   }
 
@@ -223,7 +223,6 @@ void AudioWorkletNode::FireProcessorError(
   switch (error_state) {
     case AudioWorkletProcessorErrorState::kNoError:
       NOTREACHED();
-      return;
     case AudioWorkletProcessorErrorState::kConstructionError:
       error_message = error_message + "AudioWorkletProcessor constructor";
       break;

@@ -6,6 +6,7 @@
 #define UI_VIEWS_INTERACTION_INTERACTION_TEST_UTIL_VIEWS_H_
 
 #include <string>
+
 #include "ui/base/interaction/element_tracker.h"
 #include "ui/base/interaction/interaction_test_util.h"
 
@@ -17,7 +18,7 @@ namespace views {
 class Button;
 class View;
 class Widget;
-}
+}  // namespace views
 
 namespace views::test {
 
@@ -61,6 +62,9 @@ class InteractionTestUtilSimulatorViews
   // As above, but for non-button Views.
   static bool DoDefaultAction(View* view,
                               InputType input_type = InputType::kDontCare);
+
+  // Returns whether the current machine is running Wayland.
+  static bool IsWayland();
 };
 
 }  // namespace views::test

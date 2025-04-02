@@ -11,6 +11,7 @@
 #include "base/logging.h"
 #include "chrome/services/speech/soda/cros_soda_client.h"
 #include "components/soda/constants.h"
+#include "components/soda/soda_installer.h"
 #include "google_apis/google_api_keys.h"
 #include "media/base/audio_buffer.h"
 #include "media/base/audio_sample_types.h"
@@ -35,10 +36,8 @@ GetSodaSpeechRecognitionMode(
     case media::mojom::SpeechRecognitionMode::kCaption:
       return chromeos::machine_learning::mojom::SodaRecognitionMode::kCaption;
     case media::mojom::SpeechRecognitionMode::kUnknown:
-      // Chrome OS SODA doesn't support unknown recognition type. Default to
-      // caption.
+      // Chrome OS SODA doesn't support unknown recognition type.
       NOTREACHED();
-      return chromeos::machine_learning::mojom::SodaRecognitionMode::kCaption;
   }
 }
 }  // namespace
@@ -74,7 +73,7 @@ CrosSpeechRecognitionRecognizerImpl::CrosSpeechRecognitionRecognizerImpl(
                                       primary_language_name,
                                       mask_offensive_words),
       binary_path_(binary_path) {
-  cros_soda_client_ = std::make_unique<soda::CrosSodaClient>();
+  cros_soda_client_ = std::make_unique<::soda::CrosSodaClient>();
 }
 
 chromeos::machine_learning::mojom::SodaMultilangConfigPtr
@@ -96,6 +95,7 @@ CrosSpeechRecognitionRecognizerImpl::AddLiveCaptionLanguagesToConfig(
     multi_lang_config->locale_to_language_pack_map[config_path.first] =
         config_path.second.value();
   }
+  multi_lang_config->rewind_when_switching_language = true;
   return multi_lang_config;
 }
 
@@ -133,7 +133,8 @@ void CrosSpeechRecognitionRecognizerImpl::
         base::FeatureList::IsEnabled(media::kLiveCaptionMultiLanguage)) {
       config->multi_lang_config = AddLiveCaptionLanguagesToConfig(
           primary_language_name(), config_paths(),
-          speech::GetLiveCaptionEnabledLanguages());
+          speech::SodaInstaller::GetInstance()
+              ->GetLiveCaptionEnabledLanguages());
     }
 
     config->enable_formatting =
@@ -141,7 +142,8 @@ void CrosSpeechRecognitionRecognizerImpl::
             ? chromeos::machine_learning::mojom::OptionalBool::kTrue
             : chromeos::machine_learning::mojom::OptionalBool::kFalse;
     cros_soda_client_->Reset(std::move(config), recognition_event_callback(),
-                             speech_recognition_stopped_callback());
+                             speech_recognition_stopped_callback(),
+                             language_identification_event_callback());
   }
   cros_soda_client_->AddAudio(reinterpret_cast<char*>(buffer->data.data()),
                               buffer_size);

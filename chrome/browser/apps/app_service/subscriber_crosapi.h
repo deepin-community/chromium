@@ -22,7 +22,7 @@
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
-static_assert(BUILDFLAG(IS_CHROMEOS_ASH), "For Ash only");
+static_assert(BUILDFLAG(IS_CHROMEOS), "For ChromeOS only");
 
 class Profile;
 
@@ -75,8 +75,8 @@ class SubscriberCrosapi : public KeyedService,
   void SetSupportedLinksPreference(const std::string& app_id) override;
   void UninstallSilently(const std::string& app_id,
                          UninstallSource uninstall_source) override;
-  void InstallApp(crosapi::mojom::InstallAppParamsPtr params,
-                  InstallAppCallback callback) override;
+  void InstallAppWithFallback(crosapi::mojom::InstallAppParamsPtr params,
+                              InstallAppWithFallbackCallback callback) override;
 
   void OnSubscriberDisconnected();
 

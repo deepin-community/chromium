@@ -8,10 +8,16 @@ if (is_android) {
   import("//build/config/android/rules.gni")
 }
 
-source_set("public") {
+source_set("commerce_info_cache") {
   sources = [
-    "discount_consent_handler.h",
-    "shopping_prompt.h",
+    "commerce_info_cache.cc",
+    "commerce_info_cache.h",
+  ]
+
+  deps = [
+    ":commerce_types",
+    "//base",
+    "//url",
   ]
 }
 
@@ -34,6 +40,22 @@ source_set("feature_list") {
   ]
 }
 
+source_set("feature_utils") {
+  sources = [
+    "feature_utils.cc",
+    "feature_utils.h",
+  ]
+  deps = [
+    ":account_checker",
+    ":feature_list",
+    ":pref_names",
+    "product_specifications",
+    "//components/optimization_guide/core:features",
+    "//components/prefs",
+    "//components/sync/base",
+  ]
+}
+
 source_set("feature_list_unittests") {
   testonly = true
   sources = [ "commerce_feature_list_unittest.cc" ]
@@ -52,12 +74,15 @@ source_set("feature_list_unittests") {
 
 static_library("metrics") {
   sources = [
+    "metrics/discounts_metric_collector.cc",
+    "metrics/discounts_metric_collector.h",
     "metrics/metrics_utils.cc",
     "metrics/metrics_utils.h",
   ]
 
   deps = [
     ":account_checker",
+    ":commerce_types",
     ":feature_list",
     ":proto",
     "//base",
@@ -77,14 +102,18 @@ proto_library("proto") {
     "proto/parcel.proto",
     "proto/price_insights.proto",
     "proto/price_tracking.proto",
+    "proto/product_category.proto",
     "proto/shopping_page_types.proto",
   ]
 }
 
 if (is_android) {
   proto_java_library("proto_java") {
-    proto_path = "."
-    sources = [ "proto/price_tracking.proto" ]
+    proto_path = "//"
+    sources = [
+      "proto/price_tracking.proto",
+      "proto/product_category.proto",
+    ]
   }
 
   proto_library("merchant_signal_db_proto") {
@@ -92,11 +121,6 @@ if (is_android) {
     sources = [ "proto/merchant_signal_db_content.proto" ]
   }
 } else {
-  proto_library("cart_db_content_proto") {
-    proto_in_dir = "//"
-    sources = [ "proto/cart_db_content.proto" ]
-  }
-
   proto_library("coupon_db_content_proto") {
     proto_in_dir = "//"
     sources = [ "proto/coupon_db_content.proto" ]
@@ -122,6 +146,11 @@ proto_library("commerce_subscription_db_content_proto") {
 proto_library("discounts_db_content_proto") {
   proto_in_dir = "//"
   sources = [ "proto/discounts_db_content.proto" ]
+}
+
+proto_library("cart_db_content_proto") {
+  proto_in_dir = "//"
+  sources = [ "proto/cart_db_content.proto" ]
 }
 
 source_set("commerce_heuristics_data") {
@@ -168,21 +197,6 @@ source_set("heuristics_provider") {
   ]
 }
 
-source_set("heuristics_provider_unittests") {
-  testonly = true
-  sources = [ "heuristics/commerce_heuristics_provider_unittest.cc" ]
-  deps = [
-    ":feature_list",
-    ":heuristics_provider",
-    "//base",
-    "//base/test:test_support",
-    "//components/prefs:test_support",
-    "//testing/gtest",
-    "//third_party/re2:re2",
-    "//url:url",
-  ]
-}
-
 static_library("shopping_service") {
   sources = [
     "bookmark_update_manager.cc",
@@ -206,8 +220,9 @@ static_library("shopping_service") {
   ]
 
   deps = [
-    ":account_checker",
+    ":cart_db_content_proto",
     ":commerce_constants",
+    ":commerce_info_cache",
     ":commerce_subscription_db_content_proto",
     ":discounts_db_content_proto",
     ":feature_list",
@@ -220,6 +235,7 @@ static_library("shopping_service") {
     "//components/bookmarks/browser",
     "//components/commerce/core/compare",
     "//components/commerce/core/parcel:parcel",
+    "//components/commerce/core/product_specifications:product_specifications",
     "//components/history/core/browser",
     "//components/keyed_service/core",
     "//components/leveldb_proto",
@@ -231,6 +247,7 @@ static_library("shopping_service") {
     "//components/resources:components_resources_grit",
     "//components/search:search",
     "//components/session_proto_db:core",
+    "//components/sessions",
     "//components/signin/public/identity_manager:identity_manager",
     "//components/strings:components_strings_grit",
     "//components/sync/service",
@@ -242,13 +259,16 @@ static_library("shopping_service") {
   ]
 
   public_deps = [
+    ":account_checker",
     ":commerce_types",
+    ":feature_utils",
     "//components/commerce/core/subscriptions:subscriptions",
     "//services/data_decoder/public/cpp",
   ]
 
   if (is_android) {
     sources += [
+      "android/feature_utils_android.cc",
       "android/shopping_service_android.cc",
       "android/shopping_service_android.h",
     ]
@@ -261,10 +281,14 @@ source_set("shopping_service_test_support") {
   testonly = true
 
   sources = [
+    "mock_cluster_manager.cc",
+    "mock_cluster_manager.h",
     "mock_discounts_storage.cc",
     "mock_discounts_storage.h",
     "mock_shopping_service.cc",
     "mock_shopping_service.h",
+    "mock_tab_restore_service.cc",
+    "mock_tab_restore_service.h",
     "shopping_service_test_base.cc",
     "shopping_service_test_base.h",
     "test_utils.cc",
@@ -273,18 +297,25 @@ source_set("shopping_service_test_support") {
 
   # Expose all deps for test support.
   public_deps = [
+    ":account_checker_test_support",
+    ":commerce_info_cache",
     ":feature_list",
     ":pref_names",
     ":shopping_service",
+    ":utils",
     "//base/test:test_support",
     "//components/bookmarks/browser",
     "//components/bookmarks/test",
     "//components/commerce/core:proto",
+    "//components/commerce/core/compare:compare",
+    "//components/commerce/core/product_specifications:test_support",
     "//components/commerce/core/subscriptions",
     "//components/optimization_guide/core",
+    "//components/optimization_guide/core:features",
     "//components/optimization_guide/proto:optimization_guide_proto",
     "//components/power_bookmarks/core",
     "//components/prefs:test_support",
+    "//components/sessions",
     "//components/signin/public/identity_manager:test_support",
     "//components/sync:test_support",
     "//components/unified_consent:unified_consent",
@@ -303,7 +334,9 @@ source_set("shopping_service_unit_tests") {
 
   sources = [
     "bookmark_update_manager_unittest.cc",
+    "commerce_info_cache_unittest.cc",
     "discounts_storage_unittest.cc",
+    "feature_utils_unittest.cc",
     "metrics/scheduled_metrics_manager_unittest.cc",
     "pdp_metrics_unittest.cc",
     "price_tracking_utils_unittest.cc",
@@ -315,15 +348,20 @@ source_set("shopping_service_unit_tests") {
 
   deps = [
     ":account_checker_test_support",
+    ":commerce_info_cache",
     ":discounts_db_content_proto",
+    ":feature_utils",
     ":metrics",
     ":pref_names",
     ":shopping_service_test_support",
     "compare:unit_tests",
     "parcel:unit_tests",
+    "product_specifications",
+    "product_specifications:test_support",
     "subscriptions:test_support",
     "webui:unit_tests",
     "//components/history/core/browser",
+    "//components/optimization_guide/core:features",
     "//components/search",
     "//components/ukm:test_support",
     "//services/metrics/public/cpp:ukm_builders",
@@ -357,6 +395,7 @@ source_set("account_checker") {
     "//components/endpoint_fetcher:endpoint_fetcher",
     "//components/prefs:prefs",
     "//components/signin/public/identity_manager:identity_manager",
+    "//components/sync/base",
     "//components/sync/service",
     "//components/unified_consent",
     "//net/traffic_annotation:traffic_annotation",
@@ -378,7 +417,12 @@ source_set("account_checker_test_support") {
 
   deps = [
     ":account_checker",
+    ":pref_names",
     "//base",
+    "//components/optimization_guide/core:features",
+    "//components/prefs",
+    "//components/prefs:test_support",
+    "//components/sync/base",
     "//services/network/public/cpp:cpp",
     "//testing/gmock",
   ]
@@ -409,10 +453,7 @@ source_set("account_checker_unittests") {
 }
 
 source_set("commerce_constants") {
-  sources = [
-    "commerce_constants.cc",
-    "commerce_constants.h",
-  ]
+  sources = [ "commerce_constants.h" ]
 }
 
 source_set("commerce_types") {
@@ -438,5 +479,19 @@ source_set("utils") {
     ":commerce_types",
     ":feature_list",
     "//net:net",
+  ]
+}
+
+source_set("utils_unit_tests") {
+  testonly = true
+
+  sources = [ "commerce_utils_unittest.cc" ]
+
+  deps = [
+    ":utils",
+    "//base",
+    "//base/test:test_support",
+    "//components/commerce/core:shopping_service_test_support",
+    "//url",
   ]
 }

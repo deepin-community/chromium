@@ -23,6 +23,11 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/351564777): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "third_party/blink/renderer/modules/webaudio/audio_param_timeline.h"
 
 #include <algorithm>
@@ -148,7 +153,6 @@ String AudioParamTimeline::EventToString(const ParamEvent& event) const {
     // `kCancelValues` or `kSetValueCurveEnd` event.
     case ParamEvent::kLastType:
       NOTREACHED();
-      break;
   };
 
   return s + "(" + args + ")";
@@ -602,7 +606,7 @@ void AudioParamTimeline::InsertEvent(std::unique_ptr<ParamEvent> event,
   DCHECK_GT(insertion_idx, wtf_size_t{0});
   wtf_size_t ub = insertion_idx - 1;  // upper bound of events that can overlap.
   if (events_.back()->Time() > insert_time) {
-    auto* it = std::upper_bound(
+    auto it = std::upper_bound(
         events_.begin(), events_.end(), insert_time,
         [](const double value, const std::unique_ptr<ParamEvent>& entry) {
           return value < entry->Time();
@@ -765,7 +769,6 @@ bool AudioParamTimeline::HasValues(size_t current_frame,
       }
       case ParamEvent::kLastType:
         NOTREACHED();
-        return true;
     }
   }
 
@@ -929,7 +932,6 @@ void AudioParamTimeline::CancelAndHoldAtTime(double cancel_time,
       break;
     case ParamEvent::kLastType:
       NOTREACHED();
-      break;
   }
 
   // Now remove all the following events from the timeline.
@@ -1188,7 +1190,6 @@ float AudioParamTimeline::ValuesForFrameRangeImpl(
         }
         case ParamEvent::kLastType:
           NOTREACHED();
-          break;
       }
     }
   }
@@ -1479,11 +1480,9 @@ AudioParamTimeline::HandleCancelValues(const ParamEvent* current_event,
               // SetTarget, CancelValues) or cancelScheduledValues()
               // doesn't create such an event (SetValueCurve).
               NOTREACHED();
-              break;
             case ParamEvent::kLastType:
               // Illegal event type.
               NOTREACHED();
-              break;
           }
 
           // Cache the new value so we don't keep computing it over and over.
@@ -1500,7 +1499,6 @@ AudioParamTimeline::HandleCancelValues(const ParamEvent* current_event,
         break;
       case ParamEvent::kLastType:
         NOTREACHED();
-        break;
     }
   }
 

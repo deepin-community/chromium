@@ -16,6 +16,7 @@ limitations under the License.
 #include "tensorflow/compiler/tf2xla/kernels/xla_call_module_loader.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -26,21 +27,25 @@ limitations under the License.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project
+#include "mlir/IR/Attributes.h"  // from @llvm-project
 #include "mlir/IR/Block.h"  // from @llvm-project
 #include "mlir/IR/Builders.h"  // from @llvm-project
 #include "mlir/IR/BuiltinAttributes.h"  // from @llvm-project
 #include "mlir/IR/BuiltinDialect.h"  // from @llvm-project
 #include "mlir/IR/BuiltinOps.h"  // from @llvm-project
-#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
-#include "mlir/IR/Location.h"  // from @llvm-project
-#include "mlir/IR/SymbolTable.h"  // from @llvm-project
+#include "mlir/IR/OperationSupport.h"  // from @llvm-project
 #include "mlir/IR/TypeUtilities.h"  // from @llvm-project
 #include "mlir/IR/Types.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/IR/ValueRange.h"  // from @llvm-project
 #include "mlir/IR/Verifier.h"  // from @llvm-project
 #include "mlir/Parser/Parser.h"  // from @llvm-project
 #include "mlir/Pass/PassManager.h"  // from @llvm-project
@@ -52,19 +57,19 @@ limitations under the License.
 #include "stablehlo/dialect/Serialization.h"  // from @stablehlo
 #include "stablehlo/dialect/StablehloOps.h"  // from @stablehlo
 #include "stablehlo/dialect/VhloOps.h"  // from @stablehlo
-#include "stablehlo/transforms/Passes.h"  // from @stablehlo
+#include "stablehlo/transforms/StablehloRefineShapes.h"  // from @stablehlo
 #include "tensorflow/compiler/jit/flags.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/dump_mlir_util.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/error_util.h"
-#include "xla/client/xla_computation.h"
+#include "xla/hlo/builder/xla_computation.h"
+#include "xla/hlo/translate/mhlo_to_hlo/mlir_hlo_to_hlo.h"
+#include "xla/mlir/utils/type_util.h"
 #include "xla/mlir_hlo/mhlo/IR/hlo_ops.h"
 #include "xla/mlir_hlo/mhlo/transforms/passes.h"
 #include "xla/python/refine_polymorphic_shapes.h"
-#include "xla/translate/hlo_to_mhlo/hlo_utils.h"
-#include "xla/translate/mhlo_to_hlo/mlir_hlo_to_hlo.h"
+#include "xla/service/hlo.pb.h"
+#include "xla/shape.h"
 #include "tsl/platform/errors.h"
-#include "tsl/platform/regexp.h"
-#include "tsl/platform/status.h"
 #include "tsl/platform/statusor.h"
 
 namespace tensorflow {
@@ -108,18 +113,20 @@ constexpr llvm::StringRef kUsesShapePolymorphismAttr =
 }  // namespace
 
 bool IsTokenType(mlir::Type type) {
-  return type.isa<mlir::stablehlo::TokenType>() ||
-         type.isa<mlir::mhlo::TokenType>();
+  return mlir::isa<mlir::stablehlo::TokenType>(type) ||
+         mlir::isa<mlir::mhlo::TokenType>(type);
 }
 
-tsl::StatusOr<std::unique_ptr<XlaCallModuleLoader>> XlaCallModuleLoader::Create(
-    mlir::MLIRContext *context, int version, std::string module_str,
-    std::vector<std::string> disabled_checks,
-    std::vector<std::string> platforms, int num_invocation_args,
-    bool main_has_token_input_output) {
+absl::StatusOr<std::unique_ptr<XlaCallModuleLoader>>
+XlaCallModuleLoader::Create(mlir::MLIRContext *context, int version,
+                            mlir::StringRef module_str,
+                            std::vector<std::string> disabled_checks,
+                            std::vector<std::string> platforms,
+                            int num_invocation_args,
+                            bool main_has_token_input_output) {
   std::unique_ptr<XlaCallModuleLoader> loader(new XlaCallModuleLoader);
   TF_RETURN_IF_ERROR(loader->LoadModule(
-      context, version, std::move(module_str), std::move(disabled_checks),
+      context, version, module_str, std::move(disabled_checks),
       std::move(platforms), num_invocation_args, main_has_token_input_output));
   return loader;
 }
@@ -150,7 +157,7 @@ absl::Status XlaCallModuleLoader::SetPlatformIndex(
     }
   }
 
-  if (platform_index < 0) return tsl::OkStatus();
+  if (platform_index < 0) return absl::OkStatus();
   VLOG(3) << "XlaCallModule setting the platform_index to " << platform_index
           << " for platform " << compilation_platform << ".";
   mlir::Block &main_body = main_.front();
@@ -164,7 +171,7 @@ absl::Status XlaCallModuleLoader::SetPlatformIndex(
   op_builder.setInsertionPointToStart(&main_body);
   mlir::BlockArgument platform_index_arg = main_body.getArgument(0);
   mlir::RankedTensorType arg_ranked_type =
-      platform_index_arg.getType().dyn_cast<mlir::RankedTensorType>();
+      mlir::dyn_cast<mlir::RankedTensorType>(platform_index_arg.getType());
   if (!arg_ranked_type || arg_ranked_type.getRank() != 0 ||
       !(arg_ranked_type.getElementType().isSignlessInteger(32) ||
         arg_ranked_type.getElementType().isSignlessInteger(64))) {
@@ -183,7 +190,7 @@ absl::Status XlaCallModuleLoader::SetPlatformIndex(
 
   main_.eraseArgument(0);
   platform_index_arg_set_ = true;
-  return tsl::OkStatus();
+  return absl::OkStatus();
 }
 
 absl::Status XlaCallModuleLoader::RefineDynamicShapes(
@@ -204,13 +211,13 @@ absl::Status XlaCallModuleLoader::RefineDynamicShapes(
         VLOG(3) << "XlaCallModule skipping shape refinement due to module "
                 << " attribute " << kUsesShapePolymorphismAttr.str() << "="
                 << mlir::debugString(uses_shape_poly_attr);
-        return tsl::OkStatus();
+        return absl::OkStatus();
       }
     } else {
       VLOG(3) << "XlaCallModule skipping shape refinement due to module "
               << " attribute " << kUsesShapePolymorphismAttr.str()
               << " missing";
-      return tsl::OkStatus();
+      return absl::OkStatus();
     }
   }
   // Add the tokens to the input_shapes. Starting with version 9, the main
@@ -240,6 +247,7 @@ absl::Status XlaCallModuleLoader::RefineDynamicShapes(
         ")"));
   }
 
+  // Derive static input types to use for main.
   mlir::Block &main_body = main_.front();
   mlir::Builder builder(module_->getContext());
   std::vector<mlir::Type> static_array_input_types(nr_inputs);
@@ -255,102 +263,97 @@ absl::Status XlaCallModuleLoader::RefineDynamicShapes(
       VLOG(3) << "XlaCallModule static array input type #" << i << ": "
               << mlir::debugString(static_array_input_types[i])
               << " for argument type " << mlir::debugString(arg_type);
-    } else {
-      const xla::Shape &xla_shape = input_shapes[next_actual_input++];
-      std::vector<int64_t> xla_dimensions(xla_shape.dimensions().begin(),
-                                          xla_shape.dimensions().end());
-      TF_ASSIGN_OR_RETURN(
-          mlir::Type element_type,
-          ConvertPrimitiveTypeToMLIRType(xla_shape.element_type(), builder));
-      mlir::RankedTensorType type =
-          mlir::RankedTensorType::get(xla_dimensions, element_type);
-      // TODO(burmako): This fails with an obscure compilation error.
-      // TF_ASSIGN_OR_RETURN(
-      //     mlir::Type type,
-      //     ConvertShapeToType<mlir::RankedTensorType>(xla_shape, builder));
-      VLOG(3) << "XlaCallModule static array input type #" << i << ": "
-              << mlir::debugString(type) << " for argument type "
-              << mlir::debugString(arg_type);
-      mlir::TensorType arg_type =
-          main_body.getArgument(i).getType().dyn_cast<mlir::TensorType>();
-      if (arg_type == nullptr) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "Argument ", i, " passed to XlaCallModule is not a tensor, ",
-            "has type ",
-            mlir::debugString(main_body.getArgument(i).getType())));
-      }
-
-      if (arg_type.getElementType() != type.getElementType()) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "Element type mismatch for argument ", i,
-            " passed to XlaCallModule: ", "expecting ",
-            mlir::debugString(arg_type), ", got ", mlir::debugString(type)));
-      }
-
-      if (auto ranked_arg_type = arg_type.dyn_cast<mlir::RankedTensorType>()) {
-        if (mlir::failed(mlir::verifyCompatibleShape(ranked_arg_type.getShape(),
-                                                     type.getShape()))) {
-          return absl::InvalidArgumentError(absl::StrCat(
-              "Shape mismatch for argument ", i,
-              " passed to XlaCallModule: ", "expecting ",
-              mlir::debugString(arg_type), ", got ", mlir::debugString(type)));
-        }
-      }
-
-      static_array_input_types[i] = type;
-    }
-  }
-
-  // Refine 'main' argument types to use static input types instead. The main
-  // arguments may occur as return values, or as inputs to called functions,
-  // and changing their types may invalidate the module. To prevent this
-  // we insert dummy conversion ops as the sole uses of the main arguments, for
-  // the arguments that are not tokens and have dynamic shape.
-  // If we use stablehlo.convert, we end up with "convert 3xf32 -> *xf32"
-  // after we set the static shapes for the main arguments. The "convert"
-  // op does not support unranked result for ranked inputs. So, we use
-  // "bitcast_convert", which is more flexible in the relationship between
-  // the input and the result.
-  mlir::OpBuilder op_builder(module_->getBodyRegion());
-  op_builder.setInsertionPointToStart(&main_body);
-  for (auto i = 0; i < main_body.getNumArguments(); ++i) {
-    mlir::BlockArgument arg = main_body.getArgument(i);
-    mlir::Type arg_type = arg.getType();
-    if (IsTokenType(arg_type)) {
       continue;
     }
-    auto ranked_arg_type = arg_type.dyn_cast<mlir::RankedTensorType>();
-    if (!ranked_arg_type || !ranked_arg_type.hasStaticShape()) {
-      auto convert_op = op_builder.create<mlir::stablehlo::BitcastConvertOp>(
-          arg.getLoc(), arg_type, arg);
-      arg.replaceAllUsesExcept(convert_op, convert_op);
+
+    // Get static MLIR Type from xla Shape.
+    const xla::Shape &xla_shape = input_shapes[next_actual_input++];
+    std::vector<int64_t> xla_dimensions(xla_shape.dimensions().begin(),
+                                        xla_shape.dimensions().end());
+    TF_ASSIGN_OR_RETURN(
+        mlir::Type element_type,
+        ConvertPrimitiveTypeToMlirType(xla_shape.element_type(), builder));
+    mlir::RankedTensorType type =
+        mlir::RankedTensorType::get(xla_dimensions, element_type);
+
+    VLOG(3) << "XlaCallModule static array input type #" << i << ": "
+            << mlir::debugString(type) << " for argument type "
+            << mlir::debugString(arg_type);
+    static_array_input_types[i] = type;
+  }
+
+  // Insert custom_call ops as shims to maintain the validity of the module when
+  // main's input types are changed later. This is a workaround to allow shape
+  // refinement to be applied; the custom_calls are removed before returning.
+  // Arguments to main may occur as return values, or as inputs to called
+  // functions, and changing their types may invalidate the module due to type
+  // mismatches. To prevent this, for each argument that is a dynamically-shaped
+  // tensor, we insert a custom_call op that takes the argument as an input and
+  // replace uses of the argument with the custom_call's result. custom_call
+  // is used as it allows its inputs and outputs to be unranked.
+  //
+  // Example:
+  //
+  // The below main function returns its argument directly:
+  //
+  // func.func @main(%arg0: tensor<*xf32>) -> tensor<*xf32> {
+  //   return %arg0 : tensor<*xf32>
+  // }
+  //
+  // Changing the argument's type invalidates the IR (type mismatch):
+  //
+  // func.func @main(%arg0: tensor<2x3xf32>) -> tensor<*xf32> {
+  //   return %arg0 : tensor<*xf32>
+  // }
+  //
+  // Inserting a custom_call allows the IR to remain valid:
+  //
+  // func.func @main(%arg0: tensor<2x3xf32>) -> tensor<*xf32> {
+  //   %0 = stablehlo.constant dense<[2, 3]> : tensor<2xi64>
+  //   %1 = stablehlo.custom_call
+  //   @stablehlo.shape_refinement_operand_wrapper(%arg0, %0)
+  //   {indices_of_shape_operands = dense<1> : tensor<1xi64>} :
+  //   (tensor<2x3xf32>, tensor<2xi64>) -> tensor<*xf32>
+  //   return %1 : tensor<*xf32>
+  // }
+  //
+  // After shapes are refined and the custom_calls are removed, we get:
+  //
+  // func.func @main(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  //   return %arg0 : tensor<2x3xf32>
+  // }
+  //
+  {
+    mlir::StatusScopedDiagnosticHandler diag_handler(module_->getContext());
+    if (failed(mlir::stablehlo::refineArguments(main_,
+                                                static_array_input_types))) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Error refining argument shapes: ",
+                       diag_handler.ConsumeStatus().ToString()));
     }
   }
 
-  auto static_array_output_types = llvm::to_vector(main_.getResultTypes());
-  for (auto i = 0; i < main_body.getNumArguments(); ++i) {
-    auto arg = main_body.getArgument(i);
-    arg.setType(static_array_input_types[i]);
-  }
-  main_.setType(builder.getFunctionType(static_array_input_types,
-                                        static_array_output_types));
   if (VLOG_IS_ON(5)) {
     DumpMlirOpToFile("xla_call_module.after_refined_input_types", *module_);
   }
   bool enable_shape_assertions =
       (version_ >= kVersionStartSupportShapeAssertions &&
        !IsShapeAssertionsCheckDisabled(loading_disabled_checks_));
+
+  // RefinePolymorphicShapes will refine using the new static types and clean up
+  // the shape_refinement_operand_wrapper custom calls.
   TF_RETURN_IF_ERROR(
       xla::RefinePolymorphicShapes(*module_, enable_shape_assertions));
 
   if (VLOG_IS_ON(3)) {
     DumpMlirOpToFile("xla_call_module.after_shape_refinement", *module_);
   }
-  return tsl::OkStatus();
+
+  return absl::OkStatus();
 }
 
 absl::Status XlaCallModuleLoader::LoadModule(
-    mlir::MLIRContext *context, int version, std::string module_str,
+    mlir::MLIRContext *context, int version, mlir::StringRef module_str,
     std::vector<std::string> disabled_checks,
     std::vector<std::string> platforms, int num_invocation_args,
     bool main_has_token_input_output) {
@@ -371,30 +374,6 @@ absl::Status XlaCallModuleLoader::LoadModule(
   context_->loadDialect<mlir::chlo::ChloDialect>();
   context_->loadDialect<mlir::vhlo::VhloDialect>();
 
-  if (version >= kVersionStartSupportDisabledChecks && platforms.empty()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("XlaCallModuleOp with version ", version,
-                     " must have non-empty platforms."));
-  }
-
-  // Parses both IR text and bytecode.
-  if (version >= kVersionStartStableHloCompatibility) {
-    module_ =
-        mlir::stablehlo::deserializePortableArtifact(module_str, context_);
-  } else {
-    module_ = mlir::parseSourceString<mlir::ModuleOp>(module_str, context_);
-  }
-  if (!module_) {
-    return absl::InvalidArgumentError("Cannot deserialize computation");
-  }
-  VLOG(3) << "Parsed serialized module (version = " << version
-          << ", platforms = [" << absl::StrJoin(platforms, ", ")
-          << "], main_has_token_input_output = " << main_has_token_input_output
-          << ", disabled_checks = [" << absl::StrJoin(disabled_checks, ", ")
-          << "], loading_disabled_checks = ["
-          << absl::StrJoin(loading_disabled_checks_, ", ") << "]), module = "
-          << DumpMlirOpToFile("xla_call_module.parsed", *module_);
-
   if (version < kVersionMinimumSupported) {
     return absl::InvalidArgumentError(absl::StrCat(
         "XlaCallModuleOp with version ", version,
@@ -406,6 +385,25 @@ absl::Status XlaCallModuleLoader::LoadModule(
                      " is not supported by this build. Must be <= ",
                      kVersionMaximumSupported));
   }
+  if (version >= kVersionStartSupportDisabledChecks && platforms.empty()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("XlaCallModuleOp with version ", version,
+                     " must have non-empty platforms."));
+  }
+
+  // Parse the StableHLO/VHLO bytecode
+  module_ = mlir::stablehlo::deserializePortableArtifact(module_str, context_);
+  if (!module_) {
+    return absl::InvalidArgumentError("Cannot deserialize computation");
+  }
+  VLOG(3) << "Parsed serialized module (version = " << version
+          << ", platforms = [" << absl::StrJoin(platforms, ", ")
+          << "], main_has_token_input_output = " << main_has_token_input_output
+          << ", disabled_checks = [" << absl::StrJoin(disabled_checks, ", ")
+          << "], loading_disabled_checks = ["
+          << absl::StrJoin(loading_disabled_checks_, ", ") << "]), module = "
+          << DumpMlirOpToFile("xla_call_module.parsed", *module_);
+
   {
     mlir::StatusScopedDiagnosticHandler diag_handler(module_->getContext());
     if (mlir::failed(mlir::verify(*module_))) {
@@ -443,7 +441,7 @@ absl::Status XlaCallModuleLoader::LoadModule(
         " arguments of which ", nr_platform_args, " platform index arguments, ",
         "and ", nr_token_arguments, " token arguments."));
   }
-  return tsl::OkStatus();
+  return absl::OkStatus();
 }
 
 absl::Status XlaCallModuleLoader::ValidateDialect() {
@@ -466,7 +464,7 @@ absl::Status XlaCallModuleLoader::ValidateDialect() {
         absl::StrCat("Module has unsupported dialects: ",
                      diag_handler.ConsumeStatus().ToString()));
   }
-  return tsl::OkStatus();
+  return absl::OkStatus();
 }
 
 absl::Status XlaCallModuleLoader::ValidateStaticShapes() {
@@ -479,8 +477,8 @@ absl::Status XlaCallModuleLoader::LowerModuleToMhlo() {
   mlir::PassManager pm(module_->getContext());
   applyTensorflowAndCLOptions(pm);
   pm.addPass(mlir::mhlo::createStablehloLegalizeToHloPass());
-  pm.addNestedPass<mlir::func::FuncOp>(mlir::mhlo::createChloLegalizeToHloPass(
-      /*legalizeBroadcasts=*/true, /*expandCompositions=*/true));
+  pm.addNestedPass<mlir::func::FuncOp>(
+      mlir::mhlo::createChloLegalizeToHloPass());
   pm.addNestedPass<mlir::func::FuncOp>(mlir::createCanonicalizerPass());
   // In order to export to XLA, we must sink constants to control flow
   // regions, since XLA uses functional control flow.
@@ -499,7 +497,7 @@ absl::Status XlaCallModuleLoader::LowerModuleToMhlo() {
   return absl::OkStatus();
 }
 
-tsl::StatusOr<xla::XlaComputation> XlaCallModuleLoader::ToXlaComputation() {
+absl::StatusOr<xla::XlaComputation> XlaCallModuleLoader::ToXlaComputation() {
   xla::HloProto proto;
   mlir::MlirToHloConversionOptions options;
   TF_RETURN_IF_ERROR(

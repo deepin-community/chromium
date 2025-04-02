@@ -4,9 +4,12 @@
 
 #include "components/peripherals/logging/logging.h"
 
+#include <string_view>
+
 #include "ash/constants/ash_features.h"
 #include "base/command_line.h"
 #include "base/logging.h"
+#include "base/strings/string_util.h"
 
 PeripheralsScopedLogMessage::PeripheralsScopedLogMessage(
     const char* file,
@@ -15,10 +18,20 @@ PeripheralsScopedLogMessage::PeripheralsScopedLogMessage(
     Feature feature)
     : file_(file), feature_(feature), line_(line), severity_(severity) {}
 
+std::string_view GetFeaturePrefix(Feature feature) {
+  switch (feature) {
+    case Feature::ACCEL:
+      return "[ACCEL]";
+    case Feature::IDS:
+      return "[IDS]";
+  }
+}
+
 PeripheralsScopedLogMessage::~PeripheralsScopedLogMessage() {
   // For now, only emit logs if they are warning or more severe OR if the flag
   // is enabled.
-  const std::string string_from_stream = stream_.str();
+  const std::string string_from_stream =
+      base::JoinString({GetFeaturePrefix(feature_), stream_.str()}, " ");
   if (ash::features::IsPeripheralsLoggingEnabled()) {
     // TODO(dpad): Utilize the logs in the buffer in feedback reports.
     PeripheralsLogBuffer::GetInstance()->AddLogMessage(

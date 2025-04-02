@@ -4,16 +4,15 @@
 
 #include "base/test/launcher/test_launcher_test_utils.h"
 
+#include <optional>
+
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/test/gtest_util.h"
 #include "base/test/launcher/test_result.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-namespace base {
-
-namespace test_launcher_utils {
+namespace base::test_launcher_utils {
 
 namespace {
 
@@ -45,9 +44,10 @@ bool ValidateKeyValue(const Value::Dict& dict,
                       const std::string& expected_value) {
   std::string actual_value = FindStringKeyOrEmpty(dict, key);
   bool result = !actual_value.compare(expected_value);
-  if (!result)
+  if (!result) {
     ADD_FAILURE() << key << " expected value: " << expected_value
                   << ", actual: " << actual_value;
+  }
   return result;
 }
 
@@ -56,9 +56,10 @@ bool ValidateKeyValue(const Value::Dict& dict,
                       int64_t expected_value) {
   int actual_value = dict.FindInt(key).value_or(0);
   bool result = (actual_value == expected_value);
-  if (!result)
+  if (!result) {
     ADD_FAILURE() << key << " expected value: " << expected_value
                   << ", actual: " << actual_value;
+  }
   return result;
 }
 
@@ -83,8 +84,9 @@ bool ValidateTestResult(const Value::Dict& iteration_data,
     return false;
   }
 
-  if (!ValidateKeyValue(*dict, "status", status))
+  if (!ValidateKeyValue(*dict, "status", status)) {
     return false;
+  }
 
   // Verify the keys that only exists when have_running_info, if the test didn't
   // run, it wouldn't have these information.
@@ -148,19 +150,18 @@ bool ValidateTestLocation(const Value::Dict& test_locations,
   return result;
 }
 
-absl::optional<Value::Dict> ReadSummary(const FilePath& path) {
-  absl::optional<Value::Dict> result;
+std::optional<Value::Dict> ReadSummary(const FilePath& path) {
+  std::optional<Value::Dict> result;
   File resultFile(path, File::FLAG_OPEN | File::FLAG_READ);
   const int size = 2e7;
   std::string json;
   CHECK(ReadFileToStringWithMaxSize(path, &json, size));
-  absl::optional<Value> value = JSONReader::Read(json);
-  if (value && value->is_dict())
+  std::optional<Value> value = JSONReader::Read(json);
+  if (value && value->is_dict()) {
     result = std::move(*value).TakeDict();
+  }
 
   return result;
 }
 
-}  // namespace test_launcher_utils
-
-}  // namespace base
+}  // namespace base::test_launcher_utils

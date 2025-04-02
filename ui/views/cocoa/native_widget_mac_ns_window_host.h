@@ -22,9 +22,12 @@
 #include "mojo/public/cpp/bindings/associated_remote.h"
 #include "ui/accelerated_widget_mac/accelerated_widget_mac.h"
 #include "ui/base/cocoa/accessibility_focus_overrider.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/color/color_provider_key.h"
 #include "ui/compositor/layer_owner.h"
 #include "ui/views/cocoa/drag_drop_client_mac.h"
 #include "ui/views/cocoa/native_widget_mac_event_monitor.h"
+#include "ui/views/view_observer.h"
 #include "ui/views/views_export.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_observer.h"
@@ -60,7 +63,8 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
       public ui::AccessibilityFocusOverrider::Client,
       public ui::LayerDelegate,
       public ui::LayerOwner,
-      public ui::AcceleratedWidgetMacNSView {
+      public ui::AcceleratedWidgetMacNSView,
+      public ViewObserver {
  public:
   // Retrieves the bridge host associated with the given NativeWindow. Returns
   // null if the supplied handle has no associated Widget.
@@ -97,6 +101,10 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   std::vector<NativeWidgetMacNSWindowHost*> children() const {
     return children_;
   }
+
+  // The Widget associated with the NativeWidgetMac.
+  // Returns nullptr if it doesn't exist.
+  Widget* GetWidget();
 
   // The bridge factory that was used to create the true NSWindow for this
   // widget. This is nullptr for in-process windows.
@@ -255,6 +263,14 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   void CanGoBack(bool can_go_back);
   void CanGoForward(bool can_go_forward);
 
+  // Accessors to control screenshot availability of the in-process/remote
+  // window associated to this host.
+  void SetAllowScreenshots(bool allow);
+  bool AllowScreenshots() const;
+
+  // Set the color mode of the window.
+  void SetColorMode(ui::ColorProviderKey::ColorMode color_mode);
+
  private:
   friend class TextInputHost;
 
@@ -273,6 +289,12 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   // function updates the frame of |in_process_ns_window_| to keep it in sync
   // for any native calls that may use it (e.g, for context menu positioning).
   void UpdateLocalWindowFrame(const gfx::Rect& frame);
+
+  void DropRootViewReferences();
+
+  // Get the geometry of the window, in DIPs, clamped to specified
+  // minimum/maximum window size constraints.
+  gfx::Rect GetAdjustedContentBoundsInScreen();
 
   // NativeWidgetNSWindowHostHelper:
   id GetNativeViewAccessible() override;
@@ -311,8 +333,6 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   bool GetHasMenuController(bool* has_menu_controller) override;
   bool GetIsDraggableBackgroundAt(const gfx::Point& location_in_content,
                                   bool* is_draggable_background) override;
-  bool GetTooltipTextAt(const gfx::Point& location_in_content,
-                        std::u16string* new_tooltip_text) override;
   bool GetWidgetIsModal(bool* widget_is_modal) override;
   bool GetIsFocusedViewTextual(bool* is_textual) override;
   void OnWindowGeometryChanged(
@@ -331,12 +351,11 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
                                 bool full_keyboard_access_enabled) override;
   void OnWindowStateRestorationDataChanged(
       const std::vector<uint8_t>& data) override;
-  void OnWindowParentChanged(uint64_t new_parent_id) override;
   void OnImmersiveFullscreenToolbarRevealChanged(bool is_revealed) override;
-  void OnImmersiveFullscreenMenuBarRevealChanged(float reveal_amount) override;
+  void OnImmersiveFullscreenMenuBarRevealChanged(double reveal_amount) override;
   void OnAutohidingMenuBarHeightChanged(int menu_bar_height) override;
-  void DoDialogButtonAction(ui::DialogButton button) override;
-  bool GetDialogButtonInfo(ui::DialogButton type,
+  void DoDialogButtonAction(ui::mojom::DialogButton button) override;
+  bool GetDialogButtonInfo(ui::mojom::DialogButton type,
                            bool* button_exists,
                            std::u16string* button_label,
                            bool* is_button_enabled,
@@ -352,7 +371,7 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   void SetRemoteAccessibilityTokens(
       const std::vector<uint8_t>& window_token,
       const std::vector<uint8_t>& view_token) override;
-  bool GetRootViewAccessibilityToken(int64_t* pid,
+  bool GetRootViewAccessibilityToken(base::ProcessId* pid,
                                      std::vector<uint8_t>* token) override;
   bool ValidateUserInterfaceItem(
       int32_t command,
@@ -388,7 +407,7 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   void GetWidgetIsModal(GetWidgetIsModalCallback callback) override;
   void GetIsFocusedViewTextual(
       GetIsFocusedViewTextualCallback callback) override;
-  void GetDialogButtonInfo(ui::DialogButton button,
+  void GetDialogButtonInfo(ui::mojom::DialogButton button,
                            GetDialogButtonInfoCallback callback) override;
   void GetDoDialogButtonsExist(
       GetDoDialogButtonsExistCallback callback) override;
@@ -431,6 +450,9 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
 
   // ui::AcceleratedWidgetMacNSView:
   void AcceleratedWidgetCALayerParamsUpdated() override;
+
+  // ViewObserver:
+  void OnViewIsDeleting(View* observed_view) override;
 
   // The id that this bridge may be looked up from.
   const uint64_t widget_id_;
@@ -526,8 +548,14 @@ class VIEWS_EXPORT NativeWidgetMacNSWindowHost
   // attached to |this|.
   std::map<const views::View*, NSView*> attached_native_view_host_views_;
 
+  // Indicates whether the window is allowed to be included in screenshots,
+  // based on enterprise policies.
+  bool allow_screenshots_ = true;
+
   mojo::AssociatedReceiver<remote_cocoa::mojom::NativeWidgetNSWindowHost>
       remote_ns_window_host_receiver_{this};
+
+  base::ScopedObservation<View, ViewObserver> root_view_observation_{this};
 
   base::WeakPtrFactory<NativeWidgetMacNSWindowHost>
       weak_factory_for_vsync_update_{this};

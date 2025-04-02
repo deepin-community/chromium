@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "components/paint_preview/common/serialized_recording.h"
 
 #include <optional>
@@ -90,7 +95,6 @@ bool SerializedRecording::IsValid() const {
     return buffer_.has_value();
   } else {
     NOTREACHED();
-    return false;
   }
 }
 
@@ -109,7 +113,6 @@ std::optional<SkpResult> SerializedRecording::Deserialize() && {
     result.skp = SkPicture::MakeFromStream(&stream, &procs);
   } else {
     NOTREACHED();
-    return {};
   }
 
   return {std::move(result)};
@@ -131,7 +134,6 @@ sk_sp<SkPicture> SerializedRecording::DeserializeWithContext(
     return SkPicture::MakeFromStream(&stream, &procs);
   } else {
     NOTREACHED();
-    return nullptr;
   }
 }
 

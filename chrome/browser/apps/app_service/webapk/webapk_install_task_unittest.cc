@@ -6,10 +6,6 @@
 
 #include <memory>
 
-#include "ash/components/arc/mojom/webapk.mojom.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/test/fake_webapk_instance.h"
 #include "ash/constants/ash_features.h"
 #include "base/command_line.h"
 #include "base/functional/bind.h"
@@ -26,6 +22,10 @@
 #include "chrome/browser/web_applications/web_app_install_info.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/testing_profile.h"
+#include "chromeos/ash/experiences/arc/mojom/webapk.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/test/fake_webapk_instance.h"
 #include "components/prefs/pref_service.h"
 #include "components/webapk/webapk.pb.h"
 #include "content/public/test/browser_task_environment.h"
@@ -44,8 +44,8 @@ constexpr char kTestShareTextParam[] = "share_text";
 const std::u16string kTestAppTitle = u"Test App";
 
 std::unique_ptr<web_app::WebAppInstallInfo> BuildDefaultWebAppInfo() {
-  auto app_info = std::make_unique<web_app::WebAppInstallInfo>();
-  app_info->start_url = GURL(kTestAppUrl);
+  auto app_info = web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
+      GURL(kTestAppUrl));
   app_info->scope = GURL(kTestAppUrl);
   app_info->title = kTestAppTitle;
   app_info->manifest_url = GURL(kTestManifestUrl);
@@ -255,8 +255,8 @@ TEST_F(WebApkInstallTaskTest, ShareTarget) {
 }
 
 TEST_F(WebApkInstallTaskTest, NoIconInManifest) {
-  auto app_info = std::make_unique<web_app::WebAppInstallInfo>();
-  app_info->start_url = GURL(kTestAppUrl);
+  auto app_info = web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(
+      GURL(kTestAppUrl));
   app_info->scope = GURL(kTestAppUrl);
   app_info->title = kTestAppTitle;
   app_info->manifest_url = GURL(kTestManifestUrl);

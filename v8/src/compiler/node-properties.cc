@@ -4,13 +4,15 @@
 
 #include "src/compiler/node-properties.h"
 
+#include <optional>
+
 #include "src/compiler/common-operator.h"
-#include "src/compiler/graph.h"
 #include "src/compiler/js-heap-broker.h"
 #include "src/compiler/map-inference.h"
 #include "src/compiler/node-matchers.h"
 #include "src/compiler/operator-properties.h"
 #include "src/compiler/simplified-operator.h"
+#include "src/compiler/turbofan-graph.h"
 #include "src/compiler/verifier.h"
 
 namespace v8 {
@@ -316,12 +318,14 @@ MachineRepresentation NodeProperties::GetProjectionType(
     case IrOpcode::kInt32AddWithOverflow:
     case IrOpcode::kInt32SubWithOverflow:
     case IrOpcode::kInt32MulWithOverflow:
+    case IrOpcode::kInt32AbsWithOverflow:
       CHECK_LE(index, static_cast<size_t>(1));
       return index == 0 ? MachineRepresentation::kWord32
                         : MachineRepresentation::kBit;
     case IrOpcode::kInt64AddWithOverflow:
     case IrOpcode::kInt64SubWithOverflow:
     case IrOpcode::kInt64MulWithOverflow:
+    case IrOpcode::kInt64AbsWithOverflow:
       CHECK_LE(index, static_cast<size_t>(1));
       return index == 0 ? MachineRepresentation::kWord64
                         : MachineRepresentation::kBit;
@@ -341,6 +345,8 @@ MachineRepresentation NodeProperties::GetProjectionType(
       auto call_descriptor = CallDescriptorOf(input->op());
       return call_descriptor->GetReturnType(index).representation();
     }
+    case IrOpcode::kInt32PairAdd:
+    case IrOpcode::kInt32PairSub:
     case IrOpcode::kWord32AtomicPairLoad:
     case IrOpcode::kWord32AtomicPairAdd:
     case IrOpcode::kWord32AtomicPairSub:
@@ -392,7 +398,7 @@ OptionalMapRef NodeProperties::GetJSCreateMap(JSHeapBroker* broker,
       }
     }
   }
-  return base::nullopt;
+  return std::nullopt;
 }
 
 // static
@@ -436,6 +442,18 @@ NodeProperties::InferMapsResult NodeProperties::InferMapsUnsafe(
           *maps_out = CheckMapsParametersOf(effect->op()).maps();
           return result;
         }
+        break;
+      }
+      case IrOpcode::kTransitionElementsKindOrCheckMap: {
+        Node* const object = GetValueInput(effect, 0);
+        if (IsSame(receiver, object)) {
+          *maps_out = ZoneRefSet<Map>{
+              ElementsTransitionWithMultipleSourcesOf(effect->op()).target()};
+          return result;
+        }
+        // `receiver` and `object` might alias, so
+        // TransitionElementsKindOrCheckMaps might change receiver's map.
+        result = kUnreliableMaps;
         break;
       }
       case IrOpcode::kJSCreate: {
@@ -579,6 +597,7 @@ bool NodeProperties::CanBeNullOrUndefined(JSHeapBroker* broker, Node* receiver,
     switch (receiver->opcode()) {
       case IrOpcode::kCheckInternalizedString:
       case IrOpcode::kCheckNumber:
+      case IrOpcode::kCheckNumberFitsInt32:
       case IrOpcode::kCheckSmi:
       case IrOpcode::kCheckString:
       case IrOpcode::kCheckSymbol:

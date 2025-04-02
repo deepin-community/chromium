@@ -11,6 +11,7 @@
 #include "base/apple/foundation_util.h"
 #include "base/apple/osstatus_logging.h"
 #include "base/apple/scoped_cftyperef.h"
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/notreached.h"
 #include "crypto/sha2.h"
@@ -253,9 +254,7 @@ void GetCertChainInfo(CFArrayRef cert_chain, CertVerifyResult* verify_result) {
 
     std::string_view spki_bytes;
     if (!asn1::ExtractSPKIFromDERCert(
-            std::string_view(
-                reinterpret_cast<const char*>(CFDataGetBytePtr(der_data.get())),
-                CFDataGetLength(der_data.get())),
+            base::as_string_view(base::apple::CFDataToSpan(der_data.get())),
             &spki_bytes)) {
       verify_result->cert_status |= CERT_STATUS_INVALID;
       return;
@@ -267,8 +266,6 @@ void GetCertChainInfo(CFArrayRef cert_chain, CertVerifyResult* verify_result) {
   }
   if (!verified_cert.get()) {
     NOTREACHED();
-    verify_result->cert_status |= CERT_STATUS_INVALID;
-    return;
   }
 
   scoped_refptr<X509Certificate> verified_cert_with_chain =
@@ -396,8 +393,7 @@ int CertVerifyProcIOS::VerifyInternal(X509Certificate* cert,
                                       const std::string& sct_list,
                                       int flags,
                                       CertVerifyResult* verify_result,
-                                      const NetLogWithSource& net_log,
-                                      std::optional<base::Time> time_now) {
+                                      const NetLogWithSource& net_log) {
   ScopedCFTypeRef<CFArrayRef> trust_policies;
   OSStatus status = CreateTrustPolicies(&trust_policies);
   if (status)
@@ -473,7 +469,6 @@ int CertVerifyProcIOS::VerifyInternal(X509Certificate* cert,
         case kSecTrustResultUnspecified:
         case kSecTrustResultProceed:
           NOTREACHED();
-          break;
         case kSecTrustResultDeny:
           verify_result->cert_status |= CERT_STATUS_AUTHORITY_INVALID;
           break;
@@ -484,8 +479,8 @@ int CertVerifyProcIOS::VerifyInternal(X509Certificate* cert,
 #else
       // It should be impossible to reach this code, but if somehow it is
       // reached it would allow any certificate as valid since no errors would
-      // be added to cert_status. Therefore, add a CHECK as a fail safe.
-      CHECK(false);
+      // be added to cert_status. Therefore, add a NOTREACHED() as a fail safe.
+      NOTREACHED();
 #endif
     }
   }

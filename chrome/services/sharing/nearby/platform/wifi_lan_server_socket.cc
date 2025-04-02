@@ -12,13 +12,12 @@
 #include "base/task/thread_pool.h"
 #include "net/base/net_errors.h"
 
-namespace nearby {
-namespace chrome {
+namespace nearby::chrome {
 
 WifiLanServerSocket::ServerSocketParameters::ServerSocketParameters(
     const net::IPEndPoint& local_end_point,
     mojo::PendingRemote<network::mojom::TCPServerSocket> tcp_server_socket,
-    mojo::PendingRemote<sharing::mojom::FirewallHole> firewall_hole)
+    mojo::PendingRemote<::sharing::mojom::FirewallHole> firewall_hole)
     : local_end_point(local_end_point),
       tcp_server_socket(std::move(tcp_server_socket)),
       firewall_hole(std::move(firewall_hole)) {}
@@ -236,5 +235,4 @@ void WifiLanServerSocket::OnFirewallHoleDisconnected() {
   Close();
 }
 
-}  // namespace chrome
-}  // namespace nearby
+}  // namespace nearby::chrome

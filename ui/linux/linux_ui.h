@@ -229,13 +229,12 @@ class COMPONENT_EXPORT(LINUX_UI) LinuxUi {
 
   static CmdLineArgs CopyCmdLine(const base::CommandLine& command_line);
 
-  const base::ObserverList<DeviceScaleFactorObserver>::Unchecked&
-  device_scale_factor_observer_list() const {
+  base::ObserverList<DeviceScaleFactorObserver>::Unchecked&
+  device_scale_factor_observer_list() {
     return device_scale_factor_observer_list_;
   }
 
-  const base::ObserverList<CursorThemeManagerObserver>&
-  cursor_theme_observers() {
+  base::ObserverList<CursorThemeManagerObserver>& cursor_theme_observers() {
     return cursor_theme_observer_list_;
   }
 
@@ -293,6 +292,9 @@ class COMPONENT_EXPORT(LINUX_UI) LinuxUiTheme {
   // Override the toolkit's dark mode preference.  Used when the dark mode
   // setting is provided by org.freedesktop.appearance instead of the toolkit.
   virtual void SetDarkTheme(bool dark) = 0;
+
+  // Override the toolkit's accent color.
+  virtual void SetAccentColor(std::optional<SkColor> accent_color) = 0;
 
   // Returns a new NavButtonProvider, or nullptr if the underlying
   // toolkit does not support drawing client-side navigation buttons.

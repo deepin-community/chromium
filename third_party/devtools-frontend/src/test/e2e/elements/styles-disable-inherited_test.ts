@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import {click, goToResource, waitFor} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   checkStyleAttributes,
   expandSelectedNodeRecursively,
@@ -11,7 +10,7 @@ import {
   waitForElementsStyleSection,
 } from '../helpers/elements-helpers.js';
 
-describe('The Elements tab', async function() {
+describe('The Elements tab', function() {
   it('does not break further style inspection if inherited style property was disabled', async () => {
     await goToResource('elements/styles-disable-inherited.html');
     await expandSelectedNodeRecursively();

@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include "content/public/common/user_agent.h"
 
 #include <stdint.h>
@@ -367,6 +372,14 @@ std::string BuildUserAgentFromProductAndExtraOSInfo(
                              BuildOSCpuInfo(include_android_build_number,
                                             IncludeAndroidModel::Include),
                              extra_os_info});
+  return BuildUserAgentFromOSAndProduct(os_info, product);
+}
+
+std::string BuildUnifiedPlatformUAFromProductAndExtraOs(
+    const std::string& product,
+    const std::string& extra_os_info) {
+  std::string os_info;
+  base::StrAppend(&os_info, {GetUnifiedPlatform(), extra_os_info});
   return BuildUserAgentFromOSAndProduct(os_info, product);
 }
 

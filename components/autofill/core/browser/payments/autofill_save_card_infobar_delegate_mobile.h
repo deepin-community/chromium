@@ -43,6 +43,7 @@ class AutofillSaveCardInfoBarDelegateMobile : public ConfirmInfoBarDelegate {
 
   bool is_for_upload() const { return ui_info_.is_for_upload; }
   int issuer_icon_id() const { return ui_info_.issuer_icon_id; }
+  const std::u16string& card_network() const { return ui_info_.card_network; }
   const std::u16string& card_label() const { return ui_info_.card_label; }
   const std::u16string& card_sub_label() const {
     return ui_info_.card_sub_label;
@@ -90,14 +91,8 @@ class AutofillSaveCardInfoBarDelegateMobile : public ConfirmInfoBarDelegate {
   bool Accept() override;
   bool Cancel() override;
 
-#if BUILDFLAG(IS_IOS)
-  // Updates and then saves the card using |cardholder_name|,
-  // |expiration_date_month| and |expiration_date_year|, which were provided
-  // as part of the iOS save card Infobar dialog.
-  virtual bool UpdateAndAccept(std::u16string cardholder_name,
-                               std::u16string expiration_date_month,
-                               std::u16string expiration_date_year);
-#endif  // BUILDFLAG(IS_IOS)
+ protected:
+  AutofillSaveCardDelegate* delegate() { return delegate_.get(); }
 
  private:
 #if BUILDFLAG(IS_ANDROID)

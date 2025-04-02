@@ -22,7 +22,6 @@
 #include "base/dcheck_is_on.h"
 #include "base/metrics/field_trial_params.h"
 #include "base/rand_util.h"
-#include "base/ranges/algorithm.h"
 #include "base/version_info/channel.h"
 #include "chrome/browser/privacy_budget/identifiability_study_group_settings.h"
 #include "chrome/browser/privacy_budget/privacy_budget_prefs.h"
@@ -95,7 +94,7 @@ int IdentifiabilityStudyState::generation() const {
 bool IdentifiabilityStudyState::ShouldRecordSurface(
     blink::IdentifiableSurface surface) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (LIKELY(!settings_.enabled() && !meta_experiment_active_)) {
+  if (!settings_.enabled() && !meta_experiment_active_) [[unlikely]] {
     return false;
   }
 
@@ -103,7 +102,7 @@ bool IdentifiabilityStudyState::ShouldRecordSurface(
   if (surface.GetType() == blink::IdentifiableSurface::Type::kReservedInternal)
     return true;
 
-  if (LIKELY(!settings_.enabled())) {
+  if (!settings_.enabled()) [[unlikely]] {
     return false;
   }
 
@@ -165,8 +164,9 @@ void IdentifiabilityStudyState::InitializeRenderer(
 bool IdentifiabilityStudyState::DecideInclusionForNewSurface(
     blink::IdentifiableSurface new_surface) {
   DCHECK(settings_.IsUsingRandomSampling());
-  if (UNLIKELY(seen_surfaces_.size() > kMaxSelectedSurfaceOffset + 1))
+  if (seen_surfaces_.size() > kMaxSelectedSurfaceOffset + 1) [[unlikely]] {
     return false;
+  }
 
   MaybeUpdateSelectedOffsets();
 
@@ -313,16 +313,15 @@ void IdentifiabilityStudyState::CheckInvariants() const {
   // identifiability_study_state.h.
 
   // active_surfaces_
-  DCHECK(
-      base::ranges::all_of(active_surfaces_, IsRepresentativeSurfaceAllowed));
-  DCHECK(base::ranges::all_of(selected_offsets_, [this](auto offset) {
+  DCHECK(std::ranges::all_of(active_surfaces_, IsRepresentativeSurfaceAllowed));
+  DCHECK(std::ranges::all_of(selected_offsets_, [this](auto offset) {
     return offset >= seen_surfaces_.size() ||
            active_surfaces_.contains(seen_surfaces_[offset]);
   }));
   DCHECK_LE(active_surfaces_.Cost(), active_surface_budget_);
 
   // seen_surfaces_
-  DCHECK(base::ranges::all_of(seen_surfaces_, IsSurfaceAllowed));
+  DCHECK(std::ranges::all_of(seen_surfaces_, IsSurfaceAllowed));
   DCHECK_LE(seen_surfaces_.size(),
             static_cast<size_t>(kMaxSelectedSurfaceOffset + 1));
   //                                                      ^^^
@@ -335,14 +334,14 @@ void IdentifiabilityStudyState::CheckInvariants() const {
             EncodeIdentifiabilityFieldTrialParam(seen_surfaces_.AsList()));
 
   // selected_offsets_
-  DCHECK(base::ranges::all_of(selected_offsets_,
-                              &IdentifiabilityStudyState::IsValidOffset));
+  DCHECK(std::ranges::all_of(selected_offsets_,
+                             &IdentifiabilityStudyState::IsValidOffset));
 
   // active_offset_count_
-  DCHECK_EQ(base::ranges::count_if(selected_offsets_,
-                                   [this](OffsetType offset) {
-                                     return offset < seen_surfaces_.size();
-                                   }),
+  DCHECK_EQ(std::ranges::count_if(selected_offsets_,
+                                  [this](OffsetType offset) {
+                                    return offset < seen_surfaces_.size();
+                                  }),
             active_offset_count_);
 }
 #else   // EXPENSIVE_DCHECKS_ARE_ON()
@@ -488,8 +487,8 @@ std::vector<IdentifiabilityStudyState::OffsetType>
 IdentifiabilityStudyState::AdjustForDroppedOffsets(
     std::vector<OffsetType> dropped_offsets,
     std::vector<OffsetType> offsets) {
-  DCHECK(base::ranges::is_sorted(dropped_offsets));
-  DCHECK(base::ranges::is_sorted(offsets));
+  DCHECK(std::ranges::is_sorted(dropped_offsets));
+  DCHECK(std::ranges::is_sorted(offsets));
   if (offsets.empty() || dropped_offsets.empty())
     return offsets;
 
@@ -547,7 +546,7 @@ bool IdentifiabilityStudyState::IsMetaExperimentActive() {
 }
 
 void IdentifiabilityStudyState::InitFromPrefs() {
-  if (LIKELY(!settings_.enabled())) {
+  if (!settings_.enabled()) [[unlikely]] {
     // Nothing to do if the study is not active. However it is possible that
     // this client has switched from active to inactive, in which case we should
     // nuke any persisted data.
@@ -587,8 +586,8 @@ void IdentifiabilityStudyState::InitStateForRandomSurfaceSampling() {
   // the generation has remained the same while blocked surfaces and types may
   // have changed.
 
-  if (!base::ranges::all_of(selected_offsets_,
-                            &IdentifiabilityStudyState::IsValidOffset)) {
+  if (!std::ranges::all_of(selected_offsets_,
+                           &IdentifiabilityStudyState::IsValidOffset)) {
     ResetPersistedState();
     return;
   }

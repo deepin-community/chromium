@@ -43,6 +43,7 @@
 #include "src/tint/lang/wgsl/inspector/resource_binding.h"
 #include "src/tint/lang/wgsl/inspector/scalar.h"
 #include "src/tint/lang/wgsl/program/program.h"
+#include "src/tint/lang/wgsl/sem/call.h"
 #include "src/tint/lang/wgsl/sem/sampler_texture_pair.h"
 #include "src/tint/utils/containers/unique_vector.h"
 
@@ -131,6 +132,13 @@ class Inspector {
     /// @returns vector of all of the bindings for external textures.
     std::vector<ResourceBinding> GetExternalTextureResourceBindings(const std::string& entry_point);
 
+    /// Gathers all the resource bindings of the input attachment type for the given
+    /// entry point.
+    /// @param entry_point name of the entry point to get information about.
+    /// texture type.
+    /// @returns vector of all of the bindings for input attachments.
+    std::vector<ResourceBinding> GetInputAttachmentResourceBindings(const std::string& entry_point);
+
     /// @param entry_point name of the entry point to get information about.
     /// @returns vector of all of the sampler/texture sampling pairs that are used
     /// by that entry point.
@@ -173,7 +181,7 @@ class Inspector {
         uint32_t binding = 0;
     };
 
-    /// @param ep the entry point ot get the information for
+    /// @param ep the entry point to get the information for
     /// @returns a vector of information for textures which call textureNumLevels and
     /// textureNumSamples for backends which require additional support for those methods. Each
     /// binding point will only be returned once regardless of the number of calls made. The
@@ -201,6 +209,7 @@ class Inspector {
     /// @param attributes the variable attributes
     /// @param location the location attribute value if provided
     /// @param color the color attribute value if provided
+    /// @param blend_src the blend_src attribute value if provided
     /// @param variables the list to add the variables to
     void AddEntryPointInOutVariables(std::string name,
                                      std::string variable_name,
@@ -208,6 +217,7 @@ class Inspector {
                                      VectorRef<const ast::Attribute*> attributes,
                                      std::optional<uint32_t> location,
                                      std::optional<uint32_t> color,
+                                     std::optional<uint32_t> blend_src,
                                      std::vector<StageVariable>& variables) const;
 
     /// Recursively determine if the type contains builtin.
@@ -216,7 +226,10 @@ class Inspector {
     bool ContainsBuiltin(core::BuiltinValue builtin,
                          const core::type::Type* type,
                          VectorRef<const ast::Attribute*> attributes) const;
-
+    /// Get the array length of the builtin clip_distances when it is used.
+    /// @param type the type of the variable
+    /// @returns the array length of the builtin clip_distances or empty when it is not used
+    std::optional<uint32_t> GetClipDistancesBuiltinSize(const core::type::Type* type) const;
     /// Gathers all the texture resource bindings of the given type for the given
     /// entry point.
     /// @param entry_point name of the entry point to get information about.
@@ -253,11 +266,9 @@ class Inspector {
     /// Constructs |sampler_targets_| if it hasn't already been instantiated.
     void GenerateSamplerTargets();
 
-    /// @param type the type of the parameter or structure member
     /// @param attributes attributes associated with the parameter or structure member
     /// @returns the interpolation type and sampling modes for the value
     std::tuple<InterpolationType, InterpolationSampling> CalculateInterpolationData(
-        const core::type::Type* type,
         VectorRef<const ast::Attribute*> attributes) const;
 
     /// @param func the root function of the callgraph to consider for the computation.
@@ -280,15 +291,46 @@ class Inspector {
     /// @tparam N number of expressions in the n-uple
     /// @tparam F type of the callback provided.
     /// @param exprs N-uple of expressions to resolve.
+    /// @param callsite the callsite the expressions in the n-uple originated from
     /// @param cb is a callback function with the signature:
-    /// `void(std::array<const sem::GlobalVariable*, N>)`, which is invoked
-    /// whenever a set of expressions are resolved to globals.
+    /// `void(std::array<const sem::GlobalVariable*, N>, em::Function* callsite)`,
+    /// which is invoked whenever a set of expressions are resolved to globals. The `callsite`
+    /// provides the function where we determined the sampler,texture global variables. This
+    /// is the starting point to determine which entry points are using this sampler,texture.
     template <size_t N, typename F>
-    void GetOriginatingResources(std::array<const ast::Expression*, N> exprs, F&& cb);
+    void GetOriginatingResources(std::array<const ast::Expression*, N> exprs,
+                                 const ast::CallExpression* callsite,
+                                 F&& cb);
 
     /// @param func the function of the entry point. Must be non-nullptr and true for IsEntryPoint()
     /// @returns the entry point information
     EntryPoint GetEntryPoint(const tint::ast::Function* func);
+
+    /// The information needed to be supplied.
+    enum class TextureUsageType : uint8_t {
+        /// textureLoad
+        kTextureLoad,
+        /// textureNumLevels
+        kTextureNumLevels,
+        /// textureNumSamples
+        kTextureNumSamples,
+        /// depth texture with non-comparison sampler
+        kDepthTextureWithNonComparisonSampler,
+    };
+    /// Information on level and sample calls by a given texture binding point
+    struct TextureUsageInfo {
+        /// The type of function
+        TextureUsageType type = TextureUsageType::kTextureNumLevels;
+        /// The group number
+        uint32_t group = 0;
+        /// The binding number
+        uint32_t binding = 0;
+    };
+
+    std::vector<Inspector::TextureUsageInfo> GetTextureUsagesForEntryPoint(
+        const tint::ast::Function& ep,
+        std::function<std::optional<TextureUsageType>(const tint::sem::Call* call,
+                                                      tint::wgsl::BuiltinFn builtin_fn)> filter);
 };
 
 }  // namespace tint::inspector

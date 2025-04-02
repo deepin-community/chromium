@@ -4,16 +4,19 @@
 // LICENSE file in the root directory of this source tree.
 
 #include <assert.h>
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include <xnnpack.h>
-#include <xnnpack/log.h>
-#include <xnnpack/operator.h>
-#include <xnnpack/params.h>
-#include <xnnpack/subgraph.h>
-#include <xnnpack/subgraph-validation.h>
-
+#include "xnnpack.h"
+#include "xnnpack/common.h"
+#include "xnnpack/log.h"
+#include "xnnpack/node-type.h"
+#include "xnnpack/operator-type.h"
+#include "xnnpack/operator.h"
+#include "xnnpack/subgraph-validation.h"
+#include "xnnpack/subgraph.h"
+#include "pthreadpool.h"
 
 static enum xnn_status create_average_pooling_operator(
   const struct xnn_node* node,
@@ -28,8 +31,11 @@ static enum xnn_status create_average_pooling_operator(
   assert(node->num_outputs == 1);
 
   enum xnn_status status;
-  switch (node->compute_type) {
-    case xnn_compute_type_fp16:
+  const uint32_t input_id = opdata->inputs[0];
+  assert(input_id < num_values);
+  const struct xnn_value *input_value = &values[input_id];
+  switch (input_value->datatype) {
+    case xnn_datatype_fp16:
       status = xnn_create_average_pooling2d_nhwc_f16(
         node->params.pooling_2d.padding_top,
         node->params.pooling_2d.padding_right,
@@ -44,7 +50,7 @@ static enum xnn_status create_average_pooling_operator(
         node->flags,
         &opdata->operator_objects[0]);
       break;
-    case xnn_compute_type_fp32:
+    case xnn_datatype_fp32:
       status = xnn_create_average_pooling2d_nhwc_f32(
         node->params.pooling_2d.padding_top,
         node->params.pooling_2d.padding_right,
@@ -127,6 +133,7 @@ static enum xnn_status reshape_average_pooling_operator(
   output_value->shape.dim[2] = output_width;
   output_value->shape.dim[3] = channel_dim;
 
+  output_value->shape.num_dims = 4;
   const size_t new_size = xnn_tensor_get_size(output_value);
   if (new_size > output_value->size || opdata->workspace_size > old_workspace_size) {
     output_value->size = new_size;
@@ -205,32 +212,11 @@ enum xnn_status xnn_define_average_pooling_2d(
     return xnn_status_invalid_parameter;
   }
 
-  if (pooling_size == 1) {
-    xnn_log_error(
-      "failed to define %s operator with 1 pooling element: 1x1 pooling is meaningless",
-      xnn_node_type_to_string(xnn_node_type_average_pooling_2d));
-    return xnn_status_invalid_parameter;
-  }
-
   if (stride_height == 0 || stride_width == 0) {
     xnn_log_error(
       "failed to define %s operator with %" PRIu32 "x%" PRIu32 " stride: "
       "stride dimensions must be non-zero",
       xnn_node_type_to_string(xnn_node_type_average_pooling_2d), stride_width, stride_height);
-    return xnn_status_invalid_parameter;
-  }
-
-  if (stride_height > pooling_height) {
-    xnn_log_error(
-      "failed to define %s operator with %" PRIu32 " stride height: must be less than pooling height %" PRIu32,
-      xnn_node_type_to_string(xnn_node_type_max_pooling_2d), stride_height, pooling_height);
-    return xnn_status_invalid_parameter;
-  }
-
-  if (stride_width > pooling_width) {
-    xnn_log_error(
-      "failed to define %s operator with %" PRIu32 " stride width: must be less than pooling width %" PRIu32,
-      xnn_node_type_to_string(xnn_node_type_max_pooling_2d), stride_width, pooling_width);
     return xnn_status_invalid_parameter;
   }
 
@@ -263,6 +249,7 @@ enum xnn_status xnn_define_average_pooling_2d(
   }
 
   switch (input_value->datatype) {
+    case xnn_datatype_fp16:
     case xnn_datatype_fp32:
       break;
     default:
@@ -285,6 +272,8 @@ enum xnn_status xnn_define_average_pooling_2d(
   }
 
   switch (output_value->datatype) {
+    case xnn_datatype_fp16:
+      break;
     case xnn_datatype_fp32:
       break;
     default:
@@ -301,7 +290,6 @@ enum xnn_status xnn_define_average_pooling_2d(
   }
 
   node->type = xnn_node_type_average_pooling_2d;
-  node->compute_type = xnn_compute_type_fp32;
   node->params.pooling_2d.padding_top = input_padding_top;
   node->params.pooling_2d.padding_right = input_padding_right;
   node->params.pooling_2d.padding_bottom = input_padding_bottom;

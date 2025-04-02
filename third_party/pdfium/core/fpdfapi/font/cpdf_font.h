@@ -86,7 +86,7 @@ class CPDF_Font : public Retainable, public Observable {
   virtual bool IsUnicodeCompatible() const = 0;
   virtual uint32_t GetNextChar(ByteStringView pString, size_t* pOffset) const;
   virtual size_t CountChar(ByteStringView pString) const;
-  virtual int AppendChar(char* buf, uint32_t charcode) const;
+  virtual void AppendChar(ByteString* buf, uint32_t charcode) const;
   virtual int GlyphFromCharCode(uint32_t charcode, bool* pVertGlyph) = 0;
 #if BUILDFLAG(IS_APPLE)
   virtual int GlyphFromCharCodeExt(uint32_t charcode);
@@ -107,7 +107,6 @@ class CPDF_Font : public Retainable, public Observable {
   void ClearFontDict() { m_pFontDict = nullptr; }
   bool IsStandardFont() const;
   bool HasFace() const { return !!m_Font.GetFace(); }
-  void AppendChar(ByteString* str, uint32_t charcode) const;
 
   const FX_RECT& GetFontBBox() const { return m_FontBBox; }
   int GetTypeAscent() const { return m_Ascent; }
@@ -117,7 +116,10 @@ class CPDF_Font : public Retainable, public Observable {
   int FallbackGlyphFromCharcode(int fallbackFont, uint32_t charcode);
   int GetFontFlags() const { return m_Flags; }
   int GetItalicAngle() const { return m_ItalicAngle; }
-  int GetFontWeight() const;
+
+  // Note that even when non-nullopt, the value may be outside the normal range
+  // of [100, 900].
+  std::optional<int> GetFontWeight() const;
 
   virtual int GetCharWidthF(uint32_t charcode) = 0;
   virtual FX_RECT GetCharBBox(uint32_t charcode) = 0;
@@ -171,6 +173,7 @@ class CPDF_Font : public Retainable, public Observable {
   ByteString m_BaseFontName;
   mutable std::unique_ptr<CPDF_ToUnicodeMap> m_pToUnicodeMap;
   mutable bool m_bToUnicodeLoaded = false;
+  bool m_bWillBeDestroyed = false;
   int m_Flags = 0;
   int m_StemV = 0;
   int m_Ascent = 0;

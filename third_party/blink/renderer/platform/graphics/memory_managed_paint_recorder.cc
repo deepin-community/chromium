@@ -43,12 +43,27 @@ void MemoryManagedPaintRecorder::SetClient(Client* client) {
   client_ = client;
 }
 
+void MemoryManagedPaintRecorder::DisableLineDrawingAsPaths() {
+  main_canvas_.DisableLineDrawingAsPaths();
+  if (side_canvas_) {
+    side_canvas_->DisableLineDrawingAsPaths();
+  }
+}
+
 cc::PaintRecord MemoryManagedPaintRecorder::ReleaseMainRecording() {
   cc::PaintRecord record = main_canvas_.ReleaseAsRecord();
+  // ReleaseAsRecord() clears the paint ops, so we need initialize the recording
+  // for subsequent draw calls.
   if (client_) {
     client_->InitializeForRecording(&main_canvas_);
   }
   return record;
+}
+
+cc::PaintRecord MemoryManagedPaintRecorder::CopyMainRecording() {
+  // CopyAsRecord() does not clear the paint ops, so we do not need to call
+  // InitializeForRecording().
+  return main_canvas_.CopyAsRecord();
 }
 
 void MemoryManagedPaintRecorder::RestartCurrentLayer() {
@@ -85,14 +100,15 @@ void MemoryManagedPaintRecorder::RestartRecording() {
 void MemoryManagedPaintRecorder::BeginSideRecording() {
   CHECK(!side_canvas_) << "BeginSideRecording() can't be called when side "
                           "recording is already active.";
-  side_canvas_ = std::make_unique<MemoryManagedPaintCanvas>(size_);
+  side_canvas_ = main_canvas_.CreateChildCanvas();
   current_canvas_ = side_canvas_.get();
 }
 
 void MemoryManagedPaintRecorder::EndSideRecording() {
   CHECK(side_canvas_) << "EndSideRecording() can't be called without "
                          "first calling BeginSideRecording().";
-  main_canvas_.drawPicture(side_canvas_->ReleaseAsRecord());
+  main_canvas_.drawPicture(side_canvas_->ReleaseAsRecord(),
+                           /*local_ctm=*/false);
   current_canvas_ = &main_canvas_;
   side_canvas_ = nullptr;
 }

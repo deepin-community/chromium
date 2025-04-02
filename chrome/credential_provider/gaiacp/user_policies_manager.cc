@@ -2,9 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/credential_provider/gaiacp/user_policies_manager.h"
 
 #include <limits>
+#include <string_view>
 
 #include "base/files/file.h"
 #include "base/files/file_enumerator.h"
@@ -287,7 +293,7 @@ bool UserPoliciesManager::GetUserPolicies(const std::wstring& sid,
   policy_file.reset();
 
   std::optional<base::Value> policy_data =
-      base::JSONReader::Read(base::StringPiece(buffer.data(), buffer.size()),
+      base::JSONReader::Read(std::string_view(buffer.data(), buffer.size()),
                              base::JSON_ALLOW_TRAILING_COMMAS);
   if (!policy_data || !policy_data->is_dict()) {
     LOGFN(ERROR) << "Failed to read policy data from file!";

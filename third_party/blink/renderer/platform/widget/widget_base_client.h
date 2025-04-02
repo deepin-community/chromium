@@ -10,21 +10,22 @@
 #include "base/time/time.h"
 #include "cc/metrics/begin_main_frame_metrics.h"
 #include "cc/metrics/frame_sequence_tracker_collection.h"
-#include "cc/metrics/web_vital_metrics.h"
 #include "cc/paint/element_id.h"
 #include "cc/trees/layer_tree_host_client.h"
+#include "services/viz/public/mojom/hit_test/input_target_client.mojom-blink.h"
 #include "third_party/blink/public/common/metrics/document_update_reason.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom-blink.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
 #include "third_party/blink/public/platform/web_text_input_type.h"
 #include "third_party/blink/public/web/web_lifecycle_update.h"
+#include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/widget/input/input_handler_proxy.h"
+#include "ui/base/mojom/menu_source_type.mojom-blink-forward.h"
 #include "ui/display/mojom/screen_orientation.mojom-blink.h"
 
 namespace cc {
 class LayerTreeFrameSink;
 struct BeginMainFrameMetrics;
-struct WebVitalMetrics;
 }  // namespace cc
 
 namespace blink {
@@ -47,7 +48,7 @@ class WidgetBaseClient {
 
   // Called to update the document lifecycle, advance the state of animations
   // and dispatch rAF.
-  virtual void BeginMainFrame(base::TimeTicks frame_time) = 0;
+  virtual void BeginMainFrame(const viz::BeginFrameArgs& args) = 0;
 
   // Requests that the lifecycle of the widget be updated.
   virtual void UpdateLifecycle(WebLifecycleUpdate requested_update,
@@ -75,10 +76,6 @@ class WidgetBaseClient {
   // RecordEndOfFrameMetrics.
   virtual std::unique_ptr<cc::BeginMainFrameMetrics>
   GetBeginMainFrameMetrics() {
-    return nullptr;
-  }
-
-  virtual std::unique_ptr<cc::WebVitalMetrics> GetWebVitalMetrics() {
     return nullptr;
   }
 
@@ -236,6 +233,11 @@ class WidgetBaseClient {
   // Whether to use ScrollPredictor to resample scroll events. This is false for
   // web_tests to ensure that scroll deltas are not timing-dependent.
   virtual bool AllowsScrollResampling() { return true; }
+
+  virtual void ShowContextMenu(ui::mojom::blink::MenuSourceType source_type,
+                               const gfx::Point& location) {}
+  virtual void BindInputTargetClient(
+      mojo::PendingReceiver<viz::mojom::blink::InputTargetClient> receiver) {}
 };
 
 }  // namespace blink

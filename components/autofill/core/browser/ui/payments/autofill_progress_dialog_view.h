@@ -5,11 +5,13 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_BROWSER_UI_PAYMENTS_AUTOFILL_PROGRESS_DIALOG_VIEW_H_
 #define COMPONENTS_AUTOFILL_CORE_BROWSER_UI_PAYMENTS_AUTOFILL_PROGRESS_DIALOG_VIEW_H_
 
-#include <optional>
-
 #include "base/functional/callback_forward.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
+
+namespace views {
+class Widget;
+}  // namespace views
 
 namespace autofill {
 
@@ -30,6 +32,17 @@ class AutofillProgressDialogView {
   virtual void InvalidateControllerForCallbacks() = 0;
 
   virtual base::WeakPtr<AutofillProgressDialogView> GetWeakPtr() = 0;
+};
+
+// Subclass used on desktop platforms to expose specific internal details
+// necessary for testing.
+class AutofillProgressDialogViewDesktop : public AutofillProgressDialogView {
+ public:
+  // Returns the Widget associated with the view while it is visible.
+  virtual views::Widget* GetWidgetForTesting() = 0;
+  // Calls through to the DialogDelegate::CancelDialog() function on the content
+  // view of the dialog Widget.
+  virtual void CancelDialogForTesting() = 0;
 };
 
 }  // namespace autofill

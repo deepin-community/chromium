@@ -4,6 +4,7 @@
 
 #include "third_party/blink/renderer/modules/direct_sockets/tcp_server_readable_stream_wrapper.h"
 
+#include "base/metrics/histogram_functions.h"
 #include "base/notreached.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
 #include "third_party/blink/renderer/core/streams/readable_stream.h"
@@ -59,7 +60,7 @@ void TCPServerReadableStreamWrapper::CloseStream() {
 
   tcp_server_socket_.reset();
 
-  std::move(on_close_).Run(/*exception=*/ScriptValue());
+  std::move(on_close_).Run(/*exception=*/v8::Local<v8::Value>());
 }
 
 void TCPServerReadableStreamWrapper::ErrorStream(int32_t error_code) {
@@ -68,6 +69,10 @@ void TCPServerReadableStreamWrapper::ErrorStream(int32_t error_code) {
   }
   SetState(State::kAborted);
 
+  // Error codes are negative.
+  base::UmaHistogramSparse("DirectSockets.TCPServerReadableStreamError",
+                           -error_code);
+
   tcp_server_socket_.reset();
 
   auto* script_state = GetScriptState();
@@ -75,12 +80,10 @@ void TCPServerReadableStreamWrapper::ErrorStream(int32_t error_code) {
   // ScriptValue.
   ScriptState::Scope scope{script_state};
 
-  auto exception = ScriptValue(
-      script_state->GetIsolate(),
-      V8ThrowDOMException::CreateOrDie(
-          script_state->GetIsolate(), DOMExceptionCode::kNetworkError,
-          String{"Server socket closed: " + net::ErrorToString(error_code)}));
-  Controller()->Error(exception.V8Value());
+  auto exception = V8ThrowDOMException::CreateOrDie(
+      script_state->GetIsolate(), DOMExceptionCode::kNetworkError,
+      String{"Server socket closed: " + net::ErrorToString(error_code)});
+  Controller()->Error(exception);
   std::move(on_close_).Run(exception);
 }
 

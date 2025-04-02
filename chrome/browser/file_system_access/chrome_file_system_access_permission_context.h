@@ -8,6 +8,7 @@
 #include <map>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "base/callback_list.h"
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
@@ -15,28 +16,32 @@
 #include "base/sequence_checker.h"
 #include "base/time/clock.h"
 #include "base/time/default_clock.h"
+#include "base/types/expected.h"
 #include "chrome/browser/file_system_access/file_system_access_features.h"
 #include "chrome/browser/file_system_access/file_system_access_permission_request_manager.h"
+#include "chrome/browser/permissions/one_time_permissions_tracker.h"
+#include "chrome/browser/permissions/one_time_permissions_tracker_observer.h"
+#include "components/enterprise/buildflags/buildflags.h"
 #include "components/permissions/features.h"
 #include "components/permissions/object_permission_context_base.h"
 #include "content/public/browser/file_system_access_permission_context.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_manager.mojom-forward.h"
-
 #if !BUILDFLAG(IS_ANDROID)
-#include "chrome/browser/permissions/one_time_permissions_tracker.h"
-#include "chrome/browser/permissions/one_time_permissions_tracker_observer.h"
 #include "chrome/browser/web_applications/web_app_install_manager.h"
 #include "chrome/browser/web_applications/web_app_install_manager_observer.h"
 #endif
 
-class HostContentSettingsMap;
-#if !BUILDFLAG(IS_ANDROID)
-class OneTimePermissionsTracker;
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+#include "components/enterprise/common/files_scan_data.h"
 #endif
+
+class HostContentSettingsMap;
+class OneTimePermissionsTracker;
 enum ContentSetting;
 
 namespace content {
 class BrowserContext;
+class RenderFrameHost;
 }  // namespace content
 
 // Chrome implementation of FileSystemAccessPermissionContext. This class
@@ -58,10 +63,10 @@ class BrowserContext;
 // All methods must be called on the UI thread.
 class ChromeFileSystemAccessPermissionContext
     : public content::FileSystemAccessPermissionContext,
-      public permissions::ObjectPermissionContextBase
+      public permissions::ObjectPermissionContextBase,
+      public OneTimePermissionsTrackerObserver
 #if !BUILDFLAG(IS_ANDROID)
     ,
-      public OneTimePermissionsTrackerObserver,
       public web_app::WebAppInstallManagerObserver
 #endif
 {
@@ -107,7 +112,7 @@ class ChromeFileSystemAccessPermissionContext
 
   // These values are persisted to logs. Entries should not be renumbered and
   // numeric values should never be reused.
-  // TODO(crbug.com/1011533): Currently, the `kIgnored` outcome is not user-
+  // TODO(crbug.com/40101962): Currently, the `kIgnored` outcome is not user-
   // detectable, and no metrics are expected to be recorded for this case.
   // Consider removing this value from the `RestorePermissionPromptOutcome`
   // enum when updating the corresponding logic in the permission context code.
@@ -138,7 +143,6 @@ class ChromeFileSystemAccessPermissionContext
   std::u16string GetObjectDisplayName(const base::Value::Dict& object) override;
   std::set<url::Origin> GetOriginsWithGrants() override;
 
-#if !BUILDFLAG(IS_ANDROID)
   // OneTimePermissionsTrackerObserver:
   void OnAllTabsInBackgroundTimerExpired(
       const url::Origin& origin,
@@ -147,8 +151,12 @@ class ChromeFileSystemAccessPermissionContext
   void OnLastPageFromOriginClosed(const url::Origin& origin) override;
   void OnShutdown() override;
 
+#if !BUILDFLAG(IS_ANDROID)
   // WebAppInstallManagerObserver:
   void OnWebAppInstalled(const webapps::AppId& app_id) override;
+  // TODO(crbug.com/340952100): Remove after the InstallState is saved in the
+  // database & available from OnWebAppInstalled.
+  void OnWebAppInstalledWithOsHooks(const webapps::AppId& app_id) override;
   void OnWebAppInstallManagerDestroyed() override;
   void OnWebAppWillBeUninstalled(const webapps::AppId& app_id) override;
 #endif
@@ -156,18 +164,17 @@ class ChromeFileSystemAccessPermissionContext
   // content::FileSystemAccessPermissionContext:
   scoped_refptr<content::FileSystemAccessPermissionGrant>
   GetReadPermissionGrant(const url::Origin& origin,
-                         const base::FilePath& path,
+                         const content::PathInfo& path_info,
                          HandleType handle_type,
                          UserAction user_action) override;
   scoped_refptr<content::FileSystemAccessPermissionGrant>
   GetWritePermissionGrant(const url::Origin& origin,
-                          const base::FilePath& path,
+                          const content::PathInfo& path_info,
                           HandleType handle_type,
                           UserAction user_action) override;
   void ConfirmSensitiveEntryAccess(
       const url::Origin& origin,
-      PathType path_type,
-      const base::FilePath& path,
+      const content::PathInfo& path_info,
       HandleType handle_type,
       UserAction user_action,
       content::GlobalRenderFrameHostId frame_id,
@@ -176,25 +183,32 @@ class ChromeFileSystemAccessPermissionContext
       std::unique_ptr<content::FileSystemAccessWriteItem> item,
       content::GlobalRenderFrameHostId frame_id,
       base::OnceCallback<void(AfterWriteCheckResult)> callback) override;
+  bool IsFileTypeDangerous(const base::FilePath& path,
+                           const url::Origin& origin) override;
+  base::expected<void, std::string> CanShowFilePicker(
+      content::RenderFrameHost* rfh) override;
   bool CanObtainReadPermission(const url::Origin& origin) override;
   bool CanObtainWritePermission(const url::Origin& origin) override;
   void SetLastPickedDirectory(const url::Origin& origin,
                               const std::string& id,
-                              const base::FilePath& path,
-                              const PathType type) override;
-  PathInfo GetLastPickedDirectory(const url::Origin& origin,
-                                  const std::string& id) override;
+                              const content::PathInfo& path_info) override;
+  content::PathInfo GetLastPickedDirectory(const url::Origin& origin,
+                                           const std::string& id) override;
   base::FilePath GetWellKnownDirectoryPath(
       blink::mojom::WellKnownDirectory directory,
       const url::Origin& origin) override;
   std::u16string GetPickerTitle(
       const blink::mojom::FilePickerOptionsPtr& options) override;
   void NotifyEntryMoved(const url::Origin& origin,
-                        const base::FilePath& old_path,
-                        const base::FilePath& new_path) override;
+                        const content::PathInfo& old_path,
+                        const content::PathInfo& new_path) override;
   void OnFileCreatedFromShowSaveFilePicker(
       const GURL& file_picker_binding_context,
       const storage::FileSystemURL& url) override;
+  void CheckPathsAgainstEnterprisePolicy(
+      std::vector<content::PathInfo> entries,
+      content::GlobalRenderFrameHostId frame_id,
+      EntriesAllowedByEnterprisePolicyCallback callback) override;
 
   // Registers a subscriber to be notified of file creation events originating
   // from `window.showSaveFilePicker()` until the returned subscription is
@@ -219,12 +233,6 @@ class ChromeFileSystemAccessPermissionContext
     return GetPersistedGrantStatus(origin);
   }
 
-  bool RevokeActiveGrantsForTesting(
-      const url::Origin& origin,
-      base::FilePath file_path = base::FilePath()) {
-    return RevokeActiveGrants(origin, std::move(file_path));
-  }
-
   std::vector<std::unique_ptr<Object>> GetExtendedPersistedObjectsForTesting(
       const url::Origin& origin) {
     return GetExtendedPersistedObjects(origin);
@@ -235,17 +243,13 @@ class ChromeFileSystemAccessPermissionContext
     return GetPersistedGrantType(origin);
   }
 
-  bool OriginHasExtendedPermissionForTesting(const url::Origin& origin) {
-    return OriginHasExtendedPermission(origin);
-  }
-
   bool HasExtendedPermissionForTesting(const url::Origin& origin,
-                                       const base::FilePath& path,
+                                       const content::PathInfo& path_info,
                                        HandleType handle_type,
                                        GrantType grant_type) {
-    // TODO(crbug/1011533): Clean up this usage in test.
-    return CanAutoGrantViaPersistentPermission(origin, path, handle_type,
-                                               grant_type);
+    // TODO(crbug.com/40101962): Clean up this usage in test.
+    return CanAutoGrantViaPersistentPermission(origin, path_info.path,
+                                               handle_type, grant_type);
   }
 
   // Converts permissions objects into a snapshot of grants categorized by
@@ -257,13 +261,12 @@ class ChromeFileSystemAccessPermissionContext
     Grants(Grants&&);
     Grants& operator=(Grants&&);
 
-    std::vector<base::FilePath> file_read_grants;
-    std::vector<base::FilePath> file_write_grants;
-    std::vector<base::FilePath> directory_read_grants;
-    std::vector<base::FilePath> directory_write_grants;
+    std::vector<content::PathInfo> file_read_grants;
+    std::vector<content::PathInfo> file_write_grants;
+    std::vector<content::PathInfo> directory_read_grants;
+    std::vector<content::PathInfo> directory_write_grants;
   };
-  Grants ConvertObjectsToGrants(
-      const std::vector<std::unique_ptr<Object>> objects);
+  Grants ConvertObjectsToGrants(std::vector<std::unique_ptr<Object>> objects);
 
   // Creates a new set of persisted grants based on the currently granted,
   // active grants for a given origin.
@@ -279,10 +282,18 @@ class ChromeFileSystemAccessPermissionContext
   // usage icon/bubble).
   void RevokeGrants(const url::Origin& origin);
 
+  // Revokes all the active grants in `active_permissions_map_`. This method is
+  // currently used by the browsing data clearning code.
+  void RevokeAllActiveGrants();
+
   // Returns whether active or extended grants exist for the origin of the given
   // type.
   bool OriginHasReadAccess(const url::Origin& origin);
   bool OriginHasWriteAccess(const url::Origin& origin);
+
+  // Returns whether the origin has extended permission enabled via user
+  // opt-in or by having an actively installed PWA.
+  bool OriginHasExtendedPermission(const url::Origin& origin);
 
   // Enable or disable extended permissions as a result of user
   // interaction with the File System Access Page Info UI.
@@ -299,14 +310,23 @@ class ChromeFileSystemAccessPermissionContext
 
   void SetOriginHasExtendedPermissionForTesting(const url::Origin& origin);
 
+  bool RevokeActiveGrantsForTesting(
+      const url::Origin& origin,
+      base::FilePath file_path = base::FilePath()) {
+    return RevokeActiveGrants(origin, std::move(file_path));
+  }
+
   scoped_refptr<content::FileSystemAccessPermissionGrant>
   GetExtendedReadPermissionGrantForTesting(const url::Origin& origin,
-                                           const base::FilePath& path,
+                                           const content::PathInfo& path_info,
                                            HandleType handle_type);
   scoped_refptr<content::FileSystemAccessPermissionGrant>
   GetExtendedWritePermissionGrantForTesting(const url::Origin& origin,
-                                            const base::FilePath& path,
+                                            const content::PathInfo& path_info,
                                             HandleType handle_type);
+
+  base::AutoReset<std::optional<base::FilePath>> OverrideProfilePathForTesting(
+      const base::FilePath& profile_path_override);
 
   HostContentSettingsMap* content_settings() { return content_settings_.get(); }
 
@@ -316,6 +336,9 @@ class ChromeFileSystemAccessPermissionContext
   // site_settings_helper, which displays File System Access permissions on the
   // chrome://settings/content/filesystem UI.
   static constexpr char kPermissionPathKey[] = "path";
+
+  // KeyedService:
+  void Shutdown() override;
 
  protected:
   SEQUENCE_CHECKER(sequence_checker_);
@@ -336,16 +359,23 @@ class ChromeFileSystemAccessPermissionContext
 
   void PermissionGrantDestroyed(PermissionGrantImpl* grant);
 
+#if BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+  void OnContentAnalysisComplete(
+      std::vector<content::PathInfo> entries,
+      EntriesAllowedByEnterprisePolicyCallback callback,
+      std::vector<base::FilePath> paths,
+      std::vector<bool> allowed);
+#endif
+
   // Checks whether the file or directory at `path` corresponds to a directory
   // Chrome considers sensitive (i.e. system files). Calls `callback` with
   // whether the path is on the blocklist.
-  void CheckPathAgainstBlocklist(PathType path_type,
-                                 const base::FilePath& path,
+  void CheckPathAgainstBlocklist(const content::PathInfo& path_info,
                                  HandleType handle_type,
                                  base::OnceCallback<void(bool)> callback);
   void DidCheckPathAgainstBlocklist(
       const url::Origin& origin,
-      const base::FilePath& path,
+      const content::PathInfo& path_info,
       HandleType handle_type,
       UserAction user_action,
       content::GlobalRenderFrameHostId frame_id,
@@ -375,6 +405,9 @@ class ChromeFileSystemAccessPermissionContext
   bool AncestorHasActivePermission(const url::Origin& origin,
                                    const base::FilePath& path,
                                    GrantType grant_type) const;
+
+  // Returns whether the grant has a `GRANTED` permission status.
+  bool HasGrantedActivePermissionStatus(PermissionGrantImpl* grant) const;
 
   // Given the current state of the origin, returns whether it is eligible to
   // trigger the restore permission prompt instead of the permission request
@@ -452,9 +485,6 @@ class ChromeFileSystemAccessPermissionContext
                                                    const base::FilePath& path,
                                                    GrantType grant_type);
 
-  // Returns whether the origin has extended permission enabled via user
-  // opt-in or by having an actively installed PWA.
-  bool OriginHasExtendedPermission(const url::Origin& origin);
   // Removes extended permissions for grants. Does not update the content
   // setting type for extended permissions.
   // This method should only be called for an origin that already has extended
@@ -495,10 +525,10 @@ class ChromeFileSystemAccessPermissionContext
 
   scoped_refptr<HostContentSettingsMap> content_settings_;
 
-#if !BUILDFLAG(IS_ANDROID)
   base::ScopedObservation<OneTimePermissionsTracker,
                           OneTimePermissionsTrackerObserver>
       one_time_permissions_tracker_{this};
+#if !BUILDFLAG(IS_ANDROID)
   base::ScopedObservation<web_app::WebAppInstallManager,
                           web_app::WebAppInstallManagerObserver>
       install_manager_observation_{this};
@@ -513,6 +543,8 @@ class ChromeFileSystemAccessPermissionContext
   // `window.showSaveFilePicker()`.
   FileCreatedFromShowSaveFilePickerCallbackList
       file_created_from_show_save_file_picker_callback_list_;
+
+  std::optional<base::FilePath> profile_path_override_;
 
   base::WeakPtrFactory<ChromeFileSystemAccessPermissionContext> weak_factory_{
       this};

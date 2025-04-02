@@ -6,17 +6,16 @@
 
 #include "core/fpdfapi/font/cpdf_cmapparser.h"
 
-#include <ctype.h>
-
+#include <array>
 #include <iterator>
 
 #include "core/fpdfapi/cmaps/fpdf_cmaps.h"
 #include "core/fpdfapi/parser/cpdf_array.h"
 #include "core/fpdfapi/parser/cpdf_dictionary.h"
 #include "core/fpdfapi/parser/cpdf_simple_parser.h"
+#include "core/fxcrt/check.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_safe_types.h"
-#include "third_party/base/check.h"
 
 namespace {
 
@@ -144,7 +143,7 @@ uint32_t CPDF_CMapParser::GetCode(ByteStringView word) {
 
   FX_SAFE_UINT32 num = 0;
   if (word[0] == '<') {
-    for (size_t i = 1; i < word.GetLength() && isxdigit(word[i]); ++i) {
+    for (size_t i = 1; i < word.GetLength() && FXSYS_IsHexDigit(word[i]); ++i) {
       num = num * 16 + FXSYS_HexCharToInt(word[i]);
       if (!num.IsValid())
         return 0;
@@ -152,8 +151,9 @@ uint32_t CPDF_CMapParser::GetCode(ByteStringView word) {
     return num.ValueOrDie();
   }
 
-  for (size_t i = 0; i < word.GetLength() && isdigit(word[i]); ++i) {
-    num = num * 10 + FXSYS_DecimalCharToInt(static_cast<wchar_t>(word[i]));
+  for (size_t i = 0;
+       i < word.GetLength() && FXSYS_IsDecimalDigit(word.CharAt(i)); ++i) {
+    num = num * 10 + FXSYS_DecimalCharToInt(word.CharAt(i));
     if (!num.IsValid())
       return 0;
   }
@@ -199,10 +199,8 @@ std::optional<CPDF_CMap::CodeRange> CPDF_CMapParser::GetCodeRange(
 
 // static
 CIDSet CPDF_CMapParser::CharsetFromOrdering(ByteStringView ordering) {
-  static const char* const kCharsetNames[CIDSET_NUM_SETS] = {
-      nullptr, "GB1", "CNS1", "Japan1", "Korea1", "UCS"};
-  static_assert(std::size(kCharsetNames) == CIDSET_NUM_SETS,
-                "Too many CID sets");
+  static const std::array<const char*, CIDSET_NUM_SETS> kCharsetNames = {
+      {nullptr, "GB1", "CNS1", "Japan1", "Korea1", "UCS"}};
 
   for (size_t charset = 1; charset < std::size(kCharsetNames); ++charset) {
     if (ordering == kCharsetNames[charset])

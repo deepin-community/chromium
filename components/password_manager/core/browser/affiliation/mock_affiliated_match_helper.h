@@ -16,7 +16,7 @@
 
 namespace password_manager {
 
-// TODO(crbug.com/1432264) Delete this class. Class should not be derived from
+// TODO(crbug.com/40263853) Delete this class. Class should not be derived from
 // the production class.
 class MockAffiliatedMatchHelper : public AffiliatedMatchHelper {
  public:
@@ -44,7 +44,8 @@ class MockAffiliatedMatchHelper : public AffiliatedMatchHelper {
   void ExpectCallToGetAffiliatedAndGrouped(
       const PasswordFormDigest& expected_observed_form,
       std::vector<std::string> affiliated_realms,
-      std::vector<std::string> grouped_realms = {});
+      std::vector<std::string> grouped_realms = {},
+      bool repeatedly = false);
 
   // Expects GetGroup() to be called with the
   // |expected_observed_form|, and will cause the result callback supplied to

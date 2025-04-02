@@ -5,8 +5,7 @@
  */
 
 .film-strip-view {
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: auto hidden;
   align-content: flex-start;
   min-height: 81px;
 }
@@ -23,6 +22,8 @@
 }
 
 .film-strip-view .frame {
+  background: none;
+  border: none;
   display: flex;
   flex-direction: column;
   align-items: center;

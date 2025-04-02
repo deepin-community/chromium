@@ -64,7 +64,15 @@ public:
     void save();
     void restore();
 
-    void clipShape(const Transform& localToDevice, const Shape& shape, SkClipOp op);
+    // The clip stack does not have a notion of AA vs. non-AA. However, if PixelSnapping::kYes is
+    // used and the right conditions are met, it can adjust the clip geometry to align with the
+    // pixel grid and emulate some aspects of non-AA behavior.
+    enum class PixelSnapping : bool {
+        kNo = false,
+        kYes = true
+    };
+    void clipShape(const Transform& localToDevice, const Shape& shape, SkClipOp op,
+                   PixelSnapping = PixelSnapping::kNo);
     void clipShader(sk_sp<SkShader> shader);
 
     // Compute the bounds and the effective elements of the clip stack when applied to the draw
@@ -89,6 +97,7 @@ public:
                                const Geometry&,
                                const SkStrokeRec&,
                                bool outsetBoundsForAA,
+                               bool msaaSupported,
                                ElementList* outEffectiveElements) const;
 
     // Update the per-clip element state for later rendering using pre-computed clip state data for
@@ -144,7 +153,8 @@ private:
         RawElement(const Rect& deviceBounds,
                    const Transform& localToDevice,
                    const Shape& shape,
-                   SkClipOp op);
+                   SkClipOp op,
+                   PixelSnapping);
 
         ~RawElement() {
             // A pending draw means the element affects something already recorded, so its own
@@ -264,6 +274,7 @@ private:
         const Rect&     innerBounds() const { return fInnerBounds;  }
         SkClipOp        op()          const { return fStackOp;      }
         ClipState       state()       const;
+        uint32_t        genID()       const;
 
         int  firstActiveElementIndex() const { return fStartingElementIndex;     }
         int  oldestElementIndex()      const { return fOldestValidIndex;         }
@@ -320,6 +331,7 @@ private:
         // because if kDifference then there is an implicit extra outer bounds at the device edges.
         SkClipOp  fStackOp;
         ClipState fState;
+        uint32_t  fGenID;
     };
 
     Rect deviceBounds() const;

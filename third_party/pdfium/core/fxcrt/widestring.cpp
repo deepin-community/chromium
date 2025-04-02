@@ -8,21 +8,24 @@
 
 #include <stddef.h>
 #include <string.h>
+#include <wchar.h>
 
 #include <algorithm>
 #include <sstream>
 
+#include "core/fxcrt/check.h"
+#include "core/fxcrt/check_op.h"
+#include "core/fxcrt/compiler_specific.h"
 #include "core/fxcrt/fx_codepage.h"
 #include "core/fxcrt/fx_extension.h"
 #include "core/fxcrt/fx_memcpy_wrappers.h"
 #include "core/fxcrt/fx_safe_types.h"
+#include "core/fxcrt/fx_string.h"
 #include "core/fxcrt/fx_system.h"
+#include "core/fxcrt/numerics/safe_math.h"
 #include "core/fxcrt/span_util.h"
 #include "core/fxcrt/string_pool_template.h"
 #include "core/fxcrt/utf16.h"
-#include "third_party/base/check.h"
-#include "third_party/base/check_op.h"
-#include "third_party/base/numerics/safe_math.h"
 
 // Instantiate.
 template class fxcrt::StringViewTemplate<wchar_t>;
@@ -57,67 +60,78 @@ constexpr wchar_t kWideTrimChars[] = L"\x09\x0a\x0b\x0c\x0d\x20";
 std::optional<size_t> GuessSizeForVSWPrintf(const wchar_t* pFormat,
                                             va_list argList) {
   size_t nMaxLen = 0;
-  for (const wchar_t* pStr = pFormat; *pStr != 0; pStr++) {
-    if (*pStr != '%' || *(pStr = pStr + 1) == '%') {
+  for (WideStringView view(pFormat); !view.IsEmpty(); view = view.Substr(1u)) {
+    if (view.Front() != '%') {
+      ++nMaxLen;
+      continue;
+    }
+
+    view = view.Substr(1u);
+    if (view.Front() == '%') {
       ++nMaxLen;
       continue;
     }
     int iWidth = 0;
-    for (; *pStr != 0; pStr++) {
-      if (*pStr == '#') {
+    for (; !view.IsEmpty(); view = view.Substr(1u)) {
+      const wchar_t c = view.Front();
+      if (c == '#') {
         nMaxLen += 2;
-      } else if (*pStr == '*') {
+      } else if (c == '*') {
         iWidth = va_arg(argList, int);
-      } else if (*pStr != '-' && *pStr != '+' && *pStr != '0' && *pStr != ' ') {
+      } else if (c != '-' && c != '+' && c != '0' && c != ' ') {
         break;
       }
     }
     if (iWidth == 0) {
-      iWidth = FXSYS_wtoi(pStr);
-      while (FXSYS_IsDecimalDigit(*pStr))
-        ++pStr;
-    }
-    if (iWidth < 0 || iWidth > 128 * 1024)
-      return std::nullopt;
-    uint32_t nWidth = static_cast<uint32_t>(iWidth);
-    int iPrecision = 0;
-    if (*pStr == '.') {
-      pStr++;
-      if (*pStr == '*') {
-        iPrecision = va_arg(argList, int);
-        pStr++;
-      } else {
-        iPrecision = FXSYS_wtoi(pStr);
-        while (FXSYS_IsDecimalDigit(*pStr))
-          ++pStr;
+      iWidth = StringToInt(view);
+      while (FXSYS_IsDecimalDigit(static_cast<wchar_t>(view.Front()))) {
+        view = view.Substr(1u);
       }
     }
-    if (iPrecision < 0 || iPrecision > 128 * 1024)
+    if (iWidth < 0 || iWidth > 128 * 1024) {
       return std::nullopt;
+    }
+    uint32_t nWidth = static_cast<uint32_t>(iWidth);
+    int iPrecision = 0;
+    if (view.Front() == '.') {
+      view = view.Substr(1u);
+      if (view.Front() == '*') {
+        iPrecision = va_arg(argList, int);
+        view = view.Substr(1u);
+      } else {
+        iPrecision = StringToInt(view);
+        while (FXSYS_IsDecimalDigit(static_cast<wchar_t>(view.Front()))) {
+          view = view.Substr(1u);
+        }
+      }
+    }
+    if (iPrecision < 0 || iPrecision > 128 * 1024) {
+      return std::nullopt;
+    }
     uint32_t nPrecision = static_cast<uint32_t>(iPrecision);
     int nModifier = 0;
-    if (*pStr == L'I' && *(pStr + 1) == L'6' && *(pStr + 2) == L'4') {
-      pStr += 3;
+    if (view.First(3u) == L"I64") {
+      view = view.Substr(3u);
       nModifier = FORCE_INT64;
     } else {
-      switch (*pStr) {
+      switch (view.Front()) {
         case 'h':
           nModifier = FORCE_ANSI;
-          pStr++;
+          view = view.Substr(1u);
           break;
         case 'l':
           nModifier = FORCE_UNICODE;
-          pStr++;
+          view = view.Substr(1u);
           break;
         case 'F':
         case 'N':
         case 'L':
-          pStr++;
+          view = view.Substr(1u);
           break;
       }
     }
     size_t nItemLen = 0;
-    switch (*pStr | nModifier) {
+    switch (view.Front() | nModifier) {
       case 'c':
       case 'C':
         nItemLen = 2;
@@ -136,7 +150,7 @@ std::optional<size_t> GuessSizeForVSWPrintf(const wchar_t* pFormat,
       case 's': {
         const wchar_t* pstrNextArg = va_arg(argList, const wchar_t*);
         if (pstrNextArg) {
-          nItemLen = wcslen(pstrNextArg);
+          nItemLen = UNSAFE_TODO(wcslen(pstrNextArg));
           if (nItemLen < 1) {
             nItemLen = 1;
           }
@@ -147,7 +161,7 @@ std::optional<size_t> GuessSizeForVSWPrintf(const wchar_t* pFormat,
       case 'S': {
         const char* pstrNextArg = va_arg(argList, const char*);
         if (pstrNextArg) {
-          nItemLen = strlen(pstrNextArg);
+          nItemLen = UNSAFE_TODO(strlen(pstrNextArg));
           if (nItemLen < 1) {
             nItemLen = 1;
           }
@@ -159,7 +173,7 @@ std::optional<size_t> GuessSizeForVSWPrintf(const wchar_t* pFormat,
       case 'S' | FORCE_ANSI: {
         const char* pstrNextArg = va_arg(argList, const char*);
         if (pstrNextArg) {
-          nItemLen = strlen(pstrNextArg);
+          nItemLen = UNSAFE_TODO(strlen(pstrNextArg));
           if (nItemLen < 1) {
             nItemLen = 1;
           }
@@ -171,7 +185,7 @@ std::optional<size_t> GuessSizeForVSWPrintf(const wchar_t* pFormat,
       case 'S' | FORCE_UNICODE: {
         const wchar_t* pstrNextArg = va_arg(argList, wchar_t*);
         if (pstrNextArg) {
-          nItemLen = wcslen(pstrNextArg);
+          nItemLen = UNSAFE_TODO(wcslen(pstrNextArg));
           if (nItemLen < 1) {
             nItemLen = 1;
           }
@@ -188,7 +202,7 @@ std::optional<size_t> GuessSizeForVSWPrintf(const wchar_t* pFormat,
         nItemLen = nWidth;
       }
     } else {
-      switch (*pStr) {
+      switch (view.Front()) {
         case 'd':
         case 'i':
         case 'u':
@@ -226,7 +240,7 @@ std::optional<size_t> GuessSizeForVSWPrintf(const wchar_t* pFormat,
             f = va_arg(argList, double);
             FXSYS_snprintf(pszTemp, sizeof(pszTemp), "%*.*f", nWidth,
                            nPrecision + 6, f);
-            nItemLen = strlen(pszTemp);
+            nItemLen = UNSAFE_TODO(strlen(pszTemp));
           }
           break;
         case 'p':
@@ -259,15 +273,15 @@ std::optional<WideString> TryVSWPrintf(size_t size,
     // Span's lifetime must end before ReleaseBuffer() below.
     pdfium::span<wchar_t> buffer = str.GetBuffer(size);
 
-    // In the following two calls, there's always space in the WideString
-    // for a terminating NUL that's not included in the span.
+    // SAFETY: In the following two calls, there's always space in the
+    // WideString for a terminating NUL that's not included in the span.
     // For vswprintf(), MSAN won't untaint the buffer on a truncated write's
     // -1 return code even though the buffer is written. Probably just as well
     // not to trust the vendor's implementation to write anything anyways.
     // See https://crbug.com/705912.
-    memset(buffer.data(), 0, (size + 1) * sizeof(wchar_t));
-    int ret = vswprintf(buffer.data(), size + 1, pFormat, argList);
-
+    UNSAFE_BUFFERS(
+        FXSYS_memset(buffer.data(), 0, (size + 1) * sizeof(wchar_t)));
+    int ret = UNSAFE_TODO(vswprintf(buffer.data(), size + 1, pFormat, argList));
     bool bSufficientBuffer = ret >= 0 || buffer[size - 1] == 0;
     if (!bSufficientBuffer)
       return std::nullopt;
@@ -346,7 +360,8 @@ static_assert(sizeof(WideString) <= sizeof(wchar_t*),
 // static
 WideString WideString::FormatInteger(int i) {
   wchar_t wbuf[32];
-  swprintf(wbuf, std::size(wbuf), L"%d", i);
+  // SAFTEY: 32 bytes accommodates biggest int representation plus NUL.
+  UNSAFE_BUFFERS(swprintf(wbuf, std::size(wbuf), L"%d", i));
   return WideString(wbuf);
 }
 
@@ -360,7 +375,7 @@ WideString WideString::FormatV(const wchar_t* format, va_list argList) {
   if (!guess.has_value()) {
     return WideString();
   }
-  int maxLen = pdfium::base::checked_cast<int>(guess.value());
+  int maxLen = pdfium::checked_cast<int>(guess.value());
 
   while (maxLen < 32 * 1024) {
     va_copy(argListCopy, argList);
@@ -386,7 +401,8 @@ WideString WideString::Format(const wchar_t* pFormat, ...) {
 
 WideString::WideString(const wchar_t* pStr, size_t nLen) {
   if (nLen) {
-    m_pData = StringData::Create({pStr, nLen});
+    // SAFETY: caller ensures `pStr` points to al least `nLen` wchar_t.
+    m_pData = StringData::Create(UNSAFE_BUFFERS(pdfium::make_span(pStr, nLen)));
   }
 }
 
@@ -396,7 +412,8 @@ WideString::WideString(wchar_t ch) {
 }
 
 WideString::WideString(const wchar_t* ptr)
-    : WideString(ptr, ptr ? wcslen(ptr) : 0) {}
+    // SAFETY: caller ensures `ptr` is NUL-terminated.
+    : UNSAFE_BUFFERS(WideString(ptr, ptr ? wcslen(ptr) : 0)) {}
 
 WideString::WideString(WideStringView stringSrc) {
   if (!stringSrc.IsEmpty()) {
@@ -435,12 +452,14 @@ WideString::WideString(const std::initializer_list<WideStringView>& list) {
   }
 }
 
+// Should be UNSAFE_BUFFER_USAGE.
 WideString& WideString::operator=(const wchar_t* str) {
-  if (!str || !str[0])
+  if (!str || !str[0]) {
     clear();
-  else
-    AssignCopy(str, wcslen(str));
-
+  } else {
+    // SAFETY: required from caller.
+    AssignCopy(str, UNSAFE_BUFFERS(wcslen(str)));
+  }
   return *this;
 }
 
@@ -467,10 +486,12 @@ WideString& WideString::operator=(WideString&& that) noexcept {
   return *this;
 }
 
+// Should be UNSAFE_BUFFER_USAGE.
 WideString& WideString::operator+=(const wchar_t* str) {
-  if (str)
-    Concat(str, wcslen(str));
-
+  if (str) {
+    // SAFETY: required from caller.
+    Concat(str, UNSAFE_BUFFERS(wcslen(str)));
+  }
   return *this;
 }
 
@@ -493,24 +514,33 @@ WideString& WideString::operator+=(WideStringView str) {
   return *this;
 }
 
+// Should be UNSAFE_BUFFER_USAGE.
 bool WideString::operator==(const wchar_t* ptr) const {
-  if (!m_pData)
+  if (!m_pData) {
     return !ptr || !ptr[0];
-
-  if (!ptr)
+  }
+  if (!ptr) {
     return m_pData->m_nDataLength == 0;
+  }
 
-  return wcslen(ptr) == m_pData->m_nDataLength &&
-         FXSYS_wmemcmp(ptr, m_pData->m_String, m_pData->m_nDataLength) == 0;
+  // SAFTEY: `wsclen()` comparison (whose own safety depends upoon the caller)
+  // ensures there are `m_nDataLength` wchars at `ptr` before the terminator,
+  // and `m_nDataLength` is within `m_String`.
+  return UNSAFE_BUFFERS(wcslen(ptr)) == m_pData->m_nDataLength &&
+         UNSAFE_BUFFERS(FXSYS_wmemcmp(ptr, m_pData->m_String,
+                                      m_pData->m_nDataLength)) == 0;
 }
 
 bool WideString::operator==(WideStringView str) const {
   if (!m_pData)
     return str.IsEmpty();
 
+  // SAFTEY: Comparison ensure there are `m_nDataLength` wchars in `str`
+  // and `m_nDataLength is within `m_String`.
   return m_pData->m_nDataLength == str.GetLength() &&
-         FXSYS_wmemcmp(m_pData->m_String, str.unterminated_c_str(),
-                       str.GetLength()) == 0;
+         UNSAFE_BUFFERS(FXSYS_wmemcmp(
+             m_pData->m_String, str.unterminated_c_str(), str.GetLength())) ==
+             0;
 }
 
 bool WideString::operator==(const WideString& other) const {
@@ -523,9 +553,11 @@ bool WideString::operator==(const WideString& other) const {
   if (other.IsEmpty())
     return false;
 
+  // SAFETY: m_nDataLength bytes available at m_String.
   return other.m_pData->m_nDataLength == m_pData->m_nDataLength &&
-         wmemcmp(other.m_pData->m_String, m_pData->m_String,
-                 m_pData->m_nDataLength) == 0;
+         UNSAFE_BUFFERS(FXSYS_wmemcmp(other.m_pData->m_String,
+                                      m_pData->m_String,
+                                      m_pData->m_nDataLength)) == 0;
 }
 
 bool WideString::operator<(const wchar_t* ptr) const {
@@ -540,8 +572,10 @@ bool WideString::operator<(WideStringView str) const {
 
   size_t len = GetLength();
   size_t other_len = str.GetLength();
-  int result = FXSYS_wmemcmp(c_str(), str.unterminated_c_str(),
-                             std::min(len, other_len));
+
+  // SAFETY: Comparison limited to minimum valid length of either argument.
+  int result = UNSAFE_BUFFERS(FXSYS_wmemcmp(c_str(), str.unterminated_c_str(),
+                                            std::min(len, other_len)));
   return result < 0 || (result == 0 && len < other_len);
 }
 
@@ -601,6 +635,30 @@ ByteString WideString::ToUTF16LE() const {
     for (char16_t c : utf16) {
       buffer[output_length++] = c & 0xff;
       buffer[output_length++] = c >> 8;
+    }
+    buffer[output_length++] = 0;
+    buffer[output_length++] = 0;
+  }
+  result.ReleaseBuffer(output_length);
+  return result;
+}
+
+ByteString WideString::ToUCS2LE() const {
+  ByteString result;
+  size_t output_length = 0;
+  {
+    // Span's lifetime must end before ReleaseBuffer() below.
+    // 2 bytes required per UTF-16 code unit.
+    pdfium::span<uint8_t> buffer =
+        pdfium::as_writable_bytes(result.GetBuffer(GetLength() * 2 + 2));
+    for (wchar_t wc : AsStringView()) {
+#if defined(WCHAR_T_IS_32_BIT)
+      if (pdfium::IsSupplementary(wc)) {
+        continue;
+      }
+#endif
+      buffer[output_length++] = wc & 0xff;
+      buffer[output_length++] = wc >> 8;
     }
     buffer[output_length++] = 0;
     buffer[output_length++] = 0;
@@ -743,9 +801,12 @@ WideString WideString::FromUTF16BE(pdfium::span<const uint8_t> data) {
   return result;
 }
 
+// Should be UNSAFE_BUFFER_USAGE/
 int WideString::Compare(const wchar_t* str) const {
-  if (m_pData)
-    return str ? wcscmp(m_pData->m_String, str) : 1;
+  if (m_pData) {
+    // SAFETY: required from caller.
+    return str ? UNSAFE_BUFFERS(wcscmp(m_pData->m_String, str)) : 1;
+  }
   return (!str || str[0] == 0) ? 0 : -1;
 }
 
@@ -758,7 +819,10 @@ int WideString::Compare(const WideString& str) const {
   size_t this_len = m_pData->m_nDataLength;
   size_t that_len = str.m_pData->m_nDataLength;
   size_t min_len = std::min(this_len, that_len);
-  int result = FXSYS_wmemcmp(m_pData->m_String, str.m_pData->m_String, min_len);
+
+  // SAFTEY: Comparison limited to minimum length of either argument.
+  int result = UNSAFE_BUFFERS(
+      FXSYS_wmemcmp(m_pData->m_String, str.m_pData->m_String, min_len));
   if (result != 0)
     return result;
   if (this_len == that_len)
@@ -772,86 +836,20 @@ int WideString::CompareNoCase(const wchar_t* str) const {
   return (!str || str[0] == 0) ? 0 : -1;
 }
 
-void WideString::Trim() {
-  TrimRight(kWideTrimChars);
-  TrimLeft(kWideTrimChars);
+void WideString::TrimWhitespace() {
+  TrimWhitespaceBack();
+  TrimWhitespaceFront();
 }
 
-void WideString::Trim(wchar_t target) {
-  wchar_t str[2] = {target, 0};
-  TrimRight(str);
-  TrimLeft(str);
+void WideString::TrimWhitespaceFront() {
+  TrimFront(kWideTrimChars);
 }
 
-void WideString::Trim(WideStringView targets) {
-  TrimRight(targets);
-  TrimLeft(targets);
+void WideString::TrimWhitespaceBack() {
+  TrimBack(kWideTrimChars);
 }
-
-void WideString::TrimLeft() {
-  TrimLeft(kWideTrimChars);
-}
-
-void WideString::TrimLeft(wchar_t target) {
-  wchar_t str[2] = {target, 0};
-  TrimLeft(str);
-}
-
-void WideString::TrimLeft(WideStringView targets) {
-  if (!m_pData || targets.IsEmpty())
-    return;
-
-  size_t len = GetLength();
-  if (len == 0)
-    return;
-
-  size_t pos = 0;
-  while (pos < len) {
-    size_t i = 0;
-    while (i < targets.GetLength() &&
-           targets.CharAt(i) != m_pData->m_String[pos]) {
-      i++;
-    }
-    if (i == targets.GetLength())
-      break;
-    pos++;
-  }
-  if (!pos)
-    return;
-
-  ReallocBeforeWrite(len);
-  size_t nDataLength = len - pos;
-  memmove(m_pData->m_String, m_pData->m_String + pos,
-          (nDataLength + 1) * sizeof(wchar_t));
-  m_pData->m_nDataLength = nDataLength;
-}
-
-void WideString::TrimRight() {
-  TrimRight(kWideTrimChars);
-}
-
-void WideString::TrimRight(wchar_t target) {
-  wchar_t str[2] = {target, 0};
-  TrimRight(str);
-}
-
-void WideString::TrimRight(WideStringView targets) {
-  if (IsEmpty() || targets.IsEmpty())
-    return;
-
-  size_t pos = GetLength();
-  while (pos && targets.Contains(m_pData->m_String[pos - 1]))
-    pos--;
-
-  if (pos < m_pData->m_nDataLength) {
-    ReallocBeforeWrite(m_pData->m_nDataLength);
-    m_pData->m_String[pos] = 0;
-    m_pData->m_nDataLength = pos;
-  }
-}
-
 int WideString::GetInteger() const {
-  return m_pData ? FXSYS_wtoi(m_pData->m_String) : 0;
+  return m_pData ? StringToInt(m_pData->m_String) : 0;
 }
 
 std::wostream& operator<<(std::wostream& os, const WideString& str) {

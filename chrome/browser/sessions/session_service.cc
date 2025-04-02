@@ -42,12 +42,13 @@
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/session_crashed_bubble.h"
-#include "chrome/browser/ui/startup/launch_mode_recorder.h"
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/browser/ui/startup/startup_tab.h"
+#include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/web_app_helpers.h"
 #include "chrome/common/chrome_switches.h"
+#include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/sessions/content/content_serialized_navigation_builder.h"
 #include "components/sessions/content/session_tab_helper.h"
 #include "components/sessions/core/command_storage_manager.h"
@@ -75,10 +76,6 @@
 #if BUILDFLAG(IS_MAC)
 #include "chrome/browser/app_controller_mac.h"
 #endif
-
-#if defined(TOOLKIT_VIEWS)
-#include "chrome/browser/ui/side_search/side_search_utils.h"
-#endif  // defined(TOOLKIT_VIEWS)
 
 using content::NavigationEntry;
 using content::WebContents;
@@ -285,24 +282,54 @@ void SessionService::SetTabGroup(SessionID window_id,
 void SessionService::SetTabGroupMetadata(
     SessionID window_id,
     const tab_groups::TabGroupId& group_id,
+    const tab_groups::TabGroupVisualData* visual_data) {
+  tab_groups::TabGroupSyncService* tab_group_service =
+      tab_groups::SavedTabGroupUtils::GetServiceForProfile(profile());
+  std::optional<std::string> saved_guid;
+  if (tab_group_service) {
+    if (const std::optional<tab_groups::SavedTabGroup> saved_group =
+            tab_group_service->GetGroup(group_id)) {
+      saved_guid = saved_group->saved_guid().AsLowercaseString();
+    } else if (local_to_sync_id_mapping_.contains(group_id)) {
+      saved_guid = local_to_sync_id_mapping_.at(group_id);
+    }
+  }
+
+  SetTabGroupMetadata(window_id, group_id, visual_data, std::move(saved_guid));
+}
+
+void SessionService::SetTabGroupMetadata(
+    SessionID window_id,
+    const tab_groups::TabGroupId& group_id,
     const tab_groups::TabGroupVisualData* visual_data,
-    const std::optional<std::string> saved_guid) {
-  if (!ShouldTrackChangesToWindow(window_id))
+    std::optional<std::string> saved_guid) {
+  if (!ShouldTrackChangesToWindow(window_id)) {
     return;
+  }
 
   // Any group metadata changes happening in a closing window can be ignored.
   if (base::Contains(pending_window_close_ids_, window_id) ||
-      base::Contains(window_closing_ids_, window_id))
+      base::Contains(window_closing_ids_, window_id)) {
     return;
+  }
 
   ScheduleCommand(sessions::CreateTabGroupMetadataUpdateCommand(
       group_id, visual_data, std::move(saved_guid)));
 }
 
+void SessionService::AddSavedTabGroupsMapping(
+    const tab_groups::TabGroupId& group_id,
+    const std::string& saved_guid) {
+  // TODO(crbug.com/376733439): Clear mapping when TabGroupSyncService has
+  // finished initializing.
+  CHECK(!local_to_sync_id_mapping_.contains(group_id));
+  local_to_sync_id_mapping_.emplace(group_id, saved_guid);
+}
+
 void SessionService::AddTabExtraData(SessionID window_id,
                                      SessionID tab_id,
                                      const char* key,
-                                     const std::string data) {
+                                     const std::string& data) {
   if (!ShouldTrackChangesToWindow(window_id))
     return;
 
@@ -311,7 +338,7 @@ void SessionService::AddTabExtraData(SessionID window_id,
 
 void SessionService::AddWindowExtraData(SessionID window_id,
                                         const char* key,
-                                        const std::string data) {
+                                        const std::string& data) {
   if (!ShouldTrackChangesToWindow(window_id))
     return;
 
@@ -358,6 +385,7 @@ void SessionService::WindowOpened(Browser* browser) {
   RestoreIfNecessary(StartupTabs(), browser, /* restore_apps */ false);
   SetWindowType(browser->session_id(), browser->type());
   SetWindowAppName(browser->session_id(), browser->app_name());
+  SetWindowUserTitle(browser->session_id(), browser->user_title());
 
   // Save a browser workspace after window is created in `Browser()`.
   // Bento desks restore feature in ash requires this line to restore correctly
@@ -501,7 +529,7 @@ void SessionService::DidScheduleCommand() {
     return;
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  // TODO(https://crbug.com/1245816): for debugging, remove once tracked down
+  // TODO(crbug.com/40196304): for debugging, remove once tracked down
   // source of problem.
   // A command has been scheduled for a SessionService other than the first.
   // Recreating the SessionService happens if shutdown is canceled, which is
@@ -574,7 +602,6 @@ bool SessionService::RestoreIfNecessary(const StartupTabs& startup_tabs,
       browser_creator.LaunchBrowser(*command_line, profile(), base::FilePath(),
                                     chrome::startup::IsProcessStartup::kYes,
                                     chrome::startup::IsFirstRun::kNo,
-                                    std::make_unique<OldLaunchModeRecorder>(),
                                     /*restore_tabbed_browser=*/true);
       return true;
     } else {
@@ -622,16 +649,6 @@ void SessionService::BuildCommandsForTab(
     command_storage_manager()->AppendRebuildCommand(
         sessions::CreateTabGroupCommand(session_id, std::move(group)));
   }
-
-#if defined(TOOLKIT_VIEWS)
-  std::optional<std::pair<std::string, std::string>> tab_restore_data =
-      side_search::MaybeGetSideSearchTabRestoreData(tab);
-  if (tab_restore_data.has_value()) {
-    command_storage_manager()->AppendRebuildCommand(
-        sessions::CreateAddTabExtraDataCommand(
-            session_id, tab_restore_data->first, tab_restore_data->second));
-  }
-#endif  // defined(TOOLKIT_VIEWS)
 }
 
 void SessionService::ScheduleResetCommands() {

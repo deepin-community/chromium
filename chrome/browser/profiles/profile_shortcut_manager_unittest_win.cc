@@ -126,7 +126,6 @@ class ProfileShortcutManagerTest : public testing::Test {
     base::FilePath chrome_exe;
     if (!base::PathService::Get(base::FILE_EXE, &chrome_exe)) {
       NOTREACHED();
-      return;
     }
 
     ShellUtil::ShortcutProperties properties(ShellUtil::CURRENT_USER);

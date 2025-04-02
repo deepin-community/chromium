@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "ash/assistant/ui/main_stage/assistant_onboarding_suggestion_view.h"
 
 #include "ash/assistant/ui/assistant_ui_constants.h"
@@ -15,6 +20,7 @@
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/color_palette.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/background.h"
 #include "ui/views/controls/focus_ring.h"
@@ -118,8 +124,11 @@ AssistantOnboardingSuggestionView::~AssistantOnboardingSuggestionView() {
   views::InkDrop::Remove(this);
 }
 
-int AssistantOnboardingSuggestionView::GetHeightForWidth(int width) const {
-  return kPreferredHeightDip;
+gfx::Size AssistantOnboardingSuggestionView::CalculatePreferredSize(
+    const views::SizeBounds& available_size) const {
+  const int preferred_width =
+      views::Button::CalculatePreferredSize(available_size).width();
+  return gfx::Size(preferred_width, kPreferredHeightDip);
 }
 
 void AssistantOnboardingSuggestionView::ChildPreferredSizeChanged(
@@ -153,10 +162,11 @@ void AssistantOnboardingSuggestionView::OnThemeChanged() {
   label_->SetEnabledColor(GetForegroundColor(index_));
 
   if (assistant::util::IsResourceLinkType(url_, ResourceLinkType::kIcon)) {
-    icon_->SetImage(assistant::util::CreateVectorIcon(
-        assistant::util::AppendOrReplaceColorParam(url_,
-                                                   GetForegroundColor(index_)),
-        kIconSizeDip));
+    icon_->SetImage(
+        ui::ImageModel::FromImageSkia(assistant::util::CreateVectorIcon(
+            assistant::util::AppendOrReplaceColorParam(
+                url_, GetForegroundColor(index_)),
+            kIconSizeDip)));
   }
 }
 
@@ -171,7 +181,7 @@ const std::u16string& AssistantOnboardingSuggestionView::GetText() const {
 void AssistantOnboardingSuggestionView::InitLayout(
     const assistant::AssistantSuggestion& suggestion) {
   // A11y.
-  SetAccessibleName(base::UTF8ToUTF16(suggestion.text));
+  GetViewAccessibility().SetName(base::UTF8ToUTF16(suggestion.text));
 
   // Background.
   SetBackground(views::CreateRoundedRectBackground(GetBackgroundColor(index_),
@@ -254,7 +264,7 @@ void AssistantOnboardingSuggestionView::InitLayout(
 
 void AssistantOnboardingSuggestionView::UpdateIcon(const gfx::ImageSkia& icon) {
   if (!icon.isNull())
-    icon_->SetImage(icon);
+    icon_->SetImage(ui::ImageModel::FromImageSkia(icon));
 }
 
 void AssistantOnboardingSuggestionView::OnButtonPressed() {

@@ -8,16 +8,18 @@
 #include <string>
 #include <utility>
 #include <vector>
+
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/mock_callback.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "components/signin/public/identity_manager/account_info.h"
-#include "components/trusted_vault/features.h"
 #include "components/trusted_vault/proto/local_trusted_vault.pb.h"
 #include "components/trusted_vault/proto_time_conversion.h"
 #include "components/trusted_vault/securebox.h"
+#include "components/trusted_vault/test/mock_trusted_vault_connection.h"
 #include "components/trusted_vault/trusted_vault_connection.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -29,7 +31,7 @@ using testing::Eq;
 
 CoreAccountInfo MakeAccountInfoWithGaiaId(const std::string& gaia_id) {
   CoreAccountInfo account_info;
-  account_info.gaia = gaia_id;
+  account_info.gaia = GaiaId(gaia_id);
   return account_info;
 }
 
@@ -41,46 +43,6 @@ MATCHER_P(DegradedRecoverabilityStateEq, expected_state, "") {
          given_state.last_refresh_time_millis_since_unix_epoch() ==
              expected_state.last_refresh_time_millis_since_unix_epoch();
 }
-
-class MockTrustedVaultConnection : public TrustedVaultConnection {
- public:
-  MockTrustedVaultConnection() = default;
-  ~MockTrustedVaultConnection() override = default;
-  MOCK_METHOD(std::unique_ptr<Request>,
-              RegisterAuthenticationFactor,
-              (const CoreAccountInfo& account_info,
-               const std::vector<std::vector<uint8_t>>& trusted_vault_keys,
-               int last_trusted_vault_key_version,
-               const SecureBoxPublicKey& authentication_factor_public_key,
-               AuthenticationFactorType authentication_factor_type,
-               std::optional<int> authentication_factor_type_hint,
-               RegisterAuthenticationFactorCallback callback),
-              (override));
-  MOCK_METHOD(std::unique_ptr<Request>,
-              RegisterDeviceWithoutKeys,
-              (const CoreAccountInfo& account_info,
-               const SecureBoxPublicKey& device_public_key,
-               RegisterDeviceWithoutKeysCallback callback),
-              (override));
-  MOCK_METHOD(
-      std::unique_ptr<Request>,
-      DownloadNewKeys,
-      (const CoreAccountInfo& account_info,
-       const TrustedVaultKeyAndVersion& last_trusted_vault_key_and_version,
-       std::unique_ptr<SecureBoxKeyPair> device_key_pair,
-       DownloadNewKeysCallback callback),
-      (override));
-  MOCK_METHOD(std::unique_ptr<Request>,
-              DownloadIsRecoverabilityDegraded,
-              (const CoreAccountInfo& account_info,
-               IsRecoverabilityDegradedCallback callback),
-              (override));
-  MOCK_METHOD(std::unique_ptr<Request>,
-              DownloadAuthenticationFactorsRegistrationState,
-              (const CoreAccountInfo& account_info,
-               DownloadAuthenticationFactorsRegistrationStateCallback callback),
-              (override));
-};
 
 class MockDelegate
     : public TrustedVaultDegradedRecoverabilityHandler::Delegate {
@@ -105,6 +67,16 @@ class TrustedVaultDegradedRecoverabilityHandlerTest : public ::testing::Test {
     return task_environment_;
   }
 
+  base::TimeDelta short_refresh_period() const {
+    return TrustedVaultDegradedRecoverabilityHandler::
+        kShortDegradedRecoverabilityRefreshPeriod;
+  }
+
+  base::TimeDelta long_refresh_period() const{
+    return TrustedVaultDegradedRecoverabilityHandler::
+        kLongDegradedRecoverabilityRefreshPeriod;
+  }
+
  protected:
   base::test::SingleThreadTaskEnvironment task_environment_{
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
@@ -125,14 +97,14 @@ TEST_F(TrustedVaultDegradedRecoverabilityHandlerTest,
           &connection, &delegate, MakeAccountInfoWithGaiaId("user"),
           degraded_recoverability_state);
   histogram_tester.ExpectUniqueSample(
-      "Sync.TrustedVaultDegradedRecoverabilityValue2",
+      "TrustedVault.TrustedVaultDegradedRecoverabilityValue",
       /*sample=*/trusted_vault_pb::DegradedRecoverabilityValue::kNotDegraded,
       /*expected_bucket_count=*/0);
 
   // Start the scheduler.
   scheduler->GetIsRecoverabilityDegraded(base::DoNothing());
   histogram_tester.ExpectUniqueSample(
-      "Sync.TrustedVaultDegradedRecoverabilityValue2",
+      "TrustedVault.TrustedVaultDegradedRecoverabilityValue",
       /*sample=*/trusted_vault_pb::DegradedRecoverabilityValue::kNotDegraded,
       /*expected_bucket_count=*/1);
 }
@@ -220,7 +192,7 @@ TEST_F(TrustedVaultDegradedRecoverabilityHandlerTest,
       TrustedVaultHintDegradedRecoverabilityChangedReasonForUMA::
           kPersistentAuthErrorResolved);
   histogram_tester.ExpectUniqueSample(
-      "Sync.TrustedVaultHintDegradedRecoverabilityChangedReason2",
+      "TrustedVault.TrustedVaultHintDegradedRecoverabilityChangedReason",
       /*sample=*/
       TrustedVaultHintDegradedRecoverabilityChangedReasonForUMA::
           kPersistentAuthErrorResolved,
@@ -247,7 +219,7 @@ TEST_F(TrustedVaultDegradedRecoverabilityHandlerTest,
 
   EXPECT_CALL(connection, DownloadIsRecoverabilityDegraded);
   task_environment().FastForwardBy(
-      kSyncTrustedVaultShortPeriodDegradedRecoverabilityPolling.Get() +
+      short_refresh_period() +
       base::Milliseconds(1));
 }
 
@@ -271,14 +243,13 @@ TEST_F(TrustedVaultDegradedRecoverabilityHandlerTest,
 
   EXPECT_CALL(connection, DownloadIsRecoverabilityDegraded).Times(0);
   task_environment().FastForwardBy(
-      kSyncTrustedVaultShortPeriodDegradedRecoverabilityPolling.Get() +
+      short_refresh_period() +
       base::Milliseconds(1));
   testing::Mock::VerifyAndClearExpectations(&connection);
 
   EXPECT_CALL(connection, DownloadIsRecoverabilityDegraded);
   task_environment().FastForwardBy(
-      kSyncTrustedVaultLongPeriodDegradedRecoverabilityPolling.Get() -
-      kSyncTrustedVaultShortPeriodDegradedRecoverabilityPolling.Get());
+      long_refresh_period() - short_refresh_period());
 }
 
 TEST_F(TrustedVaultDegradedRecoverabilityHandlerTest,
@@ -311,7 +282,7 @@ TEST_F(TrustedVaultDegradedRecoverabilityHandlerTest,
   // Verify that handler switches to short polling period.
   EXPECT_CALL(connection, DownloadIsRecoverabilityDegraded);
   task_environment().FastForwardBy(
-      kSyncTrustedVaultShortPeriodDegradedRecoverabilityPolling.Get() +
+      short_refresh_period() +
       base::Milliseconds(1));
 }
 
@@ -344,7 +315,7 @@ TEST_F(TrustedVaultDegradedRecoverabilityHandlerTest,
       });
   EXPECT_CALL(delegate, OnDegradedRecoverabilityChanged);
   task_environment().FastForwardBy(
-      kSyncTrustedVaultShortPeriodDegradedRecoverabilityPolling.Get() +
+      short_refresh_period() +
       base::Milliseconds(1));
   testing::Mock::VerifyAndClearExpectations(&connection);
 
@@ -352,14 +323,14 @@ TEST_F(TrustedVaultDegradedRecoverabilityHandlerTest,
 
   EXPECT_CALL(connection, DownloadIsRecoverabilityDegraded).Times(0);
   task_environment().FastForwardBy(
-      kSyncTrustedVaultShortPeriodDegradedRecoverabilityPolling.Get() +
+      short_refresh_period() +
       base::Milliseconds(1));
   testing::Mock::VerifyAndClearExpectations(&connection);
 
   EXPECT_CALL(connection, DownloadIsRecoverabilityDegraded);
   task_environment().FastForwardBy(
-      kSyncTrustedVaultLongPeriodDegradedRecoverabilityPolling.Get() -
-      kSyncTrustedVaultShortPeriodDegradedRecoverabilityPolling.Get());
+      long_refresh_period() -
+      short_refresh_period());
 }
 
 TEST_F(TrustedVaultDegradedRecoverabilityHandlerTest,
@@ -482,7 +453,7 @@ TEST_F(TrustedVaultDegradedRecoverabilityHandlerTest,
   // Start the scheduler.
   scheduler->GetIsRecoverabilityDegraded(base::DoNothing());
   task_environment().FastForwardBy(
-      kSyncTrustedVaultLongPeriodDegradedRecoverabilityPolling.Get() -
+      long_refresh_period() -
       base::Minutes(1) + base::Milliseconds(1));
 }
 

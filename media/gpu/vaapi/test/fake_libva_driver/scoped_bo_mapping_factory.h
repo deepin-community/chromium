@@ -5,13 +5,13 @@
 #ifndef MEDIA_GPU_VAAPI_TEST_FAKE_LIBVA_DRIVER_SCOPED_BO_MAPPING_FACTORY_H_
 #define MEDIA_GPU_VAAPI_TEST_FAKE_LIBVA_DRIVER_SCOPED_BO_MAPPING_FACTORY_H_
 
-#include <gbm.h>
-
 #include <memory>
 
 #include "base/files/scoped_file.h"
 #include "base/memory/raw_ref.h"
 #include "base/synchronization/lock.h"
+#include "third_party/minigbm/src/gbm.h"
+#include "ui/gfx/linux/scoped_gbm_device.h"
 
 namespace media::internal {
 
@@ -137,7 +137,7 @@ class ScopedBOMappingFactory {
                                    struct gbm_bo* bo_import);
 
   base::Lock lock_;
-  const raw_ptr<gbm_device> gbm_device_ GUARDED_BY(lock_);
+  const ui::ScopedGbmDevice gbm_device_ GUARDED_BY(lock_);
 };
 
 }  // namespace media::internal

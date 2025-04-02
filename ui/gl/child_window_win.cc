@@ -12,6 +12,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop/message_pump_type.h"
+#include "base/notreached.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_checker.h"
 #include "base/win/wrapped_window_proc.h"
@@ -105,7 +106,7 @@ void CreateWindowsOnThread(base::WaitableEvent* event,
   if (!window) {
     logging::SystemErrorCode error = logging::GetLastSystemErrorCode();
     base::debug::Alias(&error);
-    CHECK(false);
+    NOTREACHED();
   }
   *child_window = window;
   event->Signal();
@@ -194,13 +195,25 @@ ChildWindowWin::~ChildWindowWin() {
   }
 }
 
-bool ChildWindowWin::Resize(const gfx::Size& size) {
+void ChildWindowWin::Resize(const gfx::Size& size) {
   // Force a resize and redraw (but not a move, activate, etc.).
   constexpr UINT kFlags = SWP_NOACTIVATE | SWP_NOCOPYBITS | SWP_NOMOVE |
                           SWP_NOOWNERZORDER | SWP_NOREDRAW |
                           SWP_NOSENDCHANGING | SWP_NOZORDER;
-  return SetWindowPos(window_, nullptr, 0, 0, size.width(), size.height(),
-                      kFlags);
+  // When the browser process destroys its window, Windows will destroy
+  // all of its child windows, including our window. This leads to a race
+  // condition where SetWindowPos may return false if our window has been
+  // destroyed before we finish processing Reshape requests for the
+  // window.
+  // Returning a failure from ChildWindowWin::Resize will cause the
+  // outer Skia output device code to flag CONTEXT_LOST_RESHAPE_FAILED and
+  // terminate the GPU process. Instead of handling failures from SetWindowPos,
+  // we ignore its return value. The outer code will eventually be told of the
+  // window's demise.
+  if (!::SetWindowPos(window_, nullptr, 0, 0, size.width(), size.height(),
+                      kFlags)) {
+    DPLOG(WARNING) << "::SetWindowPos failed";
+  }
 }
 
 scoped_refptr<base::TaskRunner> ChildWindowWin::GetTaskRunnerForTesting() {

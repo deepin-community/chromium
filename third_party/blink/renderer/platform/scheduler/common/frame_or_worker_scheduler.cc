@@ -9,22 +9,12 @@
 
 #include "base/feature_list.h"
 #include "base/functional/callback.h"
+#include "base/not_fatal_until.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/platform/bindings/source_location.h"
 #include "v8/include/v8-isolate.h"
 
 namespace blink {
-
-namespace {
-
-// Returns whether features::kRegisterJSSourceLocationBlockingBFCache is
-// enabled.
-bool IsRegisterJSSourceLocationBlockingBFCache() {
-  return base::FeatureList::IsEnabled(
-      blink::features::kRegisterJSSourceLocationBlockingBFCache);
-}
-
-}  // namespace
 
 FrameOrWorkerScheduler::LifecycleObserverHandle::LifecycleObserverHandle(
     FrameOrWorkerScheduler* scheduler)
@@ -54,6 +44,7 @@ FrameOrWorkerScheduler::SchedulingAffectingFeatureHandle::
 FrameOrWorkerScheduler::SchedulingAffectingFeatureHandle::
     SchedulingAffectingFeatureHandle(SchedulingAffectingFeatureHandle&& other)
     : feature_(other.feature_),
+      policy_(std::move(other.policy_)),
       feature_and_js_location_(other.feature_and_js_location_),
       scheduler_(std::move(other.scheduler_)) {
   other.scheduler_ = nullptr;
@@ -75,6 +66,11 @@ FrameOrWorkerScheduler::SchedulingAffectingFeatureHandle::GetPolicy() const {
   return policy_;
 }
 
+SchedulingPolicy::Feature
+FrameOrWorkerScheduler::SchedulingAffectingFeatureHandle::GetFeature() const {
+  return feature_;
+}
+
 const FeatureAndJSLocationBlockingBFCache& FrameOrWorkerScheduler::
     SchedulingAffectingFeatureHandle::GetFeatureAndJSLocationBlockingBFCache()
         const {
@@ -91,15 +87,13 @@ FrameOrWorkerScheduler::SchedulingAffectingFeatureHandle
 FrameOrWorkerScheduler::RegisterFeature(SchedulingPolicy::Feature feature,
                                         SchedulingPolicy policy) {
   DCHECK(!scheduler::IsFeatureSticky(feature));
-  if (IsRegisterJSSourceLocationBlockingBFCache()) {
-    // Check if V8 is currently running an isolate.
-    // CaptureSourceLocation() detects the location of JS blocking BFCache if JS
-    // is running.
-    if (v8::Isolate::TryGetCurrent()) {
-      return SchedulingAffectingFeatureHandle(
-          feature, policy, CaptureSourceLocation(),
-          GetFrameOrWorkerSchedulerWeakPtr());
-    }
+  // Check if V8 is currently running an isolate.
+  // CaptureSourceLocation() detects the location of JS blocking BFCache if JS
+  // is running.
+  if (v8::Isolate::TryGetCurrent()) {
+    return SchedulingAffectingFeatureHandle(feature, policy,
+                                            CaptureSourceLocation(),
+                                            GetFrameOrWorkerSchedulerWeakPtr());
   }
   return SchedulingAffectingFeatureHandle(feature, policy, nullptr,
                                           GetFrameOrWorkerSchedulerWeakPtr());
@@ -109,12 +103,10 @@ void FrameOrWorkerScheduler::RegisterStickyFeature(
     SchedulingPolicy::Feature feature,
     SchedulingPolicy policy) {
   DCHECK(scheduler::IsFeatureSticky(feature));
-  if (IsRegisterJSSourceLocationBlockingBFCache()) {
+  if (v8::Isolate::TryGetCurrent()) {
     // CaptureSourceLocation() detects the location of JS blocking BFCache if JS
     // is running.
-    if (v8::Isolate::TryGetCurrent()) {
-      OnStartedUsingStickyFeature(feature, policy, CaptureSourceLocation());
-    }
+    OnStartedUsingStickyFeature(feature, policy, CaptureSourceLocation());
   } else {
     OnStartedUsingStickyFeature(feature, policy, nullptr);
   }
@@ -135,7 +127,7 @@ void FrameOrWorkerScheduler::RemoveLifecycleObserver(
     LifecycleObserverHandle* handle) {
   DCHECK(handle);
   const auto found = lifecycle_observers_.find(handle);
-  DCHECK(lifecycle_observers_.end() != found);
+  CHECK(lifecycle_observers_.end() != found, base::NotFatalUntil::M130);
   lifecycle_observers_.erase(found);
 }
 

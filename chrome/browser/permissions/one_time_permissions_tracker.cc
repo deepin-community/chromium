@@ -135,7 +135,6 @@ void OneTimePermissionsTracker::HandleUserMediaState(
       break;
     default:
       NOTREACHED();
-      return;
   }
 
   if (origin_tracker_[origin].used_content_settings_set.find(content_setting) !=

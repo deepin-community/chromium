@@ -15,6 +15,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import gclient_utils
+
 # Some useful paths.
 DEPOT_TOOLS_DIR = Path(__file__).resolve().parent
 UPDATE_DEPOT_TOOLS = DEPOT_TOOLS_DIR / 'update_depot_tools'
@@ -31,6 +33,8 @@ def _UpdateDepotTools():
     while path != path.parent:
         if (path / '.repo').is_dir() and (path / 'chromite').is_dir():
             return
+        if (path / '.citc').is_dir():
+            return
         path = path.parent
 
     if UPDATE_DEPOT_TOOLS.exists():
@@ -43,13 +47,14 @@ def _UpdateDepotTools():
 
 
 def main(argv):
+    if gclient_utils.IsEnvCog():
+        print('"repo" is not supported in non-git environment.',
+              file=sys.stderr)
+        return 1
     # This is a bit hacky, but should be "good enough".  If repo itself gains
     # support for sync hooks, we could switch to that.
     if argv and argv[0] == 'sync':
         _UpdateDepotTools()
-
-    # Set the default to our fork.
-    os.environ["REPO_URL"] = "https://chromium.googlesource.com/external/repo"
 
     os.execv(sys.executable, [sys.executable, str(REPO)] + argv)
 

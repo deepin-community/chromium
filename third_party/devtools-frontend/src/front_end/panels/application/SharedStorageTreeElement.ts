@@ -6,15 +6,15 @@ import type * as Platform from '../../core/platform/platform.js';
 import * as VisualLogging from '../../ui/visual_logging/visual_logging.js';
 
 import {ApplicationPanelTreeElement} from './ApplicationPanelTreeElement.js';
-import {type ResourcesPanel} from './ResourcesPanel.js';
+import type {ResourcesPanel} from './ResourcesPanel.js';
 import {SharedStorageItemsView} from './SharedStorageItemsView.js';
-import {type SharedStorageForOrigin} from './SharedStorageModel.js';
+import type {SharedStorageForOrigin} from './SharedStorageModel.js';
 
 export class SharedStorageTreeElement extends ApplicationPanelTreeElement {
   view!: SharedStorageItemsView;
 
   constructor(resourcesPanel: ResourcesPanel, sharedStorage: SharedStorageForOrigin) {
-    super(resourcesPanel, sharedStorage.securityOrigin, false);
+    super(resourcesPanel, sharedStorage.securityOrigin, false, 'shared-storage-instance');
   }
 
   static async createElement(resourcesPanel: ResourcesPanel, sharedStorage: SharedStorageForOrigin):

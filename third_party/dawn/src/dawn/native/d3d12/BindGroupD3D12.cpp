@@ -31,6 +31,7 @@
 
 #include "dawn/common/BitSetIterator.h"
 #include "dawn/common/MatchVariant.h"
+#include "dawn/common/Range.h"
 #include "dawn/native/ExternalTexture.h"
 #include "dawn/native/Queue.h"
 #include "dawn/native/d3d12/BindGroupLayoutD3D12.h"
@@ -66,15 +67,14 @@ BindGroup::BindGroup(Device* device,
     // This is because they are created as root descriptors which are never heap allocated.
     // Since dynamic buffers are packed in the front, we can skip over these bindings by
     // starting from the dynamic buffer count.
-    for (BindingIndex bindingIndex = bgl->GetDynamicBufferCount();
-         bindingIndex < bgl->GetBindingCount(); ++bindingIndex) {
+    for (BindingIndex bindingIndex : Range(bgl->GetDynamicBufferCount(), bgl->GetBindingCount())) {
         const BindingInfo& bindingInfo = bgl->GetBindingInfo(bindingIndex);
 
         // Increment size does not need to be stored and is only used to get a handle
         // local to the allocation with OffsetFrom().
         MatchVariant(
             bindingInfo.bindingLayout,
-            [&](const BufferBindingLayout& layout) {
+            [&](const BufferBindingInfo& layout) {
                 BufferBinding binding = GetBindingAsBufferBinding(bindingIndex);
 
                 ID3D12Resource* resource = ToBackend(binding.buffer)->GetD3D12Resource();
@@ -140,11 +140,12 @@ BindGroup::BindGroup(Device* device,
                                                       descriptorHeapOffsets[bindingIndex]));
                         break;
                     }
+                    case wgpu::BufferBindingType::BindingNotUsed:
                     case wgpu::BufferBindingType::Undefined:
                         DAWN_UNREACHABLE();
                 }
             },
-            [&](const TextureBindingLayout&) {
+            [&](const TextureBindingInfo&) {
                 auto* view = ToBackend(GetBindingAsTextureView(bindingIndex));
                 auto& srv = view->GetSRVDescriptor();
 
@@ -161,7 +162,7 @@ BindGroup::BindGroup(Device* device,
                     viewAllocation.OffsetFrom(viewSizeIncrement,
                                               descriptorHeapOffsets[bindingIndex]));
             },
-            [&](const StorageTextureBindingLayout& layout) {
+            [&](const StorageTextureBindingInfo& layout) {
                 TextureView* view = ToBackend(GetBindingAsTextureView(bindingIndex));
 
                 ID3D12Resource* resource = ToBackend(view->GetTexture())->GetD3D12Resource();
@@ -190,12 +191,17 @@ BindGroup::BindGroup(Device* device,
                                                       descriptorHeapOffsets[bindingIndex]));
                         break;
                     }
+                    case wgpu::StorageTextureAccess::BindingNotUsed:
                     case wgpu::StorageTextureAccess::Undefined:
                         DAWN_UNREACHABLE();
                 }
             },
+            [](const StaticSamplerBindingInfo&) {
+                // Static samplers are already initialized in the pipeline layout.
+            },
             // No-op as samplers will be later initialized by CreateSamplers().
-            [](const SamplerBindingLayout&) {});
+            [](const SamplerBindingInfo&) {},
+            [](const InputAttachmentBindingInfo&) { DAWN_UNREACHABLE(); });
     }
 
     // Loop through the dynamic storage buffers and build a flat map from the index of the
@@ -260,12 +266,11 @@ D3D12_GPU_DESCRIPTOR_HANDLE BindGroup::GetBaseSamplerDescriptor() const {
 }
 
 bool BindGroup::PopulateSamplers(
-    Device* device,
     MutexProtected<ShaderVisibleDescriptorAllocator>& samplerAllocator) {
     if (mSamplerAllocationEntry == nullptr) {
         return true;
     }
-    return mSamplerAllocationEntry->Populate(device, samplerAllocator);
+    return mSamplerAllocationEntry->Populate(samplerAllocator);
 }
 
 void BindGroup::SetSamplerAllocationEntry(Ref<SamplerHeapCacheEntry> entry) {

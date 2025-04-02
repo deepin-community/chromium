@@ -24,6 +24,8 @@
 
 #include "third_party/blink/renderer/core/css/style_change_reason.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
+#include "third_party/blink/renderer/core/layout/hit_test_location.h"
+#include "third_party/blink/renderer/core/layout/hit_test_result.h"
 #include "third_party/blink/renderer/core/layout/layout_block.h"
 #include "third_party/blink/renderer/core/layout/text_utils.h"
 #include "third_party/blink/renderer/core/page/chrome_client.h"
@@ -69,7 +71,7 @@ int ScrollbarThickness(const LayoutBox& box) {
   const Page& page = *box.GetDocument().GetPage();
   return page.GetScrollbarTheme().ScrollbarThickness(
       page.GetChromeClient().WindowToViewportScalar(box.GetFrame(), 1.0f),
-      box.StyleRef().ScrollbarWidth());
+      box.StyleRef().UsedScrollbarWidth());
 }
 
 void HitInnerEditorElement(const LayoutBox& box,
@@ -144,20 +146,20 @@ bool HasValidAvgCharWidth(const Font& font) {
     return false;
   }
 
-  static HashSet<AtomicString>* font_families_with_invalid_char_width_map =
-      nullptr;
-
   const AtomicString& family = font.GetFontDescription().Family().FamilyName();
   if (family.empty()) {
     return false;
   }
 
+  static HashSet<AtomicString>* font_families_with_invalid_char_width_map =
+      nullptr;
   if (!font_families_with_invalid_char_width_map) {
     font_families_with_invalid_char_width_map = new HashSet<AtomicString>;
-
-    for (size_t i = 0; i < std::size(kFontFamiliesWithInvalidCharWidth); ++i) {
+    font_families_with_invalid_char_width_map->ReserveCapacityForSize(
+        std::size(kFontFamiliesWithInvalidCharWidth));
+    for (const auto* font_family : kFontFamiliesWithInvalidCharWidth) {
       font_families_with_invalid_char_width_map->insert(
-          AtomicString(kFontFamiliesWithInvalidCharWidth[i]));
+          AtomicString(font_family));
     }
   }
 
@@ -178,7 +180,7 @@ float GetAvgCharWidth(const ComputedStyle& style) {
   }
 
   const UChar kCh = '0';
-  return ComputeTextWidth(StringView(&kCh, 1u), style);
+  return ComputeTextWidth(StringView(base::span_from_ref(kCh)), style);
 }
 
 }  // namespace layout_text_control

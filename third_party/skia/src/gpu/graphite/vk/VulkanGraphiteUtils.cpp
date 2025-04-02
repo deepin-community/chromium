@@ -14,6 +14,7 @@
 #include "src/core/SkTraceEvent.h"
 #include "src/gpu/graphite/ContextPriv.h"
 #include "src/gpu/graphite/vk/VulkanQueueManager.h"
+#include "src/gpu/graphite/vk/VulkanSampler.h"
 #include "src/gpu/graphite/vk/VulkanSharedContext.h"
 #include "src/sksl/SkSLProgramSettings.h"
 
@@ -55,7 +56,7 @@ VkShaderModule createVulkanShaderModule(const VulkanSharedContext* context,
 
     VkShaderModule shaderModule;
     VkResult result;
-    VULKAN_CALL_RESULT(context->interface(),
+    VULKAN_CALL_RESULT(context,
                        result,
                        CreateShaderModule(context->device(),
                                           &moduleCreateInfo,
@@ -71,19 +72,23 @@ VkShaderModule createVulkanShaderModule(const VulkanSharedContext* context,
 void DescriptorDataToVkDescSetLayout(const VulkanSharedContext* ctxt,
                                      const SkSpan<DescriptorData>& requestedDescriptors,
                                      VkDescriptorSetLayout* outLayout) {
+    // If requestedDescriptors is empty, that simply means we should create an empty placeholder
+    // layout that doesn't actually contain any descriptors.
     skia_private::STArray<kDescriptorTypeCount, VkDescriptorSetLayoutBinding> bindingLayouts;
     for (size_t i = 0; i < requestedDescriptors.size(); i++) {
-        if (requestedDescriptors[i].count != 0) {
+        if (requestedDescriptors[i].fCount != 0) {
             const DescriptorData& currDescriptor = requestedDescriptors[i];
             VkDescriptorSetLayoutBinding& layoutBinding = bindingLayouts.push_back();
             memset(&layoutBinding, 0, sizeof(VkDescriptorSetLayoutBinding));
-            layoutBinding.binding = currDescriptor.bindingIndex;
-            layoutBinding.descriptorType = DsTypeEnumToVkDs(currDescriptor.type);
-            layoutBinding.descriptorCount = currDescriptor.count;
+            layoutBinding.binding = currDescriptor.fBindingIndex;
+            layoutBinding.descriptorType = DsTypeEnumToVkDs(currDescriptor.fType);
+            layoutBinding.descriptorCount = currDescriptor.fCount;
             layoutBinding.stageFlags =
-                    PipelineStageFlagsToVkShaderStageFlags(currDescriptor.pipelineStageFlags);
-            // TODO(b/302126498): Optionally set immutableSamplers here. Needed for YCbCr
-            layoutBinding.pImmutableSamplers = nullptr;
+                    PipelineStageFlagsToVkShaderStageFlags(currDescriptor.fPipelineStageFlags);
+            layoutBinding.pImmutableSamplers = currDescriptor.fImmutableSampler
+                    ? (static_cast<const VulkanSampler*>(
+                            currDescriptor.fImmutableSampler))->constVkSamplerPtr()
+                    : nullptr;
         }
     }
 
@@ -93,15 +98,13 @@ void DescriptorDataToVkDescSetLayout(const VulkanSharedContext* ctxt,
     layoutCreateInfo.pNext = nullptr;
     layoutCreateInfo.flags = 0;
     layoutCreateInfo.bindingCount = bindingLayouts.size();
-    layoutCreateInfo.pBindings = &bindingLayouts.front();
+    layoutCreateInfo.pBindings = bindingLayouts.data();
 
     VkResult result;
-    VULKAN_CALL_RESULT(ctxt->interface(),
-                       result,
-                       CreateDescriptorSetLayout(ctxt->device(),
-                                                 &layoutCreateInfo,
-                                                 nullptr,
-                                                 outLayout));
+    VULKAN_CALL_RESULT(
+            ctxt,
+            result,
+            CreateDescriptorSetLayout(ctxt->device(), &layoutCreateInfo, nullptr, outLayout));
     if (result != VK_SUCCESS) {
         SkDebugf("Failed to create VkDescriptorSetLayout\n");
         outLayout = VK_NULL_HANDLE;
@@ -111,7 +114,7 @@ void DescriptorDataToVkDescSetLayout(const VulkanSharedContext* ctxt,
 VkDescriptorType DsTypeEnumToVkDs(DescriptorType type) {
     switch (type) {
         case DescriptorType::kUniformBuffer:
-            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         case DescriptorType::kTextureSampler:
             return VK_DESCRIPTOR_TYPE_SAMPLER;
         case DescriptorType::kTexture:
@@ -119,7 +122,7 @@ VkDescriptorType DsTypeEnumToVkDs(DescriptorType type) {
         case DescriptorType::kCombinedTextureSampler:
             return VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         case DescriptorType::kStorageBuffer:
-            return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
         case DescriptorType::kInputAttachment:
             return VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
     }
@@ -151,6 +154,8 @@ bool vkFormatIsSupported(VkFormat format) {
         case VK_FORMAT_R16G16B16A16_UNORM:
         case VK_FORMAT_R16G16_SFLOAT:
         case VK_FORMAT_S8_UINT:
+        case VK_FORMAT_D16_UNORM:
+        case VK_FORMAT_D32_SFLOAT:
         case VK_FORMAT_D24_UNORM_S8_UINT:
         case VK_FORMAT_D32_SFLOAT_S8_UINT:
             return true;

@@ -119,6 +119,20 @@ struct BLINK_COMMON_EXPORT
 
 template <>
 struct BLINK_COMMON_EXPORT
+    StructTraits<blink::mojom::ServiceWorkerRouterNotConditionDataView,
+                 blink::ServiceWorkerRouterNotCondition> {
+  static const blink::ServiceWorkerRouterCondition& condition(
+      const blink::ServiceWorkerRouterNotCondition& data) {
+    CHECK(data.condition);
+    return *data.condition;
+  }
+
+  static bool Read(blink::mojom::ServiceWorkerRouterNotConditionDataView data,
+                   blink::ServiceWorkerRouterNotCondition* out);
+};
+
+template <>
+struct BLINK_COMMON_EXPORT
     StructTraits<blink::mojom::ServiceWorkerRouterConditionDataView,
                  blink::ServiceWorkerRouterCondition> {
   static const std::optional<blink::SafeUrlPattern>& url_pattern(
@@ -147,6 +161,13 @@ struct BLINK_COMMON_EXPORT
         data.get());
   }
 
+  static const std::optional<blink::ServiceWorkerRouterNotCondition>&
+  not_condition(const blink::ServiceWorkerRouterCondition& data) {
+    return std::get<
+        const std::optional<blink::ServiceWorkerRouterNotCondition>&>(
+        data.get());
+  }
+
   static bool Read(blink::mojom::ServiceWorkerRouterConditionDataView data,
                    blink::ServiceWorkerRouterCondition* out);
 };
@@ -163,12 +184,42 @@ struct BLINK_COMMON_EXPORT
 
 template <>
 struct BLINK_COMMON_EXPORT
-    StructTraits<blink::mojom::ServiceWorkerRouterRaceSourceDataView,
-                 blink::ServiceWorkerRouterRaceSource> {
-  static bool Read(blink::mojom::ServiceWorkerRouterRaceSourceDataView data,
-                   blink::ServiceWorkerRouterRaceSource* out) {
+    EnumTraits<blink::mojom::ServiceWorkerRouterRaceSourceEnum,
+               blink::ServiceWorkerRouterRaceSource::TargetEnum> {
+  static blink::mojom::ServiceWorkerRouterRaceSourceEnum ToMojom(
+      blink::ServiceWorkerRouterRaceSource::TargetEnum input) {
+    switch (input) {
+      case blink::ServiceWorkerRouterRaceSource::TargetEnum::
+          kNetworkAndFetchHandler:
+        return blink::mojom::ServiceWorkerRouterRaceSourceEnum::
+            kNetworkAndFetchHandler;
+    }
+  }
+  static bool FromMojom(
+      blink::mojom::ServiceWorkerRouterRaceSourceEnum input,
+      blink::ServiceWorkerRouterRaceSource::TargetEnum* output) {
+    switch (input) {
+      case blink::mojom::ServiceWorkerRouterRaceSourceEnum::
+          kNetworkAndFetchHandler:
+        *output = blink::ServiceWorkerRouterRaceSource::TargetEnum::
+            kNetworkAndFetchHandler;
+        break;
+    }
     return true;
   }
+};
+
+template <>
+struct BLINK_COMMON_EXPORT
+    StructTraits<blink::mojom::ServiceWorkerRouterRaceSourceDataView,
+                 blink::ServiceWorkerRouterRaceSource> {
+  static blink::ServiceWorkerRouterRaceSource::TargetEnum target(
+      const blink::ServiceWorkerRouterRaceSource& data) {
+    return data.target;
+  }
+
+  static bool Read(blink::mojom::ServiceWorkerRouterRaceSourceDataView data,
+                   blink::ServiceWorkerRouterRaceSource* out);
 };
 
 template <>

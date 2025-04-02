@@ -25,7 +25,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_STYLE_IMAGE_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
-#include "third_party/blink/renderer/core/layout/intrinsic_sizing_info.h"
+#include "third_party/blink/renderer/core/layout/natural_sizing_info.h"
 #include "third_party/blink/renderer/platform/graphics/image_orientation.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -33,6 +33,10 @@
 namespace gfx {
 class SizeF;
 }  // namespace gfx
+
+namespace WTF {
+class String;
+}  // namespace WTF
 
 namespace blink {
 
@@ -42,6 +46,7 @@ class ImageResourceContent;
 class Document;
 class ComputedStyle;
 class ImageResourceObserver;
+enum class CSSValuePhase;
 
 // A const pointer to either an ImageResource or a CSSImageGeneratorValue. It is
 // used as a handle when checking whether ImageResources and generated images
@@ -65,11 +70,13 @@ class CORE_EXPORT StyleImage : public GarbageCollected<StyleImage> {
   // contain per-client state (like for StyleGeneratedImage.)
   virtual CSSValue* CssValue() const = 0;
 
-  // Returns a CSSValue suitable for using as part of a computed style
-  // value. This often means that any URLs have been made absolute, and similar
-  // actions described by a "Computed value" in the relevant specification.
+  // Returns a CSSValue suitable for using as part of a computed or resolved
+  // style value. This often means that any URLs have been made absolute, and
+  // similar actions described by a "Computed value" in the relevant
+  // specification.
   virtual CSSValue* ComputedCSSValue(const ComputedStyle&,
-                                     bool allow_visited_style) const = 0;
+                                     bool allow_visited_style,
+                                     CSSValuePhase value_phase) const = 0;
 
   // An Image can be provided for rendering by GetImage.
   virtual bool CanRender() const { return true; }
@@ -83,17 +90,16 @@ class CORE_EXPORT StyleImage : public GarbageCollected<StyleImage> {
   // Any underlying resources this <image> references failed to load.
   virtual bool ErrorOccurred() const { return false; }
 
-  // Is the <image> considered same-origin? Can only be called if IsLoaded()
-  // returns true. |failing_url| is set to the (potentially formatted) URL of
-  // the first non-same-origin <image>.
-  virtual bool IsAccessAllowed(String& failing_url) const = 0;
+  // Is the <image> considered same-origin? `failing_url` is set to the
+  // (potentially formatted) URL of the first non-same-origin <image>.
+  virtual bool IsAccessAllowed(WTF::String& failing_url) const = 0;
 
   // Determine the natural dimensions (width, height, aspect ratio) of this
   // <image>, scaled by `multiplier`.
   //
   // The size will respect the image orientation if requested and if the image
   // supports it.
-  virtual IntrinsicSizingInfo GetNaturalSizingInfo(
+  virtual NaturalSizingInfo GetNaturalSizingInfo(
       float multiplier,
       RespectImageOrientationEnum) const = 0;
 
@@ -179,6 +185,10 @@ class CORE_EXPORT StyleImage : public GarbageCollected<StyleImage> {
   bool IsLazyloadPossiblyDeferred() const {
     return is_lazyload_possibly_deferred_;
   }
+
+  virtual bool IsLoadedAfterMouseover() const { return false; }
+
+  virtual bool IsOriginClean() const { return true; }
 
   virtual void Trace(Visitor* visitor) const {}
 

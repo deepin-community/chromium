@@ -2,19 +2,23 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import '../../../ui/legacy/legacy.js';
+
 import * as i18n from '../../../core/i18n/i18n.js';
 import * as Platform from '../../../core/platform/platform.js';
 import type * as SDK from '../../../core/sdk/sdk.js';
-import * as ComponentHelpers from '../../../ui/components/helpers/helpers.js';
-import * as IconButton from '../../../ui/components/icon_button/icon_button.js';
-import * as LitHtml from '../../../ui/lit-html/lit-html.js';
+import * as Lit from '../../../ui/lit/lit.js';
 import * as VisualLogging from '../../../ui/visual_logging/visual_logging.js';
 import * as NetworkForward from '../forward/forward.js';
 
-import {type HeaderDescriptor, HeaderSectionRow, type HeaderSectionRowData} from './HeaderSectionRow.js';
-import requestHeaderSectionStyles from './RequestHeaderSection.css.js';
+import {EditingAllowedStatus, type HeaderDescriptor} from './HeaderSectionRow.js';
+import requestHeaderSectionStylesRaw from './RequestHeaderSection.css.js';
 
-const {render, html} = LitHtml;
+// TODO(crbug.com/391381439): Fully migrate off of constructed style sheets.
+const requestHeaderSectionStyles = new CSSStyleSheet();
+requestHeaderSectionStyles.replaceSync(requestHeaderSectionStylesRaw.cssContent);
+
+const {render, html} = Lit;
 
 const UIStrings = {
   /**
@@ -45,7 +49,6 @@ export interface RequestHeaderSectionData {
 }
 
 export class RequestHeaderSection extends HTMLElement {
-  static readonly litTagName = LitHtml.literal`devtools-request-header-section`;
   readonly #shadow = this.attachShadow({mode: 'open'});
   #request?: Readonly<SDK.NetworkRequest.NetworkRequest>;
   #headers: HeaderDescriptor[] = [];
@@ -60,10 +63,11 @@ export class RequestHeaderSection extends HTMLElement {
     this.#headers = this.#request.requestHeaders().map(header => ({
                                                          name: Platform.StringUtilities.toLowerCaseString(header.name),
                                                          value: header.value,
+                                                         valueEditable: EditingAllowedStatus.FORBIDDEN,
                                                        }));
     this.#headers.sort((a, b) => Platform.StringUtilities.compare(a.name, b.name));
 
-    if (data.toReveal?.section === NetworkForward.UIRequestLocation.UIHeaderSection.Request) {
+    if (data.toReveal?.section === NetworkForward.UIRequestLocation.UIHeaderSection.REQUEST) {
       this.#headers.filter(header => header.name === data.toReveal?.header?.toLowerCase()).forEach(header => {
         header.highlight = true;
       });
@@ -82,18 +86,18 @@ export class RequestHeaderSection extends HTMLElement {
     render(html`
       ${this.#maybeRenderProvisionalHeadersWarning()}
       ${this.#headers.map(header => html`
-        <${HeaderSectionRow.litTagName}
-          .data=${{header: header} as HeaderSectionRowData}
-          jslog=${VisualLogging.value('request-header')}
-        ></${HeaderSectionRow.litTagName}>
+        <devtools-header-section-row
+          .data=${{header}}
+          jslog=${VisualLogging.item('request-header')}
+        ></devtools-header-section-row>
       `)}
     `, this.#shadow, {host: this});
     // clang-format on
   }
 
-  #maybeRenderProvisionalHeadersWarning(): LitHtml.LitTemplate {
+  #maybeRenderProvisionalHeadersWarning(): Lit.LitTemplate {
     if (!this.#request || this.#request.requestHeadersText() !== undefined) {
-      return LitHtml.nothing;
+      return Lit.nothing;
     }
 
     let cautionText;
@@ -110,23 +114,23 @@ export class RequestHeaderSection extends HTMLElement {
       <div class="call-to-action">
         <div class="call-to-action-body">
           <div class="explanation" title=${cautionTitle}>
-            <${IconButton.Icon.Icon.litTagName} class="inline-icon" .data=${{
+            <devtools-icon class="inline-icon" .data=${{
                 iconName: 'warning-filled',
                 color: 'var(--icon-warning)',
                 width: '16px',
                 height: '16px',
-              } as IconButton.Icon.IconData}>
-            </${IconButton.Icon.Icon.litTagName}>
+              }}>
+            </devtools-icon>
             ${cautionText} <x-link href="https://developer.chrome.com/docs/devtools/network/reference/#provisional-headers" class="link">${i18nString(UIStrings.learnMore)}</x-link>
           </div>
         </div>
       </div>
     `;
-    // clang-format on
+                // clang-format on
   }
 }
 
-ComponentHelpers.CustomElements.defineComponent('devtools-request-header-section', RequestHeaderSection);
+customElements.define('devtools-request-header-section', RequestHeaderSection);
 
 declare global {
   interface HTMLElementTagNameMap {

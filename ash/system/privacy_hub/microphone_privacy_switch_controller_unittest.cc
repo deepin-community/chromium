@@ -4,6 +4,7 @@
 
 #include "ash/system/privacy_hub/microphone_privacy_switch_controller.h"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,7 +26,6 @@
 #include "ash/test/ash_test_base.h"
 #include "base/command_line.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "chromeos/ash/components/audio/cras_audio_handler.h"
@@ -64,7 +64,7 @@ class FakeSensorDisabledNotificationDelegate
   }
 
   void CloseAppAccessingMicrophone(const std::u16string& app_name) {
-    auto it = base::ranges::find(apps_accessing_microphone_, app_name);
+    auto it = std::ranges::find(apps_accessing_microphone_, app_name);
     ASSERT_NE(apps_accessing_microphone_.end(), it);
     apps_accessing_microphone_.erase(it);
 
@@ -112,21 +112,13 @@ class PrivacyHubMicrophoneControllerTest
     if (IsVideoConferenceEnabled()) {
       fake_video_conference_tray_controller_ =
           std::make_unique<FakeVideoConferenceTrayController>();
-      enabled_features.push_back(features::kVideoConference);
-      enabled_features.push_back(features::kCameraEffectsSupportedByHardware);
+      enabled_features.push_back(features::kFeatureManagementVideoConference);
     }
     scoped_feature_list_ = std::make_unique<base::test::ScopedFeatureList>();
     scoped_feature_list_->InitWithFeatures(enabled_features, {});
-
-    auto delegate = std::make_unique<MockNewWindowDelegate>();
-    new_window_delegate_ = delegate.get();
-    window_delegate_provider_ =
-        std::make_unique<TestNewWindowDelegateProvider>(std::move(delegate));
   }
   ~PrivacyHubMicrophoneControllerTest() override {
     fake_video_conference_tray_controller_.reset();
-    new_window_delegate_ = nullptr;
-    window_delegate_provider_.reset();
   }
 
   // AshTestBase:
@@ -237,14 +229,13 @@ class PrivacyHubMicrophoneControllerTest
     return histogram_tester_;
   }
 
-  MockNewWindowDelegate& new_window_delegate() { return *new_window_delegate_; }
+  MockNewWindowDelegate& new_window_delegate() { return new_window_delegate_; }
 
   ::testing::NiceMock<MockFrontendAPI> mock_frontend_;
 
  private:
   const base::HistogramTester histogram_tester_;
-  raw_ptr<MockNewWindowDelegate> new_window_delegate_ = nullptr;
-  std::unique_ptr<TestNewWindowDelegateProvider> window_delegate_provider_;
+  MockNewWindowDelegate new_window_delegate_;
   std::unique_ptr<FakeVideoConferenceTrayController>
       fake_video_conference_tray_controller_;
   std::unique_ptr<base::test::ScopedFeatureList> scoped_feature_list_;

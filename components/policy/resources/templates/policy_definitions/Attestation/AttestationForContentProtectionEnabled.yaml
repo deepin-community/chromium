@@ -14,7 +14,6 @@ items:
 - caption: Disable remote attestation for content protection
   value: false
 owners:
-- emaxx@chromium.org
 - file://chrome/browser/ash/attestation/OWNERS
 schema:
   type: boolean
@@ -22,3 +21,4 @@ supported_on:
 - chrome_os:31-
 tags: []
 type: main
+generate_device_proto: False

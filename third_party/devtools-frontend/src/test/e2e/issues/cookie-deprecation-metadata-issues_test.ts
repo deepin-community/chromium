@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import {assertNotNullOrUndefined, getBrowserAndPages, goToResource} from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   ensureResourceSectionIsExpanded,
   expandIssue,
@@ -13,30 +12,37 @@ import {
   waitForTableFromResourceSectionContents,
 } from '../helpers/issues-helpers.js';
 
-describe('Cookie Deprecation Metadata issue', async () => {
+describe('Cookie Deprecation Metadata issue', () => {
   beforeEach(async () => {
     await goToResource('empty.html');
   });
 
-  it('should display correct information', async () => {
+  // Flaky
+  it.skip('[crbug.com/380046260] should display correct information', async () => {
     await navigateToIssuesTab();
     const {frontend} = getBrowserAndPages();
     frontend.evaluate(() => {
       const issue = {
-        'code': 'CookieDeprecationMetadataIssue',
-        'details': {
-          'cookieDeprecationMetadataIssueDetails': {
-            'allowedSites': ['example_1.test'],
+        code: 'CookieDeprecationMetadataIssue',
+        details: {
+          cookieDeprecationMetadataIssueDetails: {
+            allowedSites: ['example_1.test'],
+            optOutPercentage: 25,
+            isOptOutTopLevel: true,
+            operation: 'ReadCookie',
           },
         },
       };
       // @ts-ignore
       window.addIssueForTest(issue);
       const issue2 = {
-        'code': 'CookieDeprecationMetadataIssue',
-        'details': {
-          'cookieDeprecationMetadataIssueDetails': {
-            'allowedSites': ['example_2.test'],
+        code: 'CookieDeprecationMetadataIssue',
+        details: {
+          cookieDeprecationMetadataIssueDetails: {
+            allowedSites: ['example_2.test'],
+            optOutPercentage: 50,
+            isOptOutTopLevel: false,
+            operation: 'ReadCookie',
           },
         },
       };
@@ -50,7 +56,7 @@ describe('Cookie Deprecation Metadata issue', async () => {
     await ensureResourceSectionIsExpanded(section);
     const expectedTableRows = [
       ['example_1.test'],
-      ['example_2.test'],
+      ['example_2.test (opt-out: 50% - learn more)'],
     ];
     await waitForTableFromResourceSectionContents(section.content, expectedTableRows);
   });

@@ -4,8 +4,10 @@
 
 #include "chrome/browser/downgrade/downgrade_manager.h"
 
+#include <algorithm>
 #include <iterator>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/command_line.h"
@@ -17,7 +19,6 @@
 #include "base/functional/callback.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/syslog_logging.h"
@@ -68,7 +69,7 @@ void MoveUserData(const base::FilePath& source, const base::FilePath& target) {
         // Don't try to move the dir into which everything is being moved.
         if (name.FinalExtension() == kDowngradeDeleteSuffix)
           return true;
-        return base::ranges::any_of(kFilesToKeep, [&name](const auto& keep) {
+        return std::ranges::any_of(kFilesToKeep, [&name](const auto& keep) {
           return base::EqualsCaseInsensitiveASCII(name.value(), keep);
         });
       });
@@ -231,7 +232,7 @@ bool DowngradeManager::PrepareUserDataDirectoryForCurrentVersion(
 void DowngradeManager::UpdateLastVersion(const base::FilePath& user_data_dir) {
   DCHECK(!user_data_dir.empty());
   DCHECK_NE(type_, Type::kAdministrativeWipe);
-  const base::StringPiece version(PRODUCT_VERSION);
+  const std::string_view version(PRODUCT_VERSION);
   base::WriteFile(GetLastVersionFile(user_data_dir), version);
 }
 

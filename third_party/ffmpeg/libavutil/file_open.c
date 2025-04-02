@@ -101,6 +101,7 @@ typedef struct FileLogContext {
 
 static const AVClass file_log_ctx_class = {
     .class_name                = "TEMPFILE",
+    .item_name                 = av_default_item_name,
     .option                    = NULL,
     .version                   = LIBAVUTIL_VERSION_INT,
     .log_level_offset_offset   = offsetof(FileLogContext, log_offset),
@@ -111,7 +112,10 @@ int avpriv_tempfile(const char *prefix, char **filename, int log_offset, void *l
 {
     FileLogContext file_log_ctx = { &file_log_ctx_class, log_offset, log_ctx };
     int fd = -1;
-#if !HAVE_MKSTEMP
+#if HAVE_MKSTEMP
+    size_t len = strlen(prefix) + 12; /* room for "/tmp/" and "XXXXXX\0" */
+    *filename  = av_malloc(len);
+#elif HAVE_TEMPNAM
     void *ptr= tempnam(NULL, prefix);
     if(!ptr)
         ptr= tempnam(".", prefix);
@@ -119,8 +123,7 @@ int avpriv_tempfile(const char *prefix, char **filename, int log_offset, void *l
 #undef free
     free(ptr);
 #else
-    size_t len = strlen(prefix) + 12; /* room for "/tmp/" and "XXXXXX\0" */
-    *filename  = av_malloc(len);
+    return AVERROR(ENOSYS);
 #endif
     /* -----common section-----*/
     if (!*filename) {
@@ -188,10 +191,3 @@ FILE *avpriv_fopen_utf8(const char *path, const char *mode)
         return NULL;
     return fdopen(fd, mode);
 }
-
-#if FF_API_AV_FOPEN_UTF8
-FILE *av_fopen_utf8(const char *path, const char *mode)
-{
-    return avpriv_fopen_utf8(path, mode);
-}
-#endif

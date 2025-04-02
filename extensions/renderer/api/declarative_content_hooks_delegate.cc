@@ -223,7 +223,6 @@ void DeclarativeContentHooksDelegate::HandleCall(
   if (this_object.IsEmpty()) {
     // Crazy script (e.g. declarativeContent.Foo.apply(null, args);).
     NOTREACHED();
-    return;
   }
 
   // TODO(devlin): Find a way to use APISignature here? It's a little awkward

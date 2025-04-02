@@ -12,6 +12,7 @@
 
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/command_line.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/environment.h"
@@ -27,6 +28,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/not_fatal_until.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
@@ -35,10 +37,11 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "build/chromecast_buildflags.h"
-#include "build/chromeos_buildflags.h"
+#include "components/ip_protection/common/masked_domain_list_manager.h"
 #include "components/network_session_configurator/common/network_features.h"
 #include "components/os_crypt/sync/os_crypt.h"
 #include "components/privacy_sandbox/masked_domain_list/masked_domain_list.pb.h"
+#include "mojo/public/cpp/base/proto_wrapper.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/scoped_message_error_crash_key.h"
@@ -76,30 +79,26 @@
 #include "services/network/dns_config_change_manager.h"
 #include "services/network/first_party_sets/first_party_sets_manager.h"
 #include "services/network/http_auth_cache_copier.h"
-#include "services/network/masked_domain_list/network_service_proxy_allow_list.h"
 #include "services/network/net_log_exporter.h"
 #include "services/network/net_log_proxy_sink.h"
 #include "services/network/network_context.h"
 #include "services/network/public/cpp/crash_keys.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/initiator_lock_compatibility.h"
-#include "services/network/public/cpp/load_info_util.h"
 #include "services/network/public/cpp/network_switches.h"
 #include "services/network/public/cpp/parsed_headers.h"
 #include "services/network/public/mojom/key_pinning.mojom.h"
 #include "services/network/public/mojom/network_service_test.mojom.h"
 #include "services/network/public/mojom/system_dns_resolution.mojom-forward.h"
 #include "services/network/restricted_cookie_manager.h"
+#include "services/network/tpcd/metadata/manager.h"
 #include "services/network/url_loader.h"
 
 #if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARMEL)
-#include "crypto/openssl_util.h"
 #include "third_party/boringssl/src/include/openssl/cpu.h"
 #endif
 
-#if (BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CASTOS)) || \
-    BUILDFLAG(IS_CHROMEOS_LACROS)
-
+#if BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CASTOS)
 #include "components/os_crypt/sync/key_storage_config_linux.h"
 #endif
 
@@ -223,8 +222,17 @@ std::unique_ptr<net::HttpAuthMechanism> CreateAuthSystem(
 // message handling inside the Browser process is sufficient).
 void HandleBadMessage(const std::string& error) {
   LOG(WARNING) << "Mojo error in NetworkService: " << error;
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kIgnoreBadMessageForTesting)) {
+    return;
+  }
   mojo::debug::ScopedMessageErrorCrashKey crash_key_value(error);
-  base::debug::DumpWithoutCrashing();
+  // Don't expect bad message in normal testing and usage, but it could happen
+  // if a compromised renderer process sends a bad message. Therefore, use
+  // DUMP_WILL_BE_NOTREACHED to create dump in official build and crash
+  // otherwise so that it is more visible when unexpected bad message is
+  // encountered in tests.
+  DUMP_WILL_BE_NOTREACHED();
   network::debug::ClearDeserializationCrashKeyString();
 }
 
@@ -388,15 +396,7 @@ void NetworkService::Initialize(mojom::NetworkServiceParamsPtr params,
 
   initialized_ = true;
 
-#if BUILDFLAG(IS_ANDROID)
-  base::UmaHistogramTimes("NetworkService.InitializedTime",
-                          base::Time::Now().since_origin());
-#endif
-
 #if BUILDFLAG(IS_ANDROID) && defined(ARCH_CPU_ARMEL)
-  // Make sure OpenSSL is initialized before using it to histogram data.
-  crypto::EnsureOpenSSLInit();
-
   // Measure Android kernels with missing AT_HWCAP2 auxv fields. See
   // https://crbug.com/boringssl/46.
   UMA_HISTOGRAM_BOOLEAN("Net.NeedsHWCAP2Workaround",
@@ -473,12 +473,11 @@ void NetworkService::Initialize(mojom::NetworkServiceParamsPtr params,
   first_party_sets_manager_ =
       std::make_unique<FirstPartySetsManager>(params->first_party_sets_enabled);
 
-  network_service_proxy_allow_list_ =
-      std::make_unique<NetworkServiceProxyAllowList>(
-          params->ip_protection_proxy_bypass_policy);
+  tpcd_metadata_manager_ = std::make_unique<network::tpcd::metadata::Manager>();
 
-  network_service_resource_block_list_ =
-      std::make_unique<NetworkServiceResourceBlockList>();
+  masked_domain_list_manager_ =
+      std::make_unique<ip_protection::MaskedDomainListManager>(
+          params->ip_protection_proxy_bypass_policy);
 
 #if BUILDFLAG(IS_CT_SUPPORTED)
   constexpr size_t kMaxSCTAuditingCacheEntries = 1024;
@@ -486,9 +485,7 @@ void NetworkService::Initialize(mojom::NetworkServiceParamsPtr params,
       std::make_unique<SCTAuditingCache>(kMaxSCTAuditingCacheEntries);
 #endif
 
-  if (base::FeatureList::IsEnabled(features::kGetCookiesStringUma)) {
-    metrics_updater_ = std::make_unique<RestrictedCookieManagerMetrics>();
-  }
+  metrics_updater_ = std::make_unique<RestrictedCookieManagerMetrics>();
 }
 
 NetworkService::~NetworkService() {
@@ -505,7 +502,9 @@ NetworkService::~NetworkService() {
   DCHECK(network_contexts_.empty());
 
   if (file_net_log_observer_) {
-    file_net_log_observer_->StopObserving(nullptr /*polled_data*/,
+    auto polled_data =
+        std::make_unique<base::Value>(std::move(net_log_polled_data_list_));
+    file_net_log_observer_->StopObserving(std::move(polled_data),
                                           base::OnceClosure());
   }
 
@@ -927,27 +926,30 @@ void NetworkService::UpdateKeyPinsList(mojom::PinListPtr pin_list,
 }
 
 void NetworkService::UpdateMaskedDomainList(
-    const std::string& raw_mdl,
+    mojo_base::ProtoWrapper masked_domain_list,
     const std::vector<std::string>& exclusion_list) {
   const base::Time start_time = base::Time::Now();
-  auto mdl = masked_domain_list::MaskedDomainList();
-  if (mdl.ParseFromString(raw_mdl)) {
+  auto mdl = masked_domain_list.As<masked_domain_list::MaskedDomainList>();
+  if (mdl.has_value()) {
     UMA_HISTOGRAM_MEMORY_KB("NetworkService.MaskedDomainList.SizeInKB",
-                            mdl.ByteSizeLong() / 1024);
+                            mdl->ByteSizeLong() / 1024);
 
-    network_service_proxy_allow_list_->UseMaskedDomainList(mdl, exclusion_list);
-    network_service_resource_block_list_->UseMaskedDomainList(mdl);
+    masked_domain_list_manager_->UpdateMaskedDomainList(mdl.value(),
+                                                        exclusion_list);
 
-    base::UmaHistogramBoolean("NetworkService.MaskedDomainList.UpdateSuccess",
-                              true);
+    base::UmaHistogramBoolean(
+        "NetworkService.IpProtection.ProxyAllowList."
+        "UpdateSuccess",
+        true);
   } else {
-    base::UmaHistogramBoolean("NetworkService.MaskedDomainList.UpdateSuccess",
-                              false);
+    base::UmaHistogramBoolean(
+        "NetworkService.IpProtection.ProxyAllowList.UpdateSuccess", false);
     LOG(ERROR) << "Unable to parse MDL in NetworkService";
   }
 
-  base::UmaHistogramTimes("NetworkService.MaskedDomainList.UpdateProcessTime",
-                          base::Time::Now() - start_time);
+  base::UmaHistogramTimes(
+      "NetworkService.IpProtection.ProxyAllowList.UpdateProcessTime",
+      base::Time::Now() - start_time);
 }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -1083,7 +1085,11 @@ void NetworkService::DestroyNetworkContexts() {
 void NetworkService::OnNetworkContextConnectionClosed(
     NetworkContext* network_context) {
   auto it = owned_network_contexts_.find(network_context);
-  DCHECK(it != owned_network_contexts_.end());
+  CHECK(it != owned_network_contexts_.end(), base::NotFatalUntil::M130);
+  if (file_net_log_observer_) {
+    net_log_polled_data_list_.Append(
+        net::GetNetInfo(network_context->url_request_context()));
+  }
   owned_network_contexts_.erase(it);
 }
 
@@ -1101,9 +1107,17 @@ NetworkService::GetDefaultURLLoaderNetworkServiceObserver() {
   return nullptr;
 }
 
+void NetworkService::ResetMetricsUpdaterForTesting() {
+  metrics_updater_.reset();
+}
+
 // static
 NetworkService* NetworkService::GetNetworkServiceForTesting() {
   return g_network_service;
 }
 
+void NetworkService::SetTpcdMetadataGrants(
+    const std::vector<ContentSettingPatternSource>& settings) {
+  tpcd_metadata_manager_->SetGrants(settings);
+}
 }  // namespace network

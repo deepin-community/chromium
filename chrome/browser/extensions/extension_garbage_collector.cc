@@ -18,6 +18,7 @@
 #include "base/one_shot_event.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/syslog_logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
@@ -35,7 +36,6 @@
 #include "extensions/browser/extension_system.h"
 #include "extensions/browser/extension_util.h"
 #include "extensions/common/extension.h"
-#include "extensions/common/extension_features.h"
 #include "extensions/common/extension_id.h"
 #include "extensions/common/file_util.h"
 
@@ -144,7 +144,7 @@ ExtensionGarbageCollector::ExtensionGarbageCollector(
   InstallTracker::Get(context_)->AddObserver(this);
 }
 
-ExtensionGarbageCollector::~ExtensionGarbageCollector() {}
+ExtensionGarbageCollector::~ExtensionGarbageCollector() = default;
 
 // static
 ExtensionGarbageCollector* ExtensionGarbageCollector::Get(
@@ -179,6 +179,10 @@ void ExtensionGarbageCollector::GarbageCollectExtensionsOnFileThread(
     unpacked ? CheckUnpackedExtensionDirectory(extension_path, extension_paths)
              : CheckExtensionDirectory(extension_path, extension_paths);
   }
+  // TODO(crbug.com/379867155) Remove this after chrome app kiosk crash recovery
+  // is independent of extensions garbage collection.
+  SYSLOG(INFO)
+      << "Garbage collection for extensions on file thread is complete.";
 }
 
 void ExtensionGarbageCollector::GarbageCollectExtensions() {
@@ -202,7 +206,7 @@ void ExtensionGarbageCollector::GarbageCollectExtensions() {
     return;
   }
 
-  // TODO(crbug.com/1378775): Since the GC recursively deletes, insert a check
+  // TODO(crbug.com/40875193): Since the GC recursively deletes, insert a check
   // so that we can't attempt to delete outside the profile directory. The
   // problem is that in extension_garbage_collector_unittest.cc the directory
   // containing the extension installs is not a direct subdir of the profile
@@ -231,10 +235,6 @@ void ExtensionGarbageCollector::GarbageCollectExtensions() {
     NOTREACHED();
   }
 
-  if (!base::FeatureList::IsEnabled(
-          extensions_features::kExtensionsZipFileInstalledInProfileDir)) {
-    return;
-  }
   if (!GetExtensionFileTaskRunner()->PostTask(
           FROM_HERE, base::BindOnce(&GarbageCollectExtensionsOnFileThread,
                                     service->unpacked_install_directory(),
@@ -259,7 +259,7 @@ void ExtensionGarbageCollector::OnFinishCrxInstall(
   if (crx_installs_in_progress_ < 0) {
     // This can only happen if there is a mismatch in our begin/finish
     // accounting.
-    DUMP_WILL_BE_NOTREACHED_NORETURN();
+    DUMP_WILL_BE_NOTREACHED();
 
     // Don't let the count go negative to avoid garbage collecting when
     // an install is actually in progress.

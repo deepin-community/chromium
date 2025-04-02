@@ -21,7 +21,7 @@
 namespace media {
 
 // Time interval to update media time.
-constexpr auto kTimeUpdateInterval = base::Milliseconds(50);
+constexpr auto kTimeUpdateInterval = base::Milliseconds(125);
 
 // static
 mojo::SelfOwnedReceiverRef<mojom::Renderer> MojoRendererService::Create(
@@ -77,9 +77,10 @@ void MojoRendererService::Initialize(
   DCHECK(!media_url_params->media_url.is_empty());
   media_resource_ = std::make_unique<MediaUrlDemuxer>(
       nullptr, media_url_params->media_url, media_url_params->site_for_cookies,
-      media_url_params->top_frame_origin, media_url_params->has_storage_access,
+      media_url_params->top_frame_origin,
+      media_url_params->storage_access_api_status,
       media_url_params->allow_credentials, media_url_params->is_hls);
-  media_resource_->SetHeaders(media_url_params->headers);
+  media_resource_->SetHeaders(std::move(media_url_params->headers));
   renderer_->Initialize(
       media_resource_.get(), this,
       base::BindOnce(&MojoRendererService::OnRendererInitializeDone, weak_this_,
@@ -156,6 +157,15 @@ void MojoRendererService::SetCdm(
   renderer_->SetCdm(cdm_context,
                     base::BindOnce(&MojoRendererService::OnCdmAttached,
                                    weak_this_, std::move(callback)));
+}
+
+void MojoRendererService::SetLatencyHint(
+    std::optional<base::TimeDelta> latency_hint) {
+  if (latency_hint.has_value() && latency_hint->is_negative()) {
+    mojo::ReportBadMessage("Latency hint should be non-negative");
+    return;
+  }
+  renderer_->SetLatencyHint(latency_hint);
 }
 
 void MojoRendererService::OnError(PipelineStatus error) {

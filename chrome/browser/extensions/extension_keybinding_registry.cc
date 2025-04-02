@@ -9,8 +9,8 @@
 
 #include "base/values.h"
 #include "build/chromeos_buildflags.h"
-#include "chrome/browser/extensions/active_tab_permission_granter.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
+#include "chrome/browser/extensions/permissions/active_tab_permission_granter.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_context.h"
@@ -23,8 +23,8 @@
 #include "extensions/common/manifest_constants.h"
 #include "extensions/common/mojom/context_type.mojom.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ui/ash/media_client_impl.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/ui/ash/media_client/media_client_impl.h"
 #endif
 
 namespace {
@@ -50,8 +50,7 @@ ExtensionKeybindingRegistry::ExtensionKeybindingRegistry(
       this, ui::MediaKeysListener::Scope::kFocused);
 }
 
-ExtensionKeybindingRegistry::~ExtensionKeybindingRegistry() {
-}
+ExtensionKeybindingRegistry::~ExtensionKeybindingRegistry() = default;
 
 void ExtensionKeybindingRegistry::SetShortcutHandlingSuspended(bool suspended) {
   shortcut_handling_suspended_ = suspended;
@@ -79,7 +78,7 @@ void ExtensionKeybindingRegistry::RemoveExtensionKeybinding(
       // Let each platform-specific implementation get a chance to clean up.
       RemoveExtensionKeybindingImpl(old->first, command_name);
 
-      if (Command::IsMediaKey(old->first)) {
+      if (old->first.IsMediaKey()) {
         any_media_keys_removed = true;
         if (media_keys_listener_)
           media_keys_listener_->StopWatchingMediaKey(old->first.key_code());
@@ -105,7 +104,7 @@ void ExtensionKeybindingRegistry::RemoveExtensionKeybinding(
 
       media_keys_listener_manager->EnableInternalMediaKeyHandling();
     } else {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       MediaClientImpl::Get()->DisableCustomMediaKeyHandler(browser_context_,
                                                            this);
 #endif
@@ -165,8 +164,8 @@ void ExtensionKeybindingRegistry::CommandExecuted(
 
     if (web_contents) {
       // The action APIs (browserAction, pageAction, action) are only available
-      // to blessed extension contexts. As such, we deterministically know that
-      // the right context type here is blessed.
+      // to privileged extension contexts. As such, we deterministically know
+      // that the right context type here is privileged.
       constexpr mojom::ContextType context_type =
           mojom::ContextType::kPrivilegedExtension;
       ExtensionTabUtil::ScrubTabBehavior scrub_tab_behavior =
@@ -201,7 +200,7 @@ void ExtensionKeybindingRegistry::AddEventTarget(
       std::make_pair(extension_id, command_name));
   // Shortcuts except media keys have only one target in the list. See comment
   // about |event_targets_|.
-  if (!Command::IsMediaKey(accelerator)) {
+  if (!accelerator.IsMediaKey()) {
     DCHECK_EQ(1u, event_targets_[accelerator].size());
   } else {
     if (media_keys_listener_)
@@ -217,7 +216,7 @@ void ExtensionKeybindingRegistry::AddEventTarget(
 
       media_keys_listener_manager->DisableInternalMediaKeyHandling();
     } else {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       MediaClientImpl::Get()->EnableCustomMediaKeyHandler(browser_context_,
                                                           this);
 #endif
@@ -314,7 +313,6 @@ bool ExtensionKeybindingRegistry::ExtensionMatchesFilter(
     default:
       NOTREACHED();
   }
-  return false;
 }
 
 bool ExtensionKeybindingRegistry::ExecuteCommands(
@@ -343,8 +341,9 @@ bool ExtensionKeybindingRegistry::ExecuteCommands(
 
 bool ExtensionKeybindingRegistry::IsListeningToAnyMediaKeys() const {
   for (const auto& accelerator_target : event_targets_) {
-    if (Command::IsMediaKey(accelerator_target.first))
+    if (accelerator_target.first.IsMediaKey()) {
       return true;
+    }
   }
   return false;
 }

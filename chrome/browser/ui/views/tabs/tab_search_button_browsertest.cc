@@ -27,8 +27,8 @@
 
 namespace {
 ui::MouseEvent GetDummyEvent() {
-  return ui::MouseEvent(ui::ET_MOUSE_PRESSED, gfx::PointF(), gfx::PointF(),
-                        base::TimeTicks::Now(), 0, 0);
+  return ui::MouseEvent(ui::EventType::kMousePressed, gfx::PointF(),
+                        gfx::PointF(), base::TimeTicks::Now(), 0, 0);
 }
 }  // namespace
 
@@ -39,10 +39,7 @@ class TabSearchButtonBrowserTest : public InProcessBrowserTest {
   }
 
   TabSearchButton* tab_search_button() {
-    return browser_view()
-        ->tab_strip_region_view()
-        ->tab_search_container()
-        ->tab_search_button();
+    return browser_view()->tab_strip_region_view()->GetTabSearchButton();
   }
 
   TabSearchBubbleHost* tab_search_bubble_host() {
@@ -83,8 +80,7 @@ class TabSearchButtonBrowserUITest : public DialogBrowserTest {
     AppendTab(chrome::kChromeUIBookmarksURL);
     auto* tab_search_button = BrowserView::GetBrowserViewForBrowser(browser())
                                   ->tab_strip_region_view()
-                                  ->tab_search_container()
-                                  ->tab_search_button();
+                                  ->GetTabSearchButton();
     views::test::ButtonTestApi(tab_search_button).NotifyClick(GetDummyEvent());
   }
 

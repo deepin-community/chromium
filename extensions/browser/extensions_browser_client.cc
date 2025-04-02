@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <optional>
+
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
 #include "base/logging.h"
@@ -51,6 +52,8 @@ void ExtensionsBrowserClient::AddAPIProvider(
     std::unique_ptr<ExtensionsBrowserAPIProvider> provider) {
   providers_.push_back(std::move(provider));
 }
+
+void ExtensionsBrowserClient::StartTearDown() {}
 
 scoped_refptr<update_client::UpdateClient>
 ExtensionsBrowserClient::CreateUpdateClient(content::BrowserContext* context) {
@@ -134,9 +137,17 @@ bool ExtensionsBrowserClient::IsScreenshotRestricted(
   return false;
 }
 
-bool ExtensionsBrowserClient::IsValidTabId(content::BrowserContext* context,
-                                           int tab_id) const {
+bool ExtensionsBrowserClient::IsValidTabId(
+    content::BrowserContext* browser_context,
+    int tab_id,
+    bool include_incognito,
+    content::WebContents** web_contents) const {
   return false;
+}
+
+ScriptExecutor* ExtensionsBrowserClient::GetScriptExecutorForTab(
+    content::WebContents& web_contents) {
+  return nullptr;
 }
 
 void ExtensionsBrowserClient::NotifyExtensionApiTabExecuteScript(
@@ -154,10 +165,12 @@ void ExtensionsBrowserClient::NotifyExtensionApiDeclarativeNetRequest(
     const ExtensionId& extension_id,
     const std::vector<api::declarative_net_request::Rule>& rules) const {}
 
-void ExtensionsBrowserClient::NotifyExtensionRemoteHostContacted(
-    content::BrowserContext* context,
-    const ExtensionId& extension_id,
-    const GURL& url) const {}
+void ExtensionsBrowserClient::
+    NotifyExtensionDeclarativeNetRequestRedirectAction(
+        content::BrowserContext* context,
+        const ExtensionId& extension_id,
+        const GURL& request_url,
+        const GURL& redirect_url) const {}
 
 bool ExtensionsBrowserClient::IsUsbDeviceAllowedByPolicy(
     content::BrowserContext* context,

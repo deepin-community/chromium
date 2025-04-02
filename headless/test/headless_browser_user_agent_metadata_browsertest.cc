@@ -8,7 +8,6 @@
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "components/devtools/simple_devtools_protocol_client/simple_devtools_protocol_client.h"
 #include "components/embedder_support/user_agent_utils.h"
@@ -26,7 +25,6 @@
 #include "net/test/embedded_test_server/http_response.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/features.h"
 
 using ::net::test_server::BasicHttpResponse;
 using ::net::test_server::HttpRequest;
@@ -69,10 +67,6 @@ namespace headless {
 
 class HeadlessBrowserNavigatorUADataTest : public HeadlessBrowserTest {
  public:
-  void SetUpInProcessBrowserTestFixture() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        blink::features::kClientHintsFormFactor);
-  }
 
   void SetUpOnMainThread() override {
     HeadlessBrowserTest::SetUpOnMainThread();
@@ -156,11 +150,8 @@ class HeadlessBrowserNavigatorUADataTest : public HeadlessBrowserTest {
           navigator.userAgentData.getHighEntropyValues(['wow64'])
               .then(r => r.wow64))";
   static constexpr char kFormFactorScript[] = R"(
-          navigator.userAgentData.getHighEntropyValues(['formFactor'])
-              .then(r => r.formFactor.join(', ')))";
-
- private:
-  base::test::ScopedFeatureList scoped_feature_list_;
+          navigator.userAgentData.getHighEntropyValues(['formFactors'])
+              .then(r => r.formFactors.join(', ')))";
 };
 
 // UA Metadata is available via `navigator.userAgentData`.
@@ -190,7 +181,7 @@ IN_PROC_BROWSER_TEST_F(HeadlessBrowserNavigatorUADataTest, DefaultValues) {
               DictHasValue("result.result.value", expected.wow64));
   EXPECT_THAT(GetUAMetadataValue(kFormFactorScript),
               DictHasValue("result.result.value",
-                           base::JoinString(expected.form_factor, ", ")));
+                           base::JoinString(expected.form_factors, ", ")));
 }
 
 // UA Metadata is available via `navigator.userAgentData` when overridden via
@@ -218,7 +209,7 @@ IN_PROC_BROWSER_TEST_F(HeadlessBrowserNavigatorUADataTest, CDPOverride) {
               DictHasValue("result.result.value", "1.2.3"));
   EXPECT_THAT(GetUAMetadataValue(kWow64Script),
               DictHasValue("result.result.value", true));
-  // TODO(https://crbug.com/1442283): Allow overriding formFactor.
+  // TODO(crbug.com/40910451): Allow overriding formFactors.
   EXPECT_THAT(GetUAMetadataValue(kFormFactorScript),
               DictHasValue("result.result.value", ""));
 }

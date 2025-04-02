@@ -12,19 +12,17 @@
 #include <stddef.h>
 
 #include <iosfwd>
+#include <optional>
 #include <type_traits>
 
 #include "base/base_export.h"
-#include "base/feature_list.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/process/process_handle.h"
-#include "base/sequence_checker_impl.h"
 #include "base/threading/platform_thread_ref.h"
 #include "base/time/time.h"
 #include "base/types/strong_alias.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "base/win/windows_types.h"
@@ -35,6 +33,10 @@
 #elif BUILDFLAG(IS_POSIX)
 #include <pthread.h>
 #include <unistd.h>
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+#include "base/feature_list.h"
 #endif
 
 namespace base {
@@ -68,13 +70,9 @@ class PlatformThreadHandle {
     return handle_ == other.handle_;
   }
 
-  bool is_null() const {
-    return !handle_;
-  }
+  bool is_null() const { return !handle_; }
 
-  Handle platform_handle() const {
-    return handle_;
-  }
+  Handle platform_handle() const { return handle_; }
 
  private:
   Handle handle_;
@@ -113,10 +111,8 @@ enum class ThreadType : int {
   // platform default. In Chrome, this is suitable for handling user
   // interactions (input), only display and audio can get a higher priority.
   kDefault,
-  // Suitable for threads which are critical to compositing the foreground
-  // content.
-  kCompositing,
-  // Suitable for display critical threads.
+  // Suitable for display critical threads, ie. threads critical to compositing
+  // and presenting the foreground content.
   kDisplayCritical,
   // Suitable for low-latency, glitch-resistant audio.
   kRealtimeAudio,
@@ -266,7 +262,7 @@ class BASE_EXPORT PlatformThreadBase {
   static TimeDelta GetRealtimePeriod(Delegate* delegate);
 
   // Returns the override of task leeway if any.
-  static absl::optional<TimeDelta> GetThreadLeewayOverride();
+  static std::optional<TimeDelta> GetThreadLeewayOverride();
 
   // Returns the default thread stack size set by chrome. If we do not
   // explicitly set default size then returns 0.
@@ -274,7 +270,7 @@ class BASE_EXPORT PlatformThreadBase {
 
   static ThreadPriorityForTest GetCurrentThreadPriorityForTest();
 
-  protected:
+ protected:
   static void SetNameCommon(const std::string& name);
 };
 
@@ -284,11 +280,10 @@ class BASE_EXPORT PlatformThreadApple : public PlatformThreadBase {
   // Stores the period value in TLS.
   static void SetCurrentThreadRealtimePeriodValue(TimeDelta realtime_period);
 
-  // Signals that the feature list has been initialized which allows to check
-  // the feature's value now and initialize state. This prevents race
-  // conditions where the feature is being checked while it is being
-  // initialized, which can cause a crash.
-  static void InitFeaturesPostFieldTrial();
+  static TimeDelta GetCurrentThreadRealtimePeriodForTest();
+
+  // Initializes features for this class. See `base::features::Init()`.
+  static void InitializeFeatures();
 };
 #endif  // BUILDFLAG(IS_APPLE)
 
@@ -333,11 +328,18 @@ class BASE_EXPORT PlatformThreadLinux : public PlatformThreadBase {
 #if BUILDFLAG(IS_CHROMEOS)
 BASE_EXPORT BASE_DECLARE_FEATURE(kSetRtForDisplayThreads);
 
+class CrossProcessPlatformThreadDelegate;
+
 class BASE_EXPORT PlatformThreadChromeOS : public PlatformThreadLinux {
  public:
-  // Signals that the feature list has been initialized. Used for preventing
-  // race conditions and crashes, see comments in PlatformThreadApple.
-  static void InitFeaturesPostFieldTrial();
+  // Sets a delegate which handles thread type changes for threads of another
+  // process. This must be externally synchronized with any call to
+  // SetCurrentThreadType.
+  static void SetCrossProcessPlatformThreadDelegate(
+      CrossProcessPlatformThreadDelegate* delegate);
+
+  // Initializes features for this class. See `base::features::Init()`.
+  static void InitializeFeatures();
 
   // Toggles a specific thread's type at runtime. This is the ChromeOS-specific
   // version and includes Linux's functionality but does slightly more. See
@@ -361,13 +363,19 @@ class BASE_EXPORT PlatformThreadChromeOS : public PlatformThreadLinux {
                                     bool backgrounded);
 
   // Returns the thread type of a thread given its thread id.
-  static absl::optional<ThreadType> GetThreadTypeFromThreadId(
+  static std::optional<ThreadType> GetThreadTypeFromThreadId(
       ProcessId process_id,
       PlatformThreadId thread_id);
 
-  // Returns a SequenceChecker which should be used to verify that all
-  // cross-process priority changes are performed without races.
-  static SequenceCheckerImpl& GetCrossProcessThreadPrioritySequenceChecker();
+  // DCHECKs that the caller is on the correct sequence to perform cross-process
+  // priority changes without races.
+  //
+  // This does not simply return a `SequenceChecker&` and let the caller do the
+  // check, because doing so requires an `#include` of sequence_checker.h (since
+  // `SequenceChecker` is an alias rather than a forward-declarable class),
+  // which complicates life for other base/ headers trying to avoid circular
+  // dependencies.
+  static void DcheckCrossProcessThreadPrioritySequence();
 };
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
@@ -389,6 +397,24 @@ void SetCurrentThreadType(ThreadType thread_type,
 
 void SetCurrentThreadTypeImpl(ThreadType thread_type,
                               MessagePumpType pump_type_hint);
+
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+void SetThreadTypeLinux(PlatformThreadId process_id,
+                        PlatformThreadId thread_id,
+                        ThreadType thread_type,
+                        IsViaIPC via_ipc);
+#endif
+#if BUILDFLAG(IS_CHROMEOS)
+void SetThreadTypeChromeOS(PlatformThreadId process_id,
+                           PlatformThreadId thread_id,
+                           ThreadType thread_type,
+                           IsViaIPC via_ipc);
+#endif
+#if BUILDFLAG(IS_CHROMEOS)
+inline constexpr auto SetThreadType = SetThreadTypeChromeOS;
+#elif BUILDFLAG(IS_LINUX)
+inline constexpr auto SetThreadType = SetThreadTypeLinux;
+#endif
 
 }  // namespace internal
 

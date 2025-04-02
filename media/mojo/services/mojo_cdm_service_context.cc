@@ -76,7 +76,6 @@ std::unique_ptr<CdmContextRef> MojoCdmServiceContext::GetCdmContextRef(
     if (cdm_service != cdm_services_.end()) {
       if (!cdm_service->second->GetCdm()->GetCdmContext()) {
         NOTREACHED() << "All CDMs should support CdmContext.";
-        return nullptr;
       }
       return std::make_unique<CdmContextRefImpl>(cdm_service->second->GetCdm());
     }

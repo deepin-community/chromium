@@ -46,14 +46,16 @@ class DevToolsClientImpl : public DevToolsClient {
 
   // Postcondition: IsNull()
   // Postcondition: !IsConnected()
-  DevToolsClientImpl(const std::string& id, const std::string& session_id);
+  DevToolsClientImpl(const std::string& id,
+                     const std::string& session_id,
+                     bool is_tab = false);
 
   typedef base::RepeatingCallback<bool(const std::string&,
                                        int,
-                                       std::string*,
-                                       internal::InspectorMessageType*,
-                                       InspectorEvent*,
-                                       InspectorCommandResponse*)>
+                                       std::string&,
+                                       internal::InspectorMessageType&,
+                                       InspectorEvent&,
+                                       InspectorCommandResponse&)>
       ParserFunc;
 
   DevToolsClientImpl(const DevToolsClientImpl&) = delete;
@@ -96,10 +98,8 @@ class DevToolsClientImpl : public DevToolsClient {
   // Precondition: IsMainPage()
   // Precondition: IsConnected()
   // Precondition: BiDi tunnel for CDP traffic is not set.
+  Status StartBidiServer(std::string bidi_mapper_script) override;
   Status StartBidiServer(std::string bidi_mapper_script,
-                         const base::Value::Dict& mapper_options) override;
-  Status StartBidiServer(std::string bidi_mapper_script,
-                         const base::Value::Dict& mapper_options,
                          const Timeout& timeout);
   // If the object IsNull then it cannot be connected to the remote end.
   // Such an object needs to be attached to some !IsNull() parent first.
@@ -107,6 +107,9 @@ class DevToolsClientImpl : public DevToolsClient {
   bool IsNull() const override;
   bool IsConnected() const override;
   bool WasCrashed() override;
+  bool IsDialogOpen() const override;
+  bool AutoAcceptsBeforeunload() const override;
+  void SetAutoAcceptBeforeunload(bool value) override;
   Status PostBidiCommand(base::Value::Dict command) override;
   Status SendCommand(const std::string& method,
                      const base::Value::Dict& params) override;
@@ -142,6 +145,7 @@ class DevToolsClientImpl : public DevToolsClient {
   WebViewImpl* GetOwner() const override;
   DevToolsClient* GetParentClient() const override;
   bool IsMainPage() const override;
+  bool IsTabTarget() const override;
   void SetMainPage(bool value);
   int NextMessageId() const override;
   // Return NextMessageId and immediately increment it
@@ -154,9 +158,8 @@ class DevToolsClientImpl : public DevToolsClient {
                               DevToolsClient* client) override;
   void UnregisterSessionHandler(const std::string& session_id) override;
   Status OnConnected() override;
-  Status ProcessEvent(const InspectorEvent& event) override;
-  Status ProcessCommandResponse(
-      const InspectorCommandResponse& response) override;
+  Status ProcessEvent(InspectorEvent event) override;
+  Status ProcessCommandResponse(InspectorCommandResponse response) override;
   Status ProcessNextMessage(int expected_id,
                             bool log_timeout,
                             const Timeout& timeout,
@@ -164,6 +167,10 @@ class DevToolsClientImpl : public DevToolsClient {
   Status HandleMessage(int expected_id,
                        const std::string& message,
                        DevToolsClient* caller);
+  Status GetDialogMessage(std::string& message) const override;
+  Status GetTypeOfDialog(std::string& type) const override;
+  Status HandleDialog(bool accept,
+                      const std::optional<std::string>& text) override;
 
  private:
   enum ResponseState {
@@ -204,6 +211,9 @@ class DevToolsClientImpl : public DevToolsClient {
   Status EnsureListenersNotifiedOfEvent();
   Status EnsureListenersNotifiedOfCommandResponse();
   Status SetUpDevTools();
+  Status SetupTabTarget();
+  Status HandleDialogOpening(const base::Value::Dict& params);
+  Status HandleDialogClosed(const base::Value::Dict& params);
 
   std::unique_ptr<SyncWebSocket> socket_;
   // WebViewImpl that owns this instance; nullptr for browser-wide DevTools.
@@ -214,22 +224,30 @@ class DevToolsClientImpl : public DevToolsClient {
   // deep. children_ holds child sessions - identified by their session id -
   // which send/receive messages via the socket_ of their parent.
   raw_ptr<DevToolsClient> parent_ = nullptr;
-  std::map<std::string, DevToolsClient*> children_;
+  std::map<std::string, raw_ptr<DevToolsClient, CtnExperimental>> children_;
   bool crashed_ = false;
   bool detached_ = false;
   // For the top-level session, this is the target id.
   // For child sessions, it's the session id.
   const std::string id_;
   ParserFunc parser_func_;
-  std::list<DevToolsEventListener*> listeners_;
-  std::list<DevToolsEventListener*> unnotified_connect_listeners_;
-  std::list<DevToolsEventListener*> unnotified_event_listeners_;
+  std::list<raw_ptr<DevToolsEventListener, CtnExperimental>> listeners_;
+  std::list<raw_ptr<DevToolsEventListener, CtnExperimental>>
+      unnotified_connect_listeners_;
+  std::list<raw_ptr<DevToolsEventListener, CtnExperimental>>
+      unnotified_event_listeners_;
   raw_ptr<const InspectorEvent> unnotified_event_ = nullptr;
-  std::list<DevToolsEventListener*> unnotified_cmd_response_listeners_;
+  std::list<raw_ptr<DevToolsEventListener, CtnExperimental>>
+      unnotified_cmd_response_listeners_;
   scoped_refptr<ResponseInfo> unnotified_cmd_response_info_;
   std::map<int, scoped_refptr<ResponseInfo>> response_info_map_;
   int next_id_ = 1;  // The id identifying a particular request.
   bool is_main_page_ = false;
+  std::list<std::string> unhandled_dialog_queue_;
+  std::list<std::string> dialog_type_queue_;
+  std::string prompt_text_;
+  bool is_tab_ = false;
+  bool autoaccept_beforeunload_ = false;
   // Event tunneling is temporarily disabled in production.
   // It is enabled only by the unit tests
   // TODO(chromedriver:4181): Enable CDP event tunneling
@@ -241,10 +259,10 @@ namespace internal {
 
 bool ParseInspectorMessage(const std::string& message,
                            int expected_id,
-                           std::string* session_id,
-                           InspectorMessageType* type,
-                           InspectorEvent* event,
-                           InspectorCommandResponse* command_response);
+                           std::string& session_id,
+                           InspectorMessageType& type,
+                           InspectorEvent& event,
+                           InspectorCommandResponse& command_response);
 
 Status ParseInspectorError(const std::string& error_json);
 

@@ -13,13 +13,16 @@
 #include <memory>
 #include <utility>
 
+#include "absl/container/inlined_vector.h"
 #include "absl/memory/memory.h"
 #include "api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
+#include "api/environment/environment.h"
 #include "api/rtc_event_log/rtc_event_log_factory.h"
 #include "api/task_queue/default_task_queue_factory.h"
 #include "api/test/create_time_controller.h"
 #include "api/transport/field_trial_based_config.h"
+#include "api/video_codecs/scalability_mode.h"
 #include "api/video_codecs/video_decoder_factory_template.h"
 #include "api/video_codecs/video_decoder_factory_template_dav1d_adapter.h"
 #include "api/video_codecs/video_decoder_factory_template_libvpx_vp8_adapter.h"
@@ -177,26 +180,29 @@ class LambdaSetRemoteDescriptionObserver
 
 class FakeVideoEncoderFactory : public VideoEncoderFactory {
  public:
-  FakeVideoEncoderFactory(Clock* clock) : clock_(clock) {}
   std::vector<SdpVideoFormat> GetSupportedFormats() const override {
-    return {SdpVideoFormat("VP8")};
+    const absl::InlinedVector<webrtc::ScalabilityMode,
+                              webrtc::kScalabilityModeCount>
+        kSupportedScalabilityModes = {webrtc::ScalabilityMode::kL1T1,
+                                      webrtc::ScalabilityMode::kL1T2,
+                                      webrtc::ScalabilityMode::kL1T3};
+    return {
+        SdpVideoFormat(cricket::kVp8CodecName, {}, kSupportedScalabilityModes)};
   }
-  std::unique_ptr<VideoEncoder> CreateVideoEncoder(
-      const SdpVideoFormat& format) override {
+  std::unique_ptr<VideoEncoder> Create(const Environment& env,
+                                       const SdpVideoFormat& format) override {
     RTC_CHECK_EQ(format.name, "VP8");
-    return std::make_unique<FakeVp8Encoder>(clock_);
+    return std::make_unique<FakeVp8Encoder>(env);
   }
-
- private:
-  Clock* const clock_;
 };
+
 class FakeVideoDecoderFactory : public VideoDecoderFactory {
  public:
   std::vector<SdpVideoFormat> GetSupportedFormats() const override {
-    return {SdpVideoFormat("VP8")};
+    return {SdpVideoFormat::VP8()};
   }
-  std::unique_ptr<VideoDecoder> CreateVideoDecoder(
-      const SdpVideoFormat& format) override {
+  std::unique_ptr<VideoDecoder> Create(const Environment& env,
+                                       const SdpVideoFormat& format) override {
     return std::make_unique<FakeDecoder>();
   }
 };
@@ -260,8 +266,8 @@ PeerScenarioClient::PeerScenarioClient(
       TestAudioDeviceModule::CreateDiscardRenderer(config.audio.sample_rate));
 
   if (config.video.use_fake_codecs) {
-    pcf_deps.video_encoder_factory = std::make_unique<FakeVideoEncoderFactory>(
-        net->time_controller()->GetClock());
+    pcf_deps.video_encoder_factory =
+        std::make_unique<FakeVideoEncoderFactory>();
     pcf_deps.video_decoder_factory =
         std::make_unique<FakeVideoDecoderFactory>();
   } else {
@@ -350,7 +356,8 @@ void PeerScenarioClient::CreateAndSetSdp(
   RTC_DCHECK_RUN_ON(signaling_thread_);
   peer_connection_->CreateOffer(
       rtc::make_ref_counted<LambdaCreateSessionDescriptionObserver>(
-          [=](std::unique_ptr<SessionDescriptionInterface> offer) {
+          [this, munge_offer,
+           offer_handler](std::unique_ptr<SessionDescriptionInterface> offer) {
             RTC_DCHECK_RUN_ON(signaling_thread_);
             if (munge_offer) {
               munge_offer(offer.get());
@@ -373,47 +380,52 @@ void PeerScenarioClient::SetSdpOfferAndGetAnswer(
     std::function<void()> remote_description_set,
     std::function<void(std::string)> answer_handler) {
   if (!signaling_thread_->IsCurrent()) {
-    signaling_thread_->PostTask([=] {
-      SetSdpOfferAndGetAnswer(remote_offer, remote_description_set,
-                              answer_handler);
-    });
+    signaling_thread_->PostTask(
+        [this, remote_offer, remote_description_set, answer_handler] {
+          SetSdpOfferAndGetAnswer(remote_offer, remote_description_set,
+                                  answer_handler);
+        });
     return;
   }
   RTC_DCHECK_RUN_ON(signaling_thread_);
   peer_connection_->SetRemoteDescription(
       CreateSessionDescription(SdpType::kOffer, remote_offer),
-      rtc::make_ref_counted<LambdaSetRemoteDescriptionObserver>([=](RTCError) {
-        RTC_DCHECK_RUN_ON(signaling_thread_);
-        if (remote_description_set) {
-          // Allow the caller to modify transceivers
-          // before creating the answer.
-          remote_description_set();
-        }
-        peer_connection_->CreateAnswer(
-            rtc::make_ref_counted<LambdaCreateSessionDescriptionObserver>(
-                [=](std::unique_ptr<SessionDescriptionInterface> answer) {
-                  RTC_DCHECK_RUN_ON(signaling_thread_);
-                  std::string sdp_answer;
-                  answer->ToString(&sdp_answer);
-                  RTC_LOG(LS_INFO) << sdp_answer;
-                  peer_connection_->SetLocalDescription(
-                      std::move(answer),
-                      rtc::make_ref_counted<LambdaSetLocalDescriptionObserver>(
-                          [answer_handler, sdp_answer](RTCError) {
-                            answer_handler(sdp_answer);
-                          }));
-                })
-                .get(),
-            PeerConnectionInterface::RTCOfferAnswerOptions());
-      }));
+      rtc::make_ref_counted<LambdaSetRemoteDescriptionObserver>(
+          [this, remote_description_set, answer_handler](RTCError) {
+            RTC_DCHECK_RUN_ON(signaling_thread_);
+            if (remote_description_set) {
+              // Allow the caller to modify transceivers
+              // before creating the answer.
+              remote_description_set();
+            }
+            peer_connection_->CreateAnswer(
+                rtc::make_ref_counted<LambdaCreateSessionDescriptionObserver>(
+                    [this, answer_handler](
+                        std::unique_ptr<SessionDescriptionInterface> answer) {
+                      RTC_DCHECK_RUN_ON(signaling_thread_);
+                      std::string sdp_answer;
+                      answer->ToString(&sdp_answer);
+                      RTC_LOG(LS_INFO) << sdp_answer;
+                      peer_connection_->SetLocalDescription(
+                          std::move(answer),
+                          rtc::make_ref_counted<
+                              LambdaSetLocalDescriptionObserver>(
+                              [answer_handler, sdp_answer](RTCError) {
+                                answer_handler(sdp_answer);
+                              }));
+                    })
+                    .get(),
+                PeerConnectionInterface::RTCOfferAnswerOptions());
+          }));
 }
 
 void PeerScenarioClient::SetSdpAnswer(
     std::string remote_answer,
     std::function<void(const SessionDescriptionInterface&)> done_handler) {
   if (!signaling_thread_->IsCurrent()) {
-    signaling_thread_->PostTask(
-        [=] { SetSdpAnswer(remote_answer, done_handler); });
+    signaling_thread_->PostTask([this, remote_answer, done_handler] {
+      SetSdpAnswer(remote_answer, done_handler);
+    });
     return;
   }
   RTC_DCHECK_RUN_ON(signaling_thread_);

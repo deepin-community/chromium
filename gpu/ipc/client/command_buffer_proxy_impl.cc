@@ -5,9 +5,10 @@
 #include "gpu/ipc/client/command_buffer_proxy_impl.h"
 
 #include <memory>
-
 #include <optional>
+
 #include "base/command_line.h"
+#include "base/cpu_reduction_experiment.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
@@ -25,7 +26,6 @@
 #include "gpu/command_buffer/common/command_buffer_id.h"
 #include "gpu/command_buffer/common/command_buffer_shared.h"
 #include "gpu/command_buffer/common/gpu_memory_allocation.h"
-#include "gpu/command_buffer/common/gpu_memory_buffer_support.h"
 #include "gpu/command_buffer/common/presentation_feedback_utils.h"
 #include "gpu/command_buffer/common/sync_token.h"
 #include "gpu/ipc/client/gpu_channel_host.h"
@@ -67,7 +67,6 @@ CommandBufferProxyImpl::~CommandBufferProxyImpl() {
 }
 
 ContextResult CommandBufferProxyImpl::Initialize(
-    gpu::SurfaceHandle surface_handle,
     CommandBufferProxyImpl* share_group,
     gpu::SchedulingPriority stream_priority,
     const gpu::ContextCreationAttribs& attribs,
@@ -80,11 +79,6 @@ ContextResult CommandBufferProxyImpl::Initialize(
   auto channel = std::move(channel_);
 
   auto params = mojom::CreateCommandBufferParams::New();
-#if BUILDFLAG(IS_ANDROID)
-  params->surface_handle = surface_handle;
-#else
-  CHECK(surface_handle == gpu::kNullSurfaceHandle);
-#endif
   params->share_group_id =
       share_group ? share_group->route_id_ : MSG_ROUTING_NONE;
   params->stream_id = stream_id_;
@@ -191,6 +185,13 @@ void CommandBufferProxyImpl::RemoveDeletionObserver(
   deletion_observers_.RemoveObserver(observer);
 }
 
+void CommandBufferProxyImpl::UpdateLastFenceSyncRelease(
+    uint64_t release_count) {
+  CheckLock();
+  if (last_fence_sync_release_ < release_count) {
+    last_fence_sync_release_ = release_count;
+  }
+}
 void CommandBufferProxyImpl::OnSignalAck(uint32_t id,
                                          const CommandBuffer::State& state) {
   base::AutoLockMaybe lock(lock_.get());
@@ -254,7 +255,8 @@ void CommandBufferProxyImpl::OrderingBarrierHelper(int32_t put_offset) {
     return;
   last_put_offset_ = put_offset;
   last_flush_id_ = channel_->OrderingBarrier(
-      route_id_, put_offset, std::move(pending_sync_token_fences_));
+      route_id_, put_offset, std::move(pending_sync_token_fences_),
+      last_fence_sync_release_);
 }
 
 gpu::CommandBuffer::State CommandBufferProxyImpl::WaitForTokenInRange(
@@ -386,7 +388,8 @@ void CommandBufferProxyImpl::DestroyTransferBuffer(int32_t id) {
       mojom::DeferredRequestParams::NewCommandBufferRequest(
           mojom::DeferredCommandBufferRequest::New(
               route_id_, mojom::DeferredCommandBufferRequestParams::
-                             NewDestroyTransferBuffer(id))));
+                             NewDestroyTransferBuffer(id))),
+      /*sync_token_fences=*/{}, /*release_count=*/0);
 }
 
 void CommandBufferProxyImpl::ForceLostContext(error::ContextLostReason reason) {
@@ -439,12 +442,14 @@ void CommandBufferProxyImpl::EnsureWorkVisible() {
   TRACE_EVENT_NESTABLE_ASYNC_END0("gpu,login", kEnsureWorkVisible,
                                   TRACE_ID_LOCAL(kEnsureWorkVisible));
 
-  GetUMAHistogramEnsureWorkVisibleDuration()->Add(
-      elapsed_timer.Elapsed().InMicroseconds());
+  if (base::ShouldLogHistogramForCpuReductionExperiment()) {
+    GetUMAHistogramEnsureWorkVisibleDuration()->Add(
+        elapsed_timer.Elapsed().InMicroseconds());
 
-  UMA_HISTOGRAM_CUSTOM_TIMES("GPU.EnsureWorkVisibleDurationLowRes",
-                             elapsed_timer.Elapsed(), base::Milliseconds(1),
-                             base::Seconds(5), 100);
+    UMA_HISTOGRAM_CUSTOM_TIMES("GPU.EnsureWorkVisibleDurationLowRes",
+                               elapsed_timer.Elapsed(), base::Milliseconds(1),
+                               base::Seconds(5), 100);
+  }
 }
 
 gpu::CommandBufferNamespace CommandBufferProxyImpl::GetNamespaceID() const {
@@ -463,7 +468,7 @@ void CommandBufferProxyImpl::FlushPendingWork() {
 
 uint64_t CommandBufferProxyImpl::GenerateFenceSyncRelease() {
   CheckLock();
-  return next_fence_sync_release_++;
+  return ++last_fence_sync_release_;
 }
 
 // This can be called from any thread without holding |lock_|. Use a thread-safe
@@ -559,7 +564,9 @@ void CommandBufferProxyImpl::GetGpuFence(
   command_buffer_->GetGpuFenceHandle(
       gpu_fence_id,
       base::BindOnce(&CommandBufferProxyImpl::OnGetGpuFenceHandleComplete,
-                     base::Unretained(this), gpu_fence_id,
+                     // TODO(crbug.com/40061562): Remove
+                     // `UnsafeDanglingUntriaged`
+                     base::UnsafeDanglingUntriaged(this), gpu_fence_id,
                      std::move(callback)));
 }
 
@@ -597,7 +604,7 @@ void CommandBufferProxyImpl::SetDefaultFramebufferSharedImage(
                       mojom::SetDefaultFramebufferSharedImageParams::New(
                           mailbox, samples_count, preserve, needs_depth,
                           needs_stencil)))),
-      {sync_token});
+      {sync_token}, /*release_count=*/0);
 }
 
 std::pair<base::UnsafeSharedMemoryRegion, base::WritableSharedMemoryMapping>
@@ -659,8 +666,9 @@ void CommandBufferProxyImpl::TryUpdateStateDontReportError() {
     shared_state()->Read(&last_state_);
 }
 
-gpu::CommandBufferSharedState* CommandBufferProxyImpl::shared_state() const {
-  return reinterpret_cast<gpu::CommandBufferSharedState*>(
+const gpu::CommandBufferSharedState* CommandBufferProxyImpl::shared_state()
+    const {
+  return reinterpret_cast<const gpu::CommandBufferSharedState*>(
       shared_state_mapping_.memory());
 }
 
@@ -698,9 +706,9 @@ CommandBufferProxyImpl::GetUMAHistogramEnsureWorkVisibleDuration() {
     //
     // Histogram values are in microseconds.
 
-    std::vector<base::HistogramBase::Sample> intervals;
-    constexpr base::HistogramBase::Sample k15Milliseconds = 15 * 1000;
-    constexpr base::HistogramBase::Sample k30Seconds = 30 * 1000 * 1000;
+    std::vector<base::HistogramBase::Sample32> intervals;
+    constexpr base::HistogramBase::Sample32 k15Milliseconds = 15 * 1000;
+    constexpr base::HistogramBase::Sample32 k30Seconds = 30 * 1000 * 1000;
     constexpr int kFirstPartCount = 60;
     constexpr int kSecondPartCount = 120;
     intervals.reserve(kFirstPartCount + kSecondPartCount);

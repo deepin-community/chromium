@@ -33,14 +33,17 @@ import * as Host from '../../../../core/host/host.js';
 import * as i18n from '../../../../core/i18n/i18n.js';
 import * as Platform from '../../../../core/platform/platform.js';
 import * as Root from '../../../../core/root/root.js';
+import * as SDK from '../../../../core/sdk/sdk.js';
 import * as Formatter from '../../../../models/formatter/formatter.js';
 import * as TextUtils from '../../../../models/text_utils/text_utils.js';
 import * as CodeMirror from '../../../../third_party/codemirror.next/codemirror.next.js';
+import * as Buttons from '../../../components/buttons/buttons.js';
 import * as CodeHighlighter from '../../../components/code_highlighter/code_highlighter.js';
 import * as TextEditor from '../../../components/text_editor/text_editor.js';
+import * as VisualLogging from '../../../visual_logging/visual_logging.js';
 import * as UI from '../../legacy.js';
 
-import selfXssDialogStyles from './selfXssDialog.css.legacy.js';
+import selfXssDialogStyles from './selfXssDialog.css.js';
 
 const UIStrings = {
   /**
@@ -111,6 +114,12 @@ const UIStrings = {
    *@example {allow pasting} PH1
    */
   typeAllowPasting: 'Type \'\'{PH1}\'\'',
+  /**
+   * @description Error message shown when the user tries to open a file that contains non-readable data. "Editor" refers to
+   * a text editor.
+   */
+  binaryContentError:
+      'Editor can\'t show binary data. Use the "Response" tab in the "Network" panel to inspect this resource.',
 };
 const str_ = i18n.i18n.registerUIStrings('ui/legacy/components/source_frame/SourceFrame.ts', UIStrings);
 const i18nString = i18n.i18n.getLocalizedString.bind(undefined, str_);
@@ -123,14 +132,14 @@ export interface SourceFrameOptions {
 }
 
 export const enum Events {
-  EditorUpdate = 'EditorUpdate',
-  EditorScroll = 'EditorScroll',
+  EDITOR_UPDATE = 'EditorUpdate',
+  EDITOR_SCROLL = 'EditorScroll',
 }
 
-export type EventTypes = {
-  [Events.EditorUpdate]: CodeMirror.ViewUpdate,
-  [Events.EditorScroll]: void,
-};
+export interface EventTypes {
+  [Events.EDITOR_UPDATE]: CodeMirror.ViewUpdate;
+  [Events.EDITOR_SCROLL]: void;
+}
 
 type FormatFn = (lineNo: number, state: CodeMirror.EditorState) => string;
 export const LINE_NUMBER_FORMATTER = CodeMirror.Facet.define<FormatFn, FormatFn>({
@@ -144,7 +153,7 @@ export const LINE_NUMBER_FORMATTER = CodeMirror.Facet.define<FormatFn, FormatFn>
 
 export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes, typeof UI.View.SimpleView>(
     UI.View.SimpleView) implements UI.SearchableView.Searchable, UI.SearchableView.Replaceable, Transformer {
-  private readonly lazyContent: () => Promise<TextUtils.ContentProvider.DeferredContent>;
+  private readonly lazyContent: () => Promise<TextUtils.ContentData.ContentDataOrError>;
   private prettyInternal: boolean;
   private rawContent: string|CodeMirror.Text|null;
   private formattedMap: Formatter.ScriptFormatter.FormatterSourceMapping|null;
@@ -174,12 +183,12 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
   private selectionToSet: TextUtils.TextRange.TextRange|null;
   private loadedInternal: boolean;
   private contentRequested: boolean;
-  private wasmDisassemblyInternal: Common.WasmDisassembly.WasmDisassembly|null;
+  private wasmDisassemblyInternal: TextUtils.WasmDisassembly.WasmDisassembly|null;
   contentSet: boolean;
   private selfXssWarningDisabledSetting: Common.Settings.Setting<boolean>;
 
   constructor(
-      lazyContent: () => Promise<TextUtils.ContentProvider.DeferredContent>,
+      lazyContent: () => Promise<TextUtils.ContentData.ContentDataOrError>,
       private readonly options: SourceFrameOptions = {}) {
     super(i18nString(UIStrings.source));
 
@@ -190,8 +199,8 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
     this.formattedMap = null;
     this.prettyToggle =
         new UI.Toolbar.ToolbarToggle(i18nString(UIStrings.prettyPrint), 'brackets', undefined, 'pretty-print');
-    this.prettyToggle.addEventListener(UI.Toolbar.ToolbarButton.Events.Click, () => {
-      void this.setPretty(!this.prettyToggle.toggled());
+    this.prettyToggle.addEventListener(UI.Toolbar.ToolbarButton.Events.CLICK, () => {
+      void this.setPretty(this.prettyToggle.isToggled());
     });
     this.shouldAutoPrettyPrint = false;
     this.prettyToggle.setVisible(false);
@@ -200,6 +209,7 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
 
     this.textEditorInternal = new TextEditor.TextEditor.TextEditor(this.placeholderEditorState(''));
     this.textEditorInternal.style.flexGrow = '1';
+
     this.element.appendChild(this.textEditorInternal);
     this.element.addEventListener('keydown', (event: KeyboardEvent) => {
       if (event.defaultPrevented) {
@@ -233,7 +243,7 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
     this.contentSet = false;
 
     this.selfXssWarningDisabledSetting = Common.Settings.Settings.instance().createSetting(
-        'disable-self-xss-warning', false, Common.Settings.SettingStorageType.Synced);
+        'disable-self-xss-warning', false, Common.Settings.SettingStorageType.SYNCED);
     Common.Settings.Settings.instance()
         .moduleSetting('text-editor-indent')
         .addChangeListener(this.#textEditorIndentChanged, this);
@@ -268,9 +278,9 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
 
   protected editorConfiguration(doc: string|CodeMirror.Text): CodeMirror.Extension {
     return [
-      CodeMirror.EditorView.updateListener.of(update => this.dispatchEventToListeners(Events.EditorUpdate, update)),
+      CodeMirror.EditorView.updateListener.of(update => this.dispatchEventToListeners(Events.EDITOR_UPDATE, update)),
       TextEditor.Config.baseConfiguration(doc),
-      TextEditor.Config.closeBrackets,
+      TextEditor.Config.closeBrackets.instance(),
       TextEditor.Config.autocompletion.instance(),
       TextEditor.Config.showWhitespace.instance(),
       TextEditor.Config.allowScrollPastEof.instance(),
@@ -281,7 +291,7 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
         focus: () => this.onFocus(),
         blur: () => this.onBlur(),
         paste: () => this.onPaste(),
-        scroll: () => this.dispatchEventToListeners(Events.EditorScroll),
+        scroll: () => this.dispatchEventToListeners(Events.EDITOR_SCROLL),
         contextmenu: event => this.onContextMenu(event),
       }),
       CodeMirror.lineNumbers({
@@ -304,16 +314,14 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
       this.wasmDisassemblyInternal ? markNonBreakableLines(this.wasmDisassemblyInternal) : nonBreakableLines,
       this.options.lineWrapping ? CodeMirror.EditorView.lineWrapping : [],
       this.options.lineNumbers !== false ? CodeMirror.lineNumbers() : [],
-      Root.Runtime.experiments.isEnabled(Root.Runtime.ExperimentName.INDENTATION_MARKERS_TEMP_DISABLE) ?
-          [] :
-          CodeMirror.indentationMarkers({
-            colors: {
-              light: 'var(--sys-color-divider)',
-              activeLight: 'var(--sys-color-divider-prominent)',
-              dark: 'var(--sys-color-divider)',
-              activeDark: 'var(--sys-color-divider-prominent)',
-            },
-          }),
+      CodeMirror.indentationMarkers({
+        colors: {
+          light: 'var(--sys-color-divider)',
+          activeLight: 'var(--sys-color-divider-prominent)',
+          dark: 'var(--sys-color-divider)',
+          activeDark: 'var(--sys-color-divider-prominent)',
+        },
+      }),
     ];
   }
 
@@ -321,16 +329,15 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
   }
 
   protected onFocus(): void {
-    this.resetCurrentSearchResultIndex();
   }
 
   protected onPaste(): boolean {
-    if (Root.Runtime.experiments.isEnabled(Root.Runtime.ExperimentName.SELF_XSS_WARNING) &&
-        !Root.Runtime.Runtime.queryParam('isChromeForTesting') && !this.selfXssWarningDisabledSetting.get()) {
-      void this.showSelfXssWarning();
-      return true;
+    if (Root.Runtime.Runtime.queryParam('isChromeForTesting') ||
+        Root.Runtime.Runtime.queryParam('disableSelfXssWarnings') || this.selfXssWarningDisabledSetting.get()) {
+      return false;
     }
-    return false;
+    void this.showSelfXssWarning();
+    return true;
   }
 
   async showSelfXssWarning(): Promise<void> {
@@ -345,7 +352,7 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
     }
   }
 
-  get wasmDisassembly(): Common.WasmDisassembly.WasmDisassembly|null {
+  get wasmDisassembly(): TextUtils.WasmDisassembly.WasmDisassembly|null {
     return this.wasmDisassemblyInternal;
   }
 
@@ -384,7 +391,8 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
   }
 
   setCanPrettyPrint(canPrettyPrint: boolean, autoPrettyPrint?: boolean): void {
-    this.shouldAutoPrettyPrint = canPrettyPrint && Boolean(autoPrettyPrint);
+    this.shouldAutoPrettyPrint = autoPrettyPrint === true &&
+        Common.Settings.Settings.instance().moduleSetting('auto-pretty-print-minified').get();
     this.prettyToggle.setVisible(canPrettyPrint);
   }
 
@@ -467,6 +475,8 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
 
   private updateLineNumberFormatter(): void {
     this.textEditor.dispatch({effects: config.lineNumbers.reconfigure(this.getLineNumberFormatter())});
+    this.textEditor.shadowRoot?.querySelector('.cm-lineNumbers')
+        ?.setAttribute('jslog', `${VisualLogging.gutter('line-numbers').track({click: true})}`);
   }
 
   private updatePrettyPrintState(): void {
@@ -531,13 +541,13 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
   private async ensureContentLoaded(): Promise<void> {
     if (!this.contentRequested) {
       this.contentRequested = true;
-      await this.setDeferredContent(this.lazyContent());
+      await this.setContentDataOrError(this.lazyContent());
 
       this.contentSet = true;
     }
   }
 
-  protected async setDeferredContent(deferredContentPromise: Promise<TextUtils.ContentProvider.DeferredContent>):
+  protected async setContentDataOrError(contentDataPromise: Promise<TextUtils.ContentData.ContentDataOrError>):
       Promise<void> {
     const progressIndicator = new UI.ProgressIndicator.ProgressIndicator();
     progressIndicator.setTitle(i18nString(UIStrings.loading));
@@ -545,78 +555,39 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
     this.progressToolbarItem.element.appendChild(progressIndicator.element);
 
     progressIndicator.setWorked(1);
-    const deferredContent = await deferredContentPromise;
+    const contentData = await contentDataPromise;
 
-    let error, content;
-    if (deferredContent.content === null) {
-      error = deferredContent.error;
-      this.rawContent = deferredContent.error;
+    let error: string|undefined;
+    let content: CodeMirror.Text|string|null;
+    let isMinified = false;
+    if (TextUtils.ContentData.ContentData.isError(contentData)) {
+      error = contentData.error;
+      content = contentData.error;
+    } else if (contentData instanceof TextUtils.WasmDisassembly.WasmDisassembly) {
+      content = CodeMirror.Text.of(contentData.lines);
+      this.wasmDisassemblyInternal = contentData;
+    } else if (contentData.isTextContent) {
+      content = contentData.text;
+      isMinified = TextUtils.TextUtils.isMinified(contentData.text);
+      this.wasmDisassemblyInternal = null;
+    } else if (contentData.mimeType === 'application/wasm') {
+      // The network panel produces ContentData with raw WASM inside. We have to manually disassemble that
+      // as V8 might not know about it.
+      this.wasmDisassemblyInternal = await SDK.Script.disassembleWasm(contentData.base64);
+      content = CodeMirror.Text.of(this.wasmDisassemblyInternal.lines);
     } else {
-      content = deferredContent.content;
-      if (deferredContent.isEncoded) {
-        const view = new DataView(Common.Base64.decode(deferredContent.content));
-        const decoder = new TextDecoder();
-        this.rawContent = decoder.decode(view, {stream: true});
-      } else if ('wasmDisassemblyInfo' in deferredContent && deferredContent.wasmDisassemblyInfo) {
-        const {wasmDisassemblyInfo} = deferredContent;
-        this.rawContent = CodeMirror.Text.of(wasmDisassemblyInfo.lines);
-        this.wasmDisassemblyInternal = wasmDisassemblyInfo;
-      } else {
-        this.rawContent = content;
-        this.wasmDisassemblyInternal = null;
-      }
-    }
-
-    // If the input is wasm but v8-based wasm disassembly failed, fall back to wasmparser for backwards compatibility.
-    if (content && this.contentType === 'application/wasm' && !this.wasmDisassemblyInternal) {
-      const worker = Common.Worker.WorkerWrapper.fromURL(
-          new URL('../../../../entrypoints/wasmparser_worker/wasmparser_worker-entrypoint.js', import.meta.url));
-      const promise = new Promise<{
-        lines: string[],
-        offsets: number[],
-        functionBodyOffsets: {
-          start: number,
-          end: number,
-        }[],
-      }>((resolve, reject) => {
-        worker.onmessage =
-            // TODO(crbug.com/1172300) Ignored during the jsdoc to ts migration)
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            ({data}: MessageEvent<any>) => {
-              if ('event' in data) {
-                switch (data.event) {
-                  case 'progress':
-                    progressIndicator?.setWorked(data.params.percentage);
-                    break;
-                }
-              } else if ('method' in data) {
-                switch (data.method) {
-                  case 'disassemble':
-                    if ('error' in data) {
-                      reject(data.error);
-                    } else if ('result' in data) {
-                      resolve(data.result);
-                    }
-                    break;
-                }
-              }
-            };
-        worker.onerror = reject;
-      });
-      worker.postMessage({method: 'disassemble', params: {content}});
-      try {
-        const {lines, offsets, functionBodyOffsets} = await promise;
-        this.rawContent = content = CodeMirror.Text.of(lines);
-        this.wasmDisassemblyInternal = new Common.WasmDisassembly.WasmDisassembly(lines, offsets, functionBodyOffsets);
-      } catch (e) {
-        this.rawContent = content = error = e.message;
-      } finally {
-        worker.terminate();
-      }
+      error = i18nString(UIStrings.binaryContentError);
+      content = null;
+      this.wasmDisassemblyInternal = null;
     }
 
     progressIndicator.setWorked(100);
     progressIndicator.done();
+
+    if (this.rawContent === content && error === undefined) {
+      return;
+    }
+    this.rawContent = content;
 
     this.formattedMap = null;
     this.prettyToggle.setEnabled(true);
@@ -625,12 +596,10 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
       this.loadError = true;
       this.textEditor.state = this.placeholderEditorState(error);
       this.prettyToggle.setEnabled(false);
+    } else if (this.shouldAutoPrettyPrint && isMinified) {
+      await this.setPretty(true);
     } else {
-      if (this.shouldAutoPrettyPrint && TextUtils.TextUtils.isMinified(content || '')) {
-        await this.setPretty(true);
-      } else {
-        await this.setContent(this.rawContent || '');
-      }
+      await this.setContent(this.rawContent || '');
     }
   }
 
@@ -718,6 +687,11 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
     this.innerRevealPositionIfNeeded();
     this.innerSetSelectionIfNeeded();
     this.innerScrollToLineIfNeeded();
+    this.textEditor.shadowRoot?.querySelector('.cm-lineNumbers')
+        ?.setAttribute('jslog', `${VisualLogging.gutter('line-numbers').track({click: true})}`);
+    this.textEditor.shadowRoot?.querySelector('.cm-foldGutter')
+        ?.setAttribute('jslog', `${VisualLogging.gutter('fold')}`);
+    this.textEditor.setAttribute('jslog', `${VisualLogging.textField().track({change: true})}`);
   }
 
   onTextChanged(): void {
@@ -1031,7 +1005,7 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
 
   onContextMenu(event: MouseEvent): boolean {
     event.consume(true);  // Consume event now to prevent document from handling the async menu
-    const contextMenu = new UI.ContextMenu.ContextMenu(event, {jsLogContext: 'sources-text-area'});
+    const contextMenu = new UI.ContextMenu.ContextMenu(event);
     const {state} = this.textEditor;
     const pos = state.selection.main.from, line = state.doc.lineAt(pos);
     this.populateTextAreaContextMenu(contextMenu, line.number - 1, pos - line.from);
@@ -1046,7 +1020,7 @@ export class SourceFrameImpl extends Common.ObjectWrapper.eventMixin<EventTypes,
 
   onLineGutterContextMenu(position: number, event: MouseEvent): boolean {
     event.consume(true);  // Consume event now to prevent document from handling the async menu
-    const contextMenu = new UI.ContextMenu.ContextMenu(event, {jsLogContext: 'sources-line-gutter'});
+    const contextMenu = new UI.ContextMenu.ContextMenu(event);
     const lineNumber = this.textEditor.state.doc.lineAt(position).number - 1;
     this.populateLineGutterContextMenu(contextMenu, lineNumber);
     contextMenu.appendApplicableItems(this);
@@ -1084,17 +1058,15 @@ class SearchMatch {
 
 export class SelfXssWarningDialog {
   static async show(): Promise<boolean> {
-    const dialog = new UI.Dialog.Dialog();
+    const dialog = new UI.Dialog.Dialog('self-xss-warning');
     dialog.setMaxContentSize(new UI.Geometry.Size(504, 340));
-    dialog.setSizeBehavior(UI.GlassPane.SizeBehavior.SetExactWidthMaxHeight);
+    dialog.setSizeBehavior(UI.GlassPane.SizeBehavior.SET_EXACT_WIDTH_MAX_HEIGHT);
     dialog.setDimmed(true);
-    const shadowRoot = UI.Utils.createShadowRootWithCoreStyles(
-        dialog.contentElement, {cssFile: selfXssDialogStyles, delegatesFocus: undefined});
+    const shadowRoot = UI.UIUtils.createShadowRootWithCoreStyles(dialog.contentElement, {cssFile: selfXssDialogStyles});
     const content = shadowRoot.createChild('div', 'widget');
 
     const result = await new Promise<boolean>(resolve => {
-      const closeButton =
-          content.createChild('div', 'dialog-close-button', 'dt-close-button') as UI.UIUtils.DevToolsCloseButton;
+      const closeButton = content.createChild('dt-close-button', 'dialog-close-button');
       closeButton.setTabbable(true);
       self.onInvokeElement(closeButton, event => {
         dialog.hide();
@@ -1106,7 +1078,7 @@ export class SelfXssWarningDialog {
       content.createChild('div', 'message').textContent =
           i18nString(UIStrings.doNotPaste, {PH1: i18nString(UIStrings.allowPasting)});
 
-      const input = UI.UIUtils.createInput('text-input', 'text');
+      const input = UI.UIUtils.createInput('text-input', 'text', 'allow-pasting');
       input.placeholder = i18nString(UIStrings.typeAllowPasting, {PH1: i18nString(UIStrings.allowPasting)});
       content.appendChild(input);
 
@@ -1116,7 +1088,7 @@ export class SelfXssWarningDialog {
       buttonsBar.appendChild(cancelButton);
       const allowButton = UI.UIUtils.createTextButton(i18nString(UIStrings.allow), () => {
         resolve(input.value === i18nString(UIStrings.allowPasting));
-      }, {jslogContext: 'confirm', primary: true});
+      }, {jslogContext: 'confirm', variant: Buttons.Button.Variant.PRIMARY});
       allowButton.disabled = true;
       buttonsBar.appendChild(allowButton);
 
@@ -1287,7 +1259,7 @@ export function isBreakableLine(state: CodeMirror.EditorState, line: CodeMirror.
   return !found;
 }
 
-function markNonBreakableLines(disassembly: Common.WasmDisassembly.WasmDisassembly): CodeMirror.Extension {
+function markNonBreakableLines(disassembly: TextUtils.WasmDisassembly.WasmDisassembly): CodeMirror.Extension {
   // Mark non-breakable lines in the Wasm disassembly after setting
   // up the content for the text editor (which creates the gutter).
   return nonBreakableLines.init(state => {

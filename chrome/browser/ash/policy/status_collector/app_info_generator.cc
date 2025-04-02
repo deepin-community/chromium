@@ -45,6 +45,7 @@ em::AppInfo::Status ExtractStatus(const apps::Readiness readiness) {
     case apps::Readiness::kDisabledByPolicy:
     case apps::Readiness::kDisabledByUser:
     case apps::Readiness::kTerminated:
+    case apps::Readiness::kDisabledByLocalSettings:
       return em::AppInfo::Status::AppInfo_Status_STATUS_DISABLED;
     case apps::Readiness::kUnknown:
       return em::AppInfo::Status::AppInfo_Status_STATUS_UNKNOWN;
@@ -55,14 +56,11 @@ em::AppInfo::AppType ExtractAppType(const apps::AppType app_type) {
   switch (app_type) {
     case apps::AppType::kArc:
       return em::AppInfo::AppType::AppInfo_AppType_TYPE_ARC;
-    case apps::AppType::kBuiltIn:
-      return em::AppInfo::AppType::AppInfo_AppType_TYPE_BUILTIN;
     case apps::AppType::kCrostini:
       return em::AppInfo::AppType::AppInfo_AppType_TYPE_CROSTINI;
     case apps::AppType::kPluginVm:
       return em::AppInfo::AppType::AppInfo_AppType_TYPE_PLUGINVM;
     case apps::AppType::kChromeApp:
-    case apps::AppType::kStandaloneBrowserChromeApp:
       return em::AppInfo::AppType::AppInfo_AppType_TYPE_EXTENSION;
     case apps::AppType::kWeb:
     case apps::AppType::kSystemWeb:
@@ -71,9 +69,7 @@ em::AppInfo::AppType ExtractAppType(const apps::AppType app_type) {
       return em::AppInfo::AppType::AppInfo_AppType_TYPE_BOREALIS;
     case apps::AppType::kBruschetta:
       return em::AppInfo::AppType::AppInfo_AppType_TYPE_BRUSCHETTA;
-    case apps::AppType::kStandaloneBrowser:
     case apps::AppType::kExtension:
-    case apps::AppType::kStandaloneBrowserExtension:
     case apps::AppType::kRemote:
     case apps::AppType::kUnknown:
       return em::AppInfo::AppType::AppInfo_AppType_TYPE_UNKNOWN;

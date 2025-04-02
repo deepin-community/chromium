@@ -21,6 +21,7 @@
 #include "components/crash/content/browser/error_reporting/mock_crash_endpoint.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "extensions/browser/extension_host.h"
 #include "extensions/browser/process_manager.h"
 #include "extensions/common/switches.h"
@@ -315,10 +316,6 @@ using CrashReportPrivateCalledFromSwaTest = ash::SystemWebAppIntegrationTest;
 // window.
 IN_PROC_BROWSER_TEST_P(CrashReportPrivateCalledFromSwaTest,
                        CalledFromWebContentsInWebAppWindow) {
-  if (web_app::IsWebAppsCrosapiEnabled()) {
-    // TODO(crbug.com/1234938): Support Crosapi (web apps running in Lacros).
-    return;
-  }
   WaitForTestSystemAppInstall();
   // Set up test server to listen to handle crash reports & serve fake web app
   // content. Note: Creating a |MockCrashEndpoint| starts the server.
@@ -327,8 +324,8 @@ IN_PROC_BROWSER_TEST_P(CrashReportPrivateCalledFromSwaTest,
   ASSERT_TRUE(embedded_test_server()->Started());
   // Create and launch a test web app, opens in an app window.
   GURL start_url = embedded_test_server()->GetURL("/test_app.html");
-  auto web_app_info = std::make_unique<web_app::WebAppInstallInfo>();
-  web_app_info->start_url = start_url;
+  auto web_app_info =
+      web_app::WebAppInstallInfo::CreateWithStartUrlForTesting(start_url);
   webapps::AppId app_id =
       web_app::test::InstallWebApp(profile(), std::move(web_app_info));
   Browser* app_browser = web_app::LaunchWebAppBrowserAndWait(profile(), app_id);

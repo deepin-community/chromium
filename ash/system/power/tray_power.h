@@ -25,10 +25,9 @@ class PowerTrayView : public TrayItemView, public PowerStatus::Observer {
   ~PowerTrayView() override;
 
   // views::View:
-  gfx::Size CalculatePreferredSize() const override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override;
   views::View* GetTooltipHandlerForPoint(const gfx::Point& point) override;
-  std::u16string GetTooltipText(const gfx::Point& p) const override;
   void OnThemeChanged() override;
 
   // TrayItemView:
@@ -41,8 +40,8 @@ class PowerTrayView : public TrayItemView, public PowerStatus::Observer {
  private:
   void UpdateStatus(bool icon_color_changed);
   void UpdateImage(bool icon_color_changed);
+  void UpdateAccessibleName();
 
-  std::u16string tooltip_;
   std::optional<PowerStatus::BatteryImageInfo> info_;
   bool previous_battery_saver_state_ = false;
 };

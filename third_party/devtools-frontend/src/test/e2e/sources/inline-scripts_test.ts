@@ -9,7 +9,6 @@ import {
   getBrowserAndPages,
   waitFor,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   addBreakpointForLine,
   getCallFrameNames,

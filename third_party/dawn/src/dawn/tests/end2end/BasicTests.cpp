@@ -74,18 +74,18 @@ TEST_P(BasicTests, QueueWriteBufferError) {
     ASSERT_DEVICE_ERROR(queue.WriteBuffer(buffer, 1000, &value, sizeof(value)));
 }
 
-TEST_P(BasicTests, GetInstanceFeatures) {
-    wgpu::InstanceFeatures instanceFeatures{};
-    bool success = wgpu::GetInstanceFeatures(&instanceFeatures);
-    EXPECT_TRUE(success);
-    EXPECT_EQ(instanceFeatures.timedWaitAnyEnable, !UsesWire());
-    EXPECT_EQ(instanceFeatures.timedWaitAnyMaxCount, kTimedWaitAnyMaxCountDefault);
-    EXPECT_EQ(instanceFeatures.nextInChain, nullptr);
+TEST_P(BasicTests, GetInstanceCapabilities) {
+    wgpu::InstanceCapabilities instanceCapabilities{};
+    auto status = wgpu::GetInstanceCapabilities(&instanceCapabilities);
+    EXPECT_EQ(status, wgpu::Status::Success);
+    EXPECT_EQ(instanceCapabilities.timedWaitAnyEnable, !UsesWire());
+    EXPECT_EQ(instanceCapabilities.timedWaitAnyMaxCount, kTimedWaitAnyMaxCountDefault);
+    EXPECT_EQ(instanceCapabilities.nextInChain, nullptr);
 
     wgpu::ChainedStruct chained{};
-    instanceFeatures.nextInChain = &chained;
-    success = wgpu::GetInstanceFeatures(&instanceFeatures);
-    EXPECT_FALSE(success);
+    instanceCapabilities.nextInChain = &chained;
+    status = wgpu::GetInstanceCapabilities(&instanceCapabilities);
+    EXPECT_EQ(status, wgpu::Status::Error);
 }
 
 DAWN_INSTANTIATE_TEST(BasicTests,

@@ -15,6 +15,7 @@
 
 #include "constants/annotation_common.h"
 #include "constants/annotation_flags.h"
+#include "constants/font_encodings.h"
 #include "constants/page_object.h"
 #include "core/fpdfapi/edit/cpdf_contentstream_write_utils.h"
 #include "core/fpdfapi/page/cpdf_page.h"
@@ -30,8 +31,8 @@
 #include "core/fpdfapi/parser/fpdf_parser_utility.h"
 #include "core/fpdfdoc/cpdf_annot.h"
 #include "core/fxcrt/fx_string_wrappers.h"
+#include "core/fxcrt/notreached.h"
 #include "fpdfsdk/cpdfsdk_helpers.h"
-#include "third_party/base/notreached.h"
 
 enum FPDF_TYPE { MAX, MIN };
 enum FPDF_VALUE { TOP, LEFT, RIGHT, BOTTOM };
@@ -39,14 +40,14 @@ enum FPDF_VALUE { TOP, LEFT, RIGHT, BOTTOM };
 namespace {
 
 bool IsValidRect(const CFX_FloatRect& rect, const CFX_FloatRect& rcPage) {
-  constexpr float kMinSize = 0.000001f;
+  static constexpr float kMinSize = 0.000001f;
   if (rect.IsEmpty() || rect.Width() < kMinSize || rect.Height() < kMinSize)
     return false;
 
   if (rcPage.IsEmpty())
     return true;
 
-  constexpr float kMinBorderSize = 10.000001f;
+  static constexpr float kMinBorderSize = 10.000001f;
   return rect.left - rcPage.left >= -kMinBorderSize &&
          rect.right - rcPage.right <= kMinBorderSize &&
          rect.top - rcPage.top <= kMinBorderSize &&
@@ -60,6 +61,10 @@ void GetContentsRect(CPDF_Document* pDoc,
   pPDFPage->ParseContent();
 
   for (const auto& pPageObject : *pPDFPage) {
+    if (!pPageObject->IsActive()) {
+      continue;
+    }
+
     const CFX_FloatRect& rc = pPageObject->GetRect();
     if (IsValidRect(rc, pDict->GetRectFor(pdfium::page_object::kMediaBox)))
       pRectArray->push_back(rc);
@@ -182,7 +187,7 @@ RetainPtr<CPDF_Reference> NewIndirectContentsStreamReference(
     const ByteString& contents) {
   auto pNewContents =
       pDocument->NewIndirect<CPDF_Stream>(pDocument->New<CPDF_Dictionary>());
-  pNewContents->SetData(contents.raw_span());
+  pNewContents->SetData(contents.unsigned_span());
   return pNewContents->MakeReference(pDocument);
 }
 
@@ -212,10 +217,10 @@ void SetPageContents(const ByteString& key,
     {
       auto pAcc = pdfium::MakeRetain<CPDF_StreamAcc>(pContentsStream);
       pAcc->LoadAllDataFiltered();
-      sStream += ByteString(pAcc->GetSpan());
+      sStream += ByteStringView(pAcc->GetSpan());
       sStream += "\nQ";
     }
-    pContentsStream->SetDataAndRemoveFilter(sStream.raw_span());
+    pContentsStream->SetDataAndRemoveFilter(sStream.unsigned_span());
     pContentsArray = pDocument->NewIndirect<CPDF_Array>();
     pContentsArray->AppendNew<CPDF_Reference>(pDocument,
                                               pContentsStream->GetObjNum());
@@ -243,6 +248,50 @@ CFX_Matrix GetMatrix(const CFX_FloatRect& rcAnnot,
   float e = rcAnnot.left - rcTransformed.left * a;
   float f = rcAnnot.bottom - rcTransformed.bottom * d;
   return CFX_Matrix(a, 0.0f, 0.0f, d, e, f);
+}
+
+bool IsValidBaseEncoding(ByteString base_encoding) {
+  // ISO 32000-1:2008 spec, table 114.
+  // ISO 32000-2:2020 spec, table 112.
+  //
+  // Since /BaseEncoding is optional, `base_encoding` can be empty.
+  return base_encoding.IsEmpty() ||
+         base_encoding == pdfium::font_encodings::kWinAnsiEncoding ||
+         base_encoding == pdfium::font_encodings::kMacRomanEncoding ||
+         base_encoding == pdfium::font_encodings::kMacExpertEncoding;
+}
+
+void SanitizeFont(RetainPtr<CPDF_Dictionary> font_dict) {
+  if (!font_dict) {
+    return;
+  }
+
+  RetainPtr<CPDF_Dictionary> encoding_dict =
+      font_dict->GetMutableDictFor("Encoding");
+  if (encoding_dict) {
+    if (!IsValidBaseEncoding(encoding_dict->GetNameFor("BaseEncoding"))) {
+      font_dict->RemoveFor("Encoding");
+    }
+  }
+}
+
+void SanitizeFontResources(RetainPtr<CPDF_Dictionary> font_resource_dict) {
+  if (!font_resource_dict) {
+    return;
+  }
+
+  CPDF_DictionaryLocker locker(font_resource_dict);
+  for (auto it : locker) {
+    SanitizeFont(ToDictionary(it.second->GetMutableDirect()));
+  }
+}
+
+void SanitizeResources(RetainPtr<CPDF_Dictionary> resources_dict) {
+  if (!resources_dict) {
+    return;
+  }
+
+  SanitizeFontResources(resources_dict->GetMutableDictFor("Font"));
 }
 
 }  // namespace
@@ -391,6 +440,7 @@ FPDF_EXPORT int FPDF_CALLCONV FPDFPage_Flatten(FPDF_PAGE page, int nFlag) {
     RetainPtr<CPDF_Dictionary> ap_stream_dict = ap_stream->GetMutableDict();
     ap_stream_dict->SetNewFor<CPDF_Name>("Type", "XObject");
     ap_stream_dict->SetNewFor<CPDF_Name>("Subtype", "Form");
+    SanitizeResources(ap_stream_dict->GetMutableDictFor("Resources"));
 
     RetainPtr<CPDF_Dictionary> pXObject =
         pNewXORes->GetOrCreateDictFor("XObject");
@@ -402,7 +452,7 @@ FPDF_EXPORT int FPDF_CALLCONV FPDFPage_Flatten(FPDF_PAGE page, int nFlag) {
     {
       auto pAcc = pdfium::MakeRetain<CPDF_StreamAcc>(pNewXObject);
       pAcc->LoadAllDataFiltered();
-      sStream = ByteString(pAcc->GetSpan());
+      sStream = ByteString(ByteStringView(pAcc->GetSpan()));
     }
     CFX_Matrix matrix = original_ap_stream_dict->GetMatrixFor("Matrix");
     CFX_Matrix m = GetMatrix(rcAnnot, rcStream, matrix);
@@ -413,7 +463,7 @@ FPDF_EXPORT int FPDF_CALLCONV FPDFPage_Flatten(FPDF_PAGE page, int nFlag) {
     ByteString str(buf);
     sStream += ByteString::Format("q %s cm /%s Do Q\n", str.c_str(),
                                   sFormName.c_str());
-    pNewXObject->SetDataAndRemoveFilter(sStream.raw_span());
+    pNewXObject->SetDataAndRemoveFilter(sStream.unsigned_span());
   }
   pPageDict->RemoveFor("Annots");
   return FLATTEN_SUCCESS;

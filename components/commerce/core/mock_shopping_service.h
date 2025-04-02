@@ -9,7 +9,7 @@
 #include <memory>
 #include <vector>
 
-#include "components/bookmarks/browser/bookmark_model.h"
+#include "components/commerce/core/compare/product_group.h"
 #include "components/commerce/core/shopping_service.h"
 #include "components/commerce/core/subscriptions/commerce_subscription.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -21,6 +21,10 @@ class BookmarkNode;
 
 namespace commerce {
 
+class AccountChecker;
+class MockClusterManager;
+class MockProductSpecificationsService;
+
 // A mock ShoppingService that allows us to decide the response.
 class MockShoppingService : public commerce::ShoppingService {
  public:
@@ -31,6 +35,7 @@ class MockShoppingService : public commerce::ShoppingService {
   ~MockShoppingService() override;
 
   // commerce::ShoppingService overrides.
+  MOCK_METHOD(AccountChecker*, GetAccountChecker, (), (override));
   MOCK_METHOD(void,
               GetProductInfoForUrl,
               (const GURL& url, commerce::ProductInfoCallback callback),
@@ -38,6 +43,19 @@ class MockShoppingService : public commerce::ShoppingService {
   MOCK_METHOD(void,
               GetPriceInsightsInfoForUrl,
               (const GURL& url, commerce::PriceInsightsInfoCallback callback),
+              (override));
+  MOCK_METHOD(const std::vector<commerce::UrlInfo>,
+              GetUrlInfosForActiveWebWrappers,
+              (),
+              (override));
+  MOCK_METHOD(
+      void,
+      GetUrlInfosForWebWrappersWithProducts,
+      (base::OnceCallback<void(const std::vector<commerce::UrlInfo>)> callback),
+      (override));
+  MOCK_METHOD(const std::vector<commerce::UrlInfo>,
+              GetUrlInfosForRecentlyViewedWebWrappers,
+              (),
               (override));
   MOCK_METHOD(void,
               GetUpdatedProductInfoForBookmarks,
@@ -97,17 +115,9 @@ class MockShoppingService : public commerce::ShoppingService {
               WaitForReady,
               (base::OnceCallback<void(ShoppingService*)>),
               (override));
-  MOCK_METHOD(bool, IsMerchantViewerEnabled, (), (override));
-  MOCK_METHOD(bool, IsPriceInsightsEligible, (), (override));
-  MOCK_METHOD(bool, IsDiscountEligibleToShowOnNavigation, (), (override));
-  MOCK_METHOD(bool, IsParcelTrackingEligible, (), (override));
   MOCK_METHOD(void,
-              GetDiscountInfoForUrls,
-              (const std::vector<GURL>& urls, DiscountInfoCallback callback),
-              (override));
-  MOCK_METHOD(bookmarks::BookmarkModel*,
-              GetBookmarkModelUsedForSync,
-              (),
+              GetDiscountInfoForUrl,
+              (const GURL& url, DiscountInfoCallback callback),
               (override));
   MOCK_METHOD(void,
               GetAllParcelStatuses,
@@ -118,15 +128,32 @@ class MockShoppingService : public commerce::ShoppingService {
               (const std::string& tracking_id,
                base::OnceCallback<void(bool)> callback),
               (override));
+  MOCK_METHOD(void,
+              StopTrackingAllParcels,
+              (base::OnceCallback<void(bool)> callback),
+              (override));
+  MOCK_METHOD(void,
+              GetProductSpecificationsForUrls,
+              (const std::vector<GURL>& urls,
+               ProductSpecificationsCallback callback),
+              (override));
+  MOCK_METHOD(ProductSpecificationsService*,
+              GetProductSpecificationsService,
+              (),
+              (override));
+  MOCK_METHOD(ClusterManager*, GetClusterManager, (), (override));
 
   // Make this mock permissive for all features but default to providing empty
   // data for all accessors of shopping data.
   void SetupPermissiveMock();
 
+  void SetAccountChecker(AccountChecker* account_checker);
   void SetResponseForGetProductInfoForUrl(
       std::optional<commerce::ProductInfo> product_info);
   void SetResponseForGetPriceInsightsInfoForUrl(
       std::optional<commerce::PriceInsightsInfo> price_insights_info);
+  void SetResponseForGetUrlInfosForActiveWebWrappers(
+      std::vector<commerce::UrlInfo> url_infos);
   void SetResponsesForGetUpdatedProductInfoForBookmarks(
       std::map<int64_t, ProductInfo> bookmark_updates);
   void SetResponseForGetMerchantInfoForUrl(
@@ -139,23 +166,21 @@ class MockShoppingService : public commerce::ShoppingService {
       std::vector<CommerceSubscription> subscriptions);
   void SetIsShoppingListEligible(bool enabled);
   void SetIsReady(bool ready);
-  void SetIsMerchantViewerEnabled(bool is_enabled);
   void SetGetAllPriceTrackedBookmarksCallbackValue(
       std::vector<const bookmarks::BookmarkNode*> bookmarks);
   void SetGetAllShoppingBookmarksValue(
       std::vector<const bookmarks::BookmarkNode*> bookmarks);
-  void SetIsPriceInsightsEligible(bool is_eligible);
-  void SetIsDiscountEligibleToShowOnNavigation(bool is_eligible);
-  void SetResponseForGetDiscountInfoForUrls(const DiscountsMap& discounts_map);
-  void SetBookmarkModelUsedForSync(bookmarks::BookmarkModel* bookmark_model);
-  void SetIsParcelTrackingEligible(bool is_eligible);
+  void SetResponseForGetDiscountInfoForUrl(
+      const std::vector<DiscountInfo>& infos);
   void SetGetAllParcelStatusesCallbackValue(
       std::vector<ParcelTrackingStatus> parcels);
+  void SetResponseForGetProductSpecificationsForUrls(
+      ProductSpecifications specs);
 
  private:
-  // Since the discount API wants a const ref to some map, keep a default
-  // instance here.
-  DiscountsMap default_discounts_map_;
+  std::unique_ptr<MockProductSpecificationsService>
+      product_specifications_service_;
+  std::unique_ptr<MockClusterManager> cluster_manager_;
 };
 
 }  // namespace commerce

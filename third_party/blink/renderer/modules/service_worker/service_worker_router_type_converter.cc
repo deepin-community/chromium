@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/service_worker/service_worker_router_type_converter.h"
 
 #include "services/network/public/mojom/service_worker_router_info.mojom-shared.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/safe_url_pattern.h"
 #include "third_party/blink/public/common/service_worker/service_worker_router_rule.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_typedefs.h"
@@ -41,11 +42,17 @@ std::optional<ServiceWorkerRouterCondition> RouterConditionToBlink(
     exception_state.ThrowTypeError("Conditions are nested too much");
     return true;
   }
-  if (!v8_condition->hasOrConditions()) {
-    return false;
+  if (v8_condition->hasOrConditions()) {
+    for (const auto& v8_ob : v8_condition->orConditions()) {
+      if (ExceedsMaxConditionDepth(v8_ob, exception_state, depth + 1)) {
+        CHECK(exception_state.HadException());
+        return true;
+      }
+    }
   }
-  for (const auto& v8_ob : v8_condition->orConditions()) {
-    if (ExceedsMaxConditionDepth(v8_ob, exception_state, depth + 1)) {
+  if (v8_condition->hasNotCondition()) {
+    if (ExceedsMaxConditionDepth(v8_condition->notCondition(), exception_state,
+                                 depth + 1)) {
       CHECK(exception_state.HadException());
       return true;
     }
@@ -58,8 +65,8 @@ std::optional<SafeUrlPattern> RouterUrlPatternConditionToBlink(
     const V8URLPatternCompatible* url_pattern_compatible,
     const KURL& url_pattern_base_url,
     ExceptionState& exception_state) {
-  // If |url_pattern_compatible| is not a constructed URLPattern,
-  // |url_pattern_base_url| as baseURL will give additional information to
+  // If `url_pattern_compatible` is not a constructed URLPattern,
+  // `url_pattern_base_url` as baseURL will give additional information to
   // appropriately complement missing fields. For more details, see
   // https://urlpattern.spec.whatwg.org/#other-specs-javascript.
   //
@@ -83,6 +90,8 @@ std::optional<SafeUrlPattern> RouterUrlPatternConditionToBlink(
   return safe_url_pattern;
 }
 
+// Follows requestMethod, requestMode, requestDestination handling in
+// https://w3c.github.io/ServiceWorker/#verify-router-rule-algorithm
 std::optional<ServiceWorkerRouterRequestCondition>
 RouterRequestConditionToBlink(RouterCondition* v8_condition,
                               ExceptionState& exception_state) {
@@ -90,10 +99,23 @@ RouterRequestConditionToBlink(RouterCondition* v8_condition,
   bool request_condition_exist = false;
   ServiceWorkerRouterRequestCondition request;
   if (v8_condition->hasRequestMethod()) {
+    const auto& method = v8_condition->requestMethod();
+    // "If |method| is not a [=/method=], then return false."
+    // i.e. throw TypeError.
+    if (!IsValidHTTPToken(method)) {
+      exception_state.ThrowTypeError("'" + method +
+                                     "' is not a valid HTTP method.");
+      return std::nullopt;
+    }
+    // "If |method| is a [=forbidden method=], then return false."
+    // i.e. throw TypeError.
+    if (FetchUtils::IsForbiddenMethod(method)) {
+      exception_state.ThrowTypeError("'" + method +
+                                     "' HTTP method is unsupported.");
+      return std::nullopt;
+    }
     request_condition_exist = true;
-    request.method =
-        FetchUtils::NormalizeMethod(AtomicString(v8_condition->requestMethod()))
-            .Latin1();
+    request.method = FetchUtils::NormalizeMethod(AtomicString(method)).Latin1();
   }
   if (v8_condition->hasRequestMode()) {
     request_condition_exist = true;
@@ -156,6 +178,24 @@ std::optional<ServiceWorkerRouterOrCondition> RouterOrConditionToBlink(
   return or_condition;
 }
 
+std::optional<ServiceWorkerRouterNotCondition> RouterNotConditionToBlink(
+    v8::Isolate* isolate,
+    RouterCondition* v8_condition,
+    const KURL& url_pattern_base_url,
+    ExceptionState& exception_state) {
+  std::optional<ServiceWorkerRouterCondition> c =
+      RouterConditionToBlink(isolate, v8_condition->notCondition(),
+                             url_pattern_base_url, exception_state);
+  if (!c) {
+    CHECK(exception_state.HadException());
+    return std::nullopt;
+  }
+  ServiceWorkerRouterNotCondition not_condition;
+  not_condition.condition =
+      std::make_unique<blink::ServiceWorkerRouterCondition>(*c);
+  return not_condition;
+}
+
 std::optional<ServiceWorkerRouterCondition> RouterConditionToBlink(
     v8::Isolate* isolate,
     RouterCondition* v8_condition,
@@ -199,8 +239,18 @@ std::optional<ServiceWorkerRouterCondition> RouterConditionToBlink(
       return std::nullopt;
     }
   }
+  std::optional<ServiceWorkerRouterNotCondition> not_condition;
+  if (v8_condition->hasNotCondition()) {
+    // Not checking here for the `not` is actually exclusive.
+    not_condition = RouterNotConditionToBlink(
+        isolate, v8_condition, url_pattern_base_url, exception_state);
+    if (!not_condition.has_value()) {
+      CHECK(exception_state.HadException());
+      return std::nullopt;
+    }
+  }
   blink::ServiceWorkerRouterCondition ret(url_pattern, request, running_status,
-                                          or_condition);
+                                          or_condition, not_condition);
   if (ret.IsEmpty()) {
     // At least one condition should exist per rule.
     exception_state.ThrowTypeError(
@@ -212,6 +262,12 @@ std::optional<ServiceWorkerRouterCondition> RouterConditionToBlink(
     // `or` condition must be exclusive.
     exception_state.ThrowTypeError(
         "Cannot set other conditions when the `or` condition is specified");
+    return std::nullopt;
+  }
+  if (!ret.IsNotConditionExclusive()) {
+    // `not` condition must be exclusive.
+    exception_state.ThrowTypeError(
+        "Cannot set other conditions when the `not` condition is specified");
     return std::nullopt;
   }
   return ret;
@@ -229,9 +285,18 @@ std::optional<ServiceWorkerRouterSource> RouterSourceEnumToBlink(
       return source;
     }
     case V8RouterSourceEnum::Enum::kRaceNetworkAndFetchHandler: {
+      if (fetch_handler_type ==
+          mojom::blink::ServiceWorkerFetchHandlerType::kNoHandler) {
+        exception_state.ThrowTypeError(
+            "race-network-and-fetch-event source is specified without a fetch"
+            " handler");
+        return std::nullopt;
+      }
       ServiceWorkerRouterSource source;
       source.type = network::mojom::ServiceWorkerRouterSourceType::kRace;
       source.race_source.emplace();
+      source.race_source->target = blink::ServiceWorkerRouterRaceSource::
+          TargetEnum::kNetworkAndFetchHandler;
       return source;
     }
     case V8RouterSourceEnum::Enum::kFetchEvent: {
@@ -303,7 +368,7 @@ std::optional<ServiceWorkerRouterRule> ConvertV8RouterRuleToBlink(
     return std::nullopt;
   }
 
-  if (!input->condition()) {
+  if (!input->hasCondition()) {
     exception_state.ThrowTypeError("No input condition has been set.");
     return std::nullopt;
   }
@@ -324,12 +389,16 @@ std::optional<ServiceWorkerRouterRule> ConvertV8RouterRuleToBlink(
   // Set up sources.
   // TODO(crbug.com/1371756): support multiple sources.
   // i.e. support full form shown in
-  // https://github.com/yoshisatoyanagisawa/service-worker-static-routing-api/blob/main/final-form.md
+  // https://github.com/WICG/service-worker-static-routing-api/blob/main/final-form.md
   //
-  // https://github.com/yoshisatoyanagisawa/service-worker-static-routing-api/blob/main/README.md
-  // explains the first step. It does not cover cases sequence of sources
-  // are set. The current IDL has been implemented for this level, but
-  // the mojo IPC has been implemented to support the final form.
+  // The ServiceWorker specification (https://w3c.github.io/ServiceWorker/)
+  // does not cover cases sequence of sources are set. The current IDL has
+  // been implemented for this level, but the mojo IPC has been implemented
+  // to support the final form.
+  if (!input->hasSource()) {
+    exception_state.ThrowTypeError("No input source has been set.");
+    return std::nullopt;
+  }
   const std::optional<ServiceWorkerRouterSource> source =
       RouterSourceInputToBlink(input->source(), fetch_handler_type,
                                exception_state);

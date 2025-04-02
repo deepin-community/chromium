@@ -161,7 +161,6 @@ void IconCoalescer::OnLoadIcon(IconLoader::Key key,
   auto count = std::distance(range.first, range.second);
   if (count <= 0) {
     NOTREACHED();
-    return;
   }
 
   // Optimize / simplify the common case.

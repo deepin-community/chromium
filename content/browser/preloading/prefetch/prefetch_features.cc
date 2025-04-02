@@ -18,17 +18,15 @@ BASE_FEATURE(kPrefetchReusable,
 const base::FeatureParam<int> kPrefetchReusableBodySizeLimit{
     &kPrefetchReusable, "prefetch_reusable_body_size_limit", 65536};
 
+BASE_FEATURE_PARAM(bool,
+                   kPrefetchReusableUseNewWaitLoop,
+                   &kPrefetchReusable,
+                   "PrefetchReusableUseNewWaitLoop",
+                   false);
+
 BASE_FEATURE(kPrefetchNIKScope,
              "PrefetchNIKScope",
              base::FEATURE_DISABLED_BY_DEFAULT);
-
-BASE_FEATURE(kPrefetchDocumentManagerEarlyCookieCopySkipped,
-             "PrefetchDocumentManagerEarlyCookieCopySkipped",
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-BASE_FEATURE(kPrefetchUsesHTTPCache,
-             "PrefetchUsesHTTPCache",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 BASE_FEATURE(kPrefetchClientHints,
              "PrefetchClientHints",
@@ -50,6 +48,26 @@ BASE_FEATURE(kPrefetchStateContaminationMitigation,
              "PrefetchStateContaminationMitigation",
              base::FEATURE_ENABLED_BY_DEFAULT);
 
+const base::FeatureParam<bool>
+    kPrefetchStateContaminationSwapsBrowsingContextGroup{
+        &kPrefetchStateContaminationMitigation, "swaps_bcg", true};
+
 BASE_FEATURE(kPrefetchProxy, "PrefetchProxy", base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPrefetchCookieIndices,
+             "PrefetchCookieIndices",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPrefetchNewLimits,
+             "PrefetchNewLimits",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPrefetchNewWaitLoop,
+             "PrefetchNewWaitLoop",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kPrefetchServiceWorkerNoFetchHandlerFix,
+             "PrefetchServiceWorkerNoFetchHandlerFix",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 }  // namespace features

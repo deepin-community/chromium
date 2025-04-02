@@ -8,6 +8,7 @@
 #include <process.h>
 
 #include <string>
+#include <string_view>
 
 #include "base/json/json_reader.h"
 #include "base/logging.h"
@@ -15,6 +16,7 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "base/win/ntsecapi_shim.h"
 #include "base/win/win_util.h"
 #include "chrome/credential_provider/common/gcp_strings.h"
 #include "chrome/credential_provider/gaiacp/gaia_credential_provider.h"
@@ -78,7 +80,7 @@ unsigned __stdcall CheckReauthStatus(void* param) {
       return 1;
     }
 
-    base::StringPiece response_string(response.data(), response.size());
+    std::string_view response_string(response.data(), response.size());
     std::optional<base::Value> properties_val = base::JSONReader::Read(
         response_string, base::JSON_ALLOW_TRAILING_COMMAS);
     if (!properties_val || !properties_val->is_dict()) {
@@ -379,7 +381,7 @@ bool AssociatedUserValidator::DenySigninForUsersWithInvalidTokenHandles(
         user_denied_signin = true;
       }
     } else if (manager->IsUserDomainJoined(sid)) {
-      // TODO(crbug.com/973160): Description provided in the bug.
+      // TODO(crbug.com/40631676): Description provided in the bug.
       LOGFN(VERBOSE) << "Not denying signin for AD user accounts.";
     }
   }

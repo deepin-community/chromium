@@ -2,10 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "components/qr_code_generator/bitmap_generator.h"
 
-#include "base/metrics/histogram_macros.h"
+#include "base/notreached.h"
 #include "base/types/expected.h"
+#include "build/build_config.h"
 #include "components/qr_code_generator/dino_image.h"
 #include "components/qr_code_generator/qr_code_generator.h"
 #include "components/vector_icons/vector_icons.h"
@@ -15,6 +21,7 @@
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/image/image_skia_rep_default.h"
 #include "ui/gfx/paint_vector_icon.h"
 
@@ -81,6 +88,8 @@ void PaintCenterImage(SkCanvas* canvas,
                       const SkPaint& paint_background,
                       const SkBitmap& image);
 
+// `gfx::CreateVectorIcon` is not available on iOS.
+#if !BUILDFLAG(IS_IOS)
 void DrawPasskeyIcon(SkCanvas* canvas,
                      const SkRect& canvas_bounds,
                      const SkPaint& paint_foreground,
@@ -92,6 +101,19 @@ void DrawPasskeyIcon(SkCanvas* canvas,
   PaintCenterImage(canvas, canvas_bounds, kSizePx, kSizePx, kBorderPx,
                    paint_background, icon.GetRepresentation(1.0f).GetBitmap());
 }
+
+void DrawProductIcon(SkCanvas* canvas,
+                     const SkRect& canvas_bounds,
+                     const SkPaint& paint_foreground,
+                     const SkPaint& paint_background) {
+  constexpr int kSizePx = 100;
+  constexpr int kBorderPx = 0;  // Unlike the dino, the icon is already padded.
+  auto icon = gfx::CreateVectorIcon(gfx::IconDescription(
+      vector_icons::kProductRefreshIcon, kSizePx, paint_foreground.getColor()));
+  PaintCenterImage(canvas, canvas_bounds, kSizePx, kSizePx, kBorderPx,
+                   paint_background, icon.GetRepresentation(1.0f).GetBitmap());
+}
+#endif
 
 void DrawDino(SkCanvas* canvas,
               const SkRect& canvas_bounds,
@@ -156,7 +178,8 @@ void DrawLocators(SkCanvas* canvas,
                   const gfx::Size data_size,
                   const SkPaint& paint_foreground,
                   const SkPaint& paint_background,
-                  LocatorStyle style) {
+                  LocatorStyle style,
+                  int margin) {
   SkScalar radius = style == LocatorStyle::kRounded ? 10 : 0;
 
   // Draw a locator with upper left corner at {x, y} in terms of module
@@ -166,26 +189,26 @@ void DrawLocators(SkCanvas* canvas,
     int left_x_pixels = left_x_modules * kModuleSizePixels;
     int top_y_pixels = top_y_modules * kModuleSizePixels;
     int dim_pixels = kModuleSizePixels * kLocatorSizeModules;
-    canvas->drawRoundRect(
-        gfx::RectToSkRect(
-            gfx::Rect(left_x_pixels, top_y_pixels, dim_pixels, dim_pixels)),
-        radius, radius, paint_foreground);
+    canvas->drawRoundRect(gfx::RectToSkRect(gfx::Rect(margin + left_x_pixels,
+                                                      margin + top_y_pixels,
+                                                      dim_pixels, dim_pixels)),
+                          radius, radius, paint_foreground);
     // Middle square, one module smaller in all dimensions (5x5).
     left_x_pixels += kModuleSizePixels;
     top_y_pixels += kModuleSizePixels;
     dim_pixels -= 2 * kModuleSizePixels;
-    canvas->drawRoundRect(
-        gfx::RectToSkRect(
-            gfx::Rect(left_x_pixels, top_y_pixels, dim_pixels, dim_pixels)),
-        radius, radius, paint_background);
+    canvas->drawRoundRect(gfx::RectToSkRect(gfx::Rect(margin + left_x_pixels,
+                                                      margin + top_y_pixels,
+                                                      dim_pixels, dim_pixels)),
+                          radius, radius, paint_background);
     // Inner square, one additional module smaller in all dimensions (3x3).
     left_x_pixels += kModuleSizePixels;
     top_y_pixels += kModuleSizePixels;
     dim_pixels -= 2 * kModuleSizePixels;
-    canvas->drawRoundRect(
-        gfx::RectToSkRect(
-            gfx::Rect(left_x_pixels, top_y_pixels, dim_pixels, dim_pixels)),
-        radius, radius, paint_foreground);
+    canvas->drawRoundRect(gfx::RectToSkRect(gfx::Rect(margin + left_x_pixels,
+                                                      margin + top_y_pixels,
+                                                      dim_pixels, dim_pixels)),
+                          radius, radius, paint_foreground);
   };
 
   // Top-left
@@ -197,15 +220,27 @@ void DrawLocators(SkCanvas* canvas,
   // No locator on bottom-right.
 }
 
+int CalculateMargin(QuietZone quiet_zone) {
+  switch (quiet_zone) {
+    case QuietZone::kIncluded:
+      return kQuietZoneSizePixels;
+    case QuietZone::kWillBeAddedByClient:
+      return 0;
+  }
+  NOTREACHED();
+}
+
 SkBitmap RenderBitmap(base::span<const uint8_t> data,
                       const gfx::Size data_size,
                       ModuleStyle module_style,
                       LocatorStyle locator_style,
-                      CenterImage center_image) {
+                      CenterImage center_image,
+                      QuietZone quiet_zone) {
   // Setup: create colors and clear canvas.
   SkBitmap bitmap;
-  bitmap.allocN32Pixels(data_size.width() * kModuleSizePixels,
-                        data_size.height() * kModuleSizePixels);
+  int margin = CalculateMargin(quiet_zone);
+  bitmap.allocN32Pixels(data_size.width() * kModuleSizePixels + margin * 2,
+                        data_size.height() * kModuleSizePixels + margin * 2);
   bitmap.eraseARGB(0xFF, 0xFF, 0xFF, 0xFF);
   SkCanvas canvas(bitmap, SkSurfaceProps{});
   SkPaint paint_black;
@@ -215,7 +250,7 @@ SkBitmap RenderBitmap(base::span<const uint8_t> data,
 
   // Loop over qr module data and paint to canvas.
   // Paint data modules first, then locators and dino.
-  int data_index = 0;
+  size_t data_index = 0;
   for (int y = 0; y < data_size.height(); y++) {
     for (int x = 0; x < data_size.width(); x++) {
       if (data[data_index++] & 0x1) {
@@ -230,21 +265,23 @@ SkBitmap RenderBitmap(base::span<const uint8_t> data,
         }
 
         if (module_style == ModuleStyle::kCircles) {
-          float xc = (x + 0.5) * kModuleSizePixels;
-          float yc = (y + 0.5) * kModuleSizePixels;
+          float xc = margin + (x + 0.5) * kModuleSizePixels;
+          float yc = margin + (y + 0.5) * kModuleSizePixels;
           SkScalar radius = kModuleSizePixels / 2 - 1;
           canvas.drawCircle(xc, yc, radius, paint_black);
         } else {
-          canvas.drawRect(gfx::RectToSkRect(gfx::Rect(
-                              x * kModuleSizePixels, y * kModuleSizePixels,
-                              kModuleSizePixels, kModuleSizePixels)),
-                          paint_black);
+          int x0 = margin + x * kModuleSizePixels;
+          int y0 = margin + y * kModuleSizePixels;
+          const int kRectSize = kModuleSizePixels;
+          SkRect rect = gfx::RectToSkRect({x0, y0, kRectSize, kRectSize});
+          canvas.drawRect(rect, paint_black);
         }
       }
     }
   }
 
-  DrawLocators(&canvas, data_size, paint_black, paint_white, locator_style);
+  DrawLocators(&canvas, data_size, paint_black, paint_white, locator_style,
+               margin);
 
   SkRect bitmap_bounds;
   bitmap.getBounds(&bitmap_bounds);
@@ -256,9 +293,14 @@ SkBitmap RenderBitmap(base::span<const uint8_t> data,
       DrawDino(&canvas, bitmap_bounds, kDinoTileSizePixels, 2, paint_black,
                paint_white);
       break;
+#if !BUILDFLAG(IS_IOS)
     case CenterImage::kPasskey:
       DrawPasskeyIcon(&canvas, bitmap_bounds, paint_black, paint_white);
       break;
+    case CenterImage::kProductLogo:
+      DrawProductIcon(&canvas, bitmap_bounds, paint_black, paint_white);
+      break;
+#endif
   }
 
   return bitmap;
@@ -266,17 +308,32 @@ SkBitmap RenderBitmap(base::span<const uint8_t> data,
 
 }  // namespace
 
-base::expected<QRImage, Error> GenerateBitmap(base::span<const uint8_t> data,
-                                              ModuleStyle module_style,
-                                              LocatorStyle locator_style,
-                                              CenterImage center_image) {
-  SCOPED_UMA_HISTOGRAM_TIMER("Sharing.QRCodeGeneration.Duration");
+const int kQuietZoneSizePixels = kModuleSizePixels * 4;
 
+base::expected<gfx::ImageSkia, Error> GenerateImage(
+    base::span<const uint8_t> data,
+    ModuleStyle module_style,
+    LocatorStyle locator_style,
+    CenterImage center_image,
+    QuietZone quiet_zone) {
+  // TODO(crbug.com/338570710) CreateImage() should generate a higher resolution
+  // QR code for displays with scale-factor > 1. Not generating higher
+  // resolution QR codes is OK because:
+  // - QR codes are shown to the user rarely.
+  // - Many callers display the QR code at a downsampled size.
+  // - Upscaling QR codes has few upscaling artifacts.
+  return GenerateBitmap(data, module_style, locator_style, center_image,
+                        quiet_zone)
+      .transform(&gfx::ImageSkia::CreateFrom1xBitmap);
+}
+
+base::expected<SkBitmap, Error> GenerateBitmap(base::span<const uint8_t> data,
+                                               ModuleStyle module_style,
+                                               LocatorStyle locator_style,
+                                               CenterImage center_image,
+                                               QuietZone quiet_zone) {
   GeneratedCode qr_code;
   {
-    SCOPED_UMA_HISTOGRAM_TIMER_MICROS(
-        "Sharing.QRCodeGeneration.Duration.BytesToQrPixels2");
-
     // The QR version (i.e. size) must be >= 5 because otherwise the dino
     // painted over the middle covers too much of the code to be decodable.
     constexpr int kMinimumQRVersion = 5;
@@ -293,16 +350,11 @@ base::expected<QRImage, Error> GenerateBitmap(base::span<const uint8_t> data,
     byte &= 1;
   }
 
-  QRImage result;
   {
-    SCOPED_UMA_HISTOGRAM_TIMER_MICROS(
-        "Sharing.QRCodeGeneration.Duration.QrPixelsToQrImage2");
-    result.data_size = {qr_code.qr_size, qr_code.qr_size};
-    result.bitmap =
-        RenderBitmap(base::make_span(qr_code.data), result.data_size,
-                     module_style, locator_style, center_image);
+    gfx::Size data_size = {qr_code.qr_size, qr_code.qr_size};
+    return RenderBitmap(base::span(qr_code.data), data_size, module_style,
+                        locator_style, center_image, quiet_zone);
   }
-  return result;
 }
 
 }  // namespace qr_code_generator

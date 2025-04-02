@@ -4,6 +4,8 @@
 
 #include "components/global_media_controls/public/media_session_notification_item.h"
 
+#include <algorithm>
+
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/i18n/rtl.h"
@@ -14,7 +16,7 @@
 #include "components/media_message_center/media_notification_view.h"
 #include "components/vector_icons/vector_icons.h"
 #include "media/base/media_switches.h"
-#include "media/remoting/remoting_constants.h"
+#include "media/base/remoting_constants.h"
 #include "services/media_session/public/cpp/util.h"
 #include "services/media_session/public/mojom/media_controller.mojom.h"
 #include "services/media_session/public/mojom/media_session.mojom.h"
@@ -170,6 +172,12 @@ void MediaSessionNotificationItem::MediaControllerImageChanged(
     return;
   }
 
+  if (type == media_session::mojom::MediaSessionImageType::kChapter) {
+    // Chapter images should be handled in `MediaControllerChapterImageChanged`
+    // method.
+    return;
+  }
+
   DCHECK_EQ(media_session::mojom::MediaSessionImageType::kArtwork, type);
 
   session_artwork_ = gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
@@ -178,6 +186,19 @@ void MediaSessionNotificationItem::MediaControllerImageChanged(
     view_->UpdateWithMediaArtwork(*session_artwork_);
   else if (frozen_with_artwork_)
     MaybeUnfreeze();
+}
+
+void MediaSessionNotificationItem::MediaControllerChapterImageChanged(
+    int chapter_index,
+    const SkBitmap& bitmap) {
+  chapter_artwork_[chapter_index] = gfx::ImageSkia::CreateFrom1xBitmap(bitmap);
+
+  if (view_ && !frozen_) {
+    view_->UpdateWithChapterArtwork(chapter_index,
+                                    chapter_artwork_[chapter_index]);
+  } else if (frozen_with_chapter_artwork_[chapter_index]) {
+    MaybeUnfreeze();
+  }
 }
 
 void MediaSessionNotificationItem::SetView(
@@ -193,6 +214,9 @@ void MediaSessionNotificationItem::SetView(
       view_->UpdateWithMediaPosition(*session_position_);
     if (session_artwork_.has_value())
       view_->UpdateWithMediaArtwork(*session_artwork_);
+    for (auto& item : chapter_artwork_) {
+      view_->UpdateWithChapterArtwork(item.first, item.second);
+    }
     if (session_favicon_.has_value())
       view_->UpdateWithFavicon(*session_favicon_);
   } else {
@@ -264,6 +288,7 @@ void MediaSessionNotificationItem::SetController(
   observer_receiver_.reset();
   artwork_observer_receiver_.reset();
   favicon_observer_receiver_.reset();
+  chapter_observer_receiver_.reset();
 
   is_bound_ = true;
   media_controller_remote_ = std::move(controller);
@@ -274,7 +299,7 @@ void MediaSessionNotificationItem::SetController(
     media_controller_remote_->AddObserver(
         observer_receiver_.BindNewPipeAndPassRemote());
 
-    // TODO(https://crbug.com/931397): Use dip to calculate the size.
+    // TODO(crbug.com/40613662): Use dip to calculate the size.
     // Bind an observer to be notified when the artwork changes.
     media_controller_remote_->ObserveImages(
         media_session::mojom::MediaSessionImageType::kArtwork,
@@ -285,6 +310,11 @@ void MediaSessionNotificationItem::SetController(
         media_session::mojom::MediaSessionImageType::kSourceIcon,
         gfx::kFaviconSize, kMediaItemArtworkDesiredSize,
         favicon_observer_receiver_.BindNewPipeAndPassRemote());
+
+    media_controller_remote_->ObserveImages(
+        media_session::mojom::MediaSessionImageType::kChapter,
+        kMediaItemArtworkMinSize, kMediaItemArtworkDesiredSize,
+        chapter_observer_receiver_.BindNewPipeAndPassRemote());
   }
 
   MaybeHideOrShowNotification();
@@ -300,6 +330,9 @@ void MediaSessionNotificationItem::Freeze(base::OnceClosure unfrozen_callback) {
   frozen_ = true;
   frozen_with_actions_ = HasActions();
   frozen_with_artwork_ = HasArtwork();
+  for (auto& item : chapter_artwork_) {
+    frozen_with_chapter_artwork_[item.first] = HasChapterArtwork(item.first);
+  }
 
   freeze_timer_.Start(
       FROM_HERE, kFreezeTimerDelay,
@@ -345,7 +378,14 @@ media_session::MediaMetadata MediaSessionNotificationItem::GetSessionMetadata()
         optional_presentation_request_origin_.value());
   }
 
-  if (device_name_) {
+  bool add_device_name_to_source_title = !!device_name_;
+#if !BUILDFLAG(IS_CHROMEOS)
+  // Never include the device name for updated media UI on non-CrOS.
+  add_device_name_to_source_title &=
+      !base::FeatureList::IsEnabled(media::kGlobalMediaControlsUpdatedUI);
+#endif
+
+  if (add_device_name_to_source_title) {
     std::string source_title = base::UTF16ToUTF8(data.source_title);
     const char kSeparator[] = " \xC2\xB7 ";  // "Middle dot" character.
     if (base::i18n::IsRTL()) {
@@ -390,8 +430,9 @@ bool MediaSessionNotificationItem::ShouldShowNotification() const {
 }
 
 void MediaSessionNotificationItem::MaybeUnfreeze() {
-  if (!frozen_ && !frozen_with_artwork_)
+  if (!frozen_ && !frozen_with_artwork_ && !FrozenWithChapterArtwork()) {
     return;
+  }
 
   if (waiting_for_actions_ && !HasActions())
     return;
@@ -417,6 +458,13 @@ void MediaSessionNotificationItem::MaybeUnfreeze() {
     return;
   }
 
+  for (auto& item : chapter_artwork_) {
+    if (frozen_with_chapter_artwork_[item.first] &&
+        !HasChapterArtwork(item.first)) {
+      return;
+    }
+  }
+
   UnfreezeArtwork();
 }
 
@@ -424,8 +472,9 @@ void MediaSessionNotificationItem::UnfreezeNonArtwork() {
   frozen_ = false;
   waiting_for_actions_ = false;
   frozen_with_actions_ = false;
-  if (!frozen_with_artwork_)
+  if (!frozen_with_artwork_ && !FrozenWithChapterArtwork()) {
     freeze_timer_.Stop();
+  }
 
   // When we unfreeze, we want to fully update |view_| with any changes that
   // we've avoided sending during the freeze.
@@ -445,12 +494,18 @@ void MediaSessionNotificationItem::UnfreezeNonArtwork() {
 // would be slow and unresponsive when trying to skip ahead multiple tracks.
 void MediaSessionNotificationItem::UnfreezeArtwork() {
   frozen_with_artwork_ = false;
+  for (auto& item : chapter_artwork_) {
+    frozen_with_chapter_artwork_[item.first] = false;
+  }
   freeze_timer_.Stop();
   if (view_) {
     if (session_artwork_.has_value())
       view_->UpdateWithMediaArtwork(*session_artwork_);
     if (session_favicon_.has_value())
       view_->UpdateWithFavicon(*session_favicon_);
+    for (auto& item : chapter_artwork_) {
+      view_->UpdateWithChapterArtwork(item.first, item.second);
+    }
   }
 }
 
@@ -462,8 +517,13 @@ bool MediaSessionNotificationItem::HasArtwork() const {
   return session_artwork_.has_value() && !session_artwork_->isNull();
 }
 
+bool MediaSessionNotificationItem::HasChapterArtwork(int index) const {
+  auto it = chapter_artwork_.find(index);
+  return it != chapter_artwork_.end() && !it->second.isNull();
+}
+
 void MediaSessionNotificationItem::OnFreezeTimerFired() {
-  DCHECK(frozen_ || frozen_with_artwork_);
+  DCHECK(frozen_ || frozen_with_artwork_ || FrozenWithChapterArtwork());
 
   // If we've just been waiting for actions or artwork, stop waiting and just
   // show what we have.
@@ -471,8 +531,9 @@ void MediaSessionNotificationItem::OnFreezeTimerFired() {
     if (frozen_)
       UnfreezeNonArtwork();
 
-    if (frozen_with_artwork_)
+    if (frozen_with_artwork_ || FrozenWithChapterArtwork()) {
       UnfreezeArtwork();
+    }
 
     return;
   }
@@ -510,4 +571,10 @@ void MediaSessionNotificationItem::UpdateViewCommon() {
                                            : nullptr);
 }
 
+bool MediaSessionNotificationItem::FrozenWithChapterArtwork() {
+  auto it =
+      std::ranges::find_if(frozen_with_chapter_artwork_,
+                           [](const auto& it) { return it.second == true; });
+  return it != frozen_with_chapter_artwork_.end();
+}
 }  // namespace global_media_controls

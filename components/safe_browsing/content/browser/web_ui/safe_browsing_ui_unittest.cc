@@ -14,7 +14,7 @@ namespace safe_browsing {
 
 class SafeBrowsingUITest : public testing::Test {
  public:
-  SafeBrowsingUITest() {}
+  SafeBrowsingUITest() = default;
 
   void SetUp() override {}
 
@@ -25,7 +25,7 @@ class SafeBrowsingUITest : public testing::Test {
 
   SafeBrowsingUIHandler* RegisterNewHandler() {
     auto handler_unique =
-        std::make_unique<SafeBrowsingUIHandler>(&browser_context_);
+        std::make_unique<SafeBrowsingUIHandler>(&browser_context_, nullptr);
 
     SafeBrowsingUIHandler* handler = handler_unique.get();
     handler->SetWebUIForTesting(&web_ui_);

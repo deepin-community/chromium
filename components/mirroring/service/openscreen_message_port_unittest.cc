@@ -4,8 +4,6 @@
 
 #include "components/mirroring/service/openscreen_message_port.h"
 
-#include "third_party/openscreen/src/cast/common/public/message_port.h"
-
 #include "base/base64.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -15,6 +13,7 @@
 #include "components/mirroring/service/value_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/openscreen/src/cast/common/public/message_port.h"
 
 using ::testing::_;
 using ::testing::InvokeWithoutArgs;
@@ -32,7 +31,7 @@ class MockMessagePortClient : public openscreen::cast::MessagePort::Client {
               OnMessage,
               (const std::string&, const std::string&, const std::string&),
               (override));
-  MOCK_METHOD(void, OnError, (openscreen::Error), (override));
+  MOCK_METHOD(void, OnError, (const openscreen::Error&), (override));
 
   const std::string& source_id() override { return source_id_; }
 

@@ -2,14 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/views/extensions/extensions_menu_main_page_view.h"
+#include "chrome/browser/ui/views/extensions/extensions_menu_site_permissions_page_view.h"
 
 #include "base/feature_list.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
-#include "chrome/browser/extensions/scripting_permissions_modifier.h"
-#include "chrome/browser/extensions/site_permissions_helper.h"
+#include "chrome/browser/extensions/permissions/scripting_permissions_modifier.h"
+#include "chrome/browser/extensions/permissions/site_permissions_helper.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_coordinator.h"
-#include "chrome/browser/ui/views/extensions/extensions_menu_site_permissions_page_view.h"
+#include "chrome/browser/ui/views/extensions/extensions_menu_main_page_view.h"
 #include "chrome/browser/ui/views/extensions/extensions_menu_view_controller.h"
 #include "chrome/browser/ui/views/extensions/extensions_request_access_button.h"
 #include "chrome/browser/ui/views/extensions/extensions_toolbar_button.h"
@@ -234,8 +234,17 @@ TEST_F(ExtensionsSitePermissionsPageViewUnitTest, ShowRequestsTogglePressed) {
   EXPECT_TRUE(IsSitePermissionsPageOpened(extensionA->id()));
 
   // By default, extensions are allowed to show request access in the toolbar.
+  // However, request is only shown if extension adds a request for the site.
   EXPECT_TRUE(
       site_permissions_page()->GetShowRequestsToggleForTesting()->GetIsOn());
+  EXPECT_THAT(GetExtensionsShowingRequests(), testing::IsEmpty());
+
+  // Add site access requests for both extensions.
+  auto* web_contents = browser()->tab_strip_model()->GetActiveWebContents();
+  AddHostAccessRequest(*extensionA, web_contents);
+  AddHostAccessRequest(*extensionB, web_contents);
+
+  // Both extensions should have a visible request in the toolbar.
   EXPECT_THAT(GetExtensionsShowingRequests(),
               testing::ElementsAre(extensionA->id(), extensionB->id()));
 
@@ -265,6 +274,10 @@ TEST_F(ExtensionsSitePermissionsPageViewUnitTest,
   NavigateAndCommit("http://www.url.com");
   ShowSitePermissionsPage(extension->id());
   EXPECT_TRUE(IsSitePermissionsPageOpened(extension->id()));
+
+  // Add site access request for extension.
+  AddHostAccessRequest(*extension,
+                       browser()->tab_strip_model()->GetActiveWebContents());
 
   // By default, extensions are allowed to show request access in the toolbar.
   EXPECT_TRUE(

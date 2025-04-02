@@ -35,11 +35,17 @@
 #include "src/tint/lang/core/type/bool.h"
 #include "src/tint/lang/core/type/f16.h"
 #include "src/tint/lang/core/type/f32.h"
+#include "src/tint/lang/core/type/function.h"
 #include "src/tint/lang/core/type/i32.h"
+#include "src/tint/lang/core/type/i8.h"
+#include "src/tint/lang/core/type/invalid.h"
 #include "src/tint/lang/core/type/matrix.h"
 #include "src/tint/lang/core/type/pointer.h"
+#include "src/tint/lang/core/type/reference.h"
+#include "src/tint/lang/core/type/storage_texture.h"
 #include "src/tint/lang/core/type/type.h"
 #include "src/tint/lang/core/type/u32.h"
+#include "src/tint/lang/core/type/u8.h"
 #include "src/tint/lang/core/type/vector.h"
 #include "src/tint/lang/core/type/void.h"
 #include "src/tint/utils/macros/compiler.h"
@@ -54,6 +60,14 @@ Manager& Manager::operator=(Manager&& rhs) = default;
 
 Manager::~Manager() = default;
 
+const core::type::Invalid* Manager::invalid() {
+    return Get<core::type::Invalid>();
+}
+
+const core::type::Function* Manager::function() {
+    return Get<core::type::Function>();
+}
+
 const core::type::Void* Manager::void_() {
     return Get<core::type::Void>();
 }
@@ -62,8 +76,16 @@ const core::type::Bool* Manager::bool_() {
     return Get<core::type::Bool>();
 }
 
+const core::type::I8* Manager::i8() {
+    return Get<core::type::I8>();
+}
+
 const core::type::I32* Manager::i32() {
     return Get<core::type::I32>();
+}
+
+const core::type::U8* Manager::u8() {
+    return Get<core::type::U8>();
 }
 
 const core::type::U32* Manager::u32() {
@@ -94,6 +116,21 @@ const core::type::Vector* Manager::packed_vec(const core::type::Type* inner, uin
     return Get<core::type::Vector>(inner, size, true);
 }
 
+const core::type::Type* Manager::MatchWidth(const core::type::Type* el_ty,
+                                            const core::type::Type* match) {
+    if (auto* m = match->As<core::type::Vector>()) {
+        return vec(el_ty, m->Width());
+    }
+    return el_ty;
+}
+
+const core::type::Type* Manager::MatchWidth(const core::type::Type* el_ty, size_t size) {
+    if (size > 1) {
+        return vec(el_ty, static_cast<uint32_t>(size));
+    }
+    return el_ty;
+}
+
 const core::type::Vector* Manager::vec(const core::type::Type* inner, uint32_t size) {
     return Get<core::type::Vector>(inner, size);
 }
@@ -108,6 +145,13 @@ const core::type::Vector* Manager::vec3(const core::type::Type* inner) {
 
 const core::type::Vector* Manager::vec4(const core::type::Type* inner) {
     return vec(inner, 4);
+}
+
+const core::type::StorageTexture* Manager::storage_texture(TextureDimension dim,
+                                                           core::TexelFormat format,
+                                                           core::Access access) {
+    const auto* subtype = StorageTexture::SubtypeFor(format, *this);
+    return Get<core::type::StorageTexture>(dim, format, access, subtype);
 }
 
 const core::type::Matrix* Manager::mat(const core::type::Type* inner,
@@ -156,6 +200,13 @@ const core::type::Matrix* Manager::mat4x4(const core::type::Type* inner) {
     return mat(inner, 4, 4);
 }
 
+const core::type::SubgroupMatrix* Manager::subgroup_matrix(SubgroupMatrixKind kind,
+                                                           const core::type::Type* inner,
+                                                           uint32_t cols,
+                                                           uint32_t rows) {
+    return Get<core::type::SubgroupMatrix>(kind, inner, cols, rows);
+}
+
 const core::type::Array* Manager::array(const core::type::Type* elem_ty,
                                         uint32_t count,
                                         uint32_t stride /* = 0*/) {
@@ -198,10 +249,15 @@ const core::type::Pointer* Manager::ptr(core::AddressSpace address_space,
         access == core::Access::kUndefined ? DefaultAccessFor(address_space) : access);
 }
 
+const core::type::Reference* Manager::ref(core::AddressSpace address_space,
+                                          const core::type::Type* subtype,
+                                          core::Access access /* = core::Access::kReadWrite */) {
+    return Get<core::type::Reference>(address_space, subtype, access);
+}
+
 core::type::Struct* Manager::Struct(Symbol name, VectorRef<const StructMember*> members) {
-    if (auto* existing = Find<type::Struct>(name); TINT_UNLIKELY(existing)) {
+    if (auto* existing = Find<type::Struct>(name); DAWN_UNLIKELY(existing)) {
         TINT_ICE() << "attempting to construct two structs named " << name.NameView();
-        return existing;
     }
 
     uint32_t max_align = 0u;
@@ -214,9 +270,8 @@ core::type::Struct* Manager::Struct(Symbol name, VectorRef<const StructMember*> 
 }
 
 core::type::Struct* Manager::Struct(Symbol name, VectorRef<StructMemberDesc> md) {
-    if (auto* existing = Find<type::Struct>(name); TINT_UNLIKELY(existing)) {
+    if (auto* existing = Find<type::Struct>(name); DAWN_UNLIKELY(existing)) {
         TINT_ICE() << "attempting to construct two structs named " << name.NameView();
-        return existing;
     }
 
     tint::Vector<const StructMember*, 4> members;

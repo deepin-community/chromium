@@ -2,10 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "chrome/browser/error_reporting/chrome_js_error_report_processor.h"
 
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
@@ -82,8 +88,7 @@ void ChromeJsErrorReportProcessor::UpdateReportDatabase(
   std::string line = base::StrCat({base::NumberToString(report_time.ToTimeT()),
                                    ",", remote_report_id, "\n"});
   // WriteAtCurrentPos because O_APPEND.
-  if (upload_log.WriteAtCurrentPos(line.c_str(), line.length()) !=
-      static_cast<int>(line.length())) {
+  if (!upload_log.WriteAtCurrentPosAndCheck(base::as_byte_span(line))) {
     DVLOG(1) << "Could not write to upload.log";
     return;
   }

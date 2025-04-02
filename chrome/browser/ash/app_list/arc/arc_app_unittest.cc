@@ -5,21 +5,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/metrics/arc_metrics_constants.h"
-#include "ash/components/arc/mojom/app.mojom.h"
-#include "ash/components/arc/mojom/compatibility_mode.mojom.h"
-#include "ash/components/arc/session/arc_service_manager.h"
-#include "ash/components/arc/test/arc_util_test_support.h"
-#include "ash/components/arc/test/fake_app_instance.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/app_list/app_list_config.h"
 #include "ash/public/cpp/shelf_model.h"
@@ -31,7 +23,6 @@
 #include "base/memory/raw_ref.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/path_service.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/bind.h"
@@ -81,7 +72,17 @@
 #include "chrome/browser/web_applications/test/fake_web_app_provider.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_profile.h"
-#include "components/arc/test/fake_intent_helper_instance.h"
+#include "chromeos/ash/experiences/arc/app/arc_app_constants.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/metrics/arc_metrics_constants.h"
+#include "chromeos/ash/experiences/arc/mojom/app.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/compatibility_mode.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_service_manager.h"
+#include "chromeos/ash/experiences/arc/test/arc_util_test_support.h"
+#include "chromeos/ash/experiences/arc/test/fake_app_instance.h"
+#include "chromeos/ash/experiences/arc/test/fake_intent_helper_instance.h"
 #include "components/services/app_service/public/cpp/app_launch_util.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_types.h"
@@ -427,7 +428,6 @@ int GetAppListIconDimensionForScaleFactor(
              2;
     default:
       NOTREACHED();
-      return 0;
   }
 }
 
@@ -608,14 +608,14 @@ class ArcAppModelBuilderTest : public extensions::ExtensionServiceTestBase,
   }
 
   void ValidateHaveShortcuts(
-      const std::vector<arc::mojom::ShortcutInfo> shortcuts) {
+      const std::vector<arc::mojom::ShortcutInfo>& shortcuts) {
     ValidateHaveAppsAndShortcuts(std::vector<arc::mojom::AppInfoPtr>(),
                                  shortcuts);
   }
 
   void ValidateHaveAppsAndShortcuts(
       const std::vector<arc::mojom::AppInfoPtr>& apps,
-      const std::vector<arc::mojom::ShortcutInfo> shortcuts) {
+      const std::vector<arc::mojom::ShortcutInfo>& shortcuts) {
     ArcAppListPrefs* prefs = ArcAppListPrefs::Get(profile_.get());
     ASSERT_NE(nullptr, prefs);
     const std::vector<std::string> ids = prefs->GetAppIds();
@@ -715,7 +715,7 @@ class ArcAppModelBuilderTest : public extensions::ExtensionServiceTestBase,
     // Process requested apps.
     for (auto& app : apps) {
       const std::string id = ArcAppTest::GetAppId(*app);
-      std::vector<std::string>::iterator it_id = base::ranges::find(ids, id);
+      std::vector<std::string>::iterator it_id = std::ranges::find(ids, id);
       ASSERT_NE(it_id, ids.end());
       ids.erase(it_id);
 
@@ -734,7 +734,7 @@ class ArcAppModelBuilderTest : public extensions::ExtensionServiceTestBase,
 
   // Validate that requested shortcuts have required ready state
   void ValidateShortcutReadyState(
-      const std::vector<arc::mojom::ShortcutInfo> shortcuts,
+      const std::vector<arc::mojom::ShortcutInfo>& shortcuts,
       bool ready) {
     ArcAppListPrefs* prefs = ArcAppListPrefs::Get(profile_.get());
     ASSERT_NE(nullptr, prefs);
@@ -744,7 +744,7 @@ class ArcAppModelBuilderTest : public extensions::ExtensionServiceTestBase,
     // Process requested apps.
     for (auto& shortcut : shortcuts) {
       const std::string id = ArcAppTest::GetAppId(shortcut);
-      std::vector<std::string>::iterator it_id = base::ranges::find(ids, id);
+      std::vector<std::string>::iterator it_id = std::ranges::find(ids, id);
       ASSERT_NE(it_id, ids.end());
       ids.erase(it_id);
 
@@ -1255,16 +1255,12 @@ class ArcDefaultAppTest : public ArcAppModelBuilderRecreate {
       base::FilePath file_path = file_paths[scale_factor];
       ASSERT_TRUE(base::PathExists(file_path));
 
-      std::string unsafe_icon_data;
-      ASSERT_TRUE(base::ReadFileToString(file_path, &unsafe_icon_data));
+      std::optional<std::vector<uint8_t>> unsafe_icon_data =
+          base::ReadFileToBytes(file_path);
+      ASSERT_TRUE(unsafe_icon_data);
+      SkBitmap bitmap = gfx::PNGCodec::Decode(unsafe_icon_data.value());
 
       float scale = ui::GetScaleForResourceScaleFactor(scale_factor);
-
-      SkBitmap bitmap;
-      gfx::PNGCodec::Decode(
-          reinterpret_cast<const unsigned char*>(&unsafe_icon_data.front()),
-          unsafe_icon_data.length(), &bitmap);
-
       if (bitmap.width() != roundf(size_in_dip * scale) ||
           bitmap.height() != roundf(size_in_dip * scale)) {
         SkBitmap dst;
@@ -1408,7 +1404,6 @@ class ArcPlayStoreManagedUserAppTest : public ArcPlayStoreAppTest {
         return false;
       default:
         NOTREACHED();
-        return false;
     }
   }
 
@@ -1741,71 +1736,6 @@ TEST_P(ArcAppModelBuilderTest, RestartPreserveApps) {
   arc_test()->StopArcInstance();
   CreateBuilder();
   ValidateAppReadyState(fake_apps(), false);
-}
-
-TEST_P(ArcAppModelBuilderTest, IsUnknownBasic) {
-  ArcAppListPrefs* prefs = ArcAppListPrefs::Get(profile_.get());
-  ASSERT_NE(nullptr, prefs);
-  EXPECT_TRUE(prefs->IsUnknownPackage("com.package.notreallyapackage"));
-}
-
-TEST_P(ArcDefaultAppTest, IsUnknownDefaultApps) {
-  // Note we run as a default test here so that we can use the fake default apps
-  // list.
-  ArcAppListPrefs* prefs = ArcAppListPrefs::Get(profile_.get());
-  ASSERT_NE(nullptr, prefs);
-  for (const auto& app : fake_default_apps())
-    EXPECT_FALSE(prefs->IsUnknownPackage(app->package_name));
-}
-
-TEST_P(ArcAppModelBuilderTest, IsUnknownSyncTest) {
-  app_instance()->SendRefreshPackageList(
-      ArcAppTest::ClonePackages(fake_packages()));
-
-  const std::string sync_package_name = "com.google.fakesyncpack";
-  ArcAppListPrefs* prefs = ArcAppListPrefs::Get(profile_.get());
-  ASSERT_NE(nullptr, prefs);
-
-  // Check that this is indeed unknown before adding to sync.
-  ASSERT_TRUE(prefs->IsUnknownPackage(sync_package_name));
-
-  // Add to sync, then check unknown.
-  auto data_list = syncer::SyncDataList();
-  sync_pb::EntitySpecifics specifics;
-  specifics.mutable_arc_package()->set_package_name(sync_package_name);
-  data_list.push_back(syncer::SyncData::CreateRemoteData(
-      specifics, syncer::ClientTagHash::FromHashed("unused")));
-  auto* sync_service = arc::ArcPackageSyncableServiceFactory::GetInstance()
-                           ->GetForBrowserContext(profile_.get());
-  ASSERT_NE(nullptr, sync_service);
-  sync_service->MergeDataAndStartSyncing(
-      syncer::ARC_PACKAGE, data_list,
-      std::make_unique<syncer::FakeSyncChangeProcessor>());
-
-  EXPECT_FALSE(prefs->IsUnknownPackage(sync_package_name));
-}
-
-TEST_P(ArcAppModelBuilderTest, IsUnknownInstalling) {
-  const std::string package_name = "com.fakepackage.name";
-  ArcAppListPrefs* prefs = ArcAppListPrefs::Get(profile_.get());
-  ASSERT_NE(nullptr, prefs);
-  EXPECT_TRUE(prefs->IsUnknownPackage(package_name));
-  app_instance()->SendInstallationStarted(package_name);
-  EXPECT_FALSE(prefs->IsUnknownPackage(package_name));
-  AddPackage(CreatePackage(package_name));
-  app_instance()->SendInstallationFinished(package_name, true /* success */);
-  EXPECT_FALSE(prefs->IsUnknownPackage(package_name));
-}
-
-TEST_P(ArcAppModelBuilderTest, IsUnknownAfterUninstall) {
-  ArcAppListPrefs* prefs = ArcAppListPrefs::Get(profile_.get());
-  ASSERT_NE(nullptr, prefs);
-  ASSERT_GE(fake_packages().size(), 1U);
-  app_instance()->SendRefreshPackageList(
-      ArcAppTest::ClonePackages(fake_packages()));
-  EXPECT_FALSE(prefs->IsUnknownPackage(fake_packages()[0]->package_name));
-  app_instance()->UninstallPackage(fake_packages()[0]->package_name);
-  EXPECT_TRUE(prefs->IsUnknownPackage(fake_packages()[0]->package_name));
 }
 
 TEST_P(ArcAppModelBuilderTest, MetricsIncremented) {
@@ -2496,9 +2426,7 @@ TEST_P(ArcPlayStoreAppTest, PaiStarter) {
   bool pai_started = false;
 
   arc::ArcPaiStarter starter1(profile_.get());
-  arc::ArcPaiStarter starter2(profile_.get());
   EXPECT_FALSE(starter1.started());
-  EXPECT_FALSE(starter2.started());
   EXPECT_EQ(app_instance()->start_pai_request_count(), 0);
 
   starter1.AddOnStartCallback(
@@ -2517,8 +2445,6 @@ TEST_P(ArcPlayStoreAppTest, PaiStarter) {
   ASSERT_TRUE(session_manager->pai_starter());
   EXPECT_FALSE(session_manager->pai_starter()->started());
 
-  starter2.AcquireLock();
-
   SendPlayStoreApp();
 
   EXPECT_TRUE(starter1.started());
@@ -2530,17 +2456,12 @@ TEST_P(ArcPlayStoreAppTest, PaiStarter) {
       base::BindOnce(&OnPaiStartedCallback, &pai_started));
   EXPECT_TRUE(pai_started);
 
-  EXPECT_FALSE(starter2.started());
   EXPECT_TRUE(session_manager->pai_starter()->started());
   EXPECT_EQ(app_instance()->start_pai_request_count(), 2);
 
-  starter2.ReleaseLock();
+  arc::ArcPaiStarter starter2(profile_.get());
   EXPECT_TRUE(starter2.started());
   EXPECT_EQ(app_instance()->start_pai_request_count(), 3);
-
-  arc::ArcPaiStarter starter3(profile_.get());
-  EXPECT_TRUE(starter3.started());
-  EXPECT_EQ(app_instance()->start_pai_request_count(), 4);
 }
 
 // Validates that PAI is started on the next session start if it was not started
@@ -2556,10 +2477,7 @@ TEST_P(ArcPlayStoreAppTest, StartPaiOnNextRun) {
   ASSERT_TRUE(pai_starter);
   EXPECT_FALSE(pai_starter->started());
 
-  // Finish session with lock. This would prevent running PAI.
-  pai_starter->AcquireLock();
-  SendPlayStoreApp();
-  EXPECT_FALSE(pai_starter->started());
+  // Session ended without PAI starts.
   session_manager->Shutdown();
 
   // Simulate ARC restart.
@@ -2570,7 +2488,6 @@ TEST_P(ArcPlayStoreAppTest, StartPaiOnNextRun) {
   session_manager = arc::ArcSessionManager::Get();
   pai_starter = session_manager->pai_starter();
   ASSERT_TRUE(pai_starter);
-  EXPECT_FALSE(pai_starter->locked());
 
   SendPlayStoreApp();
   EXPECT_TRUE(pai_starter->started());
@@ -3116,7 +3033,7 @@ TEST_P(ArcAppModelIconTest, DISABLED_IconInvalidation) {
   EXPECT_TRUE(app_instance()->icon_requests().empty());
 }
 
-// TODO(crbug.com/1345154): Flaky.
+// TODO(crbug.com/40853365): Flaky.
 TEST_P(ArcAppModelIconTest, DISABLED_IconInvalidationOnFrameworkUpdate) {
   ArcAppListPrefs* const prefs = ArcAppListPrefs::Get(profile_.get());
   ASSERT_TRUE(prefs);
@@ -3169,7 +3086,7 @@ TEST_P(ArcAppModelIconTest, DISABLED_IconInvalidationOnFrameworkUpdate) {
 
 // This verifies that app icons are invalidated in case icon version was
 // changed which means ARC sends icons using updated processing.
-// TODO(crbug.com/1364812): Flaky.
+// TODO(crbug.com/40865778): Flaky.
 TEST_P(ArcAppModelIconTest, DISABLED_IconInvalidationOnIconVersionUpdate) {
   ArcAppListPrefs* const prefs = ArcAppListPrefs::Get(profile_.get());
   ASSERT_TRUE(prefs);
@@ -3639,7 +3556,7 @@ TEST_P(ArcDefaultAppTest, DisableDefaultApps) {
   EXPECT_FALSE(prefs->GetApp(app_id));
 }
 
-// TODO(crbug.com/1112319): Flaky.
+// TODO(crbug.com/40709649): Flaky.
 TEST_P(ArcAppLauncherForDefaultAppTest, DISABLED_AppIconUpdated) {
   ArcAppListPrefs* prefs = ArcAppListPrefs::Get(profile_.get());
   ASSERT_NE(nullptr, prefs);

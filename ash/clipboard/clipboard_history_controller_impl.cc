@@ -20,7 +20,6 @@
 #include "ash/clipboard/clipboard_nudge_constants.h"
 #include "ash/clipboard/clipboard_nudge_controller.h"
 #include "ash/clipboard/scoped_clipboard_history_pause_impl.h"
-#include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/display/display_util.h"
 #include "ash/public/cpp/clipboard_image_model_factory.h"
@@ -51,7 +50,6 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/unguessable_token.h"
-#include "chromeos/constants/chromeos_features.h"
 #include "chromeos/crosapi/mojom/clipboard_history.mojom.h"
 #include "components/prefs/pref_service.h"
 #include "ui/aura/window.h"
@@ -65,7 +63,7 @@
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/text_input_client.h"
 #include "ui/base/models/image_model.h"
-#include "ui/base/models/simple_menu_model.h"
+#include "ui/base/mojom/menu_source_type.mojom.h"
 #include "ui/base/webui/web_ui_util.h"
 #include "ui/color/color_provider_source.h"
 #include "ui/events/event.h"
@@ -73,6 +71,7 @@
 #include "ui/events/keycodes/keyboard_codes_posix.h"
 #include "ui/events/types/event_type.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/menus/simple_menu_model.h"
 #include "ui/views/controls/menu/menu_controller.h"
 
 #if BUILDFLAG(USE_XKBCOMMON)
@@ -212,7 +211,8 @@ ui::KeyEvent SyntheticCtrlV(ui::EventType type) {
 }
 
 ui::KeyEvent SyntheticCtrl(ui::EventType type) {
-  int flags = type == ui::ET_KEY_PRESSED ? ui::EF_CONTROL_DOWN : ui::EF_NONE;
+  int flags =
+      type == ui::EventType::kKeyPressed ? ui::EF_CONTROL_DOWN : ui::EF_NONE;
   ui::DomCode dom_code = ui::DomCode::NONE;
 #if BUILDFLAG(USE_XKBCOMMON)
   dom_code = LookUpXkbDomCode(XKB_KEY_Control_L);
@@ -236,23 +236,23 @@ void SyntheticPaste(
   // TODO(http://b/283533126): Replace this workaround with a long-term fix.
   if (paste_source == crosapi::mojom::ClipboardHistoryControllerShowSource::
                           kControlVLongpress) {
-    ui::KeyEvent v_release = SyntheticCtrlV(ui::ET_KEY_RELEASED);
+    ui::KeyEvent v_release = SyntheticCtrlV(ui::EventType::kKeyReleased);
     host->DeliverEventToSink(&v_release);
 
-    ui::KeyEvent ctrl_release = SyntheticCtrl(ui::ET_KEY_RELEASED);
+    ui::KeyEvent ctrl_release = SyntheticCtrl(ui::EventType::kKeyReleased);
     host->DeliverEventToSink(&ctrl_release);
   }
 
-  ui::KeyEvent ctrl_press = SyntheticCtrl(ui::ET_KEY_PRESSED);
+  ui::KeyEvent ctrl_press = SyntheticCtrl(ui::EventType::kKeyPressed);
   host->DeliverEventToSink(&ctrl_press);
 
-  ui::KeyEvent v_press = SyntheticCtrlV(ui::ET_KEY_PRESSED);
+  ui::KeyEvent v_press = SyntheticCtrlV(ui::EventType::kKeyPressed);
   host->DeliverEventToSink(&v_press);
 
-  ui::KeyEvent v_release = SyntheticCtrlV(ui::ET_KEY_RELEASED);
+  ui::KeyEvent v_release = SyntheticCtrlV(ui::EventType::kKeyReleased);
   host->DeliverEventToSink(&v_release);
 
-  ui::KeyEvent ctrl_release = SyntheticCtrl(ui::ET_KEY_RELEASED);
+  ui::KeyEvent ctrl_release = SyntheticCtrl(ui::EventType::kKeyReleased);
   host->DeliverEventToSink(&ctrl_release);
 }
 
@@ -369,7 +369,6 @@ class ClipboardHistoryControllerImpl::AcceleratorTarget
       HandlePasteFirstItem(ClipboardHistoryPasteType::kPlainTextCtrlV);
     } else {
       NOTREACHED();
-      return false;
     }
 
     return true;
@@ -502,7 +501,7 @@ void ClipboardHistoryControllerImpl::ToggleMenuShownByAccelerator(
     return;
   }
 
-  ShowMenu(CalculateAnchorRect(), ui::MENU_SOURCE_KEYBOARD,
+  ShowMenu(CalculateAnchorRect(), ui::mojom::MenuSourceType::kKeyboard,
            crosapi::mojom::ClipboardHistoryControllerShowSource::kAccelerator);
 }
 
@@ -518,7 +517,7 @@ void ClipboardHistoryControllerImpl::RemoveObserver(
 
 bool ClipboardHistoryControllerImpl::ShowMenu(
     const gfx::Rect& anchor_rect,
-    ui::MenuSourceType source_type,
+    ui::mojom::MenuSourceType source_type,
     crosapi::mojom::ClipboardHistoryControllerShowSource show_source) {
   return ShowMenu(anchor_rect, source_type, show_source,
                   OnMenuClosingCallback());
@@ -526,7 +525,7 @@ bool ClipboardHistoryControllerImpl::ShowMenu(
 
 bool ClipboardHistoryControllerImpl::ShowMenu(
     const gfx::Rect& anchor_rect,
-    ui::MenuSourceType source_type,
+    ui::mojom::MenuSourceType source_type,
     crosapi::mojom::ClipboardHistoryControllerShowSource show_source,
     OnMenuClosingCallback callback) {
   if (IsMenuShowing() || !HasAvailableHistoryItems()) {
@@ -919,7 +918,7 @@ void ClipboardHistoryControllerImpl::ExecuteCommand(int command_id,
       context_menu_->SelectMenuItemHoveredByMouse();
       return;
     case Action::kEmpty:
-      DUMP_WILL_BE_NOTREACHED_NORETURN();
+      DUMP_WILL_BE_NOTREACHED();
       return;
   }
 }
@@ -1125,7 +1124,7 @@ gfx::Rect ClipboardHistoryControllerImpl::CalculateAnchorRect() const {
 
   // Some web apps render the caret in an IFrame, and we will not get the
   // bounds in that case.
-  // TODO(https://crbug.com/1099930): Show the menu in the middle of the
+  // TODO(crbug.com/40137728): Show the menu in the middle of the
   // webview if the bounds are empty.
   ui::TextInputClient* text_input_client =
       host->GetInputMethod()->GetTextInputClient();

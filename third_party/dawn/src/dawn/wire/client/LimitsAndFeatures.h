@@ -28,8 +28,9 @@
 #ifndef SRC_DAWN_WIRE_CLIENT_LIMITSANDFEATURES_H_
 #define SRC_DAWN_WIRE_CLIENT_LIMITSANDFEATURES_H_
 
+#include <webgpu/webgpu.h>
+
 #include "absl/container/flat_hash_set.h"
-#include "dawn/webgpu.h"
 
 namespace dawn::wire::client {
 
@@ -38,9 +39,9 @@ class LimitsAndFeatures {
     LimitsAndFeatures();
     ~LimitsAndFeatures();
 
-    bool GetLimits(WGPUSupportedLimits* limits) const;
+    WGPUStatus GetLimits(WGPUSupportedLimits* limits) const;
     bool HasFeature(WGPUFeatureName feature) const;
-    size_t EnumerateFeatures(WGPUFeatureName* features) const;
+    void ToSupportedFeatures(WGPUSupportedFeatures* supportedFeatures) const;
 
     void SetLimits(const WGPUSupportedLimits* limits);
     void SetFeatures(const WGPUFeatureName* features, uint32_t featuresCount);
@@ -48,6 +49,8 @@ class LimitsAndFeatures {
   private:
     WGPUSupportedLimits mLimits;
     WGPUDawnExperimentalSubgroupLimits mExperimentalSubgroupLimits;
+    WGPUDawnExperimentalImmediateDataLimits mExperimentalImmediateDataLimits;
+    WGPUDawnTexelCopyBufferRowAlignmentLimits mTexelCopyBufferRowAlignmentLimits;
     absl::flat_hash_set<WGPUFeatureName> mFeatures;
 };
 

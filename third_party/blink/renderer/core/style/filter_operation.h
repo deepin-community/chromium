@@ -74,7 +74,6 @@ class CORE_EXPORT FilterOperation : public GarbageCollected<FilterOperation> {
     kComponentTransfer,
     kConvolveMatrix,
     kTurbulence,
-    kNone
   };
 
   static bool CanInterpolate(FilterOperation::OperationType type) {
@@ -98,11 +97,8 @@ class CORE_EXPORT FilterOperation : public GarbageCollected<FilterOperation> {
       case OperationType::kConvolveMatrix:
       case OperationType::kBoxReflect:
         return false;
-      case OperationType::kNone:
-        break;
     }
     NOTREACHED();
-    return false;
   }
 
   virtual ~FilterOperation() = default;
@@ -363,6 +359,11 @@ class CORE_EXPORT DropShadowFilterOperation : public FilterOperation {
  public:
   explicit DropShadowFilterOperation(const ShadowData& shadow)
       : FilterOperation(OperationType::kDropShadow), shadow_(shadow) {}
+
+  void Trace(Visitor* visitor) const override {
+    visitor->Trace(shadow_);
+    FilterOperation::Trace(visitor);
+  }
 
   const ShadowData& Shadow() const { return shadow_; }
 

@@ -4,6 +4,7 @@
 
 #include "components/viz/demo/client/demo_client.h"
 
+#include <array>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -66,8 +67,11 @@ void DemoClient::Resize(const gfx::Size& size,
 }
 
 viz::CompositorFrame DemoClient::CreateFrame(const viz::BeginFrameArgs& args) {
-  constexpr SkColor4f colors[] = {SkColors::kRed, SkColors::kGreen,
-                                  SkColors::kYellow};
+  constexpr auto colors = std::to_array<SkColor4f>({
+      SkColors::kRed,
+      SkColors::kGreen,
+      SkColors::kYellow,
+  });
   viz::CompositorFrame frame;
 
   frame.metadata.begin_frame_ack = viz::BeginFrameAck(args, true);
@@ -181,8 +185,8 @@ void DemoClient::OnBeginFrame(const viz::BeginFrameArgs& args,
   // deadline for the client before it needs to submit the compositor-frame.
   base::AutoLock lock(lock_);
   GetPtr()->SubmitCompositorFrame(local_surface_id_, CreateFrame(args),
-                                  std::optional<viz::HitTestRegionList>(),
-                                  /*trace_time=*/0);
+                                  /*hit_test_region_list=*/std::nullopt,
+                                  /*submit_time=*/0);
 }
 void DemoClient::OnBeginFramePausedChanged(bool paused) {}
 void DemoClient::ReclaimResources(

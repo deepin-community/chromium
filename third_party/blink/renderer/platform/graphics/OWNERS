@@ -1,6 +1,7 @@
 # OWNERS specializing in graphics code.
 
 aaronhk@chromium.org
+blundell@chromium.org
 chrishtr@chromium.org
 flackr@chromium.org
 fmalita@chromium.org
@@ -10,6 +11,7 @@ jpgravel@chromium.org
 kbr@chromium.org
 pdr@chromium.org
 senorblanco@chromium.org
+vasilyt@chromium.org
 vollick@chromium.org
 
 # For surface ID propagation and synchronization

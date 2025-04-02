@@ -74,12 +74,9 @@ class FadeView : public views::View {
     return primary_view_->GetMinimumSize();
   }
 
-  gfx::Size CalculatePreferredSize() const override {
-    return primary_view_->CalculatePreferredSize();
-  }
-
-  int GetHeightForWidth(int width) const override {
-    return primary_view_->GetHeightForWidth(width);
+  gfx::Size CalculatePreferredSize(
+      const views::SizeBounds& available_size) const override {
+    return primary_view_->CalculatePreferredSize(available_size);
   }
 
   gfx::Size GetMaximumSize() const override {

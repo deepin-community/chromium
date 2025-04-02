@@ -54,11 +54,17 @@
 #include "third_party/blink/renderer/core/frame/web_feature.h"
 #include "third_party/blink/renderer/core/html/forms/html_input_element.h"
 #include "third_party/blink/renderer/core/html/forms/html_select_element.h"
+#include "third_party/blink/renderer/core/html/html_base_element.h"
+#include "third_party/blink/renderer/core/html/html_body_element.h"
 #include "third_party/blink/renderer/core/html/html_br_element.h"
 #include "third_party/blink/renderer/core/html/html_element.h"
 #include "third_party/blink/renderer/core/html/html_li_element.h"
+#include "third_party/blink/renderer/core/html/html_link_element.h"
+#include "third_party/blink/renderer/core/html/html_meta_element.h"
 #include "third_party/blink/renderer/core/html/html_quote_element.h"
 #include "third_party/blink/renderer/core/html/html_span_element.h"
+#include "third_party/blink/renderer/core/html/html_style_element.h"
+#include "third_party/blink/renderer/core/html/html_title_element.h"
 #include "third_party/blink/renderer/core/html_names.h"
 #include "third_party/blink/renderer/core/input_type_names.h"
 #include "third_party/blink/renderer/core/layout/layout_object.h"
@@ -68,6 +74,7 @@
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/tracing/trace_event.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
@@ -444,6 +451,16 @@ ReplaceSelectionCommand::ReplaceSelectionCommand(
       sanitize_fragment_(options & kSanitizeFragment),
       should_merge_end_(false) {}
 
+String ReplaceSelectionCommand::TextDataForInputEvent() const {
+  // As per spec https://www.w3.org/TR/input-events-1/#overview
+  // input event data should be set for certain input types.
+  if (input_type_ == InputEvent::InputType::kInsertFromDrop ||
+      input_type_ == InputEvent::InputType::kInsertFromPaste ||
+      input_type_ == InputEvent::InputType::kInsertReplacementText) {
+    return input_event_data_;
+  }
+  return g_null_atom;
+}
 static bool HasMatchingQuoteLevel(VisiblePosition end_of_existing_content,
                                   VisiblePosition end_of_inserted_content) {
   Position existing = end_of_existing_content.DeepEquivalent();
@@ -883,14 +900,28 @@ static bool FollowBlockElementStyle(const Node* node) {
     return false;
   }
 
-  return IsListItem(node) || IsTableCell(node) ||
-         element->HasTagName(html_names::kPreTag) ||
-         element->HasTagName(html_names::kH1Tag) ||
-         element->HasTagName(html_names::kH2Tag) ||
-         element->HasTagName(html_names::kH3Tag) ||
-         element->HasTagName(html_names::kH4Tag) ||
-         element->HasTagName(html_names::kH5Tag) ||
-         element->HasTagName(html_names::kH6Tag);
+  bool should_follow_block_element_style =
+  // TODO(https://crbug.com/352610616): Investigate preserving styles within
+  // list elements in block merge scenarios.
+      IsListItem(node) ||
+
+      IsTableCell(node) ||
+
+  // TODO(https://crbug.com/352038138): Investigate preserving styles within
+  // pre elements in block merge scenarios.
+      element->HasTagName(html_names::kPreTag);
+  if (RuntimeEnabledFeatures::
+          PreserveFollowingBlockStylesDuringBlockMergeEnabled()) {
+    return should_follow_block_element_style;
+  } else {
+    return should_follow_block_element_style ||
+           element->HasTagName(html_names::kH1Tag) ||
+           element->HasTagName(html_names::kH2Tag) ||
+           element->HasTagName(html_names::kH3Tag) ||
+           element->HasTagName(html_names::kH4Tag) ||
+           element->HasTagName(html_names::kH5Tag) ||
+           element->HasTagName(html_names::kH6Tag);
+  }
 }
 
 // Remove style spans before insertion if they are unnecessary.  It's faster
@@ -918,7 +949,7 @@ void ReplaceSelectionCommand::HandleStyleSpansBeforeInsertion(
   // |node| can be an inline element like <br> under <li>
   // e.g.) editing/execCommand/switch-list-type.html
   //       editing/deleting/backspace-merge-into-block.html
-  if (IsInline(node)) {
+  if (IsInlineNode(node)) {
     node = EnclosingBlock(insertion_pos.AnchorNode());
     if (!node)
       return;
@@ -991,10 +1022,16 @@ void ReplaceSelectionCommand::MergeEndIfNeeded(EditingState* editing_state) {
     start_of_paragraph_to_move = CreateVisiblePosition(
         start_of_paragraph_to_move.ToPositionWithAffinity());
   }
-
-  MoveParagraph(start_of_paragraph_to_move,
-                EndOfParagraph(start_of_paragraph_to_move), destination,
-                editing_state);
+  if (RuntimeEnabledFeatures::AllowSkippingEditingBoundaryToMergeEndEnabled()) {
+    MoveParagraph(
+        start_of_paragraph_to_move,
+        EndOfParagraph(start_of_paragraph_to_move, kCanSkipOverEditingBoundary),
+        destination, editing_state);
+  } else {
+    MoveParagraph(start_of_paragraph_to_move,
+                  EndOfParagraph(start_of_paragraph_to_move), destination,
+                  editing_state);
+  }
   if (editing_state->IsAborted())
     return;
 
@@ -1230,6 +1267,8 @@ void ReplaceSelectionCommand::DoApply(EditingState* editing_state) {
     return;
 
   Position insertion_pos = EndingVisibleSelection().Start();
+  Position placeholder = ComputePlaceholderToCollapseAt(insertion_pos);
+
   // We don't want any of the pasted content to end up nested in a Mail
   // blockquote, so first break out of any surrounding Mail blockquotes. Unless
   // we're inserting in a table, in which case breaking the blockquote will
@@ -1355,7 +1394,14 @@ void ReplaceSelectionCommand::DoApply(EditingState* editing_state) {
           split_start = insertion_pos.ComputeContainerNode();
         Node* node_to_split_to =
             SplitTreeToNode(split_start, element_to_split_to->parentNode());
-        insertion_pos = Position::InParentBeforeNode(*node_to_split_to);
+        if (RuntimeEnabledFeatures::
+                ComputeInsertionPositionBasedOnAnchorTypeEnabled() &&
+            (insertion_pos.IsAfterChildren() ||
+             insertion_pos.IsAfterAnchor())) {
+          insertion_pos = Position::InParentAfterNode(*node_to_split_to);
+        } else {
+          insertion_pos = Position::InParentBeforeNode(*node_to_split_to);
+        }
       }
     }
   }
@@ -1385,18 +1431,27 @@ void ReplaceSelectionCommand::DoApply(EditingState* editing_state) {
 
   Element* block_start = EnclosingBlock(insertion_pos.AnchorNode());
   if ((IsHTMLListElement(inserted_nodes.RefNode()) ||
+       (RuntimeEnabledFeatures::PasteListItemOutsidePreviousListItemEnabled() &&
+        IsListItemTag(inserted_nodes.RefNode())) ||
        (IsHTMLListElement(inserted_nodes.RefNode()->firstChild()))) &&
-      block_start && block_start->GetLayoutObject()->IsListItemIncludingNG() &&
+      block_start && block_start->GetLayoutObject()->IsListItem() &&
       IsEditable(*block_start->parentNode())) {
     inserted_nodes.SetRefNode(InsertAsListItems(
         To<HTMLElement>(inserted_nodes.RefNode()), block_start, insertion_pos,
         inserted_nodes, editing_state));
-    if (editing_state->IsAborted())
+    if (RuntimeEnabledFeatures::PasteListItemOutsidePreviousListItemEnabled()) {
+      if (IsListItemTag(block_start) && !block_start->firstChild()) {
+        RemoveNode(block_start, editing_state);
+      }
+    }
+    if (editing_state->IsAborted()) {
       return;
+    }
   } else {
     InsertNodeAt(inserted_nodes.RefNode(), insertion_pos, editing_state);
-    if (editing_state->IsAborted())
+    if (editing_state->IsAborted()) {
       return;
+    }
     inserted_nodes.RespondToNodeInsertion(*inserted_nodes.RefNode());
   }
 
@@ -1463,8 +1518,15 @@ void ReplaceSelectionCommand::DoApply(EditingState* editing_state) {
   }
 
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
+
+  bool is_root_display_inline = false;
+  if (RuntimeEnabledFeatures::RemovePlaceholderBRForDisplayInlineEnabled()) {
+    is_root_display_inline =
+        current_root && current_root->GetComputedStyle() &&
+        current_root->GetComputedStyle()->IsDisplayInlineType();
+  }
   if (end_br &&
-      (plain_text_fragment ||
+      (plain_text_fragment || is_root_display_inline ||
        (ShouldRemoveEndBR(end_br, original_vis_pos_before_end_br) &&
         !(fragment.HasInterchangeNewlineAtEnd() && selection_is_plain_text)))) {
     ContainerNode* parent = end_br->parentNode();
@@ -1684,13 +1746,17 @@ void ReplaceSelectionCommand::DoApply(EditingState* editing_state) {
     if (editing_state->IsAborted())
       return;
   }
-
   // If we are dealing with a fragment created from plain text
   // no style matching is necessary.
   if (plain_text_fragment)
     match_style_ = false;
 
   CompleteHTMLReplacement(last_position_to_select, editing_state);
+
+  // Remove the placeholder after the replacement is complete
+  if (placeholder.IsNotNull()) {
+    RemovePlaceholderAt(placeholder);
+  }
 }
 
 bool ReplaceSelectionCommand::ShouldRemoveEndBR(
@@ -1989,9 +2055,19 @@ Node* ReplaceSelectionCommand::InsertAsListItems(HTMLElement* list_element,
                                                  const Position& insert_pos,
                                                  InsertedNodes& inserted_nodes,
                                                  EditingState* editing_state) {
-  while (list_element->HasOneChild() &&
-         IsHTMLListElement(list_element->firstChild()))
-    list_element = To<HTMLElement>(list_element->firstChild());
+  Node* list_item;
+  bool list_element_is_list_item_type =
+      RuntimeEnabledFeatures::PasteListItemOutsidePreviousListItemEnabled() &&
+      IsListItemTag(list_element);
+  if (list_element_is_list_item_type) {
+    list_item = list_element;
+  } else {
+    while (list_element->HasOneChild() &&
+           IsHTMLListElement(list_element->firstChild())) {
+      list_element = To<HTMLElement>(list_element->firstChild());
+    }
+    list_item = list_element->firstChild();
+  }
 
   GetDocument().UpdateStyleAndLayout(DocumentUpdateReason::kEditing);
   bool is_start = IsStartOfParagraph(CreateVisiblePosition(insert_pos));
@@ -2008,9 +2084,10 @@ Node* ReplaceSelectionCommand::InsertAsListItems(HTMLElement* list_element,
       SplitTextNode(text_node, text_node_offset);
     SplitTreeToNode(insert_pos.AnchorNode(), last_node, true);
   }
-
-  while (Node* list_item = list_element->firstChild()) {
-    list_element->RemoveChild(list_item, ASSERT_NO_EXCEPTION);
+  while (list_item) {
+    if (!list_element_is_list_item_type) {
+      list_element->RemoveChild(list_item, ASSERT_NO_EXCEPTION);
+    }
     if (is_start || is_middle) {
       InsertNodeBefore(list_item, last_node, editing_state);
       if (editing_state->IsAborted())
@@ -2024,6 +2101,11 @@ Node* ReplaceSelectionCommand::InsertAsListItems(HTMLElement* list_element,
       last_node = list_item;
     } else {
       NOTREACHED();
+    }
+    if (!list_element_is_list_item_type) {
+      list_item = list_element->firstChild();
+    } else {
+      break;
     }
   }
   if (is_start || is_middle) {
@@ -2056,6 +2138,9 @@ bool ReplaceSelectionCommand::PerformTrivialReplace(
   if (!fragment.FirstChild() || fragment.FirstChild() != fragment.LastChild() ||
       !fragment.FirstChild()->IsTextNode())
     return false;
+
+  // Save the text to set event data for input events.
+  input_event_data_ = To<Text>(fragment.FirstChild())->data();
 
   // FIXME: Would be nice to handle smart replace in the fast path.
   if (smart_replace_ || fragment.HasInterchangeNewlineAtStart() ||
@@ -2094,6 +2179,7 @@ bool ReplaceSelectionCommand::PerformTrivialReplace(
     if (editing_state->IsAborted())
       return false;
   }
+
 
   start_of_inserted_range_ = start;
   end_of_inserted_range_ = end;

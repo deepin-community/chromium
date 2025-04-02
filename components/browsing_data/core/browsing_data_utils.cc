@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/no_destructor.h"
@@ -22,6 +23,9 @@
 #include "ui/base/l10n/l10n_util.h"
 
 namespace browsing_data {
+
+const char kDeleteBrowsingDataDialogHistogram[] =
+    "Privacy.DeleteBrowsingData.Dialog";
 
 // Creates a string like "for a.com, b.com, and 4 more".
 std::u16string CreateDomainExamples(
@@ -174,8 +178,8 @@ std::u16string GetCounterTextFromResult(
                   ? IDS_DEL_PASSWORDS_COUNTER_SYNCED
                   : IDS_DEL_PASSWORDS_COUNTER,
               profile_passwords),
-          {CreateDomainExamples(profile_passwords,
-                                password_result->domain_examples())},
+          CreateDomainExamples(profile_passwords,
+                               password_result->domain_examples()),
           nullptr));
     }
 
@@ -184,8 +188,8 @@ std::u16string GetCounterTextFromResult(
           l10n_util::GetPluralStringFUTF16(
               IDS_DEL_ACCOUNT_PASSWORDS_COUNTER,
               password_result->account_passwords()),
-          {CreateDomainExamples(password_result->account_passwords(),
-                                password_result->account_domain_examples())},
+          CreateDomainExamples(password_result->account_passwords(),
+                               password_result->account_domain_examples()),
           nullptr));
     }
 
@@ -242,15 +246,15 @@ std::u16string GetCounterTextFromResult(
     const AutofillCounter::AutofillResult* autofill_result =
         static_cast<const AutofillCounter::AutofillResult*>(result);
     AutofillCounter::ResultInt num_suggestions = autofill_result->Value();
-    AutofillCounter::ResultInt num_credit_cards =
+    AutofillCounter::ResultInt num_payment_methods =
         autofill_result->num_credit_cards();
     AutofillCounter::ResultInt num_addresses = autofill_result->num_addresses();
 
     std::vector<std::u16string> displayed_strings;
 
-    if (num_credit_cards) {
+    if (num_payment_methods) {
       displayed_strings.push_back(l10n_util::GetPluralStringFUTF16(
-          IDS_DEL_AUTOFILL_COUNTER_CREDIT_CARDS, num_credit_cards));
+          IDS_DEL_AUTOFILL_COUNTER_PAYMENT_METHODS, num_payment_methods));
     }
     if (num_addresses) {
       displayed_strings.push_back(l10n_util::GetPluralStringFUTF16(
@@ -279,32 +283,56 @@ std::u16string GetCounterTextFromResult(
 
     bool synced = autofill_result->is_sync_enabled();
 
-    // Construct the resulting string from the sections in |displayed_strings|.
+    // TODO(crbug.com/371539581): Exclude payment methods from this part,
+    // because it can be attributed as "synced", while payment methods are
+    // always local.
+    std::u16string payment_methods_addresses_autocomplete_entries_part;
     switch (displayed_strings.size()) {
       case 0:
-        return l10n_util::GetStringUTF16(IDS_DEL_AUTOFILL_COUNTER_EMPTY);
+        payment_methods_addresses_autocomplete_entries_part =
+            l10n_util::GetStringUTF16(IDS_DEL_AUTOFILL_COUNTER_EMPTY);
+        break;
       case 1:
-        return synced ? l10n_util::GetStringFUTF16(
-                            IDS_DEL_AUTOFILL_COUNTER_ONE_TYPE_SYNCED,
-                            displayed_strings[0])
-                      : displayed_strings[0];
+        payment_methods_addresses_autocomplete_entries_part =
+            synced ? l10n_util::GetStringFUTF16(
+                         IDS_DEL_AUTOFILL_COUNTER_ONE_TYPE_SYNCED,
+                         displayed_strings[0])
+                   : displayed_strings[0];
+        break;
       case 2:
-        return l10n_util::GetStringFUTF16(
-            synced ? IDS_DEL_AUTOFILL_COUNTER_TWO_TYPES_SYNCED
-                   : IDS_DEL_AUTOFILL_COUNTER_TWO_TYPES,
-            displayed_strings[0], displayed_strings[1]);
+        payment_methods_addresses_autocomplete_entries_part =
+            l10n_util::GetStringFUTF16(
+                synced ? IDS_DEL_AUTOFILL_COUNTER_TWO_TYPES_SYNCED
+                       : IDS_DEL_AUTOFILL_COUNTER_TWO_TYPES,
+                displayed_strings[0], displayed_strings[1]);
+        break;
       case 3:
-        return l10n_util::GetStringFUTF16(
-            synced ? IDS_DEL_AUTOFILL_COUNTER_THREE_TYPES_SYNCED
-                   : IDS_DEL_AUTOFILL_COUNTER_THREE_TYPES,
-            displayed_strings[0], displayed_strings[1], displayed_strings[2]);
+        payment_methods_addresses_autocomplete_entries_part =
+            l10n_util::GetStringFUTF16(
+                synced ? IDS_DEL_AUTOFILL_COUNTER_THREE_TYPES_SYNCED
+                       : IDS_DEL_AUTOFILL_COUNTER_THREE_TYPES,
+                displayed_strings[0], displayed_strings[1],
+                displayed_strings[2]);
+        break;
       default:
         NOTREACHED();
+    }
+
+    AutofillCounter::ResultInt num_user_annotations =
+        autofill_result->num_user_annotation_entries();
+    if (num_user_annotations) {
+      return l10n_util::GetStringFUTF16(
+          IDS_DEL_AUTOFILL_SYNCABLE_NON_SYNCABLE_COMBINATION,
+          payment_methods_addresses_autocomplete_entries_part,
+          l10n_util::GetPluralStringFUTF16(
+              IDS_DEL_AUTOFILL_COUNTER_USER_ANNOTATION_ENTRIES,
+              num_user_annotations));
+    } else {
+      return payment_methods_addresses_autocomplete_entries_part;
     }
   }
 
   NOTREACHED();
-  return std::u16string();
 }
 
 const char* GetTimePeriodPreferenceName(
@@ -326,20 +354,16 @@ bool GetDeletionPreferenceFromDataType(
       case BrowsingDataType::CACHE:
         *out_pref = prefs::kDeleteCacheBasic;
         return true;
-      case BrowsingDataType::COOKIES:
+      case BrowsingDataType::SITE_DATA:
         *out_pref = prefs::kDeleteCookiesBasic;
         return true;
       case BrowsingDataType::PASSWORDS:
       case BrowsingDataType::FORM_DATA:
-      case BrowsingDataType::BOOKMARKS:
       case BrowsingDataType::SITE_SETTINGS:
       case BrowsingDataType::DOWNLOADS:
       case BrowsingDataType::HOSTED_APPS_DATA:
+      case BrowsingDataType::TABS:
         return false;  // No corresponding preference on basic tab.
-      case BrowsingDataType::NUM_TYPES:
-        // This is not an actual type.
-        NOTREACHED();
-        return false;
     }
   }
   switch (data_type) {
@@ -349,7 +373,7 @@ bool GetDeletionPreferenceFromDataType(
     case BrowsingDataType::CACHE:
       *out_pref = prefs::kDeleteCache;
       return true;
-    case BrowsingDataType::COOKIES:
+    case BrowsingDataType::SITE_DATA:
       *out_pref = prefs::kDeleteCookies;
       return true;
     case BrowsingDataType::PASSWORDS:
@@ -358,10 +382,6 @@ bool GetDeletionPreferenceFromDataType(
     case BrowsingDataType::FORM_DATA:
       *out_pref = prefs::kDeleteFormData;
       return true;
-    case BrowsingDataType::BOOKMARKS:
-      // Bookmarks are deleted on the Android side. No corresponding deletion
-      // preference. Not implemented on Desktop.
-      return false;
     case BrowsingDataType::SITE_SETTINGS:
       *out_pref = prefs::kDeleteSiteSettings;
       return true;
@@ -371,12 +391,11 @@ bool GetDeletionPreferenceFromDataType(
     case BrowsingDataType::HOSTED_APPS_DATA:
       *out_pref = prefs::kDeleteHostedAppsData;
       return true;
-    case BrowsingDataType::NUM_TYPES:
-      NOTREACHED();  // This is not an actual type.
-      return false;
+    case BrowsingDataType::TABS:
+      *out_pref = prefs::kCloseTabs;
+      return true;
   }
   NOTREACHED();
-  return false;
 }
 
 std::optional<BrowsingDataType> GetDataTypeFromDeletionPreference(
@@ -388,8 +407,8 @@ std::optional<BrowsingDataType> GetDataTypeFromDeletionPreference(
           {prefs::kDeleteBrowsingHistoryBasic, BrowsingDataType::HISTORY},
           {prefs::kDeleteCache, BrowsingDataType::CACHE},
           {prefs::kDeleteCacheBasic, BrowsingDataType::CACHE},
-          {prefs::kDeleteCookies, BrowsingDataType::COOKIES},
-          {prefs::kDeleteCookiesBasic, BrowsingDataType::COOKIES},
+          {prefs::kDeleteCookies, BrowsingDataType::SITE_DATA},
+          {prefs::kDeleteCookiesBasic, BrowsingDataType::SITE_DATA},
           {prefs::kDeletePasswords, BrowsingDataType::PASSWORDS},
           {prefs::kDeleteFormData, BrowsingDataType::FORM_DATA},
           {prefs::kDeleteSiteSettings, BrowsingDataType::SITE_SETTINGS},

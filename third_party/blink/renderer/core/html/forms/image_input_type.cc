@@ -39,6 +39,7 @@
 #include "third_party/blink/renderer/core/layout/layout_block_flow.h"
 #include "third_party/blink/renderer/core/layout/layout_image.h"
 #include "third_party/blink/renderer/core/layout/layout_inline.h"
+#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
 
 namespace blink {
@@ -101,8 +102,8 @@ void ImageInputType::HandleDOMActivateEvent(Event& event) {
   event.SetDefaultHandled();
 }
 
-ControlPart ImageInputType::AutoAppearance() const {
-  return kNoControlPart;
+AppearanceValue ImageInputType::AutoAppearance() const {
+  return AppearanceValue::kNone;
 }
 
 LayoutObject* ImageInputType::CreateLayoutObject(
@@ -236,6 +237,9 @@ void ImageInputType::SetUseFallbackContent() {
   if (use_fallback_content_)
     return;
   use_fallback_content_ = true;
+  if (!HasCreatedShadowSubtree()) {
+    return;
+  }
   if (GetElement().GetDocument().InStyleRecalc())
     return;
   if (ShadowRoot* root = GetElement().UserAgentShadowRoot())
@@ -247,6 +251,9 @@ void ImageInputType::EnsurePrimaryContent() {
   if (!use_fallback_content_)
     return;
   use_fallback_content_ = false;
+  if (!HasCreatedShadowSubtree()) {
+    return;
+  }
   if (ShadowRoot* root = GetElement().UserAgentShadowRoot())
     root->RemoveChildren();
   CreateShadowSubtree();
@@ -272,15 +279,13 @@ void ImageInputType::CreateShadowSubtree() {
   HTMLImageFallbackHelper::CreateAltTextShadowTree(GetElement());
 }
 
-// TODO(crbug.com/953707): Avoid marking style dirty in
-// HTMLImageFallbackHelper and use AdjustStyle instead.
-const ComputedStyle* ImageInputType::CustomStyleForLayoutObject(
-    const ComputedStyle* original_style) const {
-  if (!use_fallback_content_)
-    return original_style;
-  ComputedStyleBuilder builder(*original_style);
-  HTMLImageFallbackHelper::CustomStyleForAltText(GetElement(), builder);
-  return builder.TakeStyle();
+void ImageInputType::AdjustStyle(ComputedStyleBuilder& builder) {
+  if (!use_fallback_content_) {
+    builder.SetUAShadowHostData(nullptr);
+    return;
+  }
+
+  HTMLImageFallbackHelper::AdjustHostStyle(GetElement(), builder);
 }
 
 }  // namespace blink

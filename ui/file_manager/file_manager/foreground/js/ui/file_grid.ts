@@ -17,7 +17,8 @@ import type {FilesAppEntry} from '../../../common/js/files_app_entry_types.js';
 import {getEntryLabel, str} from '../../../common/js/translations.js';
 import type {FilesTooltip} from '../../elements/files_tooltip.js';
 import {type FileListModel, GROUP_BY_FIELD_DIRECTORY, GROUP_BY_FIELD_MODIFICATION_TIME, type GroupValue} from '../file_list_model.js';
-import {ListThumbnailLoader, type ThumbnailLoadedEvent} from '../list_thumbnail_loader.js';
+import type {ListThumbnailLoader} from '../list_thumbnail_loader.js';
+import {type ThumbnailLoadedEvent} from '../list_thumbnail_loader.js';
 import {type MetadataItem} from '../metadata/metadata_item.js';
 import {type MetadataModel} from '../metadata/metadata_model.js';
 
@@ -28,7 +29,7 @@ import {FileTapHandler} from './file_tap_handler.js';
 import {Grid, GridSelectionController} from './grid.js';
 import {List} from './list.js';
 import {ListItem} from './list_item.js';
-import {ListSelectionModel} from './list_selection_model.js';
+import type {ListSelectionModel} from './list_selection_model.js';
 
 // Align with CSS .grid-title.group-by-modificationTime.
 const MODIFICATION_TIME_GROUP_HEADING_HEIGHT = 57;
@@ -140,7 +141,7 @@ export class FileGrid extends Grid {
     if (!target) {
       return;
     }
-    const labelElement = target.querySelector('.filename-label') as HTMLElement;
+    const labelElement = target.querySelector<HTMLElement>('.filename-label')!;
     if (!labelElement) {
       return;
     }
@@ -881,7 +882,7 @@ export class FileGrid extends Grid {
    * @param mimeType Optional mime type for the image.
    */
   private static setThumbnailImage_(
-      box: HTMLDivElement, entry: Entry|FilesAppEntry, dataUrl: string,
+      box: HTMLElement, entry: Entry|FilesAppEntry, dataUrl: string,
       width: number, height: number, mimeType?: string) {
     const thumbnail = box.ownerDocument.createElement('div');
     thumbnail.classList.add('thumbnail');
@@ -909,7 +910,7 @@ export class FileGrid extends Grid {
    * Clears thumbnail image from the box.
    * @param box A div element to hold thumbnails.
    */
-  private static clearThumbnailImage_(box: HTMLDivElement) {
+  private static clearThumbnailImage_(box: HTMLElement) {
     const oldThumbnails = Array.from(box.querySelectorAll('.thumbnail'));
     for (const oldThumbnail of oldThumbnails) {
       box.removeChild(oldThumbnail);
@@ -924,7 +925,7 @@ export class FileGrid extends Grid {
    * @param mimeType Optional mime type for the file.
    */
   private setGenericThumbnail_(
-      box: HTMLDivElement, entry: Entry|FilesAppEntry, mimeType?: string) {
+      box: HTMLElement, entry: Entry|FilesAppEntry, mimeType?: string) {
     if (isEncrypted(entry, mimeType)) {
       box.setAttribute('generic-thumbnail', 'encrypted');
       box.setAttribute('aria-label', str('ENCRYPTED_ICON_TOOLTIP'));

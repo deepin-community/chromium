@@ -5,7 +5,6 @@
 import {
   goToResource,
 } from '../../shared/helper.js';
-import {describe, it} from '../../shared/mocha-extensions.js';
 import {
   checkCommandResultFunction,
   navigateToConsoleTab,
@@ -15,7 +14,7 @@ import {
 // to check the output before the last one.
 const checkCommandResult = checkCommandResultFunction(1);
 
-describe('The Console Tab', async function() {
+describe('The Console Tab', function() {
   // This test takes longer than usual because each command is typed and
   // checked individually.
   this.timeout(20000);

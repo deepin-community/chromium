@@ -7,14 +7,6 @@
 #include <string>
 #include <string_view>
 
-#include "ash/components/arc/arc_browser_context_keyed_service_factory_base.h"
-#include "ash/components/arc/arc_features.h"
-#include "ash/components/arc/arc_prefs.h"
-#include "ash/components/arc/arc_util.h"
-#include "ash/components/arc/mojom/backup_settings.mojom.h"
-#include "ash/components/arc/mojom/intent_helper.mojom.h"
-#include "ash/components/arc/mojom/pip.mojom.h"
-#include "ash/components/arc/session/arc_bridge_service.h"
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_pref_names.h"
 #include "ash/system/privacy_hub/privacy_hub_controller.h"
@@ -39,7 +31,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/ui/zoom/chrome_zoom_level_prefs.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/ash/components/network/network_handler.h"
 #include "chromeos/ash/components/network/network_state.h"
@@ -48,8 +39,16 @@
 #include "chromeos/ash/components/network/onc/network_onc_utils.h"
 #include "chromeos/ash/components/network/proxy/proxy_config_service_impl.h"
 #include "chromeos/ash/components/settings/timezone_settings.h"
-#include "components/arc/common/intent_helper/arc_intent_helper_package.h"
-#include "components/arc/intent_helper/arc_intent_helper_bridge.h"
+#include "chromeos/ash/experiences/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "chromeos/ash/experiences/arc/arc_features.h"
+#include "chromeos/ash/experiences/arc/arc_prefs.h"
+#include "chromeos/ash/experiences/arc/arc_util.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_bridge.h"
+#include "chromeos/ash/experiences/arc/intent_helper/arc_intent_helper_package.h"
+#include "chromeos/ash/experiences/arc/mojom/backup_settings.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/intent_helper.mojom.h"
+#include "chromeos/ash/experiences/arc/mojom/pip.mojom.h"
+#include "chromeos/ash/experiences/arc/session/arc_bridge_service.h"
 #include "components/language/core/browser/pref_names.h"
 #include "components/live_caption/pref_names.h"
 #include "components/onc/onc_pref_names.h"
@@ -291,6 +290,7 @@ class ArcSettingsServiceImpl : public TimezoneSettings::Observer,
   void SyncTimeZoneByGeolocation() const;
   void SyncUse24HourClock() const;
   void SyncUserGeolocation() const;
+  void SyncUserGeolocationAccuracy() const;
 
   // Resets Android's font scale to the default value.
   void ResetFontScaleToDefault() const;
@@ -416,6 +416,8 @@ void ArcSettingsServiceImpl::OnPrefChanged(const std::string& pref_name) const {
     SyncAccessibilityVirtualKeyboardEnabled();
   } else if (pref_name == ash::prefs::kUserGeolocationAccessLevel) {
     SyncUserGeolocation();
+  } else if (pref_name == ash::prefs::kUserGeolocationAccuracyEnabled) {
+    SyncUserGeolocationAccuracy();
   } else if (pref_name == ::language::prefs::kApplicationLocale ||
              pref_name == ::language::prefs::kPreferredLanguages) {
     SyncLocale();
@@ -537,6 +539,7 @@ void ArcSettingsServiceImpl::StartObservingSettingsChanges() {
   AddPrefToObserve(ash::prefs::kAccessibilityVirtualKeyboardEnabled);
   AddPrefToObserve(ash::prefs::kDockedMagnifierEnabled);
   AddPrefToObserve(ash::prefs::kUserGeolocationAccessLevel);
+  AddPrefToObserve(ash::prefs::kUserGeolocationAccuracyEnabled);
   AddPrefToObserve(onc::prefs::kDeviceOpenNetworkConfiguration);
   AddPrefToObserve(onc::prefs::kOpenNetworkConfiguration);
   AddPrefToObserve(proxy_config::prefs::kProxy);
@@ -834,15 +837,12 @@ void ArcSettingsServiceImpl::SyncReportingConsent(bool initial_sync) const {
 }
 
 void ArcSettingsServiceImpl::SyncPictureInPictureEnabled() const {
-  bool isPipEnabled =
-      base::FeatureList::IsEnabled(arc::kPictureInPictureFeature);
-
   auto* instance = ARC_GET_INSTANCE_FOR_METHOD(arc_bridge_service_->pip(),
                                                SetPipSuppressionStatus);
   if (!instance)
     return;
 
-  instance->SetPipSuppressionStatus(!isPipEnabled);
+  instance->SetPipSuppressionStatus(false);
 }
 
 void ArcSettingsServiceImpl::SyncTimeZone() const {
@@ -894,6 +894,12 @@ void ArcSettingsServiceImpl::SyncUserGeolocation() const {
   SendBoolValueSettingsBroadcast(
       enabled_for_arc, !pref->IsUserModifiable(),
       "org.chromium.arc.intent_helper.SET_USER_GEOLOCATION");
+}
+
+void ArcSettingsServiceImpl::SyncUserGeolocationAccuracy() const {
+  SendBoolPrefSettingsBroadcast(
+      ash::prefs::kUserGeolocationAccuracyEnabled,
+      "org.chromium.arc.intent_helper.SET_USER_GEOLOCATION_ACCURACY_ENABLED");
 }
 
 void ArcSettingsServiceImpl::SyncConsumerAutoUpdateToggle() const {

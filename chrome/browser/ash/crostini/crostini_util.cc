@@ -6,7 +6,6 @@
 
 #include <utility>
 
-#include "ash/constants/app_types.h"
 #include "ash/constants/ash_features.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
@@ -27,7 +26,9 @@
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service_factory.h"
 #include "chrome/browser/ash/guest_os/guest_os_session_tracker.h"
+#include "chrome/browser/ash/guest_os/guest_os_session_tracker_factory.h"
 #include "chrome/browser/ash/guest_os/guest_os_share_path.h"
+#include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
 #include "chrome/browser/ash/guest_os/guest_os_terminal.h"
 #include "chrome/browser/ash/guest_os/public/types.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
@@ -41,6 +42,8 @@
 #include "chrome/browser/ui/webui/ash/crostini_upgrader/crostini_upgrader_dialog.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/grit/generated_resources.h"
+#include "chromeos/ui/base/app_types.h"
+#include "chromeos/ui/base/window_properties.h"
 #include "components/prefs/pref_service.h"
 #include "components/user_manager/user.h"
 #include "ui/aura/client/aura_constants.h"
@@ -101,23 +104,8 @@ void OnSharePathForLaunchApplication(
         CrostiniResult::SHARE_PATHS_FAILED);
   }
 
-  if (registration.Terminal()) {
-    // TODO(crbug.com/853560): This could be improved by using garcon
-    // DesktopFile::GenerateArgvWithFiles().
-    std::vector<std::string> terminal_args = {
-        registration.ExecutableFileName()};
-    terminal_args.insert(terminal_args.end(), args.begin(), args.end());
-    guest_os::LaunchTerminal(profile, display_id, container_id,
-                             /*cwd=*/std::string(), terminal_args);
-    OnApplicationLaunched(app_id, std::move(callback),
-                          crostini::CrostiniResult::SUCCESS, true,
-                          std::string());
-    return;
-  }
-
   guest_os::launcher::LaunchApplication(
-      profile, container_id, registration.DesktopFileId(), args,
-      registration.IsScaled(),
+      profile, container_id, std::move(registration), display_id, args,
       base::BindOnce(OnApplicationLaunched, app_id, std::move(callback),
                      crostini::CrostiniResult::UNKNOWN_ERROR));
 }
@@ -147,7 +135,7 @@ void LaunchApplication(
   // Get vm_info because we need seneschal_server_handle.
   const std::string& vm_name = registration.VmName();
   auto vm_info =
-      guest_os::GuestOsSessionTracker::GetForProfile(profile)->GetVmInfo(
+      guest_os::GuestOsSessionTrackerFactory::GetForProfile(profile)->GetVmInfo(
           vm_name);
   if (!vm_info) {
     return OnLaunchFailed(app_id, std::move(callback),
@@ -157,7 +145,7 @@ void LaunchApplication(
 
   // Share any paths not in crostini.  The user will see the spinner while this
   // is happening.
-  auto* share_path = guest_os::GuestOsSharePath::GetForProfile(profile);
+  auto* share_path = guest_os::GuestOsSharePathFactory::GetForProfile(profile);
   auto paths_or_error = share_path->ConvertArgsToPathsToShare(
       registration, args, crostini::ContainerChromeOSBaseDirectory(),
       /*map_crostini_home=*/true);
@@ -203,9 +191,7 @@ bool ShouldConfigureDefaultContainer(Profile* profile) {
       profile->GetPrefs()->GetFilePath(prefs::kCrostiniAnsiblePlaybookFilePath);
   bool default_container_configured = profile->GetPrefs()->GetBoolean(
       prefs::kCrostiniDefaultContainerConfigured);
-  return base::FeatureList::IsEnabled(
-             features::kCrostiniAnsibleInfrastructure) &&
-         !default_container_configured && !ansible_playbook_file_path.empty();
+  return !default_container_configured && !ansible_playbook_file_path.empty();
 }
 
 bool ShouldAllowContainerUpgrade(Profile* profile) {
@@ -251,7 +237,7 @@ void LaunchCrostiniAppImpl(
           [](Profile* profile, const std::string& app_id,
              guest_os::GuestOsRegistryService::Registration registration,
              const guest_os::GuestId& container_id, int64_t display_id,
-             const std::vector<guest_os::LaunchArg> args,
+             std::vector<guest_os::LaunchArg> args,
              crostini::CrostiniSuccessCallback callback,
              crostini::CrostiniResult result) {
             if (result != crostini::CrostiniResult::SUCCESS) {
@@ -471,8 +457,8 @@ bool IsCrostiniWindow(const aura::Window* window) {
   // more productionised they get their own app type (e.g. lacros), but at some
   // point we'll want to untangle these different types to e.g. avoid double
   // counting in usage metrics.
-  return window->GetProperty(aura::client::kAppType) ==
-         static_cast<int>(ash::AppType::CROSTINI_APP);
+  return window->GetProperty(chromeos::kAppTypeKey) ==
+         chromeos::AppType::CROSTINI_APP;
 }
 
 void RecordAppLaunchHistogram(CrostiniAppLaunchAppType app_type) {
@@ -506,8 +492,8 @@ bool ShouldStopVm(Profile* profile, const guest_os::GuestId& container_id) {
        guest_os::GetContainers(profile, kCrostiniDefaultVmType)) {
     if (container.container_name != container_id.container_name &&
         container.vm_name == container_id.vm_name) {
-      if (guest_os::GuestOsSessionTracker::GetForProfile(profile)->IsRunning(
-              container)) {
+      if (guest_os::GuestOsSessionTrackerFactory::GetForProfile(profile)
+              ->IsRunning(container)) {
         return false;
       }
     }

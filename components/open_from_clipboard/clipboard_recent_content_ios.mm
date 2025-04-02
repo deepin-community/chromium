@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #import "components/open_from_clipboard/clipboard_recent_content_ios.h"
 
 #import <CommonCrypto/CommonDigest.h>
@@ -61,7 +66,6 @@ ClipboardContentType ClipboardContentTypeFromContentType(ContentType type) {
     return ClipboardContentType::Image;
   }
   NOTREACHED();
-  return ClipboardContentType::Text;
 }
 
 }  // namespace
@@ -238,7 +242,7 @@ void ClipboardRecentContentIOS::GetRecentImageFromClipboard(
   }];
 }
 
-ClipboardRecentContentIOS::~ClipboardRecentContentIOS() {}
+ClipboardRecentContentIOS::~ClipboardRecentContentIOS() = default;
 
 base::TimeDelta ClipboardRecentContentIOS::GetClipboardContentAge() const {
   return base::Seconds(

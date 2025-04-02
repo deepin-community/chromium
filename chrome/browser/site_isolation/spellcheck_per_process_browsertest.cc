@@ -53,7 +53,7 @@ class MockSpellCheckHost : spellcheck::mojom::SpellCheckHost {
   MockSpellCheckHost(const MockSpellCheckHost&) = delete;
   MockSpellCheckHost& operator=(const MockSpellCheckHost&) = delete;
 
-  ~MockSpellCheckHost() override {}
+  ~MockSpellCheckHost() override = default;
 
   content::RenderProcessHost* process_host() const { return process_host_; }
 
@@ -153,8 +153,6 @@ class MockSpellCheckHost : spellcheck::mojom::SpellCheckHost {
     }
 
     NOTREACHED();
-    std::move(callback).Run(/*dictionaries=*/{}, /*custom_words=*/{},
-                            /*enable=*/false);
   }
 
   void OnDictionariesInitialized() {

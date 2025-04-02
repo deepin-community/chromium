@@ -13,7 +13,6 @@
 #include "base/system/sys_info.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_util.h"
 #include "chrome/browser/ash/guest_os/guest_id.h"
-#include "chrome/browser/ash/guest_os/guest_os_session_tracker_factory.h"
 #include "chrome/browser/ash/guest_os/public/types.h"
 #include "chromeos/ash/components/dbus/cicerone/cicerone_client.h"
 #include "chromeos/ash/components/dbus/concierge/concierge_client.h"
@@ -38,10 +37,6 @@ GuestInfo::GuestInfo(GuestInfo&&) = default;
 GuestInfo::GuestInfo(const GuestInfo&) = default;
 GuestInfo& GuestInfo::operator=(GuestInfo&&) = default;
 GuestInfo& GuestInfo::operator=(const GuestInfo&) = default;
-
-GuestOsSessionTracker* GuestOsSessionTracker::GetForProfile(Profile* profile) {
-  return GuestOsSessionTrackerFactory::GetForProfile(profile);
-}
 
 GuestOsSessionTracker::GuestOsSessionTracker(std::string owner_id)
     : owner_id_(std::move(owner_id)) {
@@ -104,7 +99,8 @@ void GuestOsSessionTracker::OnListRunningContainers(
     ash::CiceroneClient::Get()->GetGarconSessionInfo(
         req, base::BindOnce(&GuestOsSessionTracker::OnGetGarconSessionInfo,
                             weak_ptr_factory_.GetWeakPtr(), container.vm_name(),
-                            container.container_name(), container.container_token()));
+                            container.container_name(),
+                            container.container_token()));
   }
 }
 
@@ -121,9 +117,9 @@ void GuestOsSessionTracker::OnGetGarconSessionInfo(
   }
   // Don't need ipv4 address yet so haven't plumbed it through. Once we get
   // around to port forwarding or similar we'll need it though.
-  HandleNewGuest(vm_name, container_name,
-                 container_token, response->container_username(), response->container_homedir(), "",
-                 response->sftp_vsock_port());
+  HandleNewGuest(vm_name, container_name, container_token,
+                 response->container_username(), response->container_homedir(),
+                 "", response->sftp_vsock_port());
 }
 
 // Returns information about a running guest. Returns nullopt if the guest
@@ -240,8 +236,8 @@ void GuestOsSessionTracker::HandleNewGuest(const std::string& vm_name,
   guests_.insert_or_assign(id, info);
 
   if (container_token.length() == 0) {
-    LOG(ERROR)
-        << "Received ContainerStarted signal with no container token specified.";
+    LOG(ERROR) << "Received ContainerStarted signal with no container token "
+                  "specified.";
   } else {
     tokens_to_guests_.emplace(container_token, id);
   }
@@ -264,18 +260,6 @@ void GuestOsSessionTracker::OnContainerShutdown(
     return;
   }
   HandleContainerShutdown(signal.vm_name(), signal.container_name());
-}
-
-void GuestOsSessionTracker::OnLxdContainerStopping(
-    const vm_tools::cicerone::LxdContainerStoppingSignal& signal) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (signal.owner_id() != owner_id_) {
-    return;
-  }
-  if (signal.status() ==
-      vm_tools::cicerone::LxdContainerStoppingSignal::STOPPED) {
-    HandleContainerShutdown(signal.vm_name(), signal.container_name());
-  }
 }
 
 void GuestOsSessionTracker::HandleContainerShutdown(

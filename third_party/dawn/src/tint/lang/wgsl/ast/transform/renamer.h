@@ -32,6 +32,7 @@
 #include <unordered_map>
 
 #include "src/tint/lang/wgsl/ast/transform/transform.h"
+#include "src/tint/utils/reflection.h"
 
 namespace tint::ast::transform {
 
@@ -40,23 +41,6 @@ class Renamer final : public Castable<Renamer, Transform> {
   public:
     /// Remappings is a map of old symbol name to new symbol name
     using Remappings = std::unordered_map<std::string, std::string>;
-
-    /// Data is outputted by the Renamer transform.
-    /// Data holds information about shader usage and constant buffer offsets.
-    struct Data final : public Castable<Data, transform::Data> {
-        /// Constructor
-        /// @param remappings the symbol remappings
-        explicit Data(Remappings&& remappings);
-
-        /// Copy constructor
-        Data(const Data&);
-
-        /// Destructor
-        ~Data() override;
-
-        /// A map of old symbol name to new symbol name
-        const Remappings remappings;
-    };
 
     /// Target is an enumerator of rename targets that can be used
     enum class Target {
@@ -74,16 +58,17 @@ class Renamer final : public Castable<Renamer, Transform> {
     /// If omitted, then the renamer will use Target::kAll.
     struct Config final : public Castable<Config, transform::Data> {
         /// Constructor
-        /// @param tgt the targets to rename
-        /// @param keep_unicode if false, symbols with non-ascii code-points are
-        /// renamed
-        explicit Config(Target tgt, bool keep_unicode = false);
+        Config();
 
         /// Constructor
         /// @param tgt the targets to rename
-        /// @param keep_unicode if false, symbols with non-ascii code-points are renamed
+        /// renamed
+        explicit Config(Target tgt);
+
+        /// Constructor
+        /// @param tgt the targets to rename
         /// @param remappings requested old to new name map
-        explicit Config(Target tgt, bool keep_unicode, Remappings&& remappings);
+        Config(Target tgt, Remappings&& remappings);
 
         /// Copy constructor
         Config(const Config&);
@@ -92,13 +77,13 @@ class Renamer final : public Castable<Renamer, Transform> {
         ~Config() override;
 
         /// The targets to rename
-        Target const target = Target::kAll;
-
-        /// If false, symbols with non-ascii code-points are renamed.
-        bool preserve_unicode = false;
+        Target target = Target::kAll;
 
         /// Requested renaming rules
-        const Remappings requested_names = {};
+        Remappings requested_names = {};
+
+        /// Reflection for this class
+        TINT_REFLECT(Config, target, requested_names);
     };
 
     /// Constructor using a the configuration provided in the input Data
@@ -114,5 +99,12 @@ class Renamer final : public Castable<Renamer, Transform> {
 };
 
 }  // namespace tint::ast::transform
+
+namespace tint {
+
+/// Reflection for Target
+TINT_REFLECT_ENUM_RANGE(tint::ast::transform::Renamer::Target, kAll, kMslKeywords);
+
+}  // namespace tint
 
 #endif  // SRC_TINT_LANG_WGSL_AST_TRANSFORM_RENAMER_H_

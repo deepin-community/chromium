@@ -4,8 +4,8 @@
 
 #include "services/viz/public/cpp/compositing/transferable_resource_mojom_traits.h"
 
+#include "base/functional/overloaded.h"
 #include "build/build_config.h"
-#include "gpu/ipc/common/mailbox_holder_mojom_traits.h"
 #include "gpu/ipc/common/mailbox_mojom_traits.h"
 #include "gpu/ipc/common/sync_token_mojom_traits.h"
 #include "services/viz/public/cpp/compositing/resource_id_mojom_traits.h"
@@ -30,7 +30,6 @@ EnumTraits<viz::mojom::SynchronizationType,
       return viz::mojom::SynchronizationType::kReleaseFence;
   }
   NOTREACHED();
-  return viz::mojom::SynchronizationType::kSyncToken;
 }
 
 // static
@@ -59,16 +58,24 @@ bool StructTraits<viz::mojom::TransferableResourceDataView,
     Read(viz::mojom::TransferableResourceDataView data,
          viz::TransferableResource* out) {
   viz::ResourceId id;
+
+  gpu::SyncToken sync_token;
+  gpu::Mailbox memory_buffer_id;
   if (!data.ReadSize(&out->size) || !data.ReadFormat(&out->format) ||
-      !data.ReadMailboxHolder(&out->mailbox_holder) ||
+      !data.ReadMemoryBufferId(&memory_buffer_id) ||
+      !data.ReadSyncToken(&sync_token) ||
       !data.ReadColorSpace(&out->color_space) ||
       !data.ReadHdrMetadata(&out->hdr_metadata) ||
       !data.ReadYcbcrInfo(&out->ycbcr_info) || !data.ReadId(&id) ||
-      !data.ReadSynchronizationType(&out->synchronization_type)) {
+      !data.ReadSynchronizationType(&out->synchronization_type) ||
+      !data.ReadOrigin(&out->origin)) {
     return false;
   }
   out->id = id;
   out->is_software = data.is_software();
+  out->set_memory_buffer_id(memory_buffer_id);
+  out->set_sync_token(sync_token);
+  out->set_texture_target(data.texture_target());
   out->is_overlay_candidate = data.is_overlay_candidate();
   out->needs_detiling = data.needs_detiling();
 

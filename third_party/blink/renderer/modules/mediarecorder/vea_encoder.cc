@@ -15,9 +15,11 @@
 #include "media/base/bitrate.h"
 #include "media/base/bitstream_buffer.h"
 #include "media/base/media_util.h"
+#include "media/base/supported_types.h"
 #include "media/base/video_encoder_metrics_provider.h"
 #include "media/base/video_frame.h"
 #include "media/video/gpu_video_accelerator_factories.h"
+#include "media/video/video_encode_accelerator.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/libyuv/include/libyuv.h"
@@ -102,9 +104,8 @@ void VEAEncoder::BitstreamBufferReady(
   DVLOG(3) << __func__;
 
   OutputBuffer* output_buffer = output_buffers_[bitstream_buffer_id].get();
-  base::span<char> data_span =
-      output_buffer->mapping.GetMemoryAsSpan<char>(metadata.payload_size_bytes);
-  std::string data(data_span.begin(), data_span.end());
+  auto data_span = output_buffer->mapping.GetMemoryAsSpan<const uint8_t>(
+      metadata.payload_size_bytes);
 
   auto front_frame = frames_in_encode_.front();
   frames_in_encode_.pop();
@@ -113,9 +114,11 @@ void VEAEncoder::BitstreamBufferReady(
     front_frame.first.visible_rect_size = *metadata.encoded_size;
   }
 
-  on_encoded_video_cb_.Run(front_frame.first, std::move(data), std::string(),
-                           std::nullopt, front_frame.second,
-                           metadata.key_frame);
+  auto buffer = media::DecoderBuffer::CopyFrom(data_span);
+  buffer->set_is_key_frame(metadata.key_frame);
+
+  on_encoded_video_cb_.Run(front_frame.first, std::move(buffer), std::nullopt,
+                           front_frame.second);
 
   UseOutputBitstreamBufferId(bitstream_buffer_id);
 }
@@ -127,7 +130,7 @@ void VEAEncoder::NotifyErrorStatus(const media::EncoderStatus& status) {
               << static_cast<int>(status.code())
               << ", message=" << status.message();
   metrics_provider_->SetError(status);
-  on_error_cb_.Run();
+  on_error_cb_.Run(status);
   error_notified_ = true;
 }
 
@@ -234,18 +237,18 @@ void VEAEncoder::EncodeFrame(scoped_refptr<media::VideoFrame> frame,
       return;
     }
     libyuv::I420Copy(
-        frame->visible_data(media::VideoFrame::kYPlane),
-        frame->stride(media::VideoFrame::kYPlane),
-        frame->visible_data(media::VideoFrame::kUPlane),
-        frame->stride(media::VideoFrame::kUPlane),
-        frame->visible_data(media::VideoFrame::kVPlane),
-        frame->stride(media::VideoFrame::kVPlane),
-        video_frame->GetWritableVisibleData(media::VideoFrame::kYPlane),
-        video_frame->stride(media::VideoFrame::kYPlane),
-        video_frame->GetWritableVisibleData(media::VideoFrame::kUPlane),
-        video_frame->stride(media::VideoFrame::kUPlane),
-        video_frame->GetWritableVisibleData(media::VideoFrame::kVPlane),
-        video_frame->stride(media::VideoFrame::kVPlane),
+        frame->visible_data(media::VideoFrame::Plane::kY),
+        frame->stride(media::VideoFrame::Plane::kY),
+        frame->visible_data(media::VideoFrame::Plane::kU),
+        frame->stride(media::VideoFrame::Plane::kU),
+        frame->visible_data(media::VideoFrame::Plane::kV),
+        frame->stride(media::VideoFrame::Plane::kV),
+        video_frame->GetWritableVisibleData(media::VideoFrame::Plane::kY),
+        video_frame->stride(media::VideoFrame::Plane::kY),
+        video_frame->GetWritableVisibleData(media::VideoFrame::Plane::kU),
+        video_frame->stride(media::VideoFrame::Plane::kU),
+        video_frame->GetWritableVisibleData(media::VideoFrame::Plane::kV),
+        video_frame->stride(media::VideoFrame::Plane::kV),
         input_visible_size_.width(), input_visible_size_.height());
     video_frame->BackWithSharedMemory(&input_buffer->region);
     video_frame->AddDestructionObserver(base::BindPostTask(
@@ -305,13 +308,17 @@ void VEAEncoder::ConfigureEncoder(const gfx::Size& size,
   // TODO(crbug.com/1289907): remove the cast to uint32_t once
   // |bits_per_second_| is stored as uint32_t.
   media::VideoEncodeAccelerator::Config config(
-      pixel_format, input_visible_size_, codec_, bitrate);
-  config.h264_output_level = level_;
-  config.storage_type = storage_type;
-  config.content_type =
+      pixel_format, input_visible_size_, codec_, bitrate,
+      media::VideoEncodeAccelerator::kDefaultFramerate, storage_type,
       is_screencast_
           ? media::VideoEncodeAccelerator::Config::ContentType::kDisplay
-          : media::VideoEncodeAccelerator::Config::ContentType::kCamera;
+          : media::VideoEncodeAccelerator::Config::ContentType::kCamera);
+  config.h264_output_level = level_;
+  config.required_encoder_type =
+      media::MayHaveAndAllowSelectOSSoftwareEncoder(
+          media::VideoCodecProfileToVideoCodec(codec_))
+          ? media::VideoEncodeAccelerator::Config::EncoderType::kNoPreference
+          : media::VideoEncodeAccelerator::Config::EncoderType::kHardware;
   if (!video_encoder_ ||
       !video_encoder_->Initialize(config, this,
                                   std::make_unique<media::NullMediaLog>())) {

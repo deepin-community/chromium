@@ -9,7 +9,6 @@
 
 #include "base/files/file_path.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/ui/startup/startup_tab.h"
 #include "components/signin/public/base/signin_buildflags.h"
 #include "url/gurl.h"
@@ -36,10 +35,6 @@ class ExtensionRegistry;
 // faking in unit tests.
 class StartupTabProvider {
  public:
-  // Gathers relevant system state and returns any tabs which should be
-  // shown according to onboarding/first run policy.
-  virtual StartupTabs GetOnboardingTabs(Profile* profile) const = 0;
-
   // Gathers URLs from a initial preferences file indicating first run logic
   // specific to this distribution. Transforms any such URLs per policy and
   // returns them. Also clears the value of first_run_urls_ in the provided
@@ -101,15 +96,6 @@ class StartupTabProvider {
 
 class StartupTabProviderImpl : public StartupTabProvider {
  public:
-  struct StandardOnboardingTabsParams {
-    bool is_first_run = false;
-    bool has_seen_welcome_page = false;
-    bool is_signin_allowed = false;
-    bool is_signed_in = false;
-    bool is_child_account = false;
-    bool is_force_signin_enabled = false;
-  };
-
   StartupTabProviderImpl() = default;
   StartupTabProviderImpl(const StartupTabProviderImpl&) = delete;
   StartupTabProviderImpl& operator=(const StartupTabProviderImpl&) = delete;
@@ -118,23 +104,6 @@ class StartupTabProviderImpl : public StartupTabProvider {
   // respective Get*Tabs methods, but do not gather or interact with any
   // system state relating to making those policy decisions. Exposed for
   // testing.
-
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  // Returns true if showing the standard welcome page is permissible.
-  static bool CanShowWelcome(bool is_signin_allowed,
-                             bool is_supervised_user,
-                             bool is_force_signin_enabled);
-
-  // Returns true if the standard welcome page should be shown in a tab. This
-  // should only be used following a positive result from CanShowWelcome.
-  static bool ShouldShowWelcomeForOnboarding(bool has_seen_welcome_page,
-                                             bool is_signed_in);
-#endif
-
-  // Determines which tabs should be shown according to onboarding/first
-  // run policy.
-  static StartupTabs GetStandardOnboardingTabsForState(
-      const StandardOnboardingTabsParams& params);
 
   // Processes first run URLs specified in initial preferences file, replacing
   // any "magic word" URL hosts with appropriate URLs.
@@ -183,15 +152,6 @@ class StartupTabProviderImpl : public StartupTabProvider {
       const StartupTabs& other_startup_tabs);
 #endif
 
-#if BUILDFLAG(ENABLE_DICE_SUPPORT)
-  // Gets the URL for the Welcome page. If |use_later_run_variant| is true, a
-  // URL parameter will be appended so as to access the variant page used when
-  // onboarding occurs after the first Chrome execution (e.g., when creating an
-  // additional profile).
-  // TODO(hcarmona): it might be possible to deprecate use_later_run_variant.
-  static GURL GetWelcomePageUrl(bool use_later_run_variant);
-#endif
-
   // In branded Windows builds, adds the URL for the Incompatible Applications
   // subpage of the Chrome settings.
   static void AddIncompatibleApplicationsUrl(StartupTabs* tabs);
@@ -201,7 +161,6 @@ class StartupTabProviderImpl : public StartupTabProvider {
   static GURL GetTriggeredResetSettingsUrl();
 
   // StartupTabProvider:
-  StartupTabs GetOnboardingTabs(Profile* profile) const override;
   StartupTabs GetDistributionFirstRunTabs(
       StartupBrowserCreator* browser_creator) const override;
   StartupTabs GetResetTriggerTabs(Profile* profile) const override;

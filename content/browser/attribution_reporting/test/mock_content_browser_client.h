@@ -25,7 +25,7 @@ class MockAttributionReportingContentBrowserClientBase : public SuperClass {
   MOCK_METHOD(network::mojom::AttributionSupport,
               GetAttributionSupport,
               (ContentBrowserClient::AttributionReportingOsApiState state,
-               content::WebContents* web_contents),
+               bool client_os_disabled),
               (override));
 
   MOCK_METHOD(bool,
@@ -40,25 +40,17 @@ class MockAttributionReportingContentBrowserClientBase : public SuperClass {
               (override));
 
   MOCK_METHOD(bool,
-              ShouldUseOsWebSourceAttributionReporting,
-              (RenderFrameHost*),
-              (override));
-
-  MOCK_METHOD(bool,
-              ShouldUseOsWebTriggerAttributionReporting,
-              (RenderFrameHost*),
-              (override));
-
-  MOCK_METHOD(bool,
               IsPrivacySandboxReportingDestinationAttested,
               (content::BrowserContext * browser_context,
                const url::Origin& destination_origin,
-               content::PrivacySandboxInvokingAPI invoking_api,
-               bool post_impression_reporting),
+               content::PrivacySandboxInvokingAPI invoking_api),
               (override));
   MOCK_METHOD(bool,
-              AddPrivacySandboxAttestationsObserver,
-              (PrivacySandboxAttestationsObserver*),
+              IsAttributionReportingAllowedForContext,
+              (content::BrowserContext*,
+               RenderFrameHost*,
+               const url::Origin& context_origin,
+               const url::Origin& reporting_origin),
               (override));
 };
 

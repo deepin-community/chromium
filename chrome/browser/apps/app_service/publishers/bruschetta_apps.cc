@@ -15,6 +15,7 @@
 #include "chrome/browser/apps/app_service/menu_util.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_launcher.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_service.h"
+#include "chrome/browser/ash/bruschetta/bruschetta_service_factory.h"
 #include "chrome/browser/ash/bruschetta/bruschetta_util.h"
 #include "chrome/browser/ash/crostini/crostini_manager.h"
 #include "chrome/browser/ash/crostini/crostini_util.h"
@@ -23,7 +24,9 @@
 #include "chrome/browser/ash/guest_os/guest_os_launcher.h"
 #include "chrome/browser/ash/guest_os/guest_os_registry_service.h"
 #include "chrome/browser/ash/guest_os/guest_os_session_tracker.h"
+#include "chrome/browser/ash/guest_os/guest_os_session_tracker_factory.h"
 #include "chrome/browser/ash/guest_os/guest_os_share_path.h"
+#include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
 #include "chrome/browser/ui/ash/shelf/shelf_spinner_controller.h"
@@ -64,6 +67,7 @@ void OnSharePathForLaunchApplication(
     const std::string& app_id,
     guest_os::GuestOsRegistryService::Registration registration,
     const guest_os::GuestId container_id,
+    int64_t display_id,
     const std::vector<std::string>& args,
     LaunchCallback callback,
     bool success,
@@ -74,8 +78,7 @@ void OnSharePathForLaunchApplication(
     return;
   }
   guest_os::launcher::LaunchApplication(
-      profile, container_id, registration.DesktopFileId(), args,
-      registration.IsScaled(),
+      profile, container_id, std::move(registration), display_id, args,
       base::BindOnce(
           [](const std::string& app_id, LaunchCallback callback, bool success,
              const std::string& failure_reason) {
@@ -102,7 +105,7 @@ void LaunchApplication(
   // Get vm_info because we need seneschal_server_handle.
   const std::string& vm_name = registration.VmName();
   auto vm_info =
-      guest_os::GuestOsSessionTracker::GetForProfile(profile)->GetVmInfo(
+      guest_os::GuestOsSessionTrackerFactory::GetForProfile(profile)->GetVmInfo(
           vm_name);
   if (!vm_info) {
     OnLaunchFailed(app_id, std::move(callback),
@@ -111,7 +114,7 @@ void LaunchApplication(
   }
 
   const guest_os::GuestId container_id(registration.ToGuestId());
-  auto* share_path = guest_os::GuestOsSharePath::GetForProfile(profile);
+  auto* share_path = guest_os::GuestOsSharePathFactory::GetForProfile(profile);
   auto paths_or_error = share_path->ConvertArgsToPathsToShare(
       registration, args, bruschetta::BruschettaChromeOSBaseDirectory(),
       /*map_crostini_home=*/false);
@@ -127,7 +130,8 @@ void LaunchApplication(
       std::move(paths.paths_to_share),
       base::BindOnce(OnSharePathForLaunchApplication, profile, app_id,
                      std::move(registration), std::move(container_id),
-                     std::move(paths.launch_args), std::move(callback)));
+                     display_id, std::move(paths.launch_args),
+                     std::move(callback)));
 }
 
 }  // namespace
@@ -184,9 +188,8 @@ void BruschettaApps::LaunchAppWithIntent(const std::string& app_id,
 
   // Start the bruschetta VM if necessary.
   const std::string& vm_name = registration->VmName();
-  auto launcher =
-      bruschetta::BruschettaService::GetForProfile(profile())->GetLauncher(
-          vm_name);
+  auto launcher = bruschetta::BruschettaServiceFactory::GetForProfile(profile())
+                      ->GetLauncher(vm_name);
   if (!launcher) {
     OnLaunchFailed(app_id, std::move(callback),
                    "Unknown Bruschetta VM name: " + vm_name);

@@ -18,6 +18,7 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/singleton.h"
+#include "base/not_fatal_until.h"
 #include "base/system/sys_info.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
@@ -100,7 +101,7 @@ class ExtensionAssetsManagerHelper {
                          PendingInstallList* pending_installs) {
     InstallQueue::iterator it = install_queue_.find(
         InstallQueue::key_type(id, version));
-    DCHECK(it != install_queue_.end());
+    CHECK(it != install_queue_.end(), base::NotFatalUntil::M130);
     pending_installs->swap(it->second);
     install_queue_.erase(it);
   }
@@ -231,7 +232,6 @@ bool ExtensionAssetsManagerChromeOS::CleanUpSharedExtensions(
     base::Value::Dict* extension_info = shared_extension_dict.FindDict(id);
     if (!extension_info) {
       NOTREACHED();
-      return false;
     }
     if (!CleanUpExtension(id, *extension_info, live_extension_paths)) {
       return false;
@@ -260,9 +260,9 @@ bool ExtensionAssetsManagerChromeOS::CanShareAssets(
     return false;
   }
 
-  // TODO(crbug.com/1166539): Investigate why do we allow sharing assets in case
-  // of empty update URL and if the empty update URL is not required, update
-  // this to consider only the updates from webstore.
+  // TODO(crbug.com/40742161): Investigate why do we allow sharing assets in
+  // case of empty update URL and if the empty update URL is not required,
+  // update this to consider only the updates from webstore.
   if (!updates_from_webstore_or_empty_update_url)
     return false;
 
@@ -286,7 +286,6 @@ void ExtensionAssetsManagerChromeOS::CheckSharedExtension(
   user_manager::UserManager* user_manager = user_manager::UserManager::Get();
   if (!user_manager) {
     NOTREACHED();
-    return;
   }
 
   if (user_manager->IsUserNonCryptohomeDataEphemeral(
@@ -435,7 +434,6 @@ void ExtensionAssetsManagerChromeOS::MarkSharedExtensionUnused(
   base::Value::Dict* extension_info = shared_extensions_dict.FindDict(id);
   if (!extension_info) {
     NOTREACHED();
-    return;
   }
 
   std::vector<std::string> versions;
@@ -450,18 +448,15 @@ void ExtensionAssetsManagerChromeOS::MarkSharedExtensionUnused(
     base::Value::Dict* version_info = extension_info->FindDict(*it);
     if (!version_info) {
       NOTREACHED();
-      continue;
     }
     base::Value::List* users = version_info->FindList(kSharedExtensionUsers);
     if (!users) {
       NOTREACHED();
-      continue;
     }
     if (users->EraseValue(user_name) && users->empty()) {
       std::string* shared_path = version_info->FindString(kSharedExtensionPath);
       if (!shared_path) {
         NOTREACHED();
-        continue;
       }
       GetExtensionFileTaskRunner()->PostTask(
           FROM_HERE,
@@ -493,7 +488,6 @@ bool ExtensionAssetsManagerChromeOS::CleanUpExtension(
   user_manager::UserManager* user_manager = user_manager::UserManager::Get();
   if (!user_manager) {
     NOTREACHED();
-    return false;
   }
 
   std::vector<std::string> versions;
@@ -507,7 +501,6 @@ bool ExtensionAssetsManagerChromeOS::CleanUpExtension(
     base::Value::Dict* version_info = extension_info.FindDict(*it);
     if (!version_info) {
       NOTREACHED();
-      return false;
     }
     base::Value::List* users_list =
         version_info->FindList(kSharedExtensionUsers);
@@ -515,14 +508,12 @@ bool ExtensionAssetsManagerChromeOS::CleanUpExtension(
         version_info->FindString(kSharedExtensionPath);
     if (!users_list || !shared_path) {
       NOTREACHED();
-      return false;
     }
 
     for (auto iter = users_list->begin(); iter != users_list->end();) {
       const std::string* user_id = iter->GetIfString();
       if (!user_id) {
         NOTREACHED();
-        return false;
       }
       const user_manager::User* user =
           user_manager->FindUser(AccountId::FromUserEmail(*user_id));

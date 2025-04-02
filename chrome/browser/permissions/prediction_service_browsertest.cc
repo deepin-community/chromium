@@ -12,6 +12,7 @@
 #include "chrome/browser/optimization_guide/browser_test_util.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
+#include "chrome/browser/permissions/prediction_model_handler_provider.h"
 #include "chrome/browser/permissions/prediction_model_handler_provider_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
@@ -29,7 +30,7 @@
 #include "components/permissions/permission_request_manager.h"
 #include "components/permissions/permission_uma_util.h"
 #include "components/permissions/permission_util.h"
-#include "components/permissions/prediction_service/prediction_model_handler_provider.h"
+#include "components/permissions/prediction_service/prediction_model_handler.h"
 #include "components/permissions/request_type.h"
 #include "components/permissions/test/mock_permission_prompt_factory.h"
 #include "components/permissions/test/mock_permission_request.h"
@@ -46,17 +47,14 @@ class PredictionServiceBrowserTest : public InProcessBrowserTest {
  public:
   PredictionServiceBrowserTest() {
     scoped_feature_list_.InitWithFeaturesAndParameters(
-        {
-            {features::kPermissionOnDeviceNotificationPredictions,
-             {{feature_params::
-                   kPermissionOnDeviceNotificationPredictionsHoldbackChance
-                       .name,
-               "0"}}},
-            {optimization_guide::features::kOptimizationHints, {}},
-            {optimization_guide::features::kRemoteOptimizationGuideFetching,
-             {}},
-        },
-        {});
+        {{features::kPermissionOnDeviceNotificationPredictions,
+          {{feature_params::
+                kPermissionOnDeviceNotificationPredictionsHoldbackChance.name,
+            "0"}}},
+         {optimization_guide::features::kOptimizationHints, {}},
+         {optimization_guide::features::kRemoteOptimizationGuideFetching, {}},
+         {features::kCpssUseTfliteSignatureRunner, {}}},
+        {permissions::features::kPermissionsAIv1});
   }
 
   ~PredictionServiceBrowserTest() override = default;
@@ -135,7 +133,7 @@ base::FilePath& model_file_path() {
         .AppendASCII("test")
         .AppendASCII("data")
         .AppendASCII("permissions")
-        .AppendASCII("model.tflite");
+        .AppendASCII("signature_model.tflite");
   }());
   return *file_path;
 }
@@ -144,36 +142,8 @@ IN_PROC_BROWSER_TEST_F(PredictionServiceBrowserTest, PredictionServiceEnabled) {
   EXPECT_TRUE(prediction_model_handler());
 }
 
-IN_PROC_BROWSER_TEST_F(PredictionServiceBrowserTest, ModelReturnsUnlikely) {
-  ASSERT_TRUE(prediction_model_handler());
-
-  OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())
-      ->OverrideTargetModelForTesting(
-          optimization_guide::proto::
-              OPTIMIZATION_TARGET_NOTIFICATION_PERMISSION_PREDICTIONS,
-          optimization_guide::TestModelInfoBuilder()
-              .SetModelFilePath(model_file_path())
-              .Build());
-
-  prediction_model_handler()->WaitForModelLoadForTesting();
-
-  ASSERT_TRUE(embedded_test_server()->Start());
-
-  // We need 4 prompts for the cpss to kick in on the next prompt.
-  std::string test_urls[] = {"a.test", "b.test", "c.test", "d.test"};
-  for (std::string test_url : test_urls) {
-    TriggerPromptAndVerifyUI(test_url, PermissionAction::DISMISSED,
-                             /*should_expect_quiet_ui=*/false, std::nullopt);
-  }
-  TriggerPromptAndVerifyUI(
-      "e.test", PermissionAction::DISMISSED,
-      /*should_expect_quiet_ui=*/true,
-      PermissionUmaUtil::PredictionGrantLikelihood::
-          PermissionPrediction_Likelihood_DiscretizedLikelihood_VERY_UNLIKELY);
-  EXPECT_EQ(5, bubble_factory()->show_count());
-}
-
-IN_PROC_BROWSER_TEST_F(PredictionServiceBrowserTest, ModelReturnsLikely) {
+IN_PROC_BROWSER_TEST_F(PredictionServiceBrowserTest,
+                       SignatureModelReturnsLikely) {
   ASSERT_TRUE(prediction_model_handler());
 
   OptimizationGuideKeyedServiceFactory::GetForProfile(browser()->profile())

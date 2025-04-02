@@ -74,7 +74,7 @@ static bool are_equal(skiatest::Reporter* reporter,
                 float bVal = b.get(i);
                 int aValI = float_bits(aVal);
                 int bValI = float_bits(bVal);
-                if (sk_float_isnan(aVal) && aValI == bValI) {
+                if (std::isnan(aVal) && aValI == bValI) {
                     foundNaN = true;
                 } else {
                     REPORTER_ASSERT(reporter, aVal == bVal && aValI == bValI);
@@ -895,6 +895,41 @@ DEF_TEST(Matrix, reporter) {
     mat.setAll(0.0f, 1.0f, 2.0f,
                0.0f, 1.0f, -3.40277175e+38f,
                1.00003040f, 1.0f, 0.0f);
+    REPORTER_ASSERT(reporter, !mat.invert(nullptr));
+    REPORTER_ASSERT(reporter, !mat.invert(&inverse));
+
+    // Inverting this matrix results in a non-finite matrix (1/scale overflows to infinity)
+    // b/378231198: Previously this would pass invert() if a null inverse pointer was passed in.
+    mat.setAll(std::numeric_limits<float>::denorm_min(), 0.f, 0.f,
+               0.f, 1.f, 0.f,
+               0.f, 0.f, 1.f);
+    REPORTER_ASSERT(reporter, mat.isScaleTranslate());
+    REPORTER_ASSERT(reporter, !mat.invert(nullptr));
+    REPORTER_ASSERT(reporter, !mat.invert(&inverse));
+
+    // b/378231198: This matrix shouldn't be invertible, but previously the translation wasn't being
+    // validated when taking the optimized scale+translate paths.
+    mat.setAll(2.f, 0.f, std::numeric_limits<float>::quiet_NaN(),
+               0.f, 2.f, 0.f,
+               0.f, 0.f, 1.f);
+    REPORTER_ASSERT(reporter, mat.isScaleTranslate());
+    REPORTER_ASSERT(reporter, !mat.invert(nullptr));
+    REPORTER_ASSERT(reporter, !mat.invert(&inverse));
+    // Variant that tests the translate-only optimized invert()
+    mat.setAll(1.f, 0.f, std::numeric_limits<float>::quiet_NaN(),
+               0.f, 1.f, 0.f,
+               0.f, 0.f, 1.f);
+    REPORTER_ASSERT(reporter, mat.isTranslate());
+    REPORTER_ASSERT(reporter, !mat.invert(nullptr));
+    REPORTER_ASSERT(reporter, !mat.invert(&inverse));
+
+    // A finite scale+translate matrix whose inverse can't be calculated because trans/scale
+    // becomes non-finite.
+    mat.setAll(std::numeric_limits<float>::min(), 0.f, std::numeric_limits<float>::max(),
+               0.f, 1.f, 0.f,
+               0.f, 0.f, 1.f);
+    REPORTER_ASSERT(reporter, mat.isScaleTranslate());
+    REPORTER_ASSERT(reporter, mat.isFinite());
     REPORTER_ASSERT(reporter, !mat.invert(nullptr));
     REPORTER_ASSERT(reporter, !mat.invert(&inverse));
 

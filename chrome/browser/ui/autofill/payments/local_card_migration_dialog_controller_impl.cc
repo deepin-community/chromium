@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/containers/contains.h"
-#include "base/containers/cxx20_erase.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/observer_list.h"
@@ -22,19 +21,21 @@
 #include "build/build_config.h"
 #include "chrome/browser/autofill/strike_database_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/autofill/payments/local_card_migration_controller_observer.h"
 #include "chrome/browser/ui/autofill/payments/local_card_migration_dialog.h"
 #include "chrome/browser/ui/autofill/payments/local_card_migration_dialog_factory.h"
 #include "chrome/browser/ui/autofill/payments/local_card_migration_dialog_state.h"
+#include "chrome/browser/ui/autofill/payments/manage_migration_ui_controller.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "components/autofill/core/browser/data_quality/validation.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/local_card_migration_metrics.h"
 #include "components/autofill/core/browser/payments/local_card_migration_manager.h"
 #include "components/autofill/core/browser/payments/payments_service_url.h"
 #include "components/autofill/core/browser/strike_databases/payments/local_card_migration_strike_database.h"
 #include "components/autofill/core/browser/strike_databases/strike_database.h"
-#include "components/autofill/core/browser/validation.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
@@ -54,8 +55,13 @@ LocalCardMigrationDialogControllerImpl::LocalCardMigrationDialogControllerImpl(
 
 LocalCardMigrationDialogControllerImpl::
     ~LocalCardMigrationDialogControllerImpl() {
-  if (local_card_migration_dialog_)
+  if (local_card_migration_dialog_) {
     local_card_migration_dialog_->CloseDialog();
+  }
+  observer_list_.Notify(
+      &LocalCardMigrationControllerObserver::OnSourceDestruction,
+      LocalCardMigrationControllerObserver::LocalCardMigrationControllerSource::
+          kDialogContoller);
 }
 
 void LocalCardMigrationDialogControllerImpl::ShowOfferDialog(
@@ -64,8 +70,9 @@ void LocalCardMigrationDialogControllerImpl::ShowOfferDialog(
     const std::vector<MigratableCreditCard>& migratable_credit_cards,
     payments::PaymentsAutofillClient::LocalCardMigrationCallback
         start_migrating_cards_callback) {
-  if (local_card_migration_dialog_)
+  if (local_card_migration_dialog_) {
     local_card_migration_dialog_->CloseDialog();
+  }
 
   legal_message_lines_ = legal_message_lines;
   view_state_ = LocalCardMigrationDialogState::kOffered;
@@ -88,8 +95,9 @@ void LocalCardMigrationDialogControllerImpl::UpdateCreditCardIcon(
     const std::vector<MigratableCreditCard>& migratable_credit_cards,
     payments::PaymentsAutofillClient::MigrationDeleteCardCallback
         delete_local_card_callback) {
-  if (local_card_migration_dialog_)
+  if (local_card_migration_dialog_) {
     local_card_migration_dialog_->CloseDialog();
+  }
 
   migratable_credit_cards_ = migratable_credit_cards;
   tip_message_ = tip_message;
@@ -130,6 +138,11 @@ void LocalCardMigrationDialogControllerImpl::ShowErrorDialog() {
 void LocalCardMigrationDialogControllerImpl::AddObserver(
     LocalCardMigrationControllerObserver* observer) {
   observer_list_.AddObserver(observer);
+}
+
+void LocalCardMigrationDialogControllerImpl::RemoveObserver(
+    LocalCardMigrationControllerObserver* observer) {
+  observer_list_.RemoveObserver(observer);
 }
 
 LocalCardMigrationDialogState
@@ -227,7 +240,7 @@ void LocalCardMigrationDialogControllerImpl::DeleteCard(
   DCHECK(delete_local_card_callback_);
   delete_local_card_callback_.Run(deleted_card_guid);
 
-  base::EraseIf(migratable_credit_cards_, [&](const auto& card) {
+  std::erase_if(migratable_credit_cards_, [&](const auto& card) {
     return card.credit_card().guid() == deleted_card_guid;
   });
 
@@ -242,8 +255,9 @@ void LocalCardMigrationDialogControllerImpl::DeleteCard(
 }
 
 void LocalCardMigrationDialogControllerImpl::OnDialogClosed() {
-  if (local_card_migration_dialog_)
+  if (local_card_migration_dialog_) {
     local_card_migration_dialog_ = nullptr;
+  }
 
   UpdateLocalCardMigrationIcon();
 }
@@ -266,9 +280,11 @@ LocalCardMigrationDialogControllerImpl::local_card_migration_dialog_view()
 }
 
 void LocalCardMigrationDialogControllerImpl::OpenUrl(const GURL& url) {
-  GetWebContents().OpenURL(content::OpenURLParams(
-      url, content::Referrer(), WindowOpenDisposition::NEW_POPUP,
-      ui::PAGE_TRANSITION_LINK, false));
+  GetWebContents().OpenURL(
+      content::OpenURLParams(url, content::Referrer(),
+                             WindowOpenDisposition::NEW_POPUP,
+                             ui::PAGE_TRANSITION_LINK, false),
+      /*navigation_handle_callback=*/{});
 }
 
 void LocalCardMigrationDialogControllerImpl::UpdateLocalCardMigrationIcon() {

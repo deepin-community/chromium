@@ -5,14 +5,17 @@
 #ifndef CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_INSTALL_PARAMS_H_
 #define CHROME_BROWSER_WEB_APPLICATIONS_WEB_APP_INSTALL_PARAMS_H_
 
+#include <iosfwd>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
-#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
+#include "chrome/browser/web_applications/proto/web_app_install_state.pb.h"
+#include "chrome/browser/web_applications/web_app_screenshot_fetcher.h"
 #include "components/webapps/browser/install_result_code.h"
 #include "components/webapps/common/web_app_id.h"
 #include "url/gurl.h"
@@ -44,7 +47,9 @@ using WebAppInstallationAcceptanceCallback =
 
 // Callback to show the WebApp installation confirmation bubble in UI.
 // |web_app_info| is the WebAppInstallInfo to be installed.
+// If `screenshot_fetcher` exists, then the detailed install dialog is shown.
 using WebAppInstallDialogCallback = base::OnceCallback<void(
+    base::WeakPtr<WebAppScreenshotFetcher> screenshot_fetcher,
     content::WebContents* initiator_web_contents,
     std::unique_ptr<WebAppInstallInfo> web_app_info,
     WebAppInstallationAcceptanceCallback acceptance_callback)>;
@@ -68,14 +73,11 @@ struct WebAppInstallParams {
   // App name to be used if manifest is unavailable.
   std::optional<std::u16string> fallback_app_name;
 
-  bool locally_installed = true;
+  proto::InstallState install_state =
+      proto::InstallState::INSTALLED_WITH_OS_INTEGRATION;
 
-  // If true, OsIntegrationManager::InstallOsHooks won't be called at all,
-  // meaning that all other OS Hooks related parameters will be ignored.
-  bool bypass_os_hooks = false;
-
-  // These OS shortcut fields can't be true if |locally_installed| is false.
-  // They only have an effect when |bypass_os_hooks| is false.
+  // These are required to be false if `install_state` is not
+  // proto::INSTALLED_WITH_OS_INTEGRATION.
   bool add_to_applications_menu = true;
   bool add_to_desktop = true;
   bool add_to_quick_launch_bar = true;
@@ -88,9 +90,10 @@ struct WebAppInstallParams {
 
   bool require_manifest = false;
 
-  // Used only by ExternallyManagedInstallCommand.
-  // Has the same meaning as WebAppInstallFlow::kCreateShortcut
-  bool install_as_shortcut = false;
+  // Used only by ExternallyManagedInstallCommand, to create DIY web apps where
+  // only limited values from the manifest are used (like theme color) and all
+  // extra capabilities are not used (like file handlers).
+  bool install_as_diy = false;
 
   std::vector<std::string> additional_search_terms;
 
@@ -113,15 +116,34 @@ struct WebAppInstallParams {
 
 // The different UI flows that exist for creating a web app.
 enum class WebAppInstallFlow {
-  // TODO(crbug.com/1216457): This should be removed by adding all known flows
+  // TODO(crbug.com/40184819): This should be removed by adding all known flows
   // to this enum.
   kUnknown,
-  // The 'Create Shortcut' flow for adding the current page as a shortcut app.
+#if BUILDFLAG(IS_CHROMEOS)
+  // Perform the `Create Shortcut` flow on CrOS that creates a DIY app.
   kCreateShortcut,
+#endif
   // The 'Install Site' flow for installing the current site with an app
   // experience determined by the site.
   kInstallSite,
 };
+
+enum class FallbackBehavior {
+  // Installation will use the crafted manifest, and error if the manifest is
+  // not installable.
+  kCraftedManifestOnly,
+  // Installation will use whatever is available - if the site is installable
+  // then crafted app UX will be used, and if not then DIY WebApp UX will be
+  // used. See go/dpwa-universal-install.
+  kUseFallbackInfoWhenNotInstallable,
+  // Installation uses the legacy 'create shortcut' flow, which uses the crafted
+  // manifest if possible, and otherwise fallback information (which has an
+  // empty
+  // 'scope()', so IsShortcut() returns true).
+  kAllowFallbackDataAlways,
+};
+
+std::ostream& operator<<(std::ostream& os, FallbackBehavior state);
 
 }  // namespace web_app
 

@@ -14,6 +14,7 @@
 #include "build/build_config.h"
 #include "ui/accessibility/ax_enums.mojom-forward.h"
 #include "ui/accessibility/ax_mode.h"
+#include "ui/accessibility/platform/ax_platform_node_id.h"
 #include "ui/gfx/native_widget_types.h"
 
 namespace ui {
@@ -54,7 +55,8 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXPlatformNode {
 
   // Disallow any updates to the AXMode when needing to force a certain AXMode,
   // like during testing.
-  static void DisallowAXModeChanges();
+  static void SetAXModeChangeAllowed(bool allow);
+  static bool IsAXModeChangeAllowed();
 
   // Helper static function to notify all global observers about
   // the addition of an AXMode flag.
@@ -81,6 +83,10 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXPlatformNode {
   // this object.
   virtual void NotifyAccessibilityEvent(ax::mojom::Event event_type) = 0;
 
+  // Returns the top-level URL for the active document. This should generally
+  // correspond to what would be shown in the Omnibox.
+  virtual std::string GetRootURL() const = 0;
+
 #if BUILDFLAG(IS_APPLE)
   // Fire a platform-specific notification to speak the |text| string.
   // AnnouncementType kPolite will speak the given string.
@@ -99,14 +105,14 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXPlatformNode {
   virtual bool IsDescendantOf(AXPlatformNode* ancestor) const = 0;
 
   // Return the unique ID.
-  int32_t GetUniqueId() const;
+  AXPlatformNodeId GetUniqueId() const;
 
   // Creates a string representation of this node's data.
-  std::string ToString();
+  std::string ToString() const;
 
   // Returns a string representation of the subtree of nodes rooted at this
   // node.
-  std::string SubtreeToString();
+  std::string SubtreeToString() const;
 
   friend std::ostream& operator<<(std::ostream& stream, AXPlatformNode& node);
 
@@ -126,7 +132,7 @@ class COMPONENT_EXPORT(AX_PLATFORM) AXPlatformNode {
   static base::LazyInstance<NativeWindowHandlerCallback>::Leaky
       native_window_handler_;
 
-  static bool disallow_ax_mode_changes_;
+  static bool allow_ax_mode_changes_;
 
   // This allows UI menu popups like to act as if they are focused in the
   // exposed platform accessibility API, even though actual focus remains in

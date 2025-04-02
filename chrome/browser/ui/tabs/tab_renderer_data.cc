@@ -6,29 +6,65 @@
 
 #include "base/process/kill.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
+#include "chrome/browser/collaboration/messaging/messaging_backend_service_factory.h"
 #include "chrome/browser/favicon/favicon_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/resource_coordinator/lifecycle_unit_state.mojom-shared.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/performance_controls/memory_saver_utils.h"
+#include "chrome/browser/ui/performance_controls/tab_resource_usage_tab_helper.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/public/tab_interface.h"
+#include "chrome/browser/ui/tabs/saved_tab_groups/collaboration_messaging_tab_data.h"
+#include "chrome/browser/ui/tabs/saved_tab_groups/saved_tab_group_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_delegate.h"
 #include "chrome/browser/ui/tabs/tab_utils.h"
+#include "chrome/browser/ui/thumbnails/thumbnail_image.h"
 #include "chrome/browser/ui/thumbnails/thumbnail_tab_helper.h"
 #include "chrome/browser/ui/web_applications/web_app_browser_controller.h"
 #include "chrome/browser/ui/web_applications/web_app_tabbed_utils.h"
+#include "components/collaboration/public/messaging/messaging_backend_service.h"
 #include "components/performance_manager/public/features.h"
+#include "components/saved_tab_groups/public/features.h"
+#include "components/saved_tab_groups/public/tab_group_sync_service.h"
 #include "components/security_interstitials/content/security_interstitial_tab_helper.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/url_constants.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "base/feature_list.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+namespace {
+
+using collaboration::messaging::MessagingBackendService;
+using collaboration::messaging::MessagingBackendServiceFactory;
+using collaboration::messaging::PersistentMessage;
+
+base::WeakPtr<tab_groups::CollaborationMessagingTabData>
+GetCollaborationMessage(tabs::TabInterface* tab) {
+  if (!tab_groups::SavedTabGroupUtils::SupportsSharedTabGroups()) {
+    return nullptr;
+  }
+
+  if (!tab) {
+    return nullptr;
+  }
+
+  auto* tab_features = tab->GetTabFeatures();
+  if (!tab_features) {
+    return nullptr;
+  }
+
+  auto* data = tab_features->collaboration_messaging_tab_data();
+  if (!data) {
+    return nullptr;
+  }
+
+  return data->GetWeakPtr();
+}
+
+}  // namespace
 
 // static
 TabRendererData TabRendererData::FromTabInModel(const TabStripModel* model,
@@ -75,6 +111,9 @@ TabRendererData TabRendererData::FromTabInModel(const TabStripModel* model,
     data.thumbnail = thumbnail_tab_helper->thumbnail();
   }
   data.is_tab_discarded = contents->WasDiscarded();
+
+  data.collaboration_messaging =
+      GetCollaborationMessage(model->GetTabAtIndex(index));
   data.network_state = TabNetworkStateForWebContents(contents);
   data.title = tab_ui_helper->GetTitle();
   data.visible_url = contents->GetVisibleURL();
@@ -92,7 +131,7 @@ TabRendererData TabRendererData::FromTabInModel(const TabStripModel* model,
       data.pinned || model->delegate()->ShouldDisplayFavicon(contents);
   data.blocked = model->IsTabBlocked(index);
   data.should_hide_throbber = tab_ui_helper->ShouldHideThrobber();
-  data.alert_state = chrome::GetTabAlertStatesForContents(contents);
+  data.alert_state = GetTabAlertStatesForContents(contents);
 
   content::NavigationEntry* entry =
       contents->GetController().GetLastCommittedEntry();
@@ -102,14 +141,15 @@ TabRendererData TabRendererData::FromTabInModel(const TabStripModel* model,
   std::optional<mojom::LifecycleUnitDiscardReason> discard_reason =
       memory_saver::GetDiscardReason(contents);
 
-  // Only show discard status for tabs that were proactively discarded to
-  // prevent confusion to users on why a tab was discarded. Also, the favicon
-  // discard animation may use resources so the animation should be limited
-  // to proactive discards to prevent performance issues.
+  // Only show discard status for tabs that were proactively discarded or
+  // suggested by the PerformanceDetectionManager to prevent confusion to users
+  // on why a tab was discarded. Also, the favicon discard animation may use
+  // resources so the animation should be limited to prevent performance issues.
   data.should_show_discard_status =
       memory_saver::IsURLSupported(contents->GetURL()) &&
       contents->WasDiscarded() && discard_reason.has_value() &&
-      discard_reason.value() == mojom::LifecycleUnitDiscardReason::PROACTIVE;
+      (discard_reason.value() == mojom::LifecycleUnitDiscardReason::PROACTIVE ||
+       discard_reason.value() == mojom::LifecycleUnitDiscardReason::SUGGESTED);
 
   if (contents->WasDiscarded()) {
     data.discarded_memory_savings_in_bytes =

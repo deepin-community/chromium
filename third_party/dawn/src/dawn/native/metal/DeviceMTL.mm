@@ -35,11 +35,13 @@
 #include "dawn/native/Commands.h"
 #include "dawn/native/ErrorData.h"
 #include "dawn/native/EventManager.h"
+#include "dawn/native/metal/BackendMTL.h"
 #include "dawn/native/metal/BindGroupLayoutMTL.h"
 #include "dawn/native/metal/BindGroupMTL.h"
 #include "dawn/native/metal/BufferMTL.h"
 #include "dawn/native/metal/CommandBufferMTL.h"
 #include "dawn/native/metal/ComputePipelineMTL.h"
+#include "dawn/native/metal/PhysicalDeviceMTL.h"
 #include "dawn/native/metal/PipelineLayoutMTL.h"
 #include "dawn/native/metal/QuerySetMTL.h"
 #include "dawn/native/metal/QueueMTL.h"
@@ -83,11 +85,11 @@ float KalmanFilter(KalmanInfo* info, float measuredValue) {
     return info->filterValue;
 }
 
-void API_AVAILABLE(macos(10.15), ios(14)) UpdateTimestampPeriod(id<MTLDevice> device,
-                                                                KalmanInfo* info,
-                                                                MTLTimestamp* cpuTimestampStart,
-                                                                MTLTimestamp* gpuTimestampStart,
-                                                                float* timestampPeriod) {
+void UpdateTimestampPeriod(id<MTLDevice> device,
+                           KalmanInfo* info,
+                           MTLTimestamp* cpuTimestampStart,
+                           MTLTimestamp* gpuTimestampStart,
+                           float* timestampPeriod) {
     // The filter value is converged to an optimal value when the kalman gain is less than
     // 0.01. At this time, the weight of the measured value is too small to change the next
     // filter value, the sampling and calculations do not need to continue anymore.
@@ -124,10 +126,11 @@ void API_AVAILABLE(macos(10.15), ios(14)) UpdateTimestampPeriod(id<MTLDevice> de
 ResultOrError<Ref<Device>> Device::Create(AdapterBase* adapter,
                                           NSPRef<id<MTLDevice>> mtlDevice,
                                           const UnpackedPtr<DeviceDescriptor>& descriptor,
-                                          const TogglesState& deviceToggles) {
+                                          const TogglesState& deviceToggles,
+                                          Ref<DeviceBase::DeviceLostEvent>&& lostEvent) {
     @autoreleasepool {
-        Ref<Device> device =
-            AcquireRef(new Device(adapter, std::move(mtlDevice), descriptor, deviceToggles));
+        Ref<Device> device = AcquireRef(new Device(adapter, std::move(mtlDevice), descriptor,
+                                                   deviceToggles, std::move(lostEvent)));
         DAWN_TRY(device->Initialize(descriptor));
         return device;
     }
@@ -136,18 +139,15 @@ ResultOrError<Ref<Device>> Device::Create(AdapterBase* adapter,
 Device::Device(AdapterBase* adapter,
                NSPRef<id<MTLDevice>> mtlDevice,
                const UnpackedPtr<DeviceDescriptor>& descriptor,
-               const TogglesState& deviceToggles)
-    : DeviceBase(adapter, descriptor, deviceToggles), mMtlDevice(std::move(mtlDevice)) {
-    // On macOS < 11.0, we only can check whether counter sampling is supported, and the counter
-    // only can be sampled between command boundary using sampleCountersInBuffer API if it's
+               const TogglesState& deviceToggles,
+               Ref<DeviceBase::DeviceLostEvent>&& lostEvent)
+    : DeviceBase(adapter, descriptor, deviceToggles, std::move(lostEvent)),
+      mMtlDevice(std::move(mtlDevice)) {
+    // Counter only can be sampled between command boundary using sampleCountersInBuffer API if it's
     // supported.
-    if (@available(macOS 11.0, iOS 14.0, *)) {
-        mCounterSamplingAtCommandBoundary = SupportCounterSamplingAtCommandBoundary(GetMTLDevice());
-        mCounterSamplingAtStageBoundary = SupportCounterSamplingAtStageBoundary(GetMTLDevice());
-    } else {
-        mCounterSamplingAtCommandBoundary = true;
-        mCounterSamplingAtStageBoundary = false;
-    }
+
+    mCounterSamplingAtCommandBoundary = SupportCounterSamplingAtCommandBoundary(GetMTLDevice());
+    mCounterSamplingAtStageBoundary = SupportCounterSamplingAtStageBoundary(GetMTLDevice());
 
     mIsTimestampQueryEnabled = HasFeature(Feature::TimestampQuery) ||
                                HasFeature(Feature::ChromiumExperimentalTimestampQueryInsidePasses);
@@ -166,15 +166,16 @@ MaybeError Device::Initialize(const UnpackedPtr<DeviceDescriptor>& descriptor) {
         // an accurate value by the following calculations.
         mTimestampPeriod = gpu_info::IsIntel(GetPhysicalDevice()->GetVendorId()) ? 83.333f : 1.0f;
 
-        // Initialize kalman filter parameters
-        mKalmanInfo = std::make_unique<KalmanInfo>();
-        mKalmanInfo->filterValue = 0.0f;
-        mKalmanInfo->kalmanGain = 0.5f;
-        mKalmanInfo->R = 0.0001f;  // The smaller this value is, the smaller the error of measured
-                                   // value is, the more we can trust the measured value.
-        mKalmanInfo->P = 1.0f;
+        if (!IsToggleEnabled(Toggle::MetalDisableTimestampPeriodEstimation)) {
+            // Initialize kalman filter parameters
+            mKalmanInfo = std::make_unique<KalmanInfo>();
+            mKalmanInfo->filterValue = 0.0f;
+            mKalmanInfo->kalmanGain = 0.5f;
+            mKalmanInfo->R =
+                0.0001f;  // The smaller this value is, the smaller the error of measured
+                          // value is, the more we can trust the measured value.
+            mKalmanInfo->P = 1.0f;
 
-        if (@available(macOS 10.15, iOS 14.0, *)) {
             // Sample CPU timestamp and GPU timestamp for first time at device creation
             [*mMtlDevice sampleTimestamps:&mCpuTimestamp gpuTimestamp:&mGpuTimestamp];
         }
@@ -220,15 +221,16 @@ ResultOrError<Ref<SamplerBase>> Device::CreateSamplerImpl(const SamplerDescripto
 }
 ResultOrError<Ref<ShaderModuleBase>> Device::CreateShaderModuleImpl(
     const UnpackedPtr<ShaderModuleDescriptor>& descriptor,
+    const std::vector<tint::wgsl::Extension>& internalExtensions,
     ShaderModuleParseResult* parseResult,
     OwnedCompilationMessages* compilationMessages) {
-    return ShaderModule::Create(this, descriptor, parseResult, compilationMessages);
+    return ShaderModule::Create(this, descriptor, internalExtensions, parseResult,
+                                compilationMessages);
 }
-ResultOrError<Ref<SwapChainBase>> Device::CreateSwapChainImpl(
-    Surface* surface,
-    SwapChainBase* previousSwapChain,
-    const SwapChainDescriptor* descriptor) {
-    return SwapChain::Create(this, surface, previousSwapChain, descriptor);
+ResultOrError<Ref<SwapChainBase>> Device::CreateSwapChainImpl(Surface* surface,
+                                                              SwapChainBase* previousSwapChain,
+                                                              const SurfaceConfiguration* config) {
+    return SwapChain::Create(this, surface, previousSwapChain, config);
 }
 ResultOrError<Ref<TextureBase>> Device::CreateTextureImpl(
     const UnpackedPtr<TextureDescriptor>& descriptor) {
@@ -236,26 +238,28 @@ ResultOrError<Ref<TextureBase>> Device::CreateTextureImpl(
 }
 ResultOrError<Ref<TextureViewBase>> Device::CreateTextureViewImpl(
     TextureBase* texture,
-    const TextureViewDescriptor* descriptor) {
+    const UnpackedPtr<TextureViewDescriptor>& descriptor) {
     return TextureView::Create(texture, descriptor);
 }
-void Device::InitializeComputePipelineAsyncImpl(Ref<ComputePipelineBase> computePipeline,
-                                                WGPUCreateComputePipelineAsyncCallback callback,
-                                                void* userdata) {
-    ComputePipeline::InitializeAsync(std::move(computePipeline), callback, userdata);
-}
-void Device::InitializeRenderPipelineAsyncImpl(Ref<RenderPipelineBase> renderPipeline,
-                                               WGPUCreateRenderPipelineAsyncCallback callback,
-                                               void* userdata) {
-    RenderPipeline::InitializeAsync(std::move(renderPipeline), callback, userdata);
-}
+void Device::InitializeComputePipelineAsyncImpl(Ref<CreateComputePipelineAsyncEvent> event) {
+    PhysicalDevice* physicalDevice = ToBackend(GetPhysicalDevice());
+    if (physicalDevice->IsMetalValidationEnabled() &&
+        gpu_info::IsAMD(physicalDevice->GetVendorId())) {
+        event->InitializeSync();
+        return;
+    }
 
-ResultOrError<wgpu::TextureUsage> Device::GetSupportedSurfaceUsageImpl(
-    const Surface* surface) const {
-    wgpu::TextureUsage usages = wgpu::TextureUsage::RenderAttachment |
-                                wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc |
-                                wgpu::TextureUsage::CopyDst;
-    return usages;
+    event->InitializeAsync();
+}
+void Device::InitializeRenderPipelineAsyncImpl(Ref<CreateRenderPipelineAsyncEvent> event) {
+    PhysicalDevice* physicalDevice = ToBackend(GetPhysicalDevice());
+    if (physicalDevice->IsMetalValidationEnabled() &&
+        gpu_info::IsAMD(physicalDevice->GetVendorId())) {
+        event->InitializeSync();
+        return;
+    }
+
+    event->InitializeAsync();
 }
 
 ResultOrError<Ref<SharedTextureMemoryBase>> Device::ImportSharedTextureMemoryImpl(
@@ -290,22 +294,19 @@ ResultOrError<Ref<SharedFenceBase>> Device::ImportSharedFenceImpl(
 
     DAWN_INVALID_IF(!HasFeature(Feature::SharedFenceMTLSharedEvent), "%s is not enabled.",
                     wgpu::FeatureName::SharedFenceMTLSharedEvent);
-    if (@available(macOS 10.14, ios 12.0, *)) {
-        return SharedFence::Create(this, baseDescriptor->label, descriptor);
-    }
-    DAWN_UNREACHABLE();
+
+    return SharedFence::Create(this, baseDescriptor->label, descriptor);
 }
 
 MaybeError Device::TickImpl() {
     DAWN_TRY(ToBackend(GetQueue())->SubmitPendingCommandBuffer());
 
-    // Just run timestamp period calculation when timestamp feature is enabled and timestamp
-    // conversion is not disabled.
-    if (mIsTimestampQueryEnabled && !IsToggleEnabled(Toggle::DisableTimestampQueryConversion)) {
-        if (@available(macOS 10.15, iOS 14.0, *)) {
-            UpdateTimestampPeriod(GetMTLDevice(), mKalmanInfo.get(), &mCpuTimestamp, &mGpuTimestamp,
-                                  &mTimestampPeriod);
-        }
+    // Just run timestamp period estimation when timestamp feature is enabled and timestamp
+    // conversion is not disabled and the estimation is not disabled.
+    if (mIsTimestampQueryEnabled && !IsToggleEnabled(Toggle::DisableTimestampQueryConversion) &&
+        !IsToggleEnabled(Toggle::MetalDisableTimestampPeriodEstimation)) {
+        UpdateTimestampPeriod(GetMTLDevice(), mKalmanInfo.get(), &mCpuTimestamp, &mGpuTimestamp,
+                              &mTimestampPeriod);
     }
 
     return {};
@@ -387,7 +388,7 @@ float Device::GetTimestampPeriodInNS() const {
     return mTimestampPeriod;
 }
 
-bool Device::IsResolveTextureBlitWithDrawSupported() const {
+bool Device::CanTextureLoadResolveTargetInTheSameRenderpass() const {
     return true;
 }
 
@@ -397,6 +398,10 @@ bool Device::UseCounterSamplingAtCommandBoundary() const {
 
 bool Device::UseCounterSamplingAtStageBoundary() const {
     return mCounterSamplingAtStageBoundary;
+}
+
+bool Device::BackendWillValidateMultiDraw() const {
+    return true;
 }
 
 id<MTLBuffer> Device::GetMockBlitMtlBuffer() {

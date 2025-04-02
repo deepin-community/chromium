@@ -4,10 +4,11 @@
 
 #include "chrome/browser/devtools/devtools_window_testing.h"
 
+#include <algorithm>
+
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/lazy_instance.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/browser_features.h"
 #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
@@ -40,8 +41,8 @@ DevToolsWindowTesting::DevToolsWindowTesting(DevToolsWindow* window)
 DevToolsWindowTesting::~DevToolsWindowTesting() {
   DevToolsWindowTestings* instances =
       g_devtools_window_testing_instances.Pointer();
-  auto it = base::ranges::find(*instances, this);
-  DCHECK(it != instances->end());
+  auto it = std::ranges::find(*instances, this);
+  CHECK(it != instances->end());
   instances->erase(it);
   if (!close_callback_.is_null())
     std::move(close_callback_).Run();
@@ -108,7 +109,7 @@ void DevToolsWindowTesting::WaitForDevToolsWindowLoad(DevToolsWindow* window) {
   if (!window) {
     return;
   }
-  auto* main_web_contents = window->main_web_contents_;
+  auto* main_web_contents = window->main_web_contents_.get();
   if (!window->ready_for_test_) {
     scoped_refptr<content::MessageLoopRunner> runner =
         new content::MessageLoopRunner;
@@ -138,10 +139,7 @@ DevToolsWindow* DevToolsWindowTesting::OpenDevToolsWindowSync(
       "{\"isUnderTest\": true, \"currentDockState\":\"\\\"bottom\\\"\"}" :
       "{\"isUnderTest\": true, \"currentDockState\":\"\\\"undocked\\\"\"}";
   scoped_refptr<content::DevToolsAgentHost> agent(
-      base::FeatureList::IsEnabled(::features::kDevToolsTabTarget)
-          ? content::DevToolsAgentHost::GetOrCreateForTab(
-                inspected_web_contents)
-          : content::DevToolsAgentHost::GetOrCreateFor(inspected_web_contents));
+      content::DevToolsAgentHost::GetOrCreateForTab(inspected_web_contents));
   DevToolsWindow::ToggleDevToolsWindow(inspected_web_contents, profile, true,
                                        DevToolsToggleAction::Show(), settings);
   DevToolsWindow* window = DevToolsWindow::FindDevToolsWindow(agent.get());

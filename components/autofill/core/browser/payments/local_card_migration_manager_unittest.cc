@@ -23,30 +23,35 @@
 #include "base/time/time.h"
 #include "base/uuid.h"
 #include "build/build_config.h"
-#include "components/autofill/core/browser/autofill_test_utils.h"
+#include "components/autofill/core/browser/crowdsourcing/test_votes_uploader.h"
+#include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#include "components/autofill/core/browser/data_manager/test_personal_data_manager.h"
 #include "components/autofill/core/browser/data_model/autofill_profile.h"
 #include "components/autofill/core/browser/data_model/credit_card.h"
+#include "components/autofill/core/browser/data_quality/validation.h"
+#include "components/autofill/core/browser/form_import/form_data_importer_test_api.h"
+#include "components/autofill/core/browser/foundations/test_autofill_client.h"
+#include "components/autofill/core/browser/foundations/test_autofill_driver.h"
+#include "components/autofill/core/browser/foundations/test_browser_autofill_manager.h"
 #include "components/autofill/core/browser/metrics/autofill_metrics.h"
 #include "components/autofill/core/browser/metrics/payments/local_card_migration_metrics.h"
+#include "components/autofill/core/browser/payments/iban_save_manager.h"
 #include "components/autofill/core/browser/payments/payments_customer_data.h"
 #include "components/autofill/core/browser/payments/payments_util.h"
 #include "components/autofill/core/browser/payments/test_credit_card_save_manager.h"
 #include "components/autofill/core/browser/payments/test_local_card_migration_manager.h"
 #include "components/autofill/core/browser/payments/test_payments_autofill_client.h"
 #include "components/autofill/core/browser/payments/test_payments_network_interface.h"
-#include "components/autofill/core/browser/personal_data_manager.h"
-#include "components/autofill/core/browser/test_autofill_client.h"
-#include "components/autofill/core/browser/test_autofill_clock.h"
-#include "components/autofill/core/browser/test_autofill_driver.h"
-#include "components/autofill/core/browser/test_browser_autofill_manager.h"
-#include "components/autofill/core/browser/test_form_data_importer.h"
-#include "components/autofill/core/browser/test_personal_data_manager.h"
-#include "components/autofill/core/browser/validation.h"
+#include "components/autofill/core/browser/test_utils/autofill_test_utils.h"
+#include "components/autofill/core/browser/test_utils/test_autofill_clock.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
 #include "components/autofill/core/common/autofill_clock.h"
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/autofill/core/common/autofill_prefs.h"
+#include "components/autofill/core/common/credit_card_network_identifiers.h"
 #include "components/autofill/core/common/form_data.h"
+#include "components/autofill/core/common/form_data_test_api.h"
 #include "components/autofill/core/common/form_field_data.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync/test/test_sync_service.h"
@@ -69,34 +74,36 @@ class LocalCardMigrationManagerTest : public testing::Test {
     autofill_client_.SetPrefs(test::PrefServiceForTesting());
     personal_data().SetPrefService(autofill_client_.GetPrefs());
     personal_data().SetSyncServiceForTest(&sync_service_);
-    autofill_driver_ = std::make_unique<TestAutofillDriver>();
+    autofill_driver_ = std::make_unique<TestAutofillDriver>(&autofill_client_);
     payments_network_interface_ = new payments::TestPaymentsNetworkInterface(
         autofill_client_.GetURLLoaderFactory(),
         autofill_client_.GetIdentityManager(), &personal_data());
-    autofill_client_.set_test_payments_network_interface(
-        std::unique_ptr<payments::TestPaymentsNetworkInterface>(
-            payments_network_interface_));
-    credit_card_save_manager_ = new TestCreditCardSaveManager(
-        autofill_driver_.get(), &autofill_client_, &personal_data());
+    autofill_client_.GetPaymentsAutofillClient()
+        ->set_payments_network_interface(
+            std::unique_ptr<payments::TestPaymentsNetworkInterface>(
+                payments_network_interface_));
+    auto credit_card_save_manager =
+        std::make_unique<TestCreditCardSaveManager>(&autofill_client_);
+    credit_card_save_manager_ = credit_card_save_manager.get();
     credit_card_save_manager_->SetCreditCardUploadEnabled(true);
-    local_card_migration_manager_ = new TestLocalCardMigrationManager(
-        autofill_driver_.get(), &autofill_client_, &personal_data());
+    auto local_card_migration_manager =
+        std::make_unique<TestLocalCardMigrationManager>(&autofill_client_);
+    local_card_migration_manager_ = local_card_migration_manager.get();
     std::unique_ptr<TestStrikeDatabase> test_strike_database =
         std::make_unique<TestStrikeDatabase>();
     strike_database_ = test_strike_database.get();
     autofill_client_.set_test_strike_database(std::move(test_strike_database));
-    autofill::TestFormDataImporter* test_form_data_importer =
-        new TestFormDataImporter(
-            &autofill_client_,
-            std::unique_ptr<CreditCardSaveManager>(credit_card_save_manager_),
-            /*iban_save_manager=*/nullptr, &personal_data(), "en-US",
-            std::unique_ptr<LocalCardMigrationManager>(
-                local_card_migration_manager_));
-    autofill_client_.set_test_form_data_importer(
-        std::unique_ptr<TestFormDataImporter>(test_form_data_importer));
-    browser_autofill_manager_ = std::make_unique<TestBrowserAutofillManager>(
-        autofill_driver_.get(), &autofill_client_);
-    browser_autofill_manager_->SetExpectedObservedSubmission(true);
+    test_api(*autofill_client_.GetFormDataImporter())
+        .set_credit_card_save_manager(std::move(credit_card_save_manager));
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+    test_api(*autofill_client_.GetFormDataImporter())
+        .set_local_card_migration_manager(
+            std::move(local_card_migration_manager));
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+
+    browser_autofill_manager_ =
+        std::make_unique<TestBrowserAutofillManager>(autofill_driver_.get());
+    autofill_client_.GetVotesUploader().set_expected_observed_submission(true);
   }
 
   void TearDown() override {
@@ -106,7 +113,7 @@ class LocalCardMigrationManagerTest : public testing::Test {
     autofill_driver_.reset();
 
     personal_data().SetPrefService(nullptr);
-    personal_data().ClearCreditCards();
+    personal_data().test_payments_data_manager().ClearCreditCards();
   }
 
   void FormsSeen(const std::vector<FormData>& updated_forms) {
@@ -116,7 +123,7 @@ class LocalCardMigrationManagerTest : public testing::Test {
 
   void FormSubmitted(const FormData& form) {
     browser_autofill_manager_->OnFormSubmitted(
-        form, false, mojom::SubmissionSource::FORM_SUBMISSION);
+        form, mojom::SubmissionSource::FORM_SUBMISSION);
   }
 
   void EditCreditCardForm(FormData& credit_card_form,
@@ -125,12 +132,16 @@ class LocalCardMigrationManagerTest : public testing::Test {
                           std::string_view expiration_month,
                           std::string_view expiration_year,
                           std::string_view cvc) {
-    DCHECK(credit_card_form.fields.size() >= 5);
-    credit_card_form.fields[0].value = ASCIIToUTF16(name_on_card);
-    credit_card_form.fields[1].value = ASCIIToUTF16(card_number);
-    credit_card_form.fields[2].value = ASCIIToUTF16(expiration_month);
-    credit_card_form.fields[3].value = ASCIIToUTF16(expiration_year);
-    credit_card_form.fields[4].value = ASCIIToUTF16(cvc);
+    DCHECK(credit_card_form.fields().size() >= 5);
+    test_api(credit_card_form).field(0).set_value(ASCIIToUTF16(name_on_card));
+    test_api(credit_card_form).field(1).set_value(ASCIIToUTF16(card_number));
+    test_api(credit_card_form)
+        .field(2)
+        .set_value(ASCIIToUTF16(expiration_month));
+    test_api(credit_card_form)
+        .field(3)
+        .set_value(ASCIIToUTF16(expiration_year));
+    test_api(credit_card_form).field(4).set_value(ASCIIToUTF16(cvc));
   }
 
   void AddLocalCreditCard(TestPersonalDataManager& personal_data,
@@ -146,7 +157,7 @@ class LocalCardMigrationManagerTest : public testing::Test {
                             billing_address_id);
     local_card.set_record_type(CreditCard::RecordType::kLocalCard);
     local_card.set_guid(guid.AsLowercaseString());
-    personal_data.AddCreditCard(local_card);
+    personal_data.payments_data_manager().AddCreditCard(local_card);
   }
 
   // Set the parsed response |result| for the provided |guid|.
@@ -170,7 +181,7 @@ class LocalCardMigrationManagerTest : public testing::Test {
   void UseNewCardWithLocalCardsOnFile() {
     // Set the billing_customer_number to designate existence of a Payments
     // account.
-    personal_data().SetPaymentsCustomerData(
+    personal_data().test_payments_data_manager().SetPaymentsCustomerData(
         std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
     // Add a local credit card (but it will not match what we will enter below).
@@ -196,7 +207,7 @@ class LocalCardMigrationManagerTest : public testing::Test {
   void UseLocalCardWithOtherLocalCardsOnFile() {
     // Set the billing_customer_number to designate existence of a Payments
     // account.
-    personal_data().SetPaymentsCustomerData(
+    personal_data().test_payments_data_manager().SetPaymentsCustomerData(
         std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
     // Add a local credit card whose |TypeAndLastFourDigits| matches what we
@@ -222,7 +233,7 @@ class LocalCardMigrationManagerTest : public testing::Test {
   void UseLocalCardWithInvalidLocalCardsOnFile() {
     // Set the billing_customer_number to designate existence of a Payments
     // account.
-    personal_data().SetPaymentsCustomerData(
+    personal_data().test_payments_data_manager().SetPaymentsCustomerData(
         std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
     // Add a local credit card whose |TypeAndLastFourDigits| matches what we
@@ -252,7 +263,7 @@ class LocalCardMigrationManagerTest : public testing::Test {
   void UseServerCardWithOtherValidLocalCardsOnFile() {
     // Set the billing_customer_number to designate existence of a Payments
     // account.
-    personal_data().SetPaymentsCustomerData(
+    personal_data().test_payments_data_manager().SetPaymentsCustomerData(
         std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
     // Add a masked server credit card whose |TypeAndLastFourDigits| matches
@@ -262,7 +273,8 @@ class LocalCardMigrationManagerTest : public testing::Test {
     test::SetCreditCardInfo(&credit_card, "Jane Doe", "1111", "11",
                             test::NextYear().c_str(), "1");
     credit_card.SetNetworkForMaskedCard(kVisaCard);
-    personal_data().AddServerCreditCard(credit_card);
+    personal_data().test_payments_data_manager().AddServerCreditCard(
+        credit_card);
     // Add one valid local credit card, so it will trigger migration
     AddLocalCreditCard(personal_data(), "Jane Doe", "5555555555554444", "11",
                        test::NextYear().c_str(), "1",
@@ -281,7 +293,7 @@ class LocalCardMigrationManagerTest : public testing::Test {
   void UseServerCardWithInvalidLocalCardsOnFile() {
     // Set the billing_customer_number to designate existence of a Payments
     // account.
-    personal_data().SetPaymentsCustomerData(
+    personal_data().test_payments_data_manager().SetPaymentsCustomerData(
         std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
     // Add a masked credit card whose |TypeAndLastFourDigits| matches what we
@@ -291,7 +303,8 @@ class LocalCardMigrationManagerTest : public testing::Test {
     test::SetCreditCardInfo(&credit_card, "Jane Doe", "1111", "11",
                             test::NextYear().c_str(), "1");
     credit_card.SetNetworkForMaskedCard(kVisaCard);
-    personal_data().AddServerCreditCard(credit_card);
+    personal_data().test_payments_data_manager().AddServerCreditCard(
+        credit_card);
     // Add other invalid local credit cards (invalid card number or expired), so
     // it will not trigger migration.
     AddLocalCreditCard(personal_data(), "Jane Doe", "4111111111111112", "11",
@@ -313,7 +326,7 @@ class LocalCardMigrationManagerTest : public testing::Test {
 
  protected:
   TestPersonalDataManager& personal_data() {
-    return *autofill_client_.GetPersonalDataManager();
+    return autofill_client_.GetPersonalDataManager();
   }
 
   payments::TestPaymentsAutofillClient& payments_autofill_client() {
@@ -322,10 +335,10 @@ class LocalCardMigrationManagerTest : public testing::Test {
 
   base::test::TaskEnvironment task_environment_;
   test::AutofillUnitTestEnvironment autofill_test_environment_;
+  syncer::TestSyncService sync_service_;
   TestAutofillClient autofill_client_;
   std::unique_ptr<TestAutofillDriver> autofill_driver_;
   std::unique_ptr<TestBrowserAutofillManager> browser_autofill_manager_;
-  syncer::TestSyncService sync_service_;
   // Ends up getting owned (and destroyed) by TestAutofillClient:
   raw_ptr<TestStrikeDatabase> strike_database_;
   // Ends up getting owned (and destroyed) by TestFormDataImporter:
@@ -341,7 +354,7 @@ TEST_F(LocalCardMigrationManagerTest,
        MigrateCreditCard_UseLocalCardWithOneLocal) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card whose |TypeAndLastFourDigits| matches what we will
@@ -449,7 +462,7 @@ TEST_F(LocalCardMigrationManagerTest,
        MigrateCreditCard_LocalCardMatchMaskedServerCard) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a masked server card whose |TypeAndLastFourDigits| matches a local
@@ -458,43 +471,9 @@ TEST_F(LocalCardMigrationManagerTest,
   test::SetCreditCardInfo(&server_card, "Jane Doe", "1111", "11",
                           test::NextYear().c_str(), "1");
   server_card.SetNetworkForMaskedCard(kVisaCard);
-  personal_data().AddServerCreditCard(server_card);
+  personal_data().test_payments_data_manager().AddServerCreditCard(server_card);
   // Add a local card whose |TypeAndLastFourDigits| matches a masked server
   // card.
-  AddLocalCreditCard(personal_data(), "Jane Doe", "4111111111111111", "11",
-                     test::NextYear().c_str(), "1",
-                     base::Uuid::GenerateRandomV4());
-  // Add another local credit card
-  AddLocalCreditCard(personal_data(), "Jane Doe", "5555555555554444", "11",
-                     test::NextYear().c_str(), "1",
-                     base::Uuid::GenerateRandomV4());
-
-  // Set up our credit card form data.
-  FormData credit_card_form = CreateTestCreditCardFormData(true, false);
-  FormsSeen(std::vector<FormData>(1, credit_card_form));
-
-  // Edit the data, and submit.
-  EditCreditCardForm(credit_card_form, "Jane Doe", "5555555555554444", "11",
-                     test::NextYear(), "123");
-  FormSubmitted(credit_card_form);
-  EXPECT_FALSE(local_card_migration_manager_->LocalCardMigrationWasTriggered());
-}
-
-// Tests that local cards that match full server cards do not count as
-// migratable.
-TEST_F(LocalCardMigrationManagerTest,
-       MigrateCreditCard_LocalCardMatchFullServerCard) {
-  // Set the billing_customer_number to designate existence of a Payments
-  // account.
-  personal_data().SetPaymentsCustomerData(
-      std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
-
-  // Add a full server card whose number matches a local card.
-  CreditCard server_card(CreditCard::RecordType::kFullServerCard, "a123");
-  test::SetCreditCardInfo(&server_card, "Jane Doe", "4111111111111111", "11",
-                          test::NextYear().c_str(), "1");
-  personal_data().AddServerCreditCard(server_card);
-  // Add a local credit card whose number matches a full server card.
   AddLocalCreditCard(personal_data(), "Jane Doe", "4111111111111111", "11",
                      test::NextYear().c_str(), "1",
                      base::Uuid::GenerateRandomV4());
@@ -518,7 +497,7 @@ TEST_F(LocalCardMigrationManagerTest,
 TEST_F(LocalCardMigrationManagerTest, GetDetectedValues_AllWithCardHolderName) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card whose |TypeAndLastFourDigits| matches what we will
@@ -550,7 +529,7 @@ TEST_F(LocalCardMigrationManagerTest,
        GetDetectedValues_OneCardWithoutCardHolderName) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card whose |TypeAndLastFourDigits| matches what we will
@@ -602,7 +581,7 @@ TEST_F(LocalCardMigrationManagerTest,
        MigrateCreditCard_ShouldAddMigrateCardsBillingCustomerNumberInRequest) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Use one local card with more valid local cards available.
@@ -620,8 +599,7 @@ TEST_F(LocalCardMigrationManagerTest,
   UseLocalCardWithOtherLocalCardsOnFile();
 
   // Confirm that the preflight request contained the correct UploadCardSource.
-  EXPECT_EQ(payments::PaymentsNetworkInterface::UploadCardSource::
-                LOCAL_CARD_MIGRATION_CHECKOUT_FLOW,
+  EXPECT_EQ(payments::UploadCardSource::LOCAL_CARD_MIGRATION_CHECKOUT_FLOW,
             payments_network_interface_->upload_card_source_in_request());
 }
 
@@ -629,7 +607,7 @@ TEST_F(LocalCardMigrationManagerTest,
        MigrateCreditCard_ShouldAddUploadCardSourceInRequest_SettingsPage) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card. One migratable credit card will still trigger
@@ -646,8 +624,7 @@ TEST_F(LocalCardMigrationManagerTest,
   EXPECT_TRUE(local_card_migration_manager_->MainPromptWasShown());
 
   // Confirm that the preflight request contained the correct UploadCardSource.
-  EXPECT_EQ(payments::PaymentsNetworkInterface::UploadCardSource::
-                LOCAL_CARD_MIGRATION_SETTINGS_PAGE,
+  EXPECT_EQ(payments::UploadCardSource::LOCAL_CARD_MIGRATION_SETTINGS_PAGE,
             payments_network_interface_->upload_card_source_in_request());
 }
 
@@ -657,7 +634,7 @@ TEST_F(LocalCardMigrationManagerTest,
        MigrateCreditCard_TriggerFromSettingsPage) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card. One migratable credit card will still trigger
@@ -690,7 +667,7 @@ TEST_F(LocalCardMigrationManagerTest,
 TEST_F(LocalCardMigrationManagerTest, MigrateCreditCard_MigrationSuccess) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card for migration.
@@ -699,7 +676,8 @@ TEST_F(LocalCardMigrationManagerTest, MigrateCreditCard_MigrationSuccess) {
                      base::Uuid::GenerateRandomV4());
 
   // Verify that it exists in the local database.
-  EXPECT_TRUE(personal_data().GetCreditCardByNumber("4111111111111111"));
+  EXPECT_TRUE(personal_data().payments_data_manager().GetCreditCardByNumber(
+      "4111111111111111"));
 
   // Get the migratable credit cards.
   local_card_migration_manager_->GetMigratableCreditCards();
@@ -709,20 +687,21 @@ TEST_F(LocalCardMigrationManagerTest, MigrateCreditCard_MigrationSuccess) {
       local_card_migration_manager_->migratable_credit_cards_[0]
           .credit_card()
           .guid(),
-      autofill::kMigrationResultSuccess);
+      kMigrationResultSuccess);
 
   EXPECT_EQ(local_card_migration_manager_->migratable_credit_cards_[0]
                 .migration_status(),
-            autofill::MigratableCreditCard::MigrationStatus::UNKNOWN);
+            MigratableCreditCard::MigrationStatus::UNKNOWN);
 
   local_card_migration_manager_->AttemptToOfferLocalCardMigration(true);
 
   EXPECT_EQ(local_card_migration_manager_->migratable_credit_cards_[0]
                 .migration_status(),
-            autofill::MigratableCreditCard::MigrationStatus::SUCCESS_ON_UPLOAD);
+            MigratableCreditCard::MigrationStatus::SUCCESS_ON_UPLOAD);
 
   // Local card should *not* be present as it is migrated already.
-  EXPECT_FALSE(personal_data().GetCreditCardByNumber("4111111111111111"));
+  EXPECT_FALSE(personal_data().payments_data_manager().GetCreditCardByNumber(
+      "4111111111111111"));
 }
 
 // Verify that given the parsed response from the PaymentsNetworkInterface, the
@@ -731,7 +710,7 @@ TEST_F(LocalCardMigrationManagerTest,
        MigrateCreditCard_MigrationTemporaryFailure) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card. One migratable credit card will still trigger
@@ -741,7 +720,8 @@ TEST_F(LocalCardMigrationManagerTest,
                      base::Uuid::GenerateRandomV4());
 
   // Verify that it exists in local database.
-  EXPECT_TRUE(personal_data().GetCreditCardByNumber("4111111111111111"));
+  EXPECT_TRUE(personal_data().payments_data_manager().GetCreditCardByNumber(
+      "4111111111111111"));
 
   // Get the migratable credit cards.
   local_card_migration_manager_->GetMigratableCreditCards();
@@ -751,21 +731,22 @@ TEST_F(LocalCardMigrationManagerTest,
       local_card_migration_manager_->migratable_credit_cards_[0]
           .credit_card()
           .guid(),
-      autofill::kMigrationResultTemporaryFailure);
+      kMigrationResultTemporaryFailure);
 
   EXPECT_EQ(local_card_migration_manager_->migratable_credit_cards_[0]
                 .migration_status(),
-            autofill::MigratableCreditCard::MigrationStatus::UNKNOWN);
+            MigratableCreditCard::MigrationStatus::UNKNOWN);
 
   // Start the migration.
   local_card_migration_manager_->AttemptToOfferLocalCardMigration(true);
 
   EXPECT_EQ(local_card_migration_manager_->migratable_credit_cards_[0]
                 .migration_status(),
-            autofill::MigratableCreditCard::MigrationStatus::FAILURE_ON_UPLOAD);
+            MigratableCreditCard::MigrationStatus::FAILURE_ON_UPLOAD);
 
   // Local card should be present as it is not migrated.
-  EXPECT_TRUE(personal_data().GetCreditCardByNumber("4111111111111111"));
+  EXPECT_TRUE(personal_data().payments_data_manager().GetCreditCardByNumber(
+      "4111111111111111"));
 }
 
 // Verify that given the parsed response from the PaymentsNetworkInterface, the
@@ -774,7 +755,7 @@ TEST_F(LocalCardMigrationManagerTest,
        MigrateCreditCard_MigrationPermanentFailure) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card. One migratable credit card will still trigger
@@ -784,7 +765,8 @@ TEST_F(LocalCardMigrationManagerTest,
                      base::Uuid::GenerateRandomV4());
 
   // Verify that it exists in local database.
-  EXPECT_TRUE(personal_data().GetCreditCardByNumber("4111111111111111"));
+  EXPECT_TRUE(personal_data().payments_data_manager().GetCreditCardByNumber(
+      "4111111111111111"));
 
   // Get the migratable credit cards.
   local_card_migration_manager_->GetMigratableCreditCards();
@@ -794,21 +776,22 @@ TEST_F(LocalCardMigrationManagerTest,
       local_card_migration_manager_->migratable_credit_cards_[0]
           .credit_card()
           .guid(),
-      autofill::kMigrationResultPermanentFailure);
+      kMigrationResultPermanentFailure);
 
   EXPECT_EQ(local_card_migration_manager_->migratable_credit_cards_[0]
                 .migration_status(),
-            autofill::MigratableCreditCard::MigrationStatus::UNKNOWN);
+            MigratableCreditCard::MigrationStatus::UNKNOWN);
 
   // Start the migration.
   local_card_migration_manager_->AttemptToOfferLocalCardMigration(true);
 
   EXPECT_EQ(local_card_migration_manager_->migratable_credit_cards_[0]
                 .migration_status(),
-            autofill::MigratableCreditCard::MigrationStatus::FAILURE_ON_UPLOAD);
+            MigratableCreditCard::MigrationStatus::FAILURE_ON_UPLOAD);
 
   // Local card should be present as it is not migrated.
-  EXPECT_TRUE(personal_data().GetCreditCardByNumber("4111111111111111"));
+  EXPECT_TRUE(personal_data().payments_data_manager().GetCreditCardByNumber(
+      "4111111111111111"));
 }
 
 // Verify selected cards are correctly passed to manager.
@@ -823,7 +806,7 @@ TEST_F(LocalCardMigrationManagerTest, MigrateCreditCard_ToggleIsChosen) {
 
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   local_card_migration_manager_->GetMigratableCreditCards();
@@ -847,12 +830,14 @@ TEST_F(LocalCardMigrationManagerTest, DeleteLocalCardViaMigrationDialog) {
                      test::NextYear().c_str(), "1", guid);
 
   const std::string guid_str = guid.AsLowercaseString();
-  EXPECT_TRUE(personal_data().GetCreditCardByGUID(guid_str));
+  EXPECT_TRUE(
+      personal_data().payments_data_manager().GetCreditCardByGUID(guid_str));
 
   local_card_migration_manager_->OnUserDeletedLocalCardViaMigrationDialog(
       guid_str);
 
-  EXPECT_FALSE(personal_data().GetCreditCardByGUID(guid_str));
+  EXPECT_FALSE(
+      personal_data().payments_data_manager().GetCreditCardByGUID(guid_str));
 }
 
 // Use one local card with more valid local cards available, don't show prompt
@@ -918,7 +903,7 @@ TEST_F(LocalCardMigrationManagerTest, MigrateCreditCard_StrikeCountUMALogged) {
 
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
   local_card_migration_manager_->GetMigratableCreditCards();
 
@@ -948,7 +933,7 @@ TEST_F(LocalCardMigrationManagerTest,
        MigrateCreditCard_MigrationAbortWhenUseUnsupportedLocalCard) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card whose |TypeAndLastFourDigits| matches what we will
@@ -984,7 +969,7 @@ TEST_F(LocalCardMigrationManagerTest,
        MigrateCreditCard_MigrateWhenHasSupportedLocalCard) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card whose |TypeAndLastFourDigits| matches what we will
@@ -1029,7 +1014,7 @@ TEST_F(
     MigrateCreditCard_MigrateWhenUseUnsupportedServerCardWithSupportedLocalCard) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a masked server credit card whose |TypeAndLastFourDigits| matches what
@@ -1038,7 +1023,7 @@ TEST_F(
   test::SetCreditCardInfo(&credit_card, "Jane Doe", "1111", "11",
                           test::NextYear().c_str(), "1");
   credit_card.SetNetworkForMaskedCard(kVisaCard);
-  personal_data().AddServerCreditCard(credit_card);
+  personal_data().test_payments_data_manager().AddServerCreditCard(credit_card);
   // Add one valid local credit card, so it will trigger migration
   AddLocalCreditCard(personal_data(), "Jane Doe", "5555555555554444", "11",
                      test::NextYear().c_str(), "1",
@@ -1069,7 +1054,7 @@ TEST_F(
     MigrateCreditCard_MigrateAbortWhenUseSupportedServerCardWithUnsupportedLocalCard) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a masked server credit card whose |TypeAndLastFourDigits| matches what
@@ -1078,7 +1063,7 @@ TEST_F(
   test::SetCreditCardInfo(&credit_card, "Jane Doe", "1111", "11",
                           test::NextYear().c_str(), "1");
   credit_card.SetNetworkForMaskedCard(kVisaCard);
-  personal_data().AddServerCreditCard(credit_card);
+  personal_data().test_payments_data_manager().AddServerCreditCard(credit_card);
   // Add one valid local credit card, so it will trigger migration
   AddLocalCreditCard(personal_data(), "Jane Doe", "5555555555554444", "11",
                      test::NextYear().c_str(), "1",
@@ -1107,7 +1092,7 @@ TEST_F(
 TEST_F(LocalCardMigrationManagerTest, MigrateCreditCard_GetUploadDetailsFails) {
   // Anything other than "en-US" will cause GetUploadDetails to return a failure
   // response.
-  local_card_migration_manager_->SetAppLocaleForTesting("pt-BR");
+  autofill_client_.set_app_locale("pt-BR");
 
   UseLocalCardWithOtherLocalCardsOnFile();
 
@@ -1182,7 +1167,7 @@ TEST_F(LocalCardMigrationManagerTest,
        LogMigrationOrigin_TriggerFromSettingsPage) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card. One migratable credit card will still trigger
@@ -1304,7 +1289,7 @@ TEST_F(LocalCardMigrationManagerTest,
        LogMigrationDecisionMetric_GetUploadDetailsFails) {
   // Anything other than "en-US" will cause GetUploadDetails to return a failure
   // response.
-  local_card_migration_manager_->SetAppLocaleForTesting("pt-BR");
+  autofill_client_.set_app_locale("pt-BR");
 
   base::HistogramTester histogram_tester;
   UseLocalCardWithOtherLocalCardsOnFile();
@@ -1321,7 +1306,7 @@ TEST_F(LocalCardMigrationManagerTest,
        LogMigrationDecisionMetric_UseUnsupportedLocalCard) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a local credit card whose |TypeAndLastFourDigits| matches what we will
@@ -1362,7 +1347,7 @@ TEST_F(LocalCardMigrationManagerTest,
        LogMigrationDecisionMetric_NoSupportedCardsForSupportedServerCard) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a masked server credit card whose |TypeAndLastFourDigits| matches what
@@ -1371,7 +1356,7 @@ TEST_F(LocalCardMigrationManagerTest,
   test::SetCreditCardInfo(&credit_card, "Jane Doe", "1111", "11",
                           test::NextYear().c_str(), "1");
   credit_card.SetNetworkForMaskedCard(kVisaCard);
-  personal_data().AddServerCreditCard(credit_card);
+  personal_data().test_payments_data_manager().AddServerCreditCard(credit_card);
   // Add one valid local credit card, so it will trigger migration
   AddLocalCreditCard(personal_data(), "Jane Doe", "5555555555554444", "11",
                      test::NextYear().c_str(), "1",
@@ -1405,7 +1390,7 @@ TEST_F(LocalCardMigrationManagerTest,
        LogMigrationDecisionMetric_NoSupportedCardsForUnsupportedServerCard) {
   // Set the billing_customer_number to designate existence of a Payments
   // account.
-  personal_data().SetPaymentsCustomerData(
+  personal_data().test_payments_data_manager().SetPaymentsCustomerData(
       std::make_unique<PaymentsCustomerData>(/*customer_id=*/"123456"));
 
   // Add a masked server credit card whose |TypeAndLastFourDigits| matches what
@@ -1414,7 +1399,7 @@ TEST_F(LocalCardMigrationManagerTest,
   test::SetCreditCardInfo(&credit_card, "Jane Doe", "1111", "11",
                           test::NextYear().c_str(), "1");
   credit_card.SetNetworkForMaskedCard(kVisaCard);
-  personal_data().AddServerCreditCard(credit_card);
+  personal_data().test_payments_data_manager().AddServerCreditCard(credit_card);
   // Add one valid local credit card, so it will trigger migration
   AddLocalCreditCard(personal_data(), "Jane Doe", "5555555555554444", "11",
                      test::NextYear().c_str(), "1",

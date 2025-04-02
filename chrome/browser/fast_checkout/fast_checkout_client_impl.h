@@ -7,6 +7,7 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/scoped_observation.h"
+#include "build/build_config.h"
 #include "chrome/browser/fast_checkout/fast_checkout_accessibility_service.h"
 #include "chrome/browser/fast_checkout/fast_checkout_capabilities_fetcher.h"
 #include "chrome/browser/fast_checkout/fast_checkout_personal_data_helper.h"
@@ -14,14 +15,19 @@
 #include "chrome/browser/ui/fast_checkout/fast_checkout_controller_impl.h"
 #include "components/autofill/android/touch_to_fill_keyboard_suppressor.h"
 #include "components/autofill/content/browser/content_autofill_client.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager.h"
+#include "components/autofill/core/browser/data_manager/personal_data_manager_observer.h"
 #include "components/autofill/core/browser/data_model/autofill_profile.h"
+#include "components/autofill/core/browser/integrators/fast_checkout_client.h"
+#include "components/autofill/core/browser/integrators/fast_checkout_enums.h"
 #include "components/autofill/core/browser/payments/full_card_request.h"
-#include "components/autofill/core/browser/personal_data_manager.h"
-#include "components/autofill/core/browser/ui/fast_checkout_client.h"
-#include "components/autofill/core/browser/ui/fast_checkout_enums.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "url/gurl.h"
+
+#if !BUILDFLAG(IS_ANDROID)
+#error "Android-only header"
+#endif
 
 namespace autofill {
 class LogManager;
@@ -70,11 +76,10 @@ class FastCheckoutClientImpl
       autofill::AutofillManager& manager) override;
   void OnAfterDidFillAutofillFormData(autofill::AutofillManager& manager,
                                       autofill::FormGlobalId form_id) override;
-  // Is owned by a `ContentAutofillDriver` instance and its lifecycle thus is
-  // dependent on the one of `RenderFrameHost`.
-  void OnAutofillManagerDestroyed(autofill::AutofillManager& manager) override;
-  // Is called on navigation and resets its internal state.
-  void OnAutofillManagerReset(autofill::AutofillManager& manager) override;
+  void OnAutofillManagerStateChanged(
+      autofill::AutofillManager& manager,
+      autofill::AutofillManager::LifecycleState old_state,
+      autofill::AutofillManager::LifecycleState new_state) override;
 
   // ContentAutofillDriverFactory::Observer:
   void OnContentAutofillDriverFactoryDestroyed(
@@ -115,26 +120,26 @@ class FastCheckoutClientImpl
   CreateFastCheckoutController();
 
  private:
-  friend class FastCheckoutClientImplTest;
+  friend class DISABLED_FastCheckoutClientImplTest;
   FRIEND_TEST_ALL_PREFIXES(
-      FastCheckoutClientImplTest,
+      DISABLED_FastCheckoutClientImplTest,
       DestroyingAutofillDriver_ResetsAutofillManagerPointer);
   FRIEND_TEST_ALL_PREFIXES(
-      FastCheckoutClientImplTest,
+      DISABLED_FastCheckoutClientImplTest,
       OnOptionsSelected_LocalCard_SavesFormsAndAutofillDataSelections);
   FRIEND_TEST_ALL_PREFIXES(
-      FastCheckoutClientImplTest,
+      DISABLED_FastCheckoutClientImplTest,
       OnOptionsSelected_ServerCard_SavesFormsAndAutofillDataSelections);
-  FRIEND_TEST_ALL_PREFIXES(FastCheckoutClientImplTest,
+  FRIEND_TEST_ALL_PREFIXES(DISABLED_FastCheckoutClientImplTest,
                            OnAfterLoadedServerPredictions_FillsForms);
   FRIEND_TEST_ALL_PREFIXES(
-      FastCheckoutClientImplTest,
+      DISABLED_FastCheckoutClientImplTest,
       OnAfterDidFillAutofillFormData_SetsFillingFormsToFilledAndStops);
   FRIEND_TEST_ALL_PREFIXES(
-      FastCheckoutClientImplTest,
+      DISABLED_FastCheckoutClientImplTest,
       OnFullCardRequestSucceeded_InvokesCreditCardFormFill);
   FRIEND_TEST_ALL_PREFIXES(
-      FastCheckoutClientImplTest,
+      DISABLED_FastCheckoutClientImplTest,
       TryToFillForms_LocalCreditCard_ImmediatelyFillsCreditCardForm);
 
   // From autofill::PersonalDataManagerObserver.
@@ -195,24 +200,23 @@ class FastCheckoutClientImpl
                     bool is_credit_card_form);
   // Returns a pointer to the autofill profile corresponding to
   // `selected_autofill_profile_guid_`. Stops the run if it's a `nullptr`.
-  autofill::AutofillProfile* GetSelectedAutofillProfile();
+  const autofill::AutofillProfile* GetSelectedAutofillProfile();
 
   // Returns a pointer to the credit card corresponding to
   // `selected_credit_card_id_`. Stops the run if it's a `nullptr`.
-  autofill::CreditCard* GetSelectedCreditCard();
+  const autofill::CreditCard* GetSelectedCreditCard();
 
   // Fills credit card form via the `autofill_manager_` and handles internal
   // state.
   void FillCreditCardForm(const autofill::FormStructure& form,
-                          const autofill::FormFieldData& field,
-                          const autofill::CreditCard& credit_card,
-                          const std::u16string& cvc);
+                          const autofill::FieldGlobalId& field_id,
+                          const autofill::CreditCard& credit_card);
 
   // Same as Stop() but does not require `IsShowing() == true` for
   // `allow_further_runs == false` to have any effect. The `IsShowing()` guard
   // is currently required because of uncontrolled `HideFastCheckout()` calls
   // in `BrowserAutofillManager::OnHidePopupImpl()`.
-  // TODO(crbug.com/1334642): remove `HideFastCheckout()` call from
+  // TODO(crbug.com/40228235): remove `HideFastCheckout()` call from
   // `BrowserAutofillManger` by introducing a new `AutofillManager::Observer`
   // methods pair, then remove this method in favor of `Stop()`.
   void InternalStop(bool allow_further_runs);

@@ -51,7 +51,7 @@ SyncScopeUsageTracker& SyncScopeUsageTracker::operator=(SyncScopeUsageTracker&&)
 void SyncScopeUsageTracker::BufferUsedAs(BufferBase* buffer,
                                          wgpu::BufferUsage usage,
                                          wgpu::ShaderStage shaderStages) {
-    // std::map's operator[] will create a new element using the default constructor
+    // absl::flat_hash_map's operator[] will create a new element using the default constructor
     // if the key didn't exist before.
     BufferSyncInfo& bufferSyncInfo = mBufferSyncInfos[buffer];
 
@@ -111,7 +111,7 @@ void SyncScopeUsageTracker::AddBindGroup(BindGroupBase* group) {
 
         MatchVariant(
             bindingInfo.bindingLayout,
-            [&](const BufferBindingLayout& layout) {
+            [&](const BufferBindingInfo& layout) {
                 BufferBase* buffer = group->GetBindingAsBufferBinding(bindingIndex).buffer;
                 switch (layout.type) {
                     case wgpu::BufferBindingType::Uniform:
@@ -126,11 +126,12 @@ void SyncScopeUsageTracker::AddBindGroup(BindGroupBase* group) {
                     case wgpu::BufferBindingType::ReadOnlyStorage:
                         BufferUsedAs(buffer, kReadOnlyStorageBuffer, bindingInfo.visibility);
                         break;
+                    case wgpu::BufferBindingType::BindingNotUsed:
                     case wgpu::BufferBindingType::Undefined:
                         DAWN_UNREACHABLE();
                 }
             },
-            [&](const TextureBindingLayout& layout) {
+            [&](const TextureBindingInfo& layout) {
                 TextureViewBase* view = group->GetBindingAsTextureView(bindingIndex);
                 switch (layout.sampleType) {
                     case kInternalResolveAttachmentSampleType:
@@ -143,7 +144,7 @@ void SyncScopeUsageTracker::AddBindGroup(BindGroupBase* group) {
                         break;
                 }
             },
-            [&](const StorageTextureBindingLayout& layout) {
+            [&](const StorageTextureBindingInfo& layout) {
                 TextureViewBase* view = group->GetBindingAsTextureView(bindingIndex);
                 switch (layout.access) {
                     case wgpu::StorageTextureAccess::WriteOnly:
@@ -156,11 +157,17 @@ void SyncScopeUsageTracker::AddBindGroup(BindGroupBase* group) {
                     case wgpu::StorageTextureAccess::ReadOnly:
                         TextureViewUsedAs(view, kReadOnlyStorageTexture, bindingInfo.visibility);
                         break;
+                    case wgpu::StorageTextureAccess::BindingNotUsed:
                     case wgpu::StorageTextureAccess::Undefined:
                         DAWN_UNREACHABLE();
                 }
             },
-            [&](const SamplerBindingLayout&) {});
+            [&](const SamplerBindingInfo&) {},  //
+            [&](const StaticSamplerBindingInfo&) {},
+            [&](const InputAttachmentBindingInfo&) {
+                // This binding is not supposed to be used on front-end.
+                DAWN_UNREACHABLE();
+            });
     }
 
     for (const Ref<ExternalTextureBase>& externalTexture : group->GetBoundExternalTextures()) {
@@ -214,18 +221,19 @@ void ComputePassResourceUsageTracker::AddResourcesReferencedByBindGroup(BindGrou
 
         MatchVariant(
             bindingInfo.bindingLayout,
-            [&](const BufferBindingLayout&) {
+            [&](const BufferBindingInfo&) {
                 mUsage.referencedBuffers.insert(group->GetBindingAsBufferBinding(index).buffer);
             },
-            [&](const TextureBindingLayout&) {
+            [&](const TextureBindingInfo&) {
                 mUsage.referencedTextures.insert(
                     group->GetBindingAsTextureView(index)->GetTexture());
             },
-            [&](const StorageTextureBindingLayout&) {
+            [&](const StorageTextureBindingInfo&) {
                 mUsage.referencedTextures.insert(
                     group->GetBindingAsTextureView(index)->GetTexture());
             },
-            [](const SamplerBindingLayout&) {});
+            [](const SamplerBindingInfo&) {}, [](const StaticSamplerBindingInfo&) {},
+            [&](const InputAttachmentBindingInfo&) { DAWN_UNREACHABLE(); });
     }
 
     for (const Ref<ExternalTextureBase>& externalTexture : group->GetBoundExternalTextures()) {

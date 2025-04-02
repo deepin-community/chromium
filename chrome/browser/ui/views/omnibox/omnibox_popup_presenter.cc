@@ -13,7 +13,7 @@
 #include "chrome/browser/ui/views/omnibox/rounded_omnibox_results_frame.h"
 #include "chrome/browser/ui/views/theme_copying_widget.h"
 #include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_ui.h"
-#include "chrome/browser/ui/webui/realbox/realbox_handler.h"
+#include "chrome/browser/ui/webui/searchbox/realbox_handler.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/omnibox/browser/omnibox_view.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -37,9 +37,9 @@ OmniboxPopupPresenter::OmniboxPopupPresenter(LocationBarView* location_bar_view,
   // the time window of loading the URL in a separate process. Using a unique
   // session ID avoids these problems and ensures that only the omnibox
   // controller that owns this popup presenter will be selected.
-  GURL url(base::StringPrintf("%s?session_id=%d",
-                              chrome::kChromeUIOmniboxPopupURL,
-                              location_bar_view->browser()->session_id().id()));
+  const GURL url(
+      base::StringPrintf("%s?session_id=%d", chrome::kChromeUIOmniboxPopupURL,
+                         location_bar_view->browser()->session_id().id()));
   LoadInitialURL(url);
 
   location_bar_view_->AddObserver(this);
@@ -54,8 +54,10 @@ void OmniboxPopupPresenter::Show() {
   if (!widget_) {
     widget_ = new ThemeCopyingWidget(location_bar_view_->GetWidget());
 
-    views::Widget* parent_widget = location_bar_view_->GetWidget();
-    views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
+    const views::Widget* parent_widget = location_bar_view_->GetWidget();
+    views::Widget::InitParams params(
+        views::Widget::InitParams::NATIVE_WIDGET_OWNS_WIDGET,
+        views::Widget::InitParams::TYPE_POPUP);
 #if BUILDFLAG(IS_WIN)
     // On Windows use the software compositor to ensure that we don't block
     // the UI thread during command buffer creation. See http://crbug.com/125248
@@ -93,7 +95,7 @@ bool OmniboxPopupPresenter::IsShown() const {
 }
 
 RealboxHandler* OmniboxPopupPresenter::GetHandler() {
-  bool ready = IsHandlerReady();
+  const bool ready = IsHandlerReady();
   if (!requested_handler_) {
     // Only log on first access.
     requested_handler_ = true;
@@ -122,7 +124,7 @@ void OmniboxPopupPresenter::OnPopupElementSizeChanged(gfx::Size size) {
     widget_bounds.Inset(
         -RoundedOmniboxResultsFrame::GetLocationBarAlignmentInsets());
 
-    // TODO(crbug.com/1396174): Change max height according to max suggestion
+    // TODO(crbug.com/40062053): Change max height according to max suggestion
     //  count and calculated row height, or use a more general maximum value.
     constexpr int kMaxHeight = 600;
     widget_bounds.set_height(widget_bounds.height() +

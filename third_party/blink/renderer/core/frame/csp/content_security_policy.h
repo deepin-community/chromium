@@ -42,6 +42,7 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/frame/csp/content_security_policy_violation_type.h"
 #include "third_party/blink/renderer/core/frame/web_feature_forward.h"
+#include "third_party/blink/renderer/platform/crypto.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
@@ -169,7 +170,7 @@ class CORE_EXPORT ContentSecurityPolicy final
     kDisallowedDuplicateName
   };
 
-  static const size_t kMaxSampleLength = 40;
+  static constexpr size_t kMaxSampleLength = 40;
 
   ContentSecurityPolicy();
   ~ContentSecurityPolicy();
@@ -199,6 +200,12 @@ class CORE_EXPORT ContentSecurityPolicy final
   bool AllowWasmCodeGeneration(ReportingDisposition,
                                ExceptionStatus,
                                const String& script_content);
+
+  HashSet<HashAlgorithm> HashesToReport() const;
+  void AddHashReportIfNeeded(
+      LocalFrame* frame,
+      const String& url,
+      const HashMap<HashAlgorithm, String>& integrity_hashes) const;
 
   // AllowFromSource() wrappers.
   bool AllowBaseURI(const KURL&);
@@ -287,8 +294,7 @@ class CORE_EXPORT ContentSecurityPolicy final
       const String& sample_prefix = String(),
       std::optional<base::UnguessableToken> issue_id = std::nullopt);
 
-  void UsesScriptHashAlgorithms(uint8_t content_security_policy_hash_algorithm);
-  void UsesStyleHashAlgorithms(uint8_t content_security_policy_hash_algorithm);
+  void UsesHashAlgorithm(IntegrityAlgorithm algorithm);
 
   void SetOverrideAllowInlineStyle(bool);
   void SetOverrideURLForSelf(const KURL&);
@@ -343,7 +349,7 @@ class CORE_EXPORT ContentSecurityPolicy final
 
   void EnforceSandboxFlags(network::mojom::blink::WebSandboxFlags);
   void RequireTrustedTypes();
-  bool IsRequireTrustedTypes() const { return require_trusted_types_; }
+  bool TrustedTypesRequired() const { return require_trusted_types_; }
   String EvalDisabledErrorMessage() const;
   String WasmEvalDisabledErrorMessage() const;
 
@@ -357,15 +363,12 @@ class CORE_EXPORT ContentSecurityPolicy final
 
   bool ExperimentalFeaturesEnabled() const;
 
-  // Returns true if `CSPDirectiveListIsReportOnly` returns false
-  // and `CSPDirectiveListIsBaseRestrictionReasonable`,
-  // `CSPDirectiveListIsObjectRestrictionReasonable` and
-  // `CSPDirectiveListIsScriptRestrictionReasonable` return true.
-  // See also: https://web.dev/articles/strict-csp
-  bool IsStrictPolicyEnforced() const;
-
-  // Returns true if trusted types are required.
-  bool RequiresTrustedTypes() const;
+  // CSP can be set from multiple sources; if a directive is set by multiple
+  // sources, the strictest one will be used. A CSP can be considered strict
+  // if the `base-uri`, `object-src`, and `script-src` directives are all
+  // strict enough (even if the strictest directives come from different CSP
+  // sources).
+  bool IsStrictPolicyEnforced() const { return enforces_strict_policy_; }
 
   // Whether the main world's CSP should be bypassed based on the current
   // javascript world we are in.
@@ -406,6 +409,18 @@ class CORE_EXPORT ContentSecurityPolicy final
   }
 
   bool HasPolicyFromSource(network::mojom::ContentSecurityPolicySource) const;
+
+  // Whether policies allow loading an opaque URL in a <fencedframe>.
+  //
+  // The document is not allowed to retrieve data about the URL, so the only
+  // allowed `fenced-frame-src` are the one allowing every HTTPs url:
+  // - '*'
+  // - https:
+  // - https://*:*
+  bool AllowFencedFrameOpaqueURL() const;
+
+  // Returns whether enforcing frame-ancestors CSP directives are present.
+  bool HasEnforceFrameAncestorsDirectives();
 
   void Count(WebFeature feature) const;
 
@@ -450,7 +465,7 @@ class CORE_EXPORT ContentSecurityPolicy final
 
   static void FillInCSPHashValues(
       const String& source,
-      uint8_t hash_algorithms_used,
+      WTF::HashSet<IntegrityAlgorithm> hash_algorithms_used,
       Vector<network::mojom::blink::CSPHashSourcePtr>& csp_hash_values);
 
   // checks a vector of csp hashes against policy, probably a good idea
@@ -478,10 +493,9 @@ class CORE_EXPORT ContentSecurityPolicy final
   HashSet<unsigned, AlreadyHashedTraits> violation_reports_sent_;
 
   // We put the hash functions used on the policy object so that we only need
-  // to calculate a hash once and then distribute it to all of the directives
-  // for validation.
-  uint8_t script_hash_algorithms_used_;
-  uint8_t style_hash_algorithms_used_;
+  // to calculate digests using those hashing algorithms which show up in the
+  // policy.
+  WTF::HashSet<IntegrityAlgorithm> hash_algorithms_used_;
 
   // State flags used to configure the environment after parsing a policy.
   network::mojom::blink::WebSandboxFlags sandbox_mask_;
@@ -491,6 +505,8 @@ class CORE_EXPORT ContentSecurityPolicy final
   mojom::blink::InsecureRequestPolicy insecure_request_policy_;
 
   bool supports_wasm_eval_ = false;
+
+  bool enforces_strict_policy_{false};
 };
 
 }  // namespace blink

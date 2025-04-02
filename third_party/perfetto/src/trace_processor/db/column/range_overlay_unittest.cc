@@ -17,8 +17,6 @@
 #include "src/trace_processor/db/column/range_overlay.h"
 
 #include <cstdint>
-#include <limits>
-#include <utility>
 #include <vector>
 
 #include "perfetto/trace_processor/basic_types.h"
@@ -37,7 +35,10 @@ using testing::ElementsAre;
 using testing::IsEmpty;
 using Range = Range;
 
-TEST(RangeOverlay, SingleSearch) {
+using Indices = DataLayerChain::Indices;
+using OrderedIndices = DataLayerChain::OrderedIndices;
+
+TEST(RangeOverlay, SearchSingle) {
   Range range(3, 8);
   RangeOverlay storage(&range);
   auto fake = FakeStorageChain::SearchSubset(
@@ -48,40 +49,6 @@ TEST(RangeOverlay, SingleSearch) {
             SingleSearchResult::kMatch);
   ASSERT_EQ(chain->SingleSearch(FilterOp::kEq, SqlValue::Long(0u), 1),
             SingleSearchResult::kNoMatch);
-}
-
-TEST(RangeOverlay, UniqueSearch) {
-  Range range(1, 3);
-  RangeOverlay storage(&range);
-  auto fake = FakeStorageChain::SearchSubset(5, Range(2, 3));
-  auto chain = storage.MakeChain(std::move(fake));
-
-  uint32_t row = std::numeric_limits<uint32_t>::max();
-  ASSERT_EQ(chain->UniqueSearch(FilterOp::kIsNotNull, SqlValue(), &row),
-            UniqueSearchResult::kMatch);
-  ASSERT_EQ(row, 1u);
-}
-
-TEST(RangeOverlay, UniqueSearchLowOutOfBounds) {
-  Range range(3, 8);
-  RangeOverlay storage(&range);
-  auto fake = FakeStorageChain::SearchSubset(8, Range(1, 2));
-  auto chain = storage.MakeChain(std::move(fake));
-
-  uint32_t row = std::numeric_limits<uint32_t>::max();
-  ASSERT_EQ(chain->UniqueSearch(FilterOp::kIsNotNull, SqlValue(), &row),
-            UniqueSearchResult::kNoMatch);
-}
-
-TEST(RangeOverlay, UniqueSearchHighOutOfBounds) {
-  Range range(3, 8);
-  RangeOverlay storage(&range);
-  auto fake = FakeStorageChain::SearchSubset(9, Range(8, 9));
-  auto chain = storage.MakeChain(std::move(fake));
-
-  uint32_t row = std::numeric_limits<uint32_t>::max();
-  ASSERT_EQ(chain->UniqueSearch(FilterOp::kIsNotNull, SqlValue(), &row),
-            UniqueSearchResult::kNoMatch);
 }
 
 TEST(RangeOverlay, SearchAll) {
@@ -128,16 +95,17 @@ TEST(RangeOverlay, SearchBitVector) {
 TEST(RangeOverlay, IndexSearch) {
   auto fake =
       FakeStorageChain::SearchSubset(8, BitVector({0, 1, 0, 1, 0, 1, 0, 0}));
+
+  // {true, false}
   Range range(3, 5);
   RangeOverlay storage(&range);
   auto chain = storage.MakeChain(std::move(fake));
 
-  std::vector<uint32_t> table_idx{1u, 0u, 3u};
-  RangeOrBitVector res = chain->IndexSearch(
-      FilterOp::kGe, SqlValue::Long(0u),
-      Indices{table_idx.data(), static_cast<uint32_t>(table_idx.size()),
-              Indices::State::kNonmonotonic});
-  ASSERT_THAT(utils::ToIndexVectorForTests(res), ElementsAre(1u));
+  // {true, false, true}
+  Indices indices = Indices::CreateWithIndexPayloadForTesting(
+      {0, 1, 0}, Indices::State::kNonmonotonic);
+  chain->IndexSearch(FilterOp::kGe, SqlValue::Long(0u), indices);
+  ASSERT_THAT(utils::ExtractPayloadForTesting(indices), ElementsAre(0, 2));
 }
 
 TEST(RangeOverlay, StableSort) {
@@ -149,13 +117,28 @@ TEST(RangeOverlay, StableSort) {
   auto chain = storage.MakeChain(numeric.MakeChain());
 
   std::vector tokens{
-      column::DataLayerChain::SortToken{0, 0},
-      column::DataLayerChain::SortToken{1, 1},
-      column::DataLayerChain::SortToken{2, 2},
+      Token{0, 0},
+      Token{1, 1},
+      Token{2, 2},
   };
   chain->StableSort(tokens.data(), tokens.data() + tokens.size(),
-                    column::DataLayerChain::SortDirection::kAscending);
+                    SortDirection::kAscending);
   ASSERT_THAT(utils::ExtractPayloadForTesting(tokens), ElementsAre(1, 2, 0));
+}
+
+TEST(RangeOverlay, Distinct) {
+  std::vector<uint32_t> numeric_data{100, 99, 2, 0, 1};
+  NumericStorage<uint32_t> numeric(&numeric_data, ColumnType::kUint32, false);
+
+  // 99, 2, 0, 1
+  Range range(1, 4);
+  RangeOverlay storage(&range);
+  auto chain = storage.MakeChain(numeric.MakeChain());
+
+  auto indices = Indices::CreateWithIndexPayloadForTesting(
+      {0, 0, 0}, Indices::State::kNonmonotonic);
+  chain->Distinct(indices);
+  ASSERT_THAT(utils::ExtractPayloadForTesting(indices), ElementsAre(0));
 }
 
 }  // namespace

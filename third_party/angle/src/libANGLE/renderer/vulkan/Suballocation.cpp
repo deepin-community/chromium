@@ -11,8 +11,8 @@
 
 #include "libANGLE/renderer/vulkan/Suballocation.h"
 #include "libANGLE/Context.h"
-#include "libANGLE/renderer/vulkan/RendererVk.h"
 #include "libANGLE/renderer/vulkan/vk_mem_alloc_wrapper.h"
+#include "libANGLE/renderer/vulkan/vk_renderer.h"
 
 namespace rx
 {
@@ -66,7 +66,7 @@ BufferBlock::~BufferBlock()
     ASSERT(mDescriptorSetCacheManager.empty());
 }
 
-void BufferBlock::destroy(RendererVk *renderer)
+void BufferBlock::destroy(Renderer *renderer)
 {
     VkDevice device = renderer->getDevice();
 
@@ -84,7 +84,7 @@ void BufferBlock::destroy(RendererVk *renderer)
     mDeviceMemory.destroy(device);
 }
 
-VkResult BufferBlock::init(Context *context,
+VkResult BufferBlock::init(ErrorContext *context,
                            Buffer &buffer,
                            uint32_t memoryTypeIndex,
                            vma::VirtualBlockCreateFlags flags,
@@ -92,7 +92,7 @@ VkResult BufferBlock::init(Context *context,
                            VkMemoryPropertyFlags memoryPropertyFlags,
                            VkDeviceSize size)
 {
-    RendererVk *renderer = context->getRenderer();
+    Renderer *renderer = context->getRenderer();
     ASSERT(!mVirtualBlock.valid());
     ASSERT(!mBuffer.valid());
     ASSERT(!mDeviceMemory.valid());
@@ -112,7 +112,7 @@ VkResult BufferBlock::init(Context *context,
     return VK_SUCCESS;
 }
 
-void BufferBlock::initWithoutVirtualBlock(Context *context,
+void BufferBlock::initWithoutVirtualBlock(ErrorContext *context,
                                           Buffer &buffer,
                                           MemoryAllocationType memoryAllocationType,
                                           uint32_t memoryTypeIndex,
@@ -121,7 +121,7 @@ void BufferBlock::initWithoutVirtualBlock(Context *context,
                                           VkDeviceSize size,
                                           VkDeviceSize allocatedBufferSize)
 {
-    RendererVk *renderer = context->getRenderer();
+    Renderer *renderer = context->getRenderer();
     ASSERT(!mVirtualBlock.valid());
     ASSERT(!mBuffer.valid());
     ASSERT(!mDeviceMemory.valid());
@@ -154,14 +154,14 @@ VkResult BufferBlock::allocate(VkDeviceSize size,
                                VmaVirtualAllocation *allocationOut,
                                VkDeviceSize *offsetOut)
 {
-    std::unique_lock<std::mutex> lock(mVirtualBlockMutex);
+    std::unique_lock<angle::SimpleMutex> lock(mVirtualBlockMutex);
     mCountRemainsEmpty = 0;
     return mVirtualBlock.allocate(size, alignment, allocationOut, offsetOut);
 }
 
 void BufferBlock::free(VmaVirtualAllocation allocation, VkDeviceSize offset)
 {
-    std::unique_lock<std::mutex> lock(mVirtualBlockMutex);
+    std::unique_lock<angle::SimpleMutex> lock(mVirtualBlockMutex);
     mVirtualBlock.free(allocation, offset);
 }
 
@@ -172,18 +172,18 @@ int32_t BufferBlock::getAndIncrementEmptyCounter()
 
 void BufferBlock::calculateStats(vma::StatInfo *pStatInfo) const
 {
-    std::unique_lock<std::mutex> lock(mVirtualBlockMutex);
+    std::unique_lock<angle::SimpleMutex> lock(mVirtualBlockMutex);
     mVirtualBlock.calculateStats(pStatInfo);
 }
 
 // BufferSuballocation implementation.
-VkResult BufferSuballocation::map(Context *context)
+VkResult BufferSuballocation::map(ErrorContext *context)
 {
     return mBufferBlock->map(context->getDevice());
 }
 
 // BufferSuballocationGarbage implementation.
-bool BufferSuballocationGarbage::destroyIfComplete(RendererVk *renderer)
+bool BufferSuballocationGarbage::destroyIfComplete(Renderer *renderer)
 {
     if (renderer->hasResourceUseFinished(mLifetime))
     {
@@ -194,7 +194,7 @@ bool BufferSuballocationGarbage::destroyIfComplete(RendererVk *renderer)
     return false;
 }
 
-bool BufferSuballocationGarbage::hasResourceUseSubmitted(RendererVk *renderer) const
+bool BufferSuballocationGarbage::hasResourceUseSubmitted(Renderer *renderer) const
 {
     return renderer->hasResourceUseSubmitted(mLifetime);
 }

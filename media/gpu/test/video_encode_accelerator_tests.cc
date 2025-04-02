@@ -10,6 +10,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/strings/string_number_conversions.h"
+#include "build/build_config.h"
 #include "media/base/media_switches.h"
 #include "media/base/media_util.h"
 #include "media/base/test_data_util.h"
@@ -26,7 +27,6 @@
 #include "media/gpu/test/video_encoder/video_encoder_client.h"
 #include "media/gpu/test/video_encoder/video_encoder_test_environment.h"
 #include "media/gpu/test/video_frame_file_writer.h"
-#include "media/gpu/test/video_frame_helpers.h"
 #include "media/gpu/test/video_frame_validator.h"
 #include "media/gpu/test/video_test_environment.h"
 #include "media/gpu/test/video_test_helpers.h"
@@ -189,12 +189,16 @@ class VideoEncoderTest : public ::testing::Test {
                      spatial_layer_resolutions.size() > 1
                  ? FILE_PATH_LITERAL("S")
                  : FILE_PATH_LITERAL("L")) +
-            base::NumberToString(*spatial_layer_index_to_decode);
+            base::FilePath::FromASCII(
+                base::NumberToString(*spatial_layer_index_to_decode))
+                .value();
       }
       if (temporal_layer_index_to_decode) {
         output_file_prefix +=
             FILE_PATH_LITERAL("T") +
-            base::NumberToString(*temporal_layer_index_to_decode);
+            base::FilePath::FromASCII(
+                base::NumberToString(*temporal_layer_index_to_decode))
+                .value();
       }
 
       image_writer = VideoFrameFileWriter::Create(
@@ -333,29 +337,14 @@ class VideoEncoderTest : public ::testing::Test {
 };
 }  // namespace
 
-// Encode video from start to end. Wait for the kFlushDone event at the end of
-// the stream, that notifies us all frames have been encoded.
-TEST_F(VideoEncoderTest, FlushAtEndOfStream) {
-  if (g_env->SpatialLayers().size() > 1)
-    GTEST_SKIP() << "Skip SHMEM input test cases in spatial SVC encoding";
-
-  auto encoder = CreateVideoEncoder(g_env->Video(), GetDefaultConfig());
-
-  encoder->Encode();
-  EXPECT_TRUE(encoder->WaitForFlushDone());
-
-  EXPECT_EQ(encoder->GetFlushDoneCount(), 1u);
-  EXPECT_EQ(encoder->GetFrameReleasedCount(), g_env->Video()->NumFrames());
-  EXPECT_TRUE(encoder->WaitForBitstreamProcessors());
-}
-
 // Test initializing the video encoder. The test will be successful if the video
 // encoder is capable of setting up the encoder for the specified codec and
 // resolution. The test only verifies initialization and doesn't do any
 // encoding.
 TEST_F(VideoEncoderTest, Initialize) {
-  if (g_env->SpatialLayers().size() > 1)
+  if (g_env->SpatialLayers().size() > 1) {
     GTEST_SKIP() << "Skip SHMEM input test cases in spatial SVC encoding";
+  }
 
   auto encoder = CreateVideoEncoder(g_env->Video(), GetDefaultConfig());
 
@@ -373,6 +362,23 @@ TEST_F(VideoEncoderTest, DestroyBeforeInitialize) {
   auto video_encoder = VideoEncoder::Create(GetDefaultConfig());
 
   EXPECT_NE(video_encoder, nullptr);
+}
+
+// Encode video from start to end. Wait for the kFlushDone event at the end of
+// the stream, that notifies us all frames have been encoded.
+TEST_F(VideoEncoderTest, FlushAtEndOfStream) {
+  if (g_env->SpatialLayers().size() > 1) {
+    GTEST_SKIP() << "Skip SHMEM input test cases in spatial SVC encoding";
+  }
+
+  auto encoder = CreateVideoEncoder(g_env->Video(), GetDefaultConfig());
+
+  encoder->Encode();
+  EXPECT_TRUE(encoder->WaitForFlushDone());
+
+  EXPECT_EQ(encoder->GetFlushDoneCount(), 1u);
+  EXPECT_EQ(encoder->GetFrameReleasedCount(), g_env->Video()->NumFrames());
+  EXPECT_TRUE(encoder->WaitForBitstreamProcessors());
 }
 
 // Test forcing key frames while encoding a video.
@@ -407,6 +413,36 @@ TEST_F(VideoEncoderTest, ForceKeyFrame) {
   EXPECT_TRUE(encoder->WaitForBitstreamProcessors());
 }
 
+#if BUILDFLAG(IS_WIN)
+// Test key frame request when a new GOP is started.
+TEST_F(VideoEncoderTest, KeyFrameOnFirstFrameOfGOP) {
+  if (g_env->SpatialLayers().size() > 1) {
+    GTEST_SKIP() << "Skip SHMEM input test cases in spatial SVC encoding";
+  }
+
+  auto config = GetDefaultConfig();
+  // The start of the next GOP sequence should be before the end of the encoded
+  // stream.
+  config.gop_length = 3 * config.num_frames_to_encode / 2;
+  config.num_frames_to_encode *= 2;
+  auto encoder = CreateVideoEncoder(g_env->Video(), config);
+
+  // Check whether the first frame is a key frame.
+  encoder->EncodeUntil(VideoEncoder::kBitstreamReady, 1u);
+  EXPECT_TRUE(encoder->WaitUntilIdle());
+  EXPECT_EQ(encoder->GetEventCount(VideoEncoder::kKeyFrame), 1u);
+
+  // Encode until the end of stream.
+  encoder->Encode();
+  EXPECT_TRUE(encoder->WaitForFlushDone());
+  // Check if there are two key frames - each one at the start of GOP.
+  EXPECT_EQ(encoder->GetEventCount(VideoEncoder::kKeyFrame), 2u);
+  EXPECT_EQ(encoder->GetFlushDoneCount(), 1u);
+  EXPECT_EQ(encoder->GetFrameReleasedCount(), config.num_frames_to_encode);
+  EXPECT_TRUE(encoder->WaitForBitstreamProcessors());
+}
+#endif  // BUILDFLAG(IS_WIN)
+
 // Test forcing key frame to the first and second frames.
 TEST_F(VideoEncoderTest, ForceTheFirstAndSecondKeyFrames) {
   if (g_env->SpatialLayers().size() > 1) {
@@ -435,6 +471,36 @@ TEST_F(VideoEncoderTest, ForceTheFirstAndSecondKeyFrames) {
   encoder->Encode();
   EXPECT_TRUE(encoder->WaitForFlushDone());
   EXPECT_EQ(encoder->GetFlushDoneCount(), 1u);
+  EXPECT_EQ(encoder->GetFrameReleasedCount(), config.num_frames_to_encode);
+  EXPECT_TRUE(encoder->WaitForBitstreamProcessors());
+}
+
+// Execute Flush() in the middle of encoding. Supporting this is required for
+// Flush() and ChabgeOptions() in media::VideoEncoder API.
+// See media/base/video_encoder.h for detail.
+TEST_F(VideoEncoderTest, FlushIntheMiddle) {
+  if (g_env->SpatialLayers().size() > 1) {
+    GTEST_SKIP() << "Skip SHMEM input test cases in spatial SVC encoding";
+  }
+
+  auto config = GetDefaultConfig();
+
+  auto encoder = CreateVideoEncoder(g_env->Video(), GetDefaultConfig());
+  const size_t middle_frame = config.num_frames_to_encode / 2;
+
+  // Encode until the middle of stream and request force_keyframe.
+  encoder->EncodeUntil(VideoEncoder::kFrameReleased, middle_frame);
+  EXPECT_TRUE(encoder->WaitUntilIdle());
+
+  // Flush in the middle.
+  encoder->Flush();
+  EXPECT_TRUE(encoder->WaitForFlushDone());
+
+  // Encode until the end of stream.
+  encoder->Encode();
+
+  EXPECT_TRUE(encoder->WaitForFlushDone());
+  EXPECT_EQ(encoder->GetFlushDoneCount(), 2u);
   EXPECT_EQ(encoder->GetFrameReleasedCount(), config.num_frames_to_encode);
   EXPECT_TRUE(encoder->WaitForBitstreamProcessors());
 }
@@ -497,9 +563,13 @@ TEST_F(VideoEncoderTest, BitrateCheck) {
       config.bitrate_allocation.GetMode() == Bitrate::Mode::kVariable;
   const double tolerance =
       vbr_encoding ? kVariableBitrateTolerance : kBitrateTolerance;
-  if (!vbr_encoding) {
-    config.num_frames_to_encode = kNumFramesToEncodeForBitrateCheck * 3;
-  }
+  // Encode twice as many frame as kNumFramesToEncodeForBitrateCheck in VBR
+  // encoding. This is a workaround the zork rate controller. See b/361109092.
+  // TODO(b/195407733): Remove this workaround if we introduce the rate
+  // controller to the H264 vaapi encoder.
+  config.num_frames_to_encode = vbr_encoding
+                                    ? kNumFramesToEncodeForBitrateCheck * 2
+                                    : kNumFramesToEncodeForBitrateCheck * 3;
 
   auto encoder = CreateVideoEncoder(g_env->Video(), config);
   // Set longer event timeout than the default (30 sec) because encoding 2160p
@@ -559,6 +629,9 @@ TEST_F(VideoEncoderTest, BitrateCheck) {
   EXPECT_TRUE(encoder->WaitForBitstreamProcessors());
 }
 
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+// TODO(https://crbugs.com/350994517): NV12 DMABuf test does not apply to
+// Windows. There should be similar test for this with NV12 DXGI buffers added.
 TEST_F(VideoEncoderTest, FlushAtEndOfStream_NV12Dmabuf) {
   RawVideo* nv12_video = g_env->GenerateNV12Video();
   VideoEncoderClientConfig config(
@@ -577,6 +650,9 @@ TEST_F(VideoEncoderTest, FlushAtEndOfStream_NV12Dmabuf) {
   EXPECT_TRUE(encoder->WaitForBitstreamProcessors());
 }
 
+// TODO(https://crbugs.com/350994517): These are for scaling and cropping,
+// which requires GMB support. Enable these tests when GMB is supported
+// for VEA tests on Windows.
 // Downscaling is required in VideoEncodeAccelerator when zero-copy video
 // capture is enabled. One example is simulcast, camera produces 360p VideoFrame
 // and there are two VideoEncodeAccelerator for 360p and 180p. VideoEncoder for
@@ -720,6 +796,7 @@ TEST_F(VideoEncoderTest, FlushAtEndOfStream_NV12DmabufCroppingRightAndLeft) {
   EXPECT_EQ(encoder->GetFrameReleasedCount(), nv12_expanded_video->NumFrames());
   EXPECT_TRUE(encoder->WaitForBitstreamProcessors());
 }
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
 
 // This tests deactivate and activating spatial layers during encoding.
 TEST_F(VideoEncoderTest, DeactivateAndActivateSpatialLayers) {
@@ -727,7 +804,13 @@ TEST_F(VideoEncoderTest, DeactivateAndActivateSpatialLayers) {
   if (spatial_layers.size() <= 1)
     GTEST_SKIP() << "Skip (de)activate spatial layers test for simple encoding";
 
-  RawVideo* nv12_video = g_env->GenerateNV12Video();
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+  RawVideo* video = g_env->GenerateNV12Video();
+#else
+  // TODO(b/211783271): Add support for I420 SHM input.
+  RawVideo* video = g_env->Video();
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+
   const size_t bottom_spatial_idx = 0;
   const size_t top_spatial_idx = spatial_layers.size() - 1;
   auto deactivate_spatial_layer =
@@ -765,18 +848,26 @@ TEST_F(VideoEncoderTest, DeactivateAndActivateSpatialLayers) {
   bitrate_allocations.emplace_back(bitrate_allocation);
 
   VideoEncoderClientConfig config(
-      nv12_video, g_env->Profile(), g_env->SpatialLayers(),
+      video, g_env->Profile(), g_env->SpatialLayers(),
       g_env->InterLayerPredMode(), g_env->ContentType(),
       g_env->BitrateAllocation(), g_env->Reverse());
+
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
   config.input_storage_type =
       VideoEncodeAccelerator::Config::StorageType::kGpuMemoryBuffer;
+#else
+  // TODO(https://crbugs.com/350994517): Enable GMB for Windows.
+  config.input_storage_type =
+      VideoEncodeAccelerator::Config::StorageType::kShmem;
+#endif  // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+
   std::vector<size_t> num_frames_to_encode(bitrate_allocations.size());
   for (size_t i = 0; i < num_frames_to_encode.size(); ++i)
     num_frames_to_encode[i] = config.num_frames_to_encode * (i + 1);
   config.num_frames_to_encode =
       num_frames_to_encode.back() + config.num_frames_to_encode;
 
-  auto encoder = CreateVideoEncoder(nv12_video, config);
+  auto encoder = CreateVideoEncoder(video, config);
 
   for (size_t i = 0; i < bitrate_allocations.size(); ++i) {
     encoder->EncodeUntil(VideoEncoder::kFrameReleased, num_frames_to_encode[i]);
@@ -860,6 +951,7 @@ int main(int argc, char** argv) {
   base::FilePath output_folder =
       base::FilePath(base::FilePath::kCurrentDirectory);
   std::vector<base::test::FeatureRef> disabled_features;
+  std::vector<base::test::FeatureRef> enabled_features;
 
   // Parse command line arguments.
   media::test::g_enable_bitstream_validator = true;
@@ -879,14 +971,15 @@ int main(int argc, char** argv) {
     }
 
     if (it->first == "codec") {
-      codec = it->second;
+      codec = cmd_line->GetSwitchValueASCII("codec");
     } else if (it->first == "svc_mode") {
-      svc_mode = it->second;
+      svc_mode = cmd_line->GetSwitchValueASCII("svc_mode");
     } else if (it->first == "bitrate_mode") {
-      if (it->second == "vbr") {
+      auto brc_mode_str = cmd_line->GetSwitchValueASCII("bitrate_mode");
+      if (brc_mode_str == "vbr") {
         bitrate_mode = media::Bitrate::Mode::kVariable;
-      } else if (it->second != "cbr") {
-        std::cout << "unknown bitrate mode \"" << it->second
+      } else if (brc_mode_str != "cbr") {
+        std::cout << "unknown bitrate mode \"" << brc_mode_str
                   << "\", possible values are \"cbr|vbr\"\n";
         return EXIT_FAILURE;
       }
@@ -910,25 +1003,27 @@ int main(int argc, char** argv) {
     } else if (it->first == "reverse") {
       reverse = true;
     } else if (it->first == "output_images") {
-      if (it->second == "all") {
+      auto output_mode_str = cmd_line->GetSwitchValueASCII("output_images");
+      if (output_mode_str == "all") {
         frame_output_config.output_mode = media::test::FrameOutputMode::kAll;
-      } else if (it->second == "corrupt") {
+      } else if (output_mode_str == "corrupt") {
         frame_output_config.output_mode =
             media::test::FrameOutputMode::kCorrupt;
       } else {
-        std::cout << "unknown image output mode \"" << it->second
+        std::cout << "unknown image output mode \"" << output_mode_str
                   << "\", possible values are \"all|corrupt\"\n";
         return EXIT_FAILURE;
       }
     } else if (it->first == "output_format") {
-      if (it->second == "png") {
+      auto output_format_str = cmd_line->GetSwitchValueASCII("output_format");
+      if (output_format_str == "png") {
         frame_output_config.output_format =
             media::test::VideoFrameFileWriter::OutputFormat::kPNG;
-      } else if (it->second == "yuv") {
+      } else if (output_format_str == "yuv") {
         frame_output_config.output_format =
             media::test::VideoFrameFileWriter::OutputFormat::kYUV;
       } else {
-        std::cout << "unknown frame output format \"" << it->second
+        std::cout << "unknown frame output format \"" << output_format_str
                   << "\", possible values are \"png|yuv\"\n";
         return EXIT_FAILURE;
       }
@@ -947,6 +1042,9 @@ int main(int argc, char** argv) {
     }
   }
 
+#if defined(ARCH_CPU_X86_FAMILY) && BUILDFLAG(IS_CHROMEOS)
+  enabled_features.push_back(media::kVaapiH264SWBitrateController);
+#endif  // defined(ARCH_CPU_X86_FAMILY) && BUILDFLAG(IS_CHROMEOS)
   disabled_features.push_back(media::kGlobalVaapiLock);
 
   testing::InitGoogleTest(&argc, argv);
@@ -958,7 +1056,7 @@ int main(int argc, char** argv) {
           video_path, video_metadata_path, output_folder, codec, svc_mode,
           media::VideoEncodeAccelerator::Config::ContentType::kCamera,
           output_bitstream, output_bitrate, bitrate_mode, reverse,
-          frame_output_config, /*enabled_features=*/{}, disabled_features);
+          frame_output_config, enabled_features, disabled_features);
 
   if (!test_environment)
     return EXIT_FAILURE;

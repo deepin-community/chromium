@@ -85,12 +85,6 @@ bool CanEnableDiceForBuild() {
 
 }  // namespace
 
-// static
-AccountConsistencyModeManager* AccountConsistencyModeManager::GetForProfile(
-    Profile* profile) {
-  return AccountConsistencyModeManagerFactory::GetForProfile(profile);
-}
-
 AccountConsistencyModeManager::AccountConsistencyModeManager(Profile* profile)
     : profile_(profile),
       account_consistency_(signin::AccountConsistencyMethod::kDisabled),
@@ -118,7 +112,7 @@ AccountConsistencyModeManager::AccountConsistencyModeManager(Profile* profile)
   account_consistency_initialized_ = true;
 }
 
-AccountConsistencyModeManager::~AccountConsistencyModeManager() {}
+AccountConsistencyModeManager::~AccountConsistencyModeManager() = default;
 
 // static
 void AccountConsistencyModeManager::RegisterProfilePrefs(
@@ -132,7 +126,7 @@ AccountConsistencyMethod AccountConsistencyModeManager::GetMethodForProfile(
   if (!ShouldBuildServiceForProfile(profile))
     return AccountConsistencyMethod::kDisabled;
 
-  return AccountConsistencyModeManager::GetForProfile(profile)
+  return AccountConsistencyModeManagerFactory::GetForProfile(profile)
       ->GetAccountConsistencyMethod();
 }
 
@@ -145,11 +139,16 @@ bool AccountConsistencyModeManager::IsDiceEnabledForProfile(Profile* profile) {
 // static
 bool AccountConsistencyModeManager::IsDiceSignInAllowed(
     ProfileAttributesEntry* entry) {
+  // Sign in should only be allowed for OIDC profiles with 3P identities that
+  // are sync-ed to Google. Otherwise, we won't have a valid GAIA ID to sign in
+  // to.
+  bool is_oidc_sign_in_disallowed =
+      entry && !entry->GetProfileManagementOidcTokens().id_token.empty() &&
+      entry->IsDasherlessManagement();
   return CanEnableDiceForBuild() && IsBrowserSigninAllowedByCommandLine() &&
-         (!entry ||
-          (entry->GetProfileManagementEnrollmentToken().empty() &&
-           // TODO(b/319477219): Add full sign in support for OIDC profiles
-           entry->GetProfileManagementOidcTokens().id_token.empty()));
+         !is_oidc_sign_in_disallowed &&
+         (!entry || entry->GetProfileManagementEnrollmentToken().empty());
+  ;
 }
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
@@ -173,7 +172,7 @@ bool AccountConsistencyModeManager::ShouldBuildServiceForProfile(
 AccountConsistencyMethod
 AccountConsistencyModeManager::GetAccountConsistencyMethod() {
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-  // TODO(https://crbug.com/860671): ChromeOS should use the cached value.
+  // TODO(crbug.com/40583837): ChromeOS should use the cached value.
   // Changing the value dynamically is not supported.
   return ComputeAccountConsistencyMethod(profile_);
 #else
@@ -219,5 +218,4 @@ AccountConsistencyModeManager::ComputeAccountConsistencyMethod(
 #endif
 
   NOTREACHED();
-  return AccountConsistencyMethod::kDisabled;
 }

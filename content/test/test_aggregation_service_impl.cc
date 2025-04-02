@@ -4,6 +4,8 @@
 
 #include "content/test/test_aggregation_service_impl.h"
 
+#include <stddef.h>
+
 #include <optional>
 #include <string>
 #include <utility>
@@ -28,7 +30,7 @@
 #include "content/browser/aggregation_service/aggregation_service_test_utils.h"
 #include "content/browser/aggregation_service/public_key.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
-#include "third_party/blink/public/mojom/private_aggregation/aggregatable_report.mojom.h"
+#include "third_party/blink/public/mojom/aggregation_service/aggregatable_report.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -123,13 +125,18 @@ void TestAggregationServiceImpl::SetPublicKeys(
 void TestAggregationServiceImpl::AssembleReport(
     AssembleRequest request,
     base::OnceCallback<void(base::Value::Dict)> callback) {
+  constexpr size_t kDefaultFilteringIdMaxBytes = 1;
+
   AggregationServicePayloadContents payload_contents(
       ConvertToOperation(request.operation),
       {blink::mojom::AggregatableReportHistogramContribution(
-          /*bucket=*/request.bucket, /*value=*/request.value)},
+          /*bucket=*/request.bucket, /*value=*/request.value,
+          /*filtering_id=*/std::nullopt)},
       ConvertToAggregationMode(request.aggregation_mode),
       /*aggregation_coordinator_origin=*/std::nullopt,
-      /*max_contributions_allowed=*/20);
+      /*max_contributions_allowed=*/20u,
+      // TODO(crbug.com/330744610): Allow setting.
+      /*filtering_id_max_bytes=*/kDefaultFilteringIdMaxBytes);
 
   AggregatableReportSharedInfo shared_info(
       /*scheduled_report_time=*/base::Time::Now() + base::Seconds(30),
@@ -160,7 +167,7 @@ void TestAggregationServiceImpl::SendReport(
     const base::Value& contents,
     base::OnceCallback<void(bool)> callback) {
   sender_->SendReport(
-      url, contents,
+      url, contents, AggregatableReportRequest::DelayType::Unscheduled,
       base::BindOnce(
           [&](base::OnceCallback<void(bool)> callback,
               AggregatableReportSender::RequestStatus status) {

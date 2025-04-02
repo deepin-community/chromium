@@ -11,7 +11,6 @@
 #include "base/functional/bind.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/json/json_reader.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/numerics/clamped_math.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/task_traits.h"
@@ -22,6 +21,7 @@
 #include "components/bookmarks/browser/url_index.h"
 #include "components/bookmarks/common/bookmark_metrics.h"
 #include "components/bookmarks/common/url_load_stats.h"
+#include "components/bookmarks/common/user_folder_load_stats.h"
 
 namespace bookmarks {
 
@@ -97,6 +97,16 @@ std::unique_ptr<BookmarkLoadDetails> LoadBookmarks(
                                   codec.ids_reassigned());
       details->set_required_recovery(details->required_recovery() ||
                                      codec.required_recovery());
+
+      // Record metrics that indicate whether or not IDs were reassigned for
+      // account bookmarks.
+      metrics::RecordIdsReassignedOnProfileLoad(
+          metrics::StorageFileForUma::kAccount, codec.ids_reassigned());
+    } else {
+      // In the failure case, it is still possible that sync metadata was
+      // decoded, which includes legit scenarios like sync metadata indicating
+      // that there were too many bookmarks in sync, server-side.
+      details->set_account_sync_metadata_str(std::move(sync_metadata_str));
     }
   }
 
@@ -119,6 +129,13 @@ std::unique_ptr<BookmarkLoadDetails> LoadBookmarks(
                                   codec.ids_reassigned());
       details->set_required_recovery(details->required_recovery() ||
                                      codec.required_recovery());
+      details->set_local_or_syncable_reassigned_ids_per_old_id(
+          codec.release_reassigned_ids_per_old_id());
+
+      // Record metrics that indicate whether or not IDs were reassigned for
+      // local-or-syncable bookmarks.
+      metrics::RecordIdsReassignedOnProfileLoad(
+          metrics::StorageFileForUma::kLocalOrSyncable, codec.ids_reassigned());
     }
   }
 
@@ -141,18 +158,17 @@ void LoadManagedNode(LoadManagedNodeCallback load_managed_node_callback,
 }
 
 uint64_t GetFileSizeOrZero(const base::FilePath& file_path) {
-  int64_t file_size_bytes = 0;
-  if (base::GetFileSize(file_path, &file_size_bytes)) {
-    return file_size_bytes;
-  }
-  return 0;
+  return base::GetFileSize(file_path).value_or(0);
 }
 
-void RecordLoadMetrics(const BookmarkLoadDetails& details,
+void RecordLoadMetrics(BookmarkLoadDetails* details,
                        const base::FilePath& local_or_syncable_file_path,
                        const base::FilePath& account_file_path) {
-  UrlLoadStats stats = details.url_index()->ComputeStats();
-  metrics::RecordUrlLoadStatsOnProfileLoad(stats);
+  UrlLoadStats url_stats = details->url_index()->ComputeStats();
+  metrics::RecordUrlLoadStatsOnProfileLoad(url_stats);
+
+  UserFolderLoadStats user_folder_stats = details->ComputeUserFolderStats();
+  metrics::RecordUserFolderLoadStatsOnProfileLoad(user_folder_stats);
 
   const uint64_t local_or_syncable_file_size =
       GetFileSizeOrZero(local_or_syncable_file_path);
@@ -171,9 +187,9 @@ void RecordLoadMetrics(const BookmarkLoadDetails& details,
       local_or_syncable_file_size + account_file_size;
   if (sum_file_size > 0) {
     metrics::RecordAverageNodeSizeAtStartup(
-        stats.total_url_bookmark_count == 0
+        url_stats.total_url_bookmark_count == 0
             ? 0
-            : sum_file_size / stats.total_url_bookmark_count);
+            : sum_file_size / url_stats.total_url_bookmark_count);
   }
 }
 
@@ -229,7 +245,8 @@ std::unique_ptr<BookmarkLoadDetails> ModelLoader::DoLoadOnBackgroundThread(
   // thread.
   details->CreateIndices();
 
-  RecordLoadMetrics(*details, local_or_syncable_file_path, account_file_path);
+  RecordLoadMetrics(details.get(), local_or_syncable_file_path,
+                    account_file_path);
 
   history_bookmark_model_ = details->url_index();
   loaded_signal_.Signal();

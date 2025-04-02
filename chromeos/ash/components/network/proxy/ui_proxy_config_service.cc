@@ -199,7 +199,6 @@ ProxyPrefs::ProxyMode OncStringToProxyMode(const std::string& onc_proxy_type) {
     return ProxyPrefs::ProxyMode::MODE_FIXED_SERVERS;
   }
   NOTREACHED() << "Unsupported ONC proxy type: " << onc_proxy_type;
-  return ProxyPrefs::ProxyMode::MODE_DIRECT;
 }
 
 }  // namespace

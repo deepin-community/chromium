@@ -42,7 +42,6 @@ mojom::SessionState ToMojo(session_manager::SessionState state) {
       return mojom::SessionState::kInRmaScreen;
   }
   NOTREACHED();
-  return mojom::SessionState::kUnknown;
 }
 
 }  // namespace

@@ -13,9 +13,7 @@
 // limitations under the License.
 
 import m from 'mithril';
-
 import {classNames} from '../base/classnames';
-
 import {HTMLCheckboxAttrs} from './common';
 
 export interface CheckboxAttrs extends HTMLCheckboxAttrs {
@@ -26,10 +24,7 @@ export interface CheckboxAttrs extends HTMLCheckboxAttrs {
 export class Checkbox implements m.ClassComponent<CheckboxAttrs> {
   view({attrs}: m.CVnode<CheckboxAttrs>) {
     const {label, disabled, checked, className, ...htmlAttrs} = attrs;
-    const classes = classNames(
-      disabled && 'pf-disabled',
-      className,
-    );
+    const classes = classNames(disabled && 'pf-disabled', className);
 
     // The default checkbox is removed and an entirely new one created inside
     // the span element in CSS.

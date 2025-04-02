@@ -33,7 +33,7 @@ TestSafeBrowsingService::TestSafeBrowsingService()
 #endif  // BUILDFLAG(FULL_SAFE_BROWSING)
 }
 
-TestSafeBrowsingService::~TestSafeBrowsingService() {}
+TestSafeBrowsingService::~TestSafeBrowsingService() = default;
 
 V4ProtocolConfig TestSafeBrowsingService::GetV4ProtocolConfig() const {
   if (v4_protocol_config_)
@@ -89,7 +89,7 @@ SafeBrowsingUIManager* TestSafeBrowsingService::CreateUIManager() {
 }
 
 #if BUILDFLAG(FULL_SAFE_BROWSING)
-bool TestSafeBrowsingService::SendDownloadReport(
+void TestSafeBrowsingService::SendDownloadReport(
     download::DownloadItem* download,
     ClientSafeBrowsingReportRequest::ReportType report_type,
     bool did_proceed,
@@ -109,7 +109,7 @@ bool TestSafeBrowsingService::SendDownloadReport(
     report->set_token(token);
   }
   report->SerializeToString(&serialized_download_report_);
-  return true;
+  return;
 }
 #endif
 
@@ -141,7 +141,7 @@ SafeBrowsingDatabaseManager* TestSafeBrowsingService::CreateDatabaseManager() {
   DCHECK(!use_v4_local_db_manager_);
 #if BUILDFLAG(FULL_SAFE_BROWSING)
   return new TestSafeBrowsingDatabaseManager(
-      content::GetUIThreadTaskRunner({}), content::GetIOThreadTaskRunner({}));
+      content::GetUIThreadTaskRunner({}));
 #else
   NOTIMPLEMENTED();
   return nullptr;
@@ -177,7 +177,7 @@ TestSafeBrowsingService::GetURLLoaderFactory(
 TestSafeBrowsingServiceFactory::TestSafeBrowsingServiceFactory()
     : test_safe_browsing_service_(nullptr), use_v4_local_db_manager_(false) {}
 
-TestSafeBrowsingServiceFactory::~TestSafeBrowsingServiceFactory() {}
+TestSafeBrowsingServiceFactory::~TestSafeBrowsingServiceFactory() = default;
 
 SafeBrowsingService*
 TestSafeBrowsingServiceFactory::CreateSafeBrowsingService() {
@@ -239,5 +239,5 @@ std::list<std::string>* TestSafeBrowsingUIManager::GetThreatDetails() {
   return &details_;
 }
 
-TestSafeBrowsingUIManager::~TestSafeBrowsingUIManager() {}
+TestSafeBrowsingUIManager::~TestSafeBrowsingUIManager() = default;
 }  // namespace safe_browsing

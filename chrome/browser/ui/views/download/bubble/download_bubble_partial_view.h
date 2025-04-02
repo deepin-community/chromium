@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_VIEWS_DOWNLOAD_BUBBLE_DOWNLOAD_BUBBLE_PARTIAL_VIEW_H_
 
 #include <optional>
+#include <string_view>
 
 #include "base/functional/callback_forward.h"
 #include "chrome/browser/download/download_ui_model.h"
@@ -37,11 +38,9 @@ class DownloadBubblePartialView : public DownloadBubblePrimaryView,
   ~DownloadBubblePartialView() override;
 
   // DownloadBubblePrimaryView:
-  base::StringPiece GetVisibleTimeHistogramName() const override;
   void AddedToWidget() override;
   void RemovedFromWidget() override;
   void OnMouseEntered(const ui::MouseEvent& event) override;
-  bool IsPartialView() const override;
 
   // views::FocusChangeListener:
   void OnWillChangeFocus(views::View* before, views::View* now) override;

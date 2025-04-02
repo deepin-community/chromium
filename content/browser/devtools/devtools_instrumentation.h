@@ -9,6 +9,7 @@
   to the relevant set of devtools protocol handlers.
 */
 
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -25,6 +26,7 @@
 #include "content/public/browser/certificate_request_result_type.h"
 #include "content/public/browser/global_routing_id.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "net/cookies/cookie_setting_override.h"
 #include "net/filter/source_stream.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
@@ -68,7 +70,6 @@ class FrameTreeNode;
 class NavigationHandle;
 class NavigationRequest;
 class NavigationThrottle;
-class Portal;
 class RenderFrameHostImpl;
 class RenderProcessHost;
 class SharedWorkerHost;
@@ -134,13 +135,16 @@ class WillCreateURLLoaderFactoryParams final {
 
   static WillCreateURLLoaderFactoryParams ForWorkerMainScript(
       DevToolsAgentHostImpl* agent_host,
-      const base::UnguessableToken& worker_token);
+      const base::UnguessableToken& worker_token,
+      RenderFrameHostImpl& ancestor_render_frame_host);
 
   // Calls devtools hooks so that they can add interceptors.
   bool Run(bool is_navigation,
            bool is_download,
            network::URLLoaderFactoryBuilder& factory_builder,
            network::mojom::URLLoaderFactoryOverridePtr* factory_override);
+
+  DevToolsAgentHostImpl* agent_host() { return agent_host_; }
 
  private:
   WillCreateURLLoaderFactoryParams(DevToolsAgentHostImpl* agent_host,
@@ -153,27 +157,6 @@ class WillCreateURLLoaderFactoryParams final {
   const int process_id_;
   const raw_ptr<StoragePartition> storage_partition_;
 };
-
-void OnPrefetchRequestWillBeSent(
-    FrameTreeNode* frame_tree_node,
-    const std::string& request_id,
-    const GURL& initiator,
-    const network::ResourceRequest& request,
-    std::optional<std::pair<const GURL&,
-                            const network::mojom::URLResponseHeadDevToolsInfo&>>
-        redirect_info);
-void OnPrefetchResponseReceived(FrameTreeNode* frame_tree_node,
-                                const std::string& request_id,
-                                const GURL& url,
-                                const network::mojom::URLResponseHead& head);
-void OnPrefetchRequestComplete(
-    FrameTreeNode* frame_tree_node,
-    const std::string& request_id,
-    const network::URLLoaderCompletionStatus& status);
-void OnPrefetchBodyDataReceived(FrameTreeNode* frame_tree_node,
-                                const std::string& request_id,
-                                const std::string& body,
-                                bool is_base64_encoded);
 
 void OnResetNavigationRequest(NavigationRequest* navigation_request);
 void MaybeAssignResourceRequestId(FrameTreeNode* ftn,
@@ -214,38 +197,39 @@ void OnFetchKeepAliveRequestComplete(
     const network::URLLoaderCompletionStatus& status);
 
 void OnAuctionWorkletNetworkRequestWillBeSent(
-    int frame_tree_node_id,
+    FrameTreeNodeId frame_tree_node_id,
     const network::ResourceRequest& request,
     base::TimeTicks timestamp);
 
 void OnAuctionWorkletNetworkResponseReceived(
-    int frame_tree_node_id,
+    FrameTreeNodeId frame_tree_node_id,
     const std::string& request_id,
     const std::string& loader_id,
     const GURL& request_url,
     const network::mojom::URLResponseHead& headers);
 
 void OnAuctionWorkletNetworkRequestComplete(
-    int frame_tree_node_id,
+    FrameTreeNodeId frame_tree_node_id,
     const std::string& request_id,
     const network::URLLoaderCompletionStatus& status);
 
-bool NeedInterestGroupAuctionEvents(int frame_tree_node_id);
+bool NeedInterestGroupAuctionEvents(FrameTreeNodeId frame_tree_node_id);
 
 void OnInterestGroupAuctionEventOccurred(
-    int frame_tree_node_id,
+    FrameTreeNodeId frame_tree_node_id,
     base::Time event_time,
     content::InterestGroupAuctionEventType type,
     const std::string& unique_auction_id,
     base::optional_ref<const std::string> parent_auction_id,
     const base::Value::Dict& auction_config);
 void OnInterestGroupAuctionNetworkRequestCreated(
-    int frame_tree_node_id,
+    FrameTreeNodeId frame_tree_node_id,
     content::InterestGroupAuctionFetchType type,
     const std::string& request_id,
     const std::vector<std::string>& devtools_auction_ids);
 
 bool ShouldBypassCSP(const NavigationRequest& nav_request);
+bool ShouldBypassCertificateErrors();
 
 void ApplyNetworkOverridesForDownload(
     RenderFrameHostImpl* rfh,
@@ -261,25 +245,56 @@ void BackForwardCacheNotUsed(
 void WillSwapFrameTreeNode(FrameTreeNode& old_node, FrameTreeNode& new_node);
 void OnFrameTreeNodeDestroyed(FrameTreeNode& frame_tree_node);
 
+void DidUpdatePolicyContainerHost(FrameTreeNode* ftn);
+
+// SpeculationRules
+void DidUpdateSpeculationCandidates(
+    RenderFrameHost& rfh,
+    const std::vector<blink::mojom::SpeculationCandidatePtr>& candidates);
+
+// Prefetch
+void DidUpdatePrefetchStatus(
+    FrameTreeNode* ftn,
+    const base::UnguessableToken& initiator_devtools_navigation_token,
+    const GURL& prefetch_url,
+    const base::UnguessableToken& preload_pipeline_id,
+    PreloadingTriggeringOutcome status,
+    PrefetchStatus prefetch_status,
+    const std::string& request_id);
+// CDP events Network.* for prefetch
+void OnPrefetchRequestWillBeSent(
+    FrameTreeNode& ftn,
+    const std::string& request_id,
+    const GURL& initiator,
+    const network::ResourceRequest& request,
+    std::optional<std::pair<const GURL&,
+                            const network::mojom::URLResponseHeadDevToolsInfo&>>
+        redirect_info);
+void OnPrefetchResponseReceived(FrameTreeNode* frame_tree_node,
+                                const std::string& request_id,
+                                const GURL& url,
+                                const network::mojom::URLResponseHead& head);
+void OnPrefetchRequestComplete(
+    FrameTreeNode* frame_tree_node,
+    const std::string& request_id,
+    const network::URLLoaderCompletionStatus& status);
+void OnPrefetchBodyDataReceived(FrameTreeNode* frame_tree_node,
+                                const std::string& request_id,
+                                const std::string& body,
+                                bool is_base64_encoded);
+
+// Prerender
 bool IsPrerenderAllowed(FrameTree& frame_tree);
 void WillInitiatePrerender(FrameTree& frame_tree);
 void DidActivatePrerender(const NavigationRequest& nav_request,
                           const std::optional<base::UnguessableToken>&
                               initiator_devtools_navigation_token);
-
-void DidUpdatePrefetchStatus(
-    FrameTreeNode* ftn,
-    const base::UnguessableToken& initiator_devtools_navigation_token,
-    const GURL& prefetch_url,
-    PreloadingTriggeringOutcome status,
-    PrefetchStatus prefetch_status,
-    const std::string& request_id);
-
 void DidUpdatePrerenderStatus(
-    int initiator_frame_tree_node_id,
+    FrameTreeNodeId initiator_frame_tree_node_id,
     const base::UnguessableToken& initiator_devtools_navigation_token,
     const GURL& prerender_url,
     std::optional<blink::mojom::SpeculationTargetHint> target_hint,
+    const base::UnguessableToken& preload_pipeline_id,
     PreloadingTriggeringOutcome status,
     std::optional<PrerenderFinalStatus> prerender_status,
     std::optional<std::string> disallowed_mojo_interface,
@@ -360,12 +375,6 @@ bool HandleCertificateError(WebContents* web_contents,
                             const GURL& request_url,
                             CertErrorCallback callback);
 
-void PortalAttached(RenderFrameHostImpl* render_frame_host_impl);
-void PortalDetached(RenderFrameHostImpl* render_frame_host_impl);
-// This receives the _old_ portal being activated just before actual
-// tab contents is swapped by the embedder.
-void PortalActivated(Portal& portal);
-
 void FencedFrameCreated(
     base::SafeRef<RenderFrameHostImpl> owner_render_frame_host,
     FencedFrame* fenced_frame);
@@ -376,7 +385,8 @@ void ReportCookieIssue(
     const GURL& url,
     const net::SiteForCookies& site_for_cookies,
     blink::mojom::CookieOperation operation,
-    const std::optional<std::string>& devtools_request_id);
+    const std::optional<std::string>& devtools_request_id,
+    const std::optional<std::string>& devtools_issue_id);
 
 // This function works similar to RenderFrameHostImpl::AddInspectorIssue, in
 // that it reports an InspectorIssue to DevTools clients. The difference is that
@@ -418,7 +428,7 @@ void OnServiceWorkerMainScriptRequestWillBeSent(
 // Fires `Network.onRequestWillBeSent` event for a dedicated worker and shared
 // worker main script. Used for PlzDedicatedWorker/PlzSharedWorker.
 void OnWorkerMainScriptRequestWillBeSent(
-    FrameTreeNode* ftn,
+    RenderFrameHostImpl& ancestor_frame_host,
     const base::UnguessableToken& worker_token,
     network::ResourceRequest& request);
 
@@ -429,13 +439,6 @@ void OnWorkerMainScriptLoadingFailed(
     const base::UnguessableToken& worker_token,
     FrameTreeNode* ftn,
     RenderFrameHostImpl* ancestor_rfh,
-    const network::URLLoaderCompletionStatus& status);
-
-// Fires `Network.onLoadingFinished` event for a dedicated worker main script.
-// Used for PlzDedicatedWorker.
-void OnWorkerMainScriptLoadingFinished(
-    FrameTreeNode* ftn,
-    const base::UnguessableToken& worker_token,
     const network::URLLoaderCompletionStatus& status);
 
 // Adds a message from a worklet to the devtools console. This is specific to
@@ -473,16 +476,31 @@ void DidCloseFedCmDialog(RenderFrameHost& render_frame_host);
 
 // Handles dev tools integration for fenced frame reporting beacons. Used in
 // `FencedFrameReporter`.
-void OnFencedFrameReportRequestSent(int initiator_frame_tree_node_id,
-                                    const std::string& devtools_request_id,
-                                    network::ResourceRequest& request);
+void OnFencedFrameReportRequestSent(
+    FrameTreeNodeId initiator_frame_tree_node_id,
+    const std::string& devtools_request_id,
+    network::ResourceRequest& request,
+    const std::string& event_data);
 void OnFencedFrameReportResponseReceived(
-    int initiator_frame_tree_node_id,
+    FrameTreeNodeId initiator_frame_tree_node_id,
     const std::string& devtools_request_id,
     const GURL& final_url,
     scoped_refptr<net::HttpResponseHeaders> headers);
 
 void DidChangeFrameLoadingState(FrameTreeNode& ftn);
+void DidStartNavigating(FrameTreeNode& ftn,
+                        const GURL& url,
+                        const base::UnguessableToken& loader_id,
+                        const blink::mojom::NavigationType& navigation_type);
+
+// Returns true if devtools wants to override the cookie settings.
+bool ApplyNetworkCookieControlsOverrides(
+    RenderFrameHostImpl& rfh,
+    net::CookieSettingOverrides& overrides);
+
+bool ApplyNetworkCookieControlsOverrides(
+    DevToolsAgentHostImpl* params,
+    net::CookieSettingOverrides& overrides);
 
 }  // namespace devtools_instrumentation
 

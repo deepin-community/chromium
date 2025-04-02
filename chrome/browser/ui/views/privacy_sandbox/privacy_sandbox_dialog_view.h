@@ -32,11 +32,14 @@ class PrivacySandboxDialogView : public views::View {
   void Close();
 
  private:
+  friend class PrivacySandboxQueueTestHelper;
   void ResizeNativeView(int height);
   void ShowNativeView();
   void OpenPrivacySandboxSettings();
   void OpenPrivacySandboxAdMeasurementSettings();
-  friend class PrivacySandboxDialogViewBrowserTest;
+  friend class PrivacySandboxDialogViewPrivacyPolicyBrowserTest;
+  friend class
+      PrivacySandboxDialogViewAdsApiUxEnhancementPrivacyPolicyBrowserTest;
   content::WebContents* GetWebContentsForTesting();
 
   raw_ptr<views::WebView> web_view_;

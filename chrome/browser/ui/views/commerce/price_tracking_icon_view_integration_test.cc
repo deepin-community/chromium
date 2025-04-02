@@ -2,19 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/ui/views/commerce/price_tracking_icon_view.h"
-
 #include <memory>
 
 #include "base/functional/bind.h"
 #include "base/test/metrics/user_action_tester.h"
+#include "chrome/browser/bookmarks/bookmark_merged_surface_service.h"
+#include "chrome/browser/bookmarks/bookmark_merged_surface_service_factory.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/managed_bookmark_service_factory.h"
 #include "chrome/browser/commerce/shopping_service_factory.h"
 #include "chrome/browser/ui/browser_element_identifiers.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/commerce/mock_commerce_ui_tab_helper.h"
+#include "chrome/browser/ui/tabs/public/tab_features.h"
+#include "chrome/browser/ui/tabs/public/tab_interface.h"
 #include "chrome/browser/ui/views/commerce/price_tracking_bubble_dialog_view.h"
+#include "chrome/browser/ui/views/commerce/price_tracking_icon_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/test_with_browser_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
@@ -42,7 +45,9 @@ const char kNonTrackableUrl[] = "about:blank";
 
 class PriceTrackingIconViewIntegrationTest : public TestWithBrowserView {
  public:
-  PriceTrackingIconViewIntegrationTest() = default;
+  PriceTrackingIconViewIntegrationTest() {
+    MockCommerceUiTabHelper::ReplaceFactory();
+  }
 
   PriceTrackingIconViewIntegrationTest(
       const PriceTrackingIconViewIntegrationTest&) = delete;
@@ -55,8 +60,11 @@ class PriceTrackingIconViewIntegrationTest : public TestWithBrowserView {
     test_features_.InitAndEnableFeature(commerce::kShoppingList);
     TestWithBrowserView::SetUp();
     AddTab(browser(), GURL(kNonTrackableUrl));
-    mock_tab_helper_ = AttachTabHelperToWebContents(
-        browser()->tab_strip_model()->GetActiveWebContents());
+    mock_tab_helper_ =
+        static_cast<MockCommerceUiTabHelper*>(browser()
+                                                  ->GetActiveTabInterface()
+                                                  ->GetTabFeatures()
+                                                  ->commerce_ui_tab_helper());
   }
 
   TestingProfile::TestingFactories GetTestingFactories() override {
@@ -64,6 +72,9 @@ class PriceTrackingIconViewIntegrationTest : public TestWithBrowserView {
         TestWithBrowserView::GetTestingFactories();
     factories.emplace_back(BookmarkModelFactory::GetInstance(),
                            BookmarkModelFactory::GetDefaultFactory());
+    factories.emplace_back(
+        BookmarkMergedSurfaceServiceFactory::GetInstance(),
+        BookmarkMergedSurfaceServiceFactory::GetDefaultFactory());
     factories.emplace_back(ManagedBookmarkServiceFactory::GetInstance(),
                            ManagedBookmarkServiceFactory::GetDefaultFactory());
     factories.emplace_back(
@@ -129,18 +140,14 @@ class PriceTrackingIconViewIntegrationTest : public TestWithBrowserView {
       EXPECT_EQ(icon_view->GetIconLabelForTesting(),
                 l10n_util::GetStringUTF16(IDS_OMNIBOX_TRACKING_PRICE));
       EXPECT_STREQ(icon_view->GetVectorIcon().name,
-                   features::IsChromeRefresh2023()
-                       ? omnibox::kPriceTrackingEnabledRefreshIcon.name
-                       : omnibox::kPriceTrackingEnabledFilledIcon.name);
+                   omnibox::kPriceTrackingEnabledRefreshIcon.name);
       EXPECT_EQ(icon_view->GetTextForTooltipAndAccessibleName(),
                 l10n_util::GetStringUTF16(IDS_OMNIBOX_TRACKING_PRICE));
     } else {
       EXPECT_EQ(icon_view->GetIconLabelForTesting(),
                 l10n_util::GetStringUTF16(IDS_OMNIBOX_TRACK_PRICE));
       EXPECT_STREQ(icon_view->GetVectorIcon().name,
-                   features::IsChromeRefresh2023()
-                       ? omnibox::kPriceTrackingDisabledRefreshIcon.name
-                       : omnibox::kPriceTrackingDisabledIcon.name);
+                   omnibox::kPriceTrackingDisabledRefreshIcon.name);
       EXPECT_EQ(icon_view->GetTextForTooltipAndAccessibleName(),
                 l10n_util::GetStringUTF16(IDS_OMNIBOX_TRACK_PRICE));
     }
@@ -154,13 +161,6 @@ class PriceTrackingIconViewIntegrationTest : public TestWithBrowserView {
 
  private:
   base::test::ScopedFeatureList test_features_;
-
-  MockCommerceUiTabHelper* AttachTabHelperToWebContents(
-      content::WebContents* web_contents) {
-    MockCommerceUiTabHelper::CreateForWebContents(web_contents);
-    return static_cast<MockCommerceUiTabHelper*>(
-        MockCommerceUiTabHelper::FromWebContents(web_contents));
-  }
 };
 
 TEST_F(PriceTrackingIconViewIntegrationTest,

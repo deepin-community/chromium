@@ -11,10 +11,10 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/to_string.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_platform_part.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
@@ -29,7 +29,7 @@
 #include "chrome/browser/ui/cookie_controls/cookie_controls_service_factory.h"
 #include "chrome/browser/ui/layout_constants.h"
 #include "chrome/browser/ui/webui/ntp/cookie_controls_handler.h"
-#include "chrome/browser/ui/webui/webui_util.h"
+#include "chrome/browser/ui/webui/webui_util_desktop.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/pref_names.h"
@@ -43,6 +43,7 @@
 #include "components/policy/core/common/policy_service.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
+#include "components/privacy_sandbox/privacy_sandbox_features.h"
 #include "components/privacy_sandbox/tracking_protection_settings.h"
 #include "components/reading_list/features/reading_list_switches.h"
 #include "components/strings/grit/components_strings.h"
@@ -58,7 +59,7 @@
 #include "ui/gfx/color_utils.h"
 #include "ui/native_theme/native_theme.h"
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
 #include "chromeos/strings/grit/chromeos_strings.h"
 #include "ui/chromeos/devicetype_utils.h"
@@ -70,7 +71,7 @@ namespace {
 
 // The URL for the the Learn More page shown on incognito new tab.
 const char kLearnMoreIncognitoUrl[] =
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     "https://support.google.com/chromebook/?p=incognito";
 #else
     "https://support.google.com/chrome/?p=incognito";
@@ -78,7 +79,7 @@ const char kLearnMoreIncognitoUrl[] =
 
 // The URL for the Learn More page shown on guest session new tab.
 const char kLearnMoreGuestSessionUrl[] =
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     "https://support.google.com/chromebook/?p=chromebook_guest";
 #else
     "https://support.google.com/chrome/?p=ui_guest";
@@ -87,10 +88,8 @@ const char kLearnMoreGuestSessionUrl[] =
 std::string ReplaceTemplateExpressions(
     const scoped_refptr<base::RefCountedMemory>& bytes,
     const ui::TemplateReplacements& replacements) {
-  return ui::ReplaceTemplateExpressions(
-      base::StringPiece(reinterpret_cast<const char*>(bytes->front()),
-                        bytes->size()),
-      replacements);
+  return ui::ReplaceTemplateExpressions(base::as_string_view(*bytes),
+                                        replacements);
 }
 
 }  // namespace
@@ -142,7 +141,7 @@ NTPResourceCache::NTPResourceCache(Profile* profile)
   profile_pref_change_registrar_.Init(profile_->GetPrefs());
   profile_pref_change_registrar_.Add(prefs::kCookieControlsMode, callback);
 
-  // TODO(crbug/1056916): Remove the global accessor to NativeTheme.
+  // TODO(crbug.com/40677117): Remove the global accessor to NativeTheme.
   theme_observation_.Observe(ui::NativeTheme::GetInstanceForNativeUi());
 
   policy_change_registrar_ = std::make_unique<policy::PolicyChangeRegistrar>(
@@ -157,19 +156,23 @@ NTPResourceCache::NTPResourceCache(Profile* profile)
 NTPResourceCache::~NTPResourceCache() = default;
 
 NTPResourceCache::WindowType NTPResourceCache::GetWindowType(Profile* profile) {
-  if (profile->IsGuestSession())
+  if (profile->IsGuestSession()) {
     return GUEST;
-  if (profile->IsIncognitoProfile())
+  }
+  if (profile->IsIncognitoProfile()) {
     return INCOGNITO;
-  if (profile->IsOffTheRecord())
+  }
+  if (profile->IsOffTheRecord()) {
     return NON_PRIMARY_OTR;
+  }
 
   return NORMAL;
 }
 
 base::RefCountedMemory* NTPResourceCache::GetNewTabGuestHTML() {
-  if (!new_tab_guest_html_)
+  if (!new_tab_guest_html_) {
     CreateNewTabGuestHTML();
+  }
 
   return new_tab_guest_html_.get();
 }
@@ -183,8 +186,9 @@ base::RefCountedMemory* NTPResourceCache::GetNewTabHTML(
       return GetNewTabGuestHTML();
 
     case INCOGNITO:
-      if (!new_tab_incognito_html_)
+      if (!new_tab_incognito_html_) {
         CreateNewTabIncognitoHTML(wc_getter);
+      }
       return new_tab_incognito_html_.get();
 
     case NON_PRIMARY_OTR:
@@ -196,7 +200,6 @@ base::RefCountedMemory* NTPResourceCache::GetNewTabHTML(
 
     case NORMAL:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -206,19 +209,22 @@ base::RefCountedMemory* NTPResourceCache::GetNewTabCSS(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   // Guest mode doesn't have theme-related CSS.
-  if (win_type == GUEST)
+  if (win_type == GUEST) {
     return nullptr;
+  }
 
   // Returns the cached CSS if it exists.
   // The cache will be invalidated when the theme of |wc_getter| changes.
   if (win_type == INCOGNITO) {
-    if (!new_tab_incognito_css_)
+    if (!new_tab_incognito_css_) {
       CreateNewTabIncognitoCSS(wc_getter);
+    }
     return new_tab_incognito_css_.get();
   }
 
-  if (!new_tab_css_)
+  if (!new_tab_css_) {
     CreateNewTabCSS(wc_getter);
+  }
   return new_tab_css_.get();
 }
 
@@ -231,7 +237,7 @@ void NTPResourceCache::Shutdown() {
 }
 
 void NTPResourceCache::OnNativeThemeUpdated(ui::NativeTheme* updated_theme) {
-  // TODO(crbug/1056916): Remove the global accessor to NativeTheme.
+  // TODO(crbug.com/40677117): Remove the global accessor to NativeTheme.
   DCHECK_EQ(updated_theme, ui::NativeTheme::GetInstanceForNativeUi());
   Invalidate();
 }
@@ -254,6 +260,7 @@ void NTPResourceCache::Invalidate() {
 void NTPResourceCache::CreateNewTabIncognitoHTML(
     const content::WebContents::Getter& wc_getter) {
   ui::TemplateReplacements replacements;
+  base::Value::Dict localized_strings;
 
   // Ensure passing off-the-record profile; |profile_| is not an OTR profile.
   DCHECK(!profile_->IsOffTheRecord());
@@ -273,60 +280,45 @@ void NTPResourceCache::CreateNewTabIncognitoHTML(
   bool is_tracking_protection_3pcd_enabled =
       tracking_protection_settings->IsTrackingProtection3pcdEnabled();
 
-  bool use_revamped_ui =
-      base::FeatureList::IsEnabled(features::kIncognitoNtpRevamp);
-  if (use_revamped_ui) {
-    replacements["incognitoTabHeading"] =
-        l10n_util::GetStringUTF8(IDS_REVAMPED_INCOGNITO_NTP_TITLE);
-    replacements["incognitoDoesHeader"] =
-        l10n_util::GetStringUTF8(IDS_REVAMPED_INCOGNITO_NTP_DOES_HEADER);
-    replacements["incognitoDoesDescription"] =
-        l10n_util::GetStringUTF8(IDS_REVAMPED_INCOGNITO_NTP_DOES_DESCRIPTION);
-    replacements["incognitoDoesNotHeader"] =
-        l10n_util::GetStringUTF8(IDS_REVAMPED_INCOGNITO_NTP_DOES_NOT_HEADER);
-    replacements["incognitoDoesNotDescription"] = l10n_util::GetStringUTF8(
-        IDS_REVAMPED_INCOGNITO_NTP_DOES_NOT_DESCRIPTION);
-    replacements["learnMore"] =
-        l10n_util::GetStringUTF8(IDS_REVAMPED_INCOGNITO_NTP_LEARN_MORE);
-    replacements["cookieControlsTitle"] = l10n_util::GetStringUTF8(
-        IDS_REVAMPED_INCOGNITO_NTP_OTR_THIRD_PARTY_COOKIE);
-    replacements["cookieControlsDescription"] = l10n_util::GetStringUTF8(
-        IDS_REVAMPED_INCOGNITO_NTP_OTR_THIRD_PARTY_COOKIE_SUBLABEL);
-  } else {
-    replacements["incognitoTabHeading"] =
-        l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_TITLE);
-    replacements["incognitoTabWarning"] =
-        l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_VISIBLE);
-    replacements["incognitoTabFeatures"] =
-        l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_NOT_SAVED);
-    replacements["learnMore"] =
-        l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_LEARN_MORE_LINK);
-    replacements["cookieControlsTitle"] =
-        l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_THIRD_PARTY_COOKIE);
-    replacements["cookieControlsDescription"] =
-        l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_THIRD_PARTY_COOKIE_SUBLABEL);
-  }
+  replacements["incognitoTabHeading"] =
+      l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_TITLE);
+  replacements["incognitoTabWarning"] =
+      l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_VISIBLE);
+  replacements["incognitoTabFeatures"] =
+      l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_NOT_SAVED);
+  replacements["learnMore"] =
+      l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_LEARN_MORE_LINK);
+  replacements["cookieControlsTitle"] =
+      l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_THIRD_PARTY_COOKIE);
 
   replacements["learnMoreLink"] = kLearnMoreIncognitoUrl;
   replacements["learnMoreA11yLabel"] = l10n_util::GetStringUTF8(
       IDS_INCOGNITO_TAB_LEARN_MORE_ACCESSIBILITY_LABEL);
   replacements["title"] = l10n_util::GetStringUTF8(IDS_NEW_INCOGNITO_TAB_TITLE);
 
-  if (is_tracking_protection_3pcd_enabled) {
+  if (is_tracking_protection_3pcd_enabled ||
+      base::FeatureList::IsEnabled(
+          privacy_sandbox::kAlwaysBlock3pcsIncognito)) {
     replacements["hideBlockCookiesToggle"] = "hidden";
     replacements["hideTooltipIcon"] = "hidden";
 
     // Overwrite the cookies control title and description if 3pcd enabled.
     replacements["cookieControlsTitle"] =
         l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_THIRD_PARTY_BLOCKED_COOKIE);
-    replacements["cookieControlsDescription"] = l10n_util::GetStringFUTF8(
-        IDS_NEW_TAB_OTR_THIRD_PARTY_BLOCKED_COOKIE_SUBLABEL,
-        chrome::kUserBypassHelpCenterURL);
+    localized_strings.Set(
+        "cookieControlsDescription",
+        l10n_util::GetStringFUTF16(
+            IDS_NEW_TAB_OTR_THIRD_PARTY_BLOCKED_COOKIE_SUBLABEL,
+            chrome::kUserBypassHelpCenterURL,
+            l10n_util::GetStringUTF16(
+                IDS_NEW_TAB_OPENS_HC_ARTICLE_IN_NEW_TAB)));
 
   } else {
     replacements["hideBlockCookiesToggle"] = "";
     replacements["hideTooltipIcon"] =
         cookie_controls_service->ShouldEnforceCookieControls() ? "" : "hidden";
+    replacements["cookieControlsDescription"] =
+        l10n_util::GetStringUTF8(IDS_NEW_TAB_OTR_THIRD_PARTY_COOKIE_SUBLABEL);
   }
 
   replacements["cookieControlsToggleChecked"] =
@@ -341,19 +333,17 @@ void NTPResourceCache::CreateNewTabIncognitoHTML(
       ThemeService::GetThemeProviderForProfile(incognito_profile);
 
   replacements["hasCustomBackground"] =
-      tp.HasCustomImage(IDR_THEME_NTP_BACKGROUND) ? "true" : "false";
+      base::ToString(tp.HasCustomImage(IDR_THEME_NTP_BACKGROUND));
 
   const std::string& app_locale = g_browser_process->GetApplicationLocale();
   webui::SetLoadTimeDataDefaults(app_locale, &replacements);
 
-  int incognito_tab_html_resource_id = use_revamped_ui
-                                           ? IDR_REVAMPED_INCOGNITO_TAB_HTML
-                                           : IDR_INCOGNITO_TAB_HTML;
   static const base::NoDestructor<scoped_refptr<base::RefCountedMemory>>
       incognito_tab_html(
           ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
-              incognito_tab_html_resource_id));
+              IDR_INCOGNITO_TAB_HTML));
   CHECK(*incognito_tab_html);
+  ui::TemplateReplacementsFromDictionaryValue(localized_strings, &replacements);
   new_tab_incognito_html_ = base::MakeRefCounted<base::RefCountedString>(
       ReplaceTemplateExpressions(*incognito_tab_html, replacements));
 }
@@ -367,7 +357,7 @@ void NTPResourceCache::CreateNewTabGuestHTML() {
   int guest_tab_heading_ids = IDS_NEW_TAB_GUEST_SESSION_HEADING;
   int guest_tab_link_ids = IDS_LEARN_MORE;
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   guest_tab_idr = IDR_GUEST_SESSION_TAB_HTML;
 
   policy::BrowserPolicyConnectorAsh* connector =
@@ -379,6 +369,10 @@ void NTPResourceCache::CreateNewTabGuestHTML() {
                           l10n_util::GetStringUTF16(IDS_LEARN_MORE));
     localized_strings.Set("enterpriseInfoHintLink",
                           chrome::kLearnMoreEnterpriseURL);
+    localized_strings.Set(
+        "enterpriseLearnMoreA11yLabel",
+        l10n_util::GetStringUTF16(
+            IDS_NEW_TAB_ENTERPRISE_GUEST_SESSION_LEARN_MORE_ACCESSIBILITY_TEXT));
     std::u16string enterprise_info;
     if (connector->IsCloudManaged()) {
       const std::string enterprise_domain_manager =
@@ -395,6 +389,7 @@ void NTPResourceCache::CreateNewTabGuestHTML() {
     localized_strings.Set("enterpriseInfoMessage", "");
     localized_strings.Set("enterpriseLearnMore", "");
     localized_strings.Set("enterpriseInfoHintLink", "");
+    localized_strings.Set("enterpriseLearnMoreA11yLabel", "");
   }
 #endif
 
@@ -427,7 +422,8 @@ void NTPResourceCache::CreateNewTabGuestHTML() {
 void NTPResourceCache::CreateNewTabIncognitoCSS(
     const content::WebContents::Getter& wc_getter) {
   auto* web_contents = wc_getter.Run();
-  const ui::NativeTheme* native_theme = webui::GetNativeTheme(web_contents);
+  const ui::NativeTheme* native_theme =
+      webui::GetNativeThemeDeprecated(web_contents);
   DCHECK(native_theme);
 
   const ui::ThemeProvider& tp = ThemeService::GetThemeProviderForProfile(
@@ -460,7 +456,8 @@ void NTPResourceCache::CreateNewTabIncognitoCSS(
 void NTPResourceCache::CreateNewTabCSS(
     const content::WebContents::Getter& wc_getter) {
   auto* web_contents = wc_getter.Run();
-  const ui::NativeTheme* native_theme = webui::GetNativeTheme(web_contents);
+  const ui::NativeTheme* native_theme =
+      webui::GetNativeThemeDeprecated(web_contents);
   DCHECK(native_theme);
 
   const ui::ThemeProvider& tp =

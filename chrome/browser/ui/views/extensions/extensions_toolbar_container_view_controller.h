@@ -40,6 +40,9 @@ class ExtensionsToolbarContainerViewController final
   // Maybe displays the In-Product-Help with a specific priority order.
   void MaybeShowIPH();
 
+  // Updates the request access button in the toolbar.
+  void UpdateRequestAccessButton();
+
   // TabStripModelObserver:
   void OnTabStripModelChanged(
       TabStripModel* tab_strip_model,
@@ -66,8 +69,16 @@ class ExtensionsToolbarContainerViewController final
   void OnShowAccessRequestsInToolbarChanged(
       const extensions::ExtensionId& extension_id,
       bool can_show_requests) override;
-  void OnExtensionDismissedRequests(const extensions::ExtensionId& extension_id,
-                                    const url::Origin& origin) override;
+  void OnHostAccessRequestAdded(const extensions::ExtensionId& extension_id,
+                                int tab_id) override;
+  void OnHostAccessRequestUpdated(const extensions::ExtensionId& extension_id,
+                                  int tab_id) override;
+  void OnHostAccessRequestRemoved(const extensions::ExtensionId& extension_id,
+                                  int tab_id) override;
+  void OnHostAccessRequestsCleared(int tab_id) override;
+  void OnHostAccessRequestDismissedByUser(
+      const extensions::ExtensionId& extension_id,
+      const url::Origin& origin) override;
 
   const raw_ptr<Browser> browser_;
 

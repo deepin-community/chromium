@@ -5,22 +5,48 @@
 #include "components/signin/public/base/signin_switches.h"
 
 #include "base/feature_list.h"
-#include "base/metrics/field_trial_params.h"
+#include "components/prefs/pref_service.h"
+#include "components/signin/public/base/signin_pref_names.h"
 
 namespace switches {
 
 // All switches in alphabetical order.
 
 #if BUILDFLAG(IS_ANDROID)
-// Feature to refactor how and when accounts are seeded on Android.
-BASE_FEATURE(kSeedAccountsRevamp,
-             "SeedAccountsRevamp",
+BASE_FEATURE(kCctSignInPrompt,
+             "CctSignInPrompt",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Feature to apply enterprise policies on signin regardless of sync status.
-BASE_FEATURE(kEnterprisePolicyOnSignin,
-             "EnterprisePolicyOnSignin",
+// Migrate usages of USM flag to force child account sign-in to use the account
+// capability `IsSubjectToParentalControls`.
+BASE_FEATURE(kForceSupervisedSigninWithCapabilities,
+             "ForceSupervisedSigninWithCapabilities",
              base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Add some history opt-in entry points on Android.
+BASE_FEATURE(kHistoryOptInEntryPoints,
+             "HistoryOptInEntryPoints",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Feature to bypass double-checking that signin callers have correctly gotten
+// the user to accept account management. This check is slow and not strictly
+// necessary, so disable it while we work on adding caching.
+// TODO(https://crbug.com/339457762): Restore the check when we implement
+// caching.
+BASE_FEATURE(kSkipCheckForAccountManagementOnSignin,
+             "SkipCheckForAccountManagementOnSignin",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUnoForAuto, "UnoForAuto", base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kUseHostedDomainForManagementCheckOnSignin,
+             "UseHostedDomainForManagementCheckOnSignin",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+// Force enable the default browser step in the first run experience on Desktop.
+const char kForceFreDefaultBrowserStep[] = "force-fre-default-browser-step";
 #endif
 
 // Clears the token service before using it. This allows simulating the
@@ -33,7 +59,12 @@ BASE_FEATURE(kEnableBoundSessionCredentials,
              "EnableBoundSessionCredentials",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-bool IsBoundSessionCredentialsEnabled() {
+bool IsBoundSessionCredentialsEnabled(const PrefService* profile_prefs) {
+  // Enterprise policy takes precedence over the feature value.
+  if (profile_prefs->HasPrefPath(prefs::kBoundSessionCredentialsEnabled)) {
+    return profile_prefs->GetBoolean(prefs::kBoundSessionCredentialsEnabled);
+  }
+
   return base::FeatureList::IsEnabled(kEnableBoundSessionCredentials);
 }
 
@@ -44,7 +75,7 @@ const base::FeatureParam<EnableBoundSessionCredentialsDiceSupport>::Option
 const base::FeatureParam<EnableBoundSessionCredentialsDiceSupport>
     kEnableBoundSessionCredentialsDiceSupport{
         &kEnableBoundSessionCredentials, "dice-support",
-        EnableBoundSessionCredentialsDiceSupport::kDisabled,
+        EnableBoundSessionCredentialsDiceSupport::kEnabled,
         &enable_bound_session_credentials_dice_support};
 
 // Restricts the DBSC registration URL path to a single allowed string.
@@ -55,23 +86,20 @@ const base::FeatureParam<std::string>
         &kEnableBoundSessionCredentials, "exclusive-registration-path",
         "/RegisterSession"};
 
-// Enables Chrome refresh tokens binding to a device. Requires
-// "EnableBoundSessionCredentials" being enabled as a prerequisite.
+// Enables Chrome refresh tokens binding to a device.
 BASE_FEATURE(kEnableChromeRefreshTokenBinding,
              "EnableChromeRefreshTokenBinding",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-bool IsChromeRefreshTokenBindingEnabled() {
-  return IsBoundSessionCredentialsEnabled() &&
-         base::FeatureList::IsEnabled(kEnableChromeRefreshTokenBinding);
+bool IsChromeRefreshTokenBindingEnabled(const PrefService* profile_prefs) {
+  // Enterprise policy takes precedence over the feature value.
+  if (profile_prefs->HasPrefPath(prefs::kBoundSessionCredentialsEnabled)) {
+    return profile_prefs->GetBoolean(prefs::kBoundSessionCredentialsEnabled);
+  }
+
+  return base::FeatureList::IsEnabled(kEnableChromeRefreshTokenBinding);
 }
 #endif
-
-// Enables fetching account capabilities and populating AccountInfo with the
-// fetch result.
-BASE_FEATURE(kEnableFetchingAccountCapabilities,
-             "EnableFetchingAccountCapabilities",
-             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // This feature disables all extended sync promos.
 BASE_FEATURE(kForceDisableExtendedSyncPromos,
@@ -85,69 +113,115 @@ BASE_FEATURE(kForceStartupSigninPromo,
              base::FEATURE_DISABLED_BY_DEFAULT);
 #endif
 
-#if BUILDFLAG(IS_ANDROID)
-// Flag guarding the restoration of the signed-in only account instead of
-// the syncing one and the restoration of account settings after device
-// restore.
-BASE_FEATURE(kRestoreSignedInAccountAndSettingsFromBackup,
-             "RestoreSignedInAccountAndSettingsFromBackup",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
-#if BUILDFLAG(IS_ANDROID)
-// Enables the search engine choice feature for existing users.
-// TODO(b/316859558): Not used for shipping purposes, remove this feature.
-BASE_FEATURE(kSearchEngineChoice,
-             "SearchEngineChoice",
-             base::FEATURE_DISABLED_BY_DEFAULT);
-#endif
-
-BASE_FEATURE(kUnoDesktop, "UnoDesktop", base::FEATURE_DISABLED_BY_DEFAULT);
 BASE_FEATURE(kExplicitBrowserSigninUIOnDesktop,
              "ExplicitBrowserSigninUIOnDesktop",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+             base::FEATURE_ENABLED_BY_DEFAULT
+#else
+             base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+);
+
 const base::FeatureParam<bool> kInterceptBubblesDismissibleByAvatarButton{
     &kExplicitBrowserSigninUIOnDesktop,
     /*name=*/"bubble_dismissible_by_avatar_button",
     /*default_value=*/true};
 
-bool IsExplicitBrowserSigninUIOnDesktopEnabled(
-    ExplicitBrowserSigninPhase phase) {
-  if (phase == ExplicitBrowserSigninPhase::kFull) {
-    return base::FeatureList::IsEnabled(kExplicitBrowserSigninUIOnDesktop);
-  }
-  return base::FeatureList::IsEnabled(kExplicitBrowserSigninUIOnDesktop) ||
-         base::FeatureList::IsEnabled(kUnoDesktop);
+bool IsExplicitBrowserSigninUIOnDesktopEnabled() {
+  return base::FeatureList::IsEnabled(kExplicitBrowserSigninUIOnDesktop);
 }
 
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN) || \
-    BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
-BASE_FEATURE(kMinorModeRestrictionsForHistorySyncOptIn,
-             "MinorModeRestrictionsForHistorySyncOptIn",
+BASE_FEATURE(kImprovedSigninUIOnDesktop,
+             "ImprovedSigninUIOnDesktop",
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-constexpr int kMinorModeRestrictionsFetchDeadlineDefaultValueMs =
-#if BUILDFLAG(IS_ANDROID)
-    // Based on Signin.AccountCapabilities.UserVisibleLatency
-    400;
-#elif BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
-    // Based on Signin.SyncOptIn.PreSyncConfirmationLatency
-    900;
-#elif BUILDFLAG(IS_IOS)
-    // Based on Signin.AccountCapabilities.UserVisibleLatency
-    1000;
-#endif
+bool IsImprovedSigninUIOnDesktopEnabled() {
+  return IsExplicitBrowserSigninUIOnDesktopEnabled() &&
+         base::FeatureList::IsEnabled(kImprovedSigninUIOnDesktop);
+}
 
-const base::FeatureParam<int> kMinorModeRestrictionsFetchDeadlineMs{
-    &kMinorModeRestrictionsForHistorySyncOptIn,
-    /*name=*/"MinorModeRestrictionsFetchDeadlineMs",
-    kMinorModeRestrictionsFetchDeadlineDefaultValueMs};
-#endif
+BASE_FEATURE(kImprovedSettingsUIOnDesktop,
+             "ImprovedSettingsUIOnDesktop",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+bool IsImprovedSettingsUIOnDesktopEnabled() {
+  return IsExplicitBrowserSigninUIOnDesktopEnabled() &&
+         base::FeatureList::IsEnabled(kImprovedSettingsUIOnDesktop);
+}
+
+BASE_FEATURE(kEnableSnackbarInSettings,
+             "EnableSnackbarInSettings",
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 #if BUILDFLAG(IS_IOS)
-BASE_FEATURE(kRemoveSignedInAccountsDialog,
-             "RemoveSignedInAccountsDialog",
+
+BASE_FEATURE(kEnableIdentityInAuthError,
+             "EnableIdentityInAuthError",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kEnableErrorBadgeOnIdentityDisc,
+             "EnableErrorBadgeOnIdentityDisc",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kEnableASWebAuthenticationSession,
+             "EnableASWebAuthenticationSession",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif
+
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+BASE_FEATURE(kBatchUploadDesktop,
+             "BatchUploadDesktop",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
+
+bool IsBatchUploadDesktopEnabled() {
+#if BUILDFLAG(ENABLE_DICE_SUPPORT)
+  return base::FeatureList::IsEnabled(kBatchUploadDesktop);
+#else
+  return false;
+#endif
+}
+
+BASE_FEATURE(kProfilePickerGlicTesting,
+             "ProfilePickerGlicTesting",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+// Enables showing the enterprise dialog after every signin into a managed
+// account.
+BASE_FEATURE(kShowEnterpriseDialogForAllManagedAccountsSignin,
+             "ShowEnterpriseDialogForAllManagedAccountsSignin",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+}  // namespace switches
+
+#if BUILDFLAG(IS_CHROMEOS)
+// Enables the generation of pseudo-stable per-user per-device device
+// identifiers. This identifier can be reset by the user by powerwashing the
+// device.
+BASE_FEATURE(kStableDeviceId,
+             "StableDeviceId",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(ENABLE_MIRROR) && !BUILDFLAG(IS_IOS)
+BASE_FEATURE(kVerifyRequestInitiatorForMirrorHeaders,
+             "VerifyRequestInitiatorForMirrorHeaders",
+             base::FEATURE_ENABLED_BY_DEFAULT);
+#endif  // BUILDFLAG(ENABLE_MIRROR) && !BUILDFLAG(IS_IOS)
+
+BASE_FEATURE(kProfilesReordering,
+             "ProfilesReordering",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+BASE_FEATURE(kOutlineSilhouetteIcon,
+             "OutlineSilhouetteIcon",
+             base::FEATURE_DISABLED_BY_DEFAULT);
+
+#if BUILDFLAG(IS_ANDROID)
+BASE_FEATURE(kIgnoreMirrorHeadersInBackgoundTabs,
+             "IgnoreMirrorHeadersInBackgoundTabs",
              base::FEATURE_ENABLED_BY_DEFAULT);
 #endif
 
-}  // namespace switches
+BASE_FEATURE(kNonDefaultGaiaOriginCheck,
+             "NonDefaultGaiaOriginCheck",
+             base::FEATURE_ENABLED_BY_DEFAULT);

@@ -34,7 +34,6 @@ ConsistencyGoldenPolicy ConvertProcessorPolicyToGoldenPolicy(
   }
 
   NOTREACHED();
-  return UNSPECIFIED_POLICY;
 }
 
 // Converts the representation of a day of week used by the goldens to the one
@@ -57,7 +56,6 @@ const char* ConvertGoldenDayToProcessorDay(ConsistencyGoldenEffectiveDay day) {
       return utils::kSunday;
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 

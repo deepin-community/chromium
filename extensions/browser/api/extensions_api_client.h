@@ -10,9 +10,11 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
+#include "components/guest_view/buildflags/buildflags.h"
 #include "extensions/browser/api/clipboard/clipboard_api.h"
 #include "extensions/browser/api/declarative_content/content_rules_registry.h"
 #include "extensions/browser/api/storage/settings_namespace.h"
@@ -90,7 +92,8 @@ class ExtensionsAPIClient {
       content::BrowserContext* context,
       const scoped_refptr<value_store::ValueStoreFactory>& factory,
       SettingsChangedCallback observer,
-      std::map<settings_namespace::Namespace, ValueStoreCache*>* caches);
+      std::map<settings_namespace::Namespace,
+               raw_ptr<ValueStoreCache, CtnExperimental>>* caches);
 
   // Attaches any extra web contents helpers (like ExtensionWebContentsObserver)
   // to |web_contents|.
@@ -130,6 +133,7 @@ class ExtensionsAPIClient {
   virtual void OpenFileUrl(const GURL& file_url,
                            content::BrowserContext* browser_context);
 
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
   // Creates the AppViewGuestDelegate.
   virtual AppViewGuestDelegate* CreateAppViewGuestDelegate() const;
 
@@ -156,6 +160,7 @@ class ExtensionsAPIClient {
   virtual WebViewPermissionHelperDelegate*
   CreateWebViewPermissionHelperDelegate(
       WebViewPermissionHelper* web_view_permission_helper) const;
+#endif
 
 #if BUILDFLAG(IS_CHROMEOS)
   // Returns an interface for requesting consent for file system API. The caller
@@ -210,7 +215,7 @@ class ExtensionsAPIClient {
   // Returns a delegate for the chrome.feedbackPrivate API.
   virtual FeedbackPrivateDelegate* GetFeedbackPrivateDelegate();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // If supported by the embedder, returns a delegate for querying non-native
   // file systems.
   virtual NonNativeFileSystemDelegate* GetNonNativeFileSystemDelegate();
@@ -218,9 +223,7 @@ class ExtensionsAPIClient {
   // Returns a delegate for embedder-specific chrome.mediaPerceptionPrivate API
   // behavior.
   virtual MediaPerceptionAPIDelegate* GetMediaPerceptionAPIDelegate();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if BUILDFLAG(IS_CHROMEOS)
   // Saves image data on clipboard.
   virtual void SaveImageDataToClipboard(
       std::vector<uint8_t> image_data,

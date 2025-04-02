@@ -6,15 +6,15 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "base/command_line.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/memory/weak_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
@@ -32,6 +32,7 @@
 #include "cc/layers/layer.h"
 #include "components/viz/test/test_context_provider.h"
 #include "media/base/decoder_buffer.h"
+#include "media/base/key_systems_impl.h"
 #include "media/base/media_content_type.h"
 #include "media/base/media_log.h"
 #include "media/base/media_observer.h"
@@ -58,10 +59,8 @@
 #include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/platform/media/web_media_player_builder.h"
 #include "third_party/blink/public/platform/media/web_media_player_delegate.h"
-#include "third_party/blink/public/platform/scheduler/web_thread_scheduler.h"
 #include "third_party/blink/public/platform/web_fullscreen_video_status.h"
 #include "third_party/blink/public/platform/web_media_player.h"
-#include "third_party/blink/public/platform/web_media_player_client.h"
 #include "third_party/blink/public/platform/web_media_player_encrypted_media_client.h"
 #include "third_party/blink/public/platform/web_media_player_source.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
@@ -74,13 +73,16 @@
 #include "third_party/blink/public/web/web_widget.h"
 #include "third_party/blink/renderer/core/frame/frame_test_helpers.h"
 #include "third_party/blink/renderer/platform/media/buffered_data_source_host_impl.h"
+#include "third_party/blink/renderer/platform/media/media_player_client.h"
 #include "third_party/blink/renderer/platform/media/power_status_helper.h"
 #include "third_party/blink/renderer/platform/media/resource_multi_buffer_data_provider.h"
 #include "third_party/blink/renderer/platform/media/testing/mock_resource_fetch_context.h"
 #include "third_party/blink/renderer/platform/media/testing/mock_web_associated_url_loader.h"
 #include "third_party/blink/renderer/platform/media/video_decode_stats_reporter.h"
+#include "third_party/blink/renderer/platform/media/video_frame_compositor.h"
 #include "third_party/blink/renderer/platform/media/web_audio_source_provider_client.h"
 #include "third_party/blink/renderer/platform/media/web_content_decryption_module_impl.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
@@ -88,6 +90,7 @@
 #include "ui/gfx/geometry/size.h"
 
 namespace blink {
+
 namespace {
 
 using ::base::test::RunClosure;
@@ -116,6 +119,8 @@ constexpr char kEncryptedVideoOnlyTestFile[] = "bear-320x240-av_enc-v.webm";
 
 constexpr base::TimeDelta kAudioOnlyTestFileDuration = base::Milliseconds(296);
 
+enum class BackgroundBehaviorType { Page, Frame };
+
 MATCHER(WmpiDestroyed, "") {
   return CONTAINS_STRING(arg, "{\"event\":\"kWebMediaPlayerDestroyed\"}");
 }
@@ -126,8 +131,7 @@ MATCHER_P2(PlaybackRateChanged, old_rate_string, new_rate_string, "") {
                                   std::string(new_rate_string));
 }
 
-class MockMediaObserver : public media::MediaObserver,
-                          public base::SupportsWeakPtr<MockMediaObserver> {
+class MockMediaObserver : public media::MediaObserver {
  public:
   MOCK_METHOD1(OnBecameDominantVisibleContent, void(bool));
   MOCK_METHOD1(OnMetadataChanged, void(const media::PipelineMetadata&));
@@ -139,9 +143,16 @@ class MockMediaObserver : public media::MediaObserver,
   MOCK_METHOD0(OnFrozen, void());
   MOCK_METHOD1(OnDataSourceInitialized, void(const GURL&));
   MOCK_METHOD1(SetClient, void(media::MediaObserverClient*));
+
+  base::WeakPtr<MediaObserver> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
+ private:
+  base::WeakPtrFactory<MediaObserver> weak_ptr_factory_{this};
 };
 
-class MockWebMediaPlayerClient : public WebMediaPlayerClient {
+class MockWebMediaPlayerClient : public MediaPlayerClient {
  public:
   MockWebMediaPlayerClient() = default;
 
@@ -155,22 +166,10 @@ class MockWebMediaPlayerClient : public WebMediaPlayerClient {
   MOCK_METHOD0(DurationChanged, void());
   MOCK_METHOD0(SizeChanged, void());
   MOCK_METHOD1(SetCcLayer, void(cc::Layer*));
-  MOCK_METHOD5(AddAudioTrack,
-               WebMediaPlayer::TrackId(const WebString&,
-                                       WebMediaPlayerClient::AudioTrackKind,
-                                       const WebString&,
-                                       const WebString&,
-                                       bool));
-  MOCK_METHOD1(RemoveAudioTrack, void(WebMediaPlayer::TrackId));
-  MOCK_METHOD5(AddVideoTrack,
-               WebMediaPlayer::TrackId(const WebString&,
-                                       WebMediaPlayerClient::VideoTrackKind,
-                                       const WebString&,
-                                       const WebString&,
-                                       bool));
-  MOCK_METHOD1(RemoveVideoTrack, void(WebMediaPlayer::TrackId));
-  MOCK_METHOD1(MediaSourceOpened, void(WebMediaSource*));
-  MOCK_METHOD2(RemotePlaybackCompatibilityChanged, void(const WebURL&, bool));
+  MOCK_METHOD1(AddMediaTrack, void(const media::MediaTrack& track));
+  MOCK_METHOD1(RemoveMediaTrack, void(const media::MediaTrack&));
+  MOCK_METHOD1(MediaSourceOpened, void(std::unique_ptr<WebMediaSource>));
+  MOCK_METHOD2(RemotePlaybackCompatibilityChanged, void(const KURL&, bool));
   MOCK_METHOD0(WasAlwaysMuted, bool());
   MOCK_METHOD0(HasSelectedVideoTrack, bool());
   MOCK_METHOD0(GetSelectedVideoTrackId, WebMediaPlayer::TrackId());
@@ -184,7 +183,7 @@ class MockWebMediaPlayerClient : public WebMediaPlayerClient {
   MOCK_METHOD0(OnPictureInPictureStateChange, void());
   MOCK_CONST_METHOD0(CouldPlayIfEnoughData, bool());
   MOCK_METHOD0(ResumePlayback, void());
-  MOCK_METHOD1(PausePlayback, void(WebMediaPlayerClient::PauseReason));
+  MOCK_METHOD1(PausePlayback, void(MediaPlayerClient::PauseReason));
   MOCK_METHOD0(DidPlayerStartPlaying, void());
   MOCK_METHOD1(DidPlayerPaused, void(bool));
   MOCK_METHOD1(DidPlayerMutedStatusChange, void(bool));
@@ -208,6 +207,7 @@ class MockWebMediaPlayerClient : public WebMediaPlayerClient {
   MOCK_METHOD0(DidSeek, void());
   MOCK_METHOD2(OnFirstFrame, void(base::TimeTicks, size_t));
   MOCK_METHOD0(OnRequestVideoFrameCallback, void());
+  MOCK_METHOD0(GetElementId, int());
 };
 
 class MockWebMediaPlayerEncryptedMediaClient
@@ -275,7 +275,9 @@ class MockWebMediaPlayerDelegate : public WebMediaPlayerDelegate {
     return is_stale_;
   }
 
-  bool IsFrameHidden() override { return is_hidden_; }
+  bool IsPageHidden() override { return is_page_hidden_; }
+
+  bool IsFrameHidden() override { return is_frame_hidden_; }
 
   void SetIdleForTesting(bool is_idle) { is_idle_ = is_idle; }
 
@@ -294,7 +296,13 @@ class MockWebMediaPlayerDelegate : public WebMediaPlayerDelegate {
     return is_stale_;
   }
 
-  void SetFrameHiddenForTesting(bool is_hidden) { is_hidden_ = is_hidden; }
+  void SetPageHiddenForTesting(bool is_page_hidden) {
+    is_page_hidden_ = is_page_hidden;
+  }
+
+  void SetFrameHiddenForTesting(bool is_frame_hidden) {
+    is_frame_hidden_ = is_frame_hidden;
+  }
 
   int player_id() { return player_id_; }
 
@@ -303,7 +311,8 @@ class MockWebMediaPlayerDelegate : public WebMediaPlayerDelegate {
   int player_id_ = 1234;
   bool is_idle_ = false;
   bool is_stale_ = false;
-  bool is_hidden_ = false;
+  bool is_page_hidden_ = false;
+  bool is_frame_hidden_ = false;
 };
 
 class MockSurfaceLayerBridge : public WebSurfaceLayerBridge {
@@ -449,11 +458,9 @@ class WebMediaPlayerImplTest
         std::move(factory_selector), url_index_.get(), std::move(compositor),
         std::move(media_log), player_id, WebMediaPlayerBuilder::DeferLoadCB(),
         audio_sink_, media_thread_.task_runner(), media_thread_.task_runner(),
-        media_thread_.task_runner(), media_thread_.task_runner(),
-        WTF::BindRepeating(&WebMediaPlayerImplTest::OnAdjustAllocatedMemory,
-                           WTF::Unretained(this)),
-        nullptr, media::RequestRoutingTokenCallback(),
-        mock_observer_.AsWeakPtr(), false, false, provider.Unbind(),
+        media_thread_.task_runner(), media_thread_.task_runner(), nullptr,
+        media::RequestRoutingTokenCallback(), mock_observer_.AsWeakPtr(), false,
+        false, provider.Unbind(),
         WTF::BindOnce(&WebMediaPlayerImplTest::CreateMockSurfaceLayerBridge,
                       base::Unretained(this)),
         viz::TestContextProvider::Create(),
@@ -470,11 +477,6 @@ class WebMediaPlayerImplTest
 
   WebLocalFrame* GetWebLocalFrame() {
     return web_view_helper_.LocalMainFrame();
-  }
-
-  int64_t OnAdjustAllocatedMemory(int64_t delta) {
-    reported_memory_ += delta;
-    return 0;
   }
 
   void SetNetworkState(WebMediaPlayer::NetworkState state) {
@@ -608,15 +610,23 @@ class WebMediaPlayerImplTest
     return wmpi_->video_locked_when_paused_when_hidden_;
   }
 
-  void BackgroundPlayer() {
+  bool IsPausedBecausePageHidden() const {
+    return wmpi_->IsPausedBecausePageHidden();
+  }
+
+  bool IsPausedBecauseFrameHidden() const {
+    return wmpi_->IsPausedBecauseFrameHidden();
+  }
+
+  void HidePlayerPage() {
     base::RunLoop loop;
     EXPECT_CALL(*compositor_, SetIsPageVisible(false))
         .WillOnce(RunClosure(loop.QuitClosure()));
 
-    delegate_.SetFrameHiddenForTesting(true);
+    delegate_.SetPageHiddenForTesting(true);
     SetWasSuspendedForFrameClosed(false);
 
-    wmpi_->OnFrameHidden();
+    wmpi_->OnPageHidden();
 
     loop.Run();
 
@@ -624,20 +634,58 @@ class WebMediaPlayerImplTest
     testing::Mock::VerifyAndClearExpectations(compositor_);
   }
 
-  void ForegroundPlayer() {
+  void ShowPlayerPage() {
     base::RunLoop loop;
     EXPECT_CALL(*compositor_, SetIsPageVisible(true))
         .WillOnce(RunClosure(loop.QuitClosure()));
 
-    delegate_.SetFrameHiddenForTesting(false);
+    delegate_.SetPageHiddenForTesting(false);
     SetWasSuspendedForFrameClosed(false);
 
-    wmpi_->OnFrameShown();
+    wmpi_->OnPageShown();
 
     loop.Run();
 
     // Clear the mock so it doesn't have a stale QuitClosure.
     testing::Mock::VerifyAndClearExpectations(compositor_);
+  }
+
+  void HidePlayerFrame() {
+    delegate_.SetFrameHiddenForTesting(true);
+    SetWasSuspendedForFrameClosed(false);
+    wmpi_->OnFrameHidden();
+  }
+
+  void ShowPlayerFrame() {
+    delegate_.SetFrameHiddenForTesting(false);
+    SetWasSuspendedForFrameClosed(false);
+    wmpi_->OnFrameShown();
+  }
+
+  void BackgroundPlayer(BackgroundBehaviorType type) {
+    switch (type) {
+      case BackgroundBehaviorType::Page:
+        HidePlayerPage();
+        return;
+      case BackgroundBehaviorType::Frame:
+        HidePlayerFrame();
+        return;
+    }
+
+    NOTREACHED();
+  }
+
+  void ForegroundPlayer(BackgroundBehaviorType type) {
+    switch (type) {
+      case BackgroundBehaviorType::Page:
+        ShowPlayerPage();
+        return;
+      case BackgroundBehaviorType::Frame:
+        ShowPlayerFrame();
+        return;
+    }
+
+    NOTREACHED();
   }
 
   void Play() { wmpi_->Play(); }
@@ -773,15 +821,14 @@ class WebMediaPlayerImplTest
     WebURLResponse response(kTestURL);
     response.SetHttpHeaderField(
         WebString::FromUTF8("Content-Length"),
-        WebString::FromUTF8(
-            is_streaming ? "-1" : base::NumberToString(data->data_size())));
-    response.SetExpectedContentLength(is_streaming ? -1 : data->data_size());
+        WebString::FromUTF8(is_streaming ? "-1"
+                                         : base::NumberToString(data->size())));
+    response.SetExpectedContentLength(is_streaming ? -1 : data->size());
     response.SetHttpStatusCode(200);
     client->DidReceiveResponse(response);
 
     // Copy over the file data.
-    client->DidReceiveData(reinterpret_cast<const char*>(data->data()),
-                           static_cast<int>(data->data_size()));
+    client->DidReceiveData(base::as_chars(data->AsSpan()));
 
     // If we're pretending to be a streaming resource, don't complete the load;
     // otherwise the DataSource will not be marked as streaming.
@@ -833,11 +880,12 @@ class WebMediaPlayerImplTest
   void OnProgress() { wmpi_->OnProgress(); }
 
   void OnCdmCreated(base::RepeatingClosure quit_closure,
-                    WebContentDecryptionModule* cdm,
-                    const std::string& error_message) {
-    LOG_IF(ERROR, !error_message.empty()) << error_message;
+                    std::unique_ptr<WebContentDecryptionModule> cdm,
+                    media::CreateCdmStatus status) {
+    LOG_IF(ERROR, status != media::CreateCdmStatus::kSuccess)
+        << "status = " << static_cast<int>(status);
     EXPECT_TRUE(cdm);
-    web_cdm_.reset(cdm);
+    web_cdm_ = std::move(cdm);
     quit_closure.Run();
   }
 
@@ -848,9 +896,13 @@ class WebMediaPlayerImplTest
     auto test_origin = WebSecurityOrigin::CreateFromString(
         WebString::FromUTF8("https://test.origin"));
 
+    if (!key_systems_) {
+      key_systems_ =
+          std::make_unique<media::KeySystemsImpl>(base::NullCallback());
+    }
     base::RunLoop run_loop;
     WebContentDecryptionModuleImpl::Create(
-        &mock_cdm_factory_, test_origin, cdm_config,
+        &mock_cdm_factory_, key_systems_.get(), test_origin, cdm_config,
         WTF::BindOnce(&WebMediaPlayerImplTest::OnCdmCreated,
                       WTF::Unretained(this), run_loop.QuitClosure()));
     run_loop.Run();
@@ -870,6 +922,8 @@ class WebMediaPlayerImplTest
   media::MemoryDumpProviderProxy* GetMediaThreadMemDumper() {
     return wmpi_->media_thread_mem_dumper_.get();
   }
+
+  test::TaskEnvironment task_environment_;
 
   // "Media" thread. This is necessary because WMPI destruction waits on a
   // WaitableEvent.
@@ -895,6 +949,8 @@ class WebMediaPlayerImplTest
   NiceMock<MockWebMediaPlayerClient> client_;
   MockWebMediaPlayerEncryptedMediaClient encrypted_client_;
 
+  std::unique_ptr<media::KeySystemsImpl> key_systems_;
+
   // Used to create the media::MockCdm to test encrypted playback.
   scoped_refptr<media::MockCdm> mock_cdm_ =
       base::MakeRefCounted<media::MockCdm>();
@@ -918,9 +974,6 @@ class WebMediaPlayerImplTest
   // Only valid once set by InitializeWebMediaPlayerImpl(), this is for
   // verifying a subset of potential media logs.
   NiceMock<media::MockMediaLog>* media_log_ = nullptr;
-
-  // Total memory in bytes allocated by the WebMediaPlayerImpl instance.
-  int64_t reported_memory_ = 0;
 
   // Raw pointer of the media::RendererFactorySelector owned by |wmpi_|.
   media::RendererFactorySelector* renderer_factory_selector_ = nullptr;
@@ -955,7 +1008,10 @@ TEST_F(WebMediaPlayerImplTest, LoadAndDestroy) {
   // usage to ensure we're getting audio buffer and demuxer usage too.
   const int64_t data_source_size = GetDataSourceMemoryUsage();
   EXPECT_GT(data_source_size, 0);
-  EXPECT_GT(reported_memory_ - data_source_size, 0);
+  EXPECT_GT(V8ExternalMemoryAccounterBase::
+                GetTotalAmountOfExternalAllocatedMemoryForTesting(
+                    task_environment_.isolate()),
+            data_source_size);
 }
 
 // Verify LoadAndWaitForCurrentData() functions without issue.
@@ -1058,7 +1114,10 @@ TEST_F(WebMediaPlayerImplTest, LoadPreloadMetadataSuspend) {
   // usage to ensure there's no other memory usage.
   const int64_t data_source_size = GetDataSourceMemoryUsage();
   EXPECT_GT(data_source_size, 0);
-  EXPECT_EQ(reported_memory_ - data_source_size, 0);
+  EXPECT_EQ(V8ExternalMemoryAccounterBase::
+                GetTotalAmountOfExternalAllocatedMemoryForTesting(
+                    task_environment_.isolate()),
+            data_source_size);
 }
 
 // Verify that Play() before kReadyStateHaveEnough doesn't increase buffer size.
@@ -1135,7 +1194,10 @@ TEST_F(WebMediaPlayerImplTest, LazyLoadPreloadMetadataSuspend) {
   // usage to ensure there's no other memory usage.
   const int64_t data_source_size = GetDataSourceMemoryUsage();
   EXPECT_GT(data_source_size, 0);
-  EXPECT_EQ(reported_memory_ - data_source_size, 0);
+  EXPECT_EQ(V8ExternalMemoryAccounterBase::
+                GetTotalAmountOfExternalAllocatedMemoryForTesting(
+                    task_environment_.isolate()),
+            data_source_size);
 
   EXPECT_CALL(*surface_layer_bridge_ptr_, ClearObserver());
 }
@@ -1177,7 +1239,10 @@ TEST_F(WebMediaPlayerImplTest, LoadPreloadMetadataSuspendNoVideoMemoryUsage) {
   // usage to ensure there's no other memory usage.
   const int64_t data_source_size = GetDataSourceMemoryUsage();
   EXPECT_GT(data_source_size, 0);
-  EXPECT_EQ(reported_memory_ - data_source_size, 0);
+  EXPECT_EQ(V8ExternalMemoryAccounterBase::
+                GetTotalAmountOfExternalAllocatedMemoryForTesting(
+                    task_environment_.isolate()),
+            data_source_size);
 
   EXPECT_CALL(*surface_layer_bridge_ptr_, ClearObserver());
 }
@@ -1646,14 +1711,14 @@ TEST_F(WebMediaPlayerImplTest, ResumeEnded) {
   Play();
   // Cause PlayerGone
   Pause();
-  BackgroundPlayer();
+  BackgroundPlayer(BackgroundBehaviorType::Page);
 
   testing::Mock::VerifyAndClearExpectations(&delegate_);
 
   // DidMediaMetadataChange should be called again after player gone.
   EXPECT_CALL(delegate_, DidMediaMetadataChange(_, true, true, _));
 
-  ForegroundPlayer();
+  ForegroundPlayer(BackgroundBehaviorType::Page);
   Play();
 }
 
@@ -2138,7 +2203,7 @@ TEST_F(WebMediaPlayerImplTest, VideoLockedWhenPausedWhenHidden) {
   EXPECT_FALSE(IsVideoLockedWhenPausedWhenHidden());
 
   // Backgrounding the player sets the lock.
-  BackgroundPlayer();
+  BackgroundPlayer(BackgroundBehaviorType::Page);
   EXPECT_TRUE(IsVideoLockedWhenPausedWhenHidden());
 
   // Play without a user gesture doesn't unlock the player.
@@ -2163,10 +2228,143 @@ TEST_F(WebMediaPlayerImplTest, VideoLockedWhenPausedWhenHidden) {
   EXPECT_TRUE(IsVideoLockedWhenPausedWhenHidden());
 
   // Foregrounding the player unsets the lock.
-  ForegroundPlayer();
+  ForegroundPlayer(BackgroundBehaviorType::Page);
   EXPECT_FALSE(IsVideoLockedWhenPausedWhenHidden());
 
   EXPECT_CALL(*surface_layer_bridge_ptr_, ClearObserver());
+}
+
+TEST_F(WebMediaPlayerImplTest,
+       PageEventsHasNoEffectIfPausedDueToFrameVisibility) {
+  // Adding a demuxer and loading a media is necessary to make sure that the
+  // pipeline will start and that `WebMediaPlayerImpl::PauseVideoIfNeeded` won't
+  // return early.
+  std::unique_ptr<media::MockDemuxer> demuxer =
+      std::make_unique<NiceMock<media::MockDemuxer>>();
+  ON_CALL(*demuxer, IsSeekable()).WillByDefault(Return(true));
+  InitializeWebMediaPlayerImpl(std::move(demuxer));
+  // We need to load a media file to start the pipeline.
+  Load(kVideoOnlyTestFile);
+  EXPECT_FALSE(IsSuspended());
+
+  media::PipelineMetadata metadata;
+  metadata.has_video = true;
+  metadata.video_decoder_config = TestVideoConfig::Normal();
+  EXPECT_CALL(delegate_, DidMediaMetadataChange(_, false, true, _)).Times(2);
+  OnMetadata(metadata);
+
+  wmpi_->SetShouldPauseWhenFrameIsHidden(true);
+
+  SetReadyState(WebMediaPlayer::kReadyStateHaveFutureData);
+  SetSeeking(false);
+  Play();
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_FALSE(IsPausedBecauseFrameHidden());
+
+  BackgroundPlayer(BackgroundBehaviorType::Frame);
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_TRUE(IsPausedBecauseFrameHidden());
+
+  BackgroundPlayer(BackgroundBehaviorType::Page);
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_TRUE(IsPausedBecauseFrameHidden());
+
+  ForegroundPlayer(BackgroundBehaviorType::Page);
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_TRUE(IsPausedBecauseFrameHidden());
+
+  ForegroundPlayer(BackgroundBehaviorType::Frame);
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_FALSE(IsPausedBecauseFrameHidden());
+}
+
+TEST_F(WebMediaPlayerImplTest,
+       FrameVisibilityEventsHavePrecedenceOverPageEvents) {
+  // Adding a demuxer and loading a media is necessary to make sure that the
+  // pipeline will start and that `WebMediaPlayerImpl::PauseVideoIfNeeded` won't
+  // return early.
+  std::unique_ptr<media::MockDemuxer> demuxer =
+      std::make_unique<NiceMock<media::MockDemuxer>>();
+  ON_CALL(*demuxer, IsSeekable()).WillByDefault(Return(true));
+  InitializeWebMediaPlayerImpl(std::move(demuxer));
+  // We need to load a media file to start the pipeline.
+  Load(kVideoOnlyTestFile);
+  EXPECT_FALSE(IsSuspended());
+
+  media::PipelineMetadata metadata;
+  metadata.has_video = true;
+  metadata.video_decoder_config = TestVideoConfig::Normal();
+  EXPECT_CALL(delegate_, DidMediaMetadataChange(_, false, true, _)).Times(2);
+  OnMetadata(metadata);
+
+  wmpi_->SetShouldPauseWhenFrameIsHidden(true);
+
+  SetReadyState(WebMediaPlayer::kReadyStateHaveFutureData);
+  SetSeeking(false);
+  Play();
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_FALSE(IsPausedBecauseFrameHidden());
+
+  BackgroundPlayer(BackgroundBehaviorType::Page);
+  EXPECT_TRUE(IsPausedBecausePageHidden());
+  EXPECT_FALSE(IsPausedBecauseFrameHidden());
+
+  BackgroundPlayer(BackgroundBehaviorType::Frame);
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_TRUE(IsPausedBecauseFrameHidden());
+
+  ForegroundPlayer(BackgroundBehaviorType::Page);
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_TRUE(IsPausedBecauseFrameHidden());
+
+  ForegroundPlayer(BackgroundBehaviorType::Frame);
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_FALSE(IsPausedBecauseFrameHidden());
+}
+
+// When `WebMediaPlayerImpl::should_pause_when_frame_is_hidden` is false, frame
+// visibility changes should not affect the playback state.
+TEST_F(WebMediaPlayerImplTest, DisabledFlagShouldPauseWhenFrameIsHidden) {
+  // Adding a demuxer and loading a media is necessary to make sure that the
+  // pipeline will start and that `WebMediaPlayerImpl::PauseVideoIfNeeded` won't
+  // return early.
+  std::unique_ptr<media::MockDemuxer> demuxer =
+      std::make_unique<NiceMock<media::MockDemuxer>>();
+  ON_CALL(*demuxer, IsSeekable()).WillByDefault(Return(true));
+  InitializeWebMediaPlayerImpl(std::move(demuxer));
+  // We need to load a media file to start the pipeline.
+  Load(kVideoOnlyTestFile);
+  EXPECT_FALSE(IsSuspended());
+
+  media::PipelineMetadata metadata;
+  metadata.has_video = true;
+  metadata.video_decoder_config = TestVideoConfig::Normal();
+  EXPECT_CALL(delegate_, DidMediaMetadataChange(_, false, true, _)).Times(2);
+  OnMetadata(metadata);
+
+  wmpi_->SetShouldPauseWhenFrameIsHidden(false);
+
+  SetReadyState(WebMediaPlayer::kReadyStateHaveFutureData);
+  SetSeeking(false);
+  Play();
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_FALSE(IsPausedBecauseFrameHidden());
+
+  BackgroundPlayer(BackgroundBehaviorType::Page);
+  EXPECT_TRUE(IsPausedBecausePageHidden());
+  EXPECT_FALSE(IsPausedBecauseFrameHidden());
+
+  BackgroundPlayer(BackgroundBehaviorType::Frame);
+  EXPECT_TRUE(IsPausedBecausePageHidden());
+  EXPECT_FALSE(IsPausedBecauseFrameHidden());
+
+  ForegroundPlayer(BackgroundBehaviorType::Page);
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_FALSE(IsPausedBecauseFrameHidden());
+
+  ForegroundPlayer(BackgroundBehaviorType::Frame);
+  EXPECT_FALSE(IsPausedBecausePageHidden());
+  EXPECT_FALSE(IsPausedBecauseFrameHidden());
 }
 
 TEST_F(WebMediaPlayerImplTest, NotifiesObserverWhenFrozen) {
@@ -2191,10 +2389,9 @@ TEST_F(WebMediaPlayerImplTest, BackgroundIdlePauseTimerDependsOnAudio) {
   ScheduleIdlePauseTimer();
   EXPECT_TRUE(IsIdlePauseTimerRunning());
 
-  EXPECT_CALL(
-      client_,
-      PausePlayback(
-          WebMediaPlayerClient::PauseReason::kSuspendedPlayerIdleTimeout));
+  EXPECT_CALL(client_,
+              PausePlayback(
+                  MediaPlayerClient::PauseReason::kSuspendedPlayerIdleTimeout));
   FireIdlePauseTimer();
   base::RunLoop().RunUntilIdle();
 }
@@ -2454,14 +2651,14 @@ TEST_F(WebMediaPlayerImplTest, MemDumpReporting) {
         auto* player_dump = it->second.get();
         const auto& entries = player_dump->entries();
 
-        ASSERT_TRUE(base::ranges::any_of(entries, [](const auto& e) {
+        ASSERT_TRUE(std::ranges::any_of(entries, [](const auto& e) {
           auto* name = base::trace_event::MemoryAllocatorDump::kNameObjectCount;
           return e.name == name && e.value_uint64 == 1;
         }));
 
         if (args.level_of_detail ==
             base::trace_event::MemoryDumpLevelOfDetail::kDetailed) {
-          ASSERT_TRUE(base::ranges::any_of(entries, [](const auto& e) {
+          ASSERT_TRUE(std::ranges::any_of(entries, [](const auto& e) {
             return e.name == "player_state" && !e.value_string.empty();
           }));
         }
@@ -2492,7 +2689,7 @@ TEST_F(WebMediaPlayerImplTest, DISABLED_DemuxerOverride) {
       std::make_unique<NiceMock<media::MockDemuxer>>();
   StrictMock<media::MockDemuxerStream> stream(media::DemuxerStream::AUDIO);
   stream.set_audio_decoder_config(TestAudioConfig::Normal());
-  std::vector<vector_experimental_raw_ptr<media::DemuxerStream>> streams;
+  std::vector<media::DemuxerStream*> streams;
   streams.push_back(&stream);
 
   EXPECT_CALL(stream, SupportsConfigChanges()).WillRepeatedly(Return(false));
@@ -2518,7 +2715,7 @@ class WebMediaPlayerImplBackgroundBehaviorTest
     : public WebMediaPlayerImplTest,
       public WebAudioSourceProviderClient,
       public ::testing::WithParamInterface<
-          std::tuple<bool, int, int, bool, bool, bool, bool>> {
+          std::tuple<bool, int, int, bool, bool, bool, bool, bool, bool>> {
  public:
   // Indices of the tuple parameters.
   static const int kIsMediaSuspendEnabled = 0;
@@ -2528,6 +2725,10 @@ class WebMediaPlayerImplBackgroundBehaviorTest
   static const int kIsPictureInPictureEnabled = 4;
   static const int kIsBackgroundVideoPlaybackEnabled = 5;
   static const int kIsVideoBeingCaptured = 6;
+  // If true, the player's page is hidden. Otherwise, the player's frame is
+  // hidden.
+  static const int kShouldHidePage = 7;
+  static const int kShouldPauseWhenFrameIsHidden = 8;
 
   void SetUp() override {
     WebMediaPlayerImplTest::SetUp();
@@ -2549,6 +2750,12 @@ class WebMediaPlayerImplBackgroundBehaviorTest
 
     feature_list_.InitFromCommandLine(enabled_features, disabled_features);
 
+    if (std::get<kShouldHidePage>(GetParam())) {
+      background_type_ = BackgroundBehaviorType::Page;
+    } else {
+      background_type_ = BackgroundBehaviorType::Frame;
+    }
+
     InitializeWebMediaPlayerImpl();
 
     // MSE or SRC doesn't matter since we artificially inject pipeline stats.
@@ -2566,7 +2773,9 @@ class WebMediaPlayerImplBackgroundBehaviorTest
     if (IsVideoBeingCaptured())
       wmpi_->GetCurrentFrameThenUpdate();
 
-    BackgroundPlayer();
+    wmpi_->SetShouldPauseWhenFrameIsHidden(GetShouldPauseWhenFrameIsHidden());
+
+    BackgroundPlayer(background_type_);
   }
 
   void SetVideoKeyframeDistanceAverage(base::TimeDelta value) {
@@ -2602,6 +2811,10 @@ class WebMediaPlayerImplBackgroundBehaviorTest
     return std::get<kIsVideoBeingCaptured>(GetParam());
   }
 
+  bool GetShouldPauseWhenFrameIsHidden() const {
+    return std::get<kShouldPauseWhenFrameIsHidden>(GetParam());
+  }
+
   int GetDurationSec() const { return std::get<kDurationSec>(GetParam()); }
 
   int GetAverageKeyframeDistanceSec() const {
@@ -2621,6 +2834,13 @@ class WebMediaPlayerImplBackgroundBehaviorTest
     return wmpi_->ShouldPausePlaybackWhenHidden();
   }
 
+  // We should pause media playback if the media-playback-while-not-visible
+  // permission policy is not enabled and the player's frame is hidden.
+  bool IsFrameHiddenAndShouldPauseWhenHidden() const {
+    return background_type_ == BackgroundBehaviorType::Frame &&
+           GetShouldPauseWhenFrameIsHidden();
+  }
+
   std::string PrintValues() {
     std::stringstream stream;
     stream << "is_media_suspend_enabled=" << IsMediaSuspendOn()
@@ -2632,11 +2852,17 @@ class WebMediaPlayerImplBackgroundBehaviorTest
            << ", is_picture_in_picture=" << IsPictureInPictureOn()
            << ", is_background_video_playback_enabled="
            << IsBackgroundVideoPlaybackEnabled()
-           << ", is_video_being_captured=" << IsVideoBeingCaptured();
+           << ", is_video_being_captured=" << IsVideoBeingCaptured()
+           << ", should_pause_when_frame_is_hidden="
+           << GetShouldPauseWhenFrameIsHidden() << ", should_hide_page="
+           << (background_type_ == BackgroundBehaviorType::Page);
     return stream.str();
   }
 
   MOCK_METHOD2(SetFormat, void(uint32_t numberOfChannels, float sampleRate));
+
+ protected:
+  BackgroundBehaviorType background_type_;
 
  private:
   base::test::ScopedFeatureList feature_list_;
@@ -2653,7 +2879,11 @@ TEST_P(WebMediaPlayerImplBackgroundBehaviorTest, AudioOnly) {
 
     auto provider = wmpi_->GetAudioSourceProvider();
     provider->SetClient(this);
-    EXPECT_FALSE(ShouldPausePlaybackWhenHidden());
+    if (IsFrameHiddenAndShouldPauseWhenHidden()) {
+      EXPECT_TRUE(ShouldPausePlaybackWhenHidden());
+    } else {
+      EXPECT_FALSE(ShouldPausePlaybackWhenHidden());
+    }
     EXPECT_FALSE(ShouldDisableVideoWhenHidden());
 
     provider->SetClient(nullptr);
@@ -2661,7 +2891,11 @@ TEST_P(WebMediaPlayerImplBackgroundBehaviorTest, AudioOnly) {
     EXPECT_FALSE(ShouldDisableVideoWhenHidden());
 
     provider->SetCopyAudioCallback(base::DoNothing());
-    EXPECT_FALSE(ShouldPausePlaybackWhenHidden());
+    if (IsFrameHiddenAndShouldPauseWhenHidden()) {
+      EXPECT_TRUE(ShouldPausePlaybackWhenHidden());
+    } else {
+      EXPECT_FALSE(ShouldPausePlaybackWhenHidden());
+    }
     EXPECT_FALSE(ShouldDisableVideoWhenHidden());
 
     provider->ClearCopyAudioCallback();
@@ -2675,7 +2909,11 @@ TEST_P(WebMediaPlayerImplBackgroundBehaviorTest, AudioOnly) {
     SetMetadata(true, false);
   }
 
-  EXPECT_FALSE(ShouldPausePlaybackWhenHidden());
+  if (IsFrameHiddenAndShouldPauseWhenHidden()) {
+    EXPECT_TRUE(ShouldPausePlaybackWhenHidden());
+  } else {
+    EXPECT_FALSE(ShouldPausePlaybackWhenHidden());
+  }
   EXPECT_FALSE(ShouldDisableVideoWhenHidden());
 }
 
@@ -2693,12 +2931,16 @@ TEST_P(WebMediaPlayerImplBackgroundBehaviorTest, VideoOnly) {
   bool matches_requirements =
       !IsPictureInPictureOn() && !IsVideoBeingCaptured();
 
-  // Video is always paused when suspension is on and only if matches the
-  // optimization criteria if the optimization is on.
-  bool should_pause = (!IsBackgroundVideoPlaybackEnabled() ||
-                       IsMediaSuspendOn() || matches_requirements) &&
-                      !IsPictureInPictureOn();
-  EXPECT_EQ(should_pause, ShouldPausePlaybackWhenHidden());
+  if (IsFrameHiddenAndShouldPauseWhenHidden()) {
+    EXPECT_TRUE(ShouldPausePlaybackWhenHidden());
+  } else {
+    // Video is always paused when suspension is on and only if matches the
+    // optimization criteria if the optimization is on.
+    bool should_pause = (!IsBackgroundVideoPlaybackEnabled() ||
+                         IsMediaSuspendOn() || matches_requirements) &&
+                        !IsPictureInPictureOn();
+    EXPECT_EQ(should_pause, ShouldPausePlaybackWhenHidden());
+  }
 }
 
 TEST_P(WebMediaPlayerImplBackgroundBehaviorTest, AudioVideo) {
@@ -2709,11 +2951,16 @@ TEST_P(WebMediaPlayerImplBackgroundBehaviorTest, AudioVideo) {
        (IsMediaSuspendOn() && IsResumeBackgroundVideoEnabled())) &&
       !IsPictureInPictureOn();
 
-  if (base::FeatureList::IsEnabled(media::kPauseBackgroundMutedAudio)) {
-    bool should_pause = !IsPictureInPictureOn() &&
-                        (!IsBackgroundVideoPlaybackEnabled() ||
-                         IsMediaSuspendOn() || !IsVideoBeingCaptured());
+  bool should_pause = !IsPictureInPictureOn() &&
+                      (!IsBackgroundVideoPlaybackEnabled() ||
+                       IsMediaSuspendOn() || !IsVideoBeingCaptured());
 
+  if (IsFrameHiddenAndShouldPauseWhenHidden()) {
+    always_pause = true;
+    should_pause = true;
+  }
+
+  if (base::FeatureList::IsEnabled(media::kPauseBackgroundMutedAudio)) {
     EXPECT_CALL(client_, WasAlwaysMuted()).WillRepeatedly(Return(true));
     SetMetadata(true, true);
     EXPECT_EQ(should_pause, ShouldPausePlaybackWhenHidden());
@@ -2756,20 +3003,36 @@ TEST_P(WebMediaPlayerImplBackgroundBehaviorTest, AudioVideo) {
     return;
   }
 
-  ForegroundPlayer();
+  ForegroundPlayer(background_type_);
   EXPECT_FALSE(IsVideoTrackDisabled());
   EXPECT_FALSE(IsDisableVideoTrackPending());
 
-  // Should start background disable timer, but not disable immediately.
-  BackgroundPlayer();
-  if (ShouldPausePlaybackWhenHidden()) {
-    EXPECT_FALSE(IsVideoTrackDisabled());
-    EXPECT_FALSE(IsDisableVideoTrackPending());
-  } else {
-    // Testing IsVideoTrackDisabled() leads to flakyness even though there
-    // should be a 10 minutes delay until it happens. Given that it doesn't
-    // provides much of a benefit at the moment, this is being ignored.
-    EXPECT_TRUE(IsDisableVideoTrackPending());
+  // Should start background disable timer in case we need to pause media
+  // playback, but not disable immediately.
+  BackgroundPlayer(background_type_);
+  switch (background_type_) {
+    case BackgroundBehaviorType::Page:
+      if (ShouldPausePlaybackWhenHidden()) {
+        EXPECT_FALSE(IsVideoTrackDisabled());
+        EXPECT_FALSE(IsDisableVideoTrackPending());
+      } else {
+        // Testing IsVideoTrackDisabled() leads to flakiness even though there
+        // should be a 10 minutes delay until it happens. Given that it doesn't
+        // provides much of a benefit at the moment, this is being ignored.
+        EXPECT_TRUE(IsDisableVideoTrackPending());
+      }
+      break;
+    case BackgroundBehaviorType::Frame:
+      if (!IsFrameHiddenAndShouldPauseWhenHidden()) {
+        // Nothing should happen if the frame is not hidden or if the
+        // media-playback-while-not-visible permission policy is enabled.
+        EXPECT_FALSE(IsVideoTrackDisabled());
+        EXPECT_FALSE(IsDisableVideoTrackPending());
+      } else {
+        // Ignore IsVideoTrackDisabled() for the same reason as above.
+        EXPECT_FALSE(IsDisableVideoTrackPending());
+      }
+      break;
   }
 }
 
@@ -2788,6 +3051,8 @@ INSTANTIATE_TEST_SUITE_P(
                     .InSeconds() -
                 1,
             100),
+        ::testing::Bool(),
+        ::testing::Bool(),
         ::testing::Bool(),
         ::testing::Bool(),
         ::testing::Bool(),

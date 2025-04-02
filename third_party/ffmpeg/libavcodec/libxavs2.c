@@ -274,6 +274,7 @@ static const AVOption options[] = {
 
 static const AVClass libxavs2 = {
     .class_name = "XAVS2EContext",
+    .item_name  = av_default_item_name,
     .option     = options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
@@ -300,6 +301,7 @@ const FFCodec ff_libxavs2_encoder = {
                       FF_CODEC_CAP_AUTO_THREADS,
     .p.pix_fmts     = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUV420P,
                                                      AV_PIX_FMT_NONE },
+    .color_ranges   = AVCOL_RANGE_MPEG,
     .p.priv_class   = &libxavs2,
     .defaults       = xavs2_defaults,
     .p.wrapper_name = "libxavs2",

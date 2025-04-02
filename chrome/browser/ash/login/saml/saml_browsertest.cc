@@ -2,18 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <array>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "ash/constants/ash_features.h"
 #include "ash/constants/ash_switches.h"
 #include "ash/public/cpp/login_screen_test_api.h"
+#include "base/callback_list.h"
+#include "base/check.h"
+#include "base/check_deref.h"
 #include "base/command_line.h"
-#include "base/containers/flat_set.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
@@ -23,41 +26,51 @@
 #include "base/test/gmock_callback_support.h"
 #include "base/test/metrics/histogram_tester.h"
 #include "base/test/run_until.h"
+#include "base/test/scoped_chromeos_version_info.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
+#include "base/time/time.h"
 #include "base/values.h"
+#include "build/buildflag.h"
 #include "chrome/browser/ash/attestation/mock_machine_certificate_uploader.h"
 #include "chrome/browser/ash/attestation/tpm_challenge_key.h"
-#include "chrome/browser/ash/http_auth_dialog.h"
+#include "chrome/browser/ash/floating_sso/cookie_sync_conversions.h"
+#include "chrome/browser/ash/floating_sso/cookie_sync_test_util.h"
+#include "chrome/browser/ash/floating_sso/floating_sso_service.h"
+#include "chrome/browser/ash/floating_sso/floating_sso_service_factory.h"
+#include "chrome/browser/ash/floating_sso/floating_sso_sync_bridge.h"
+#include "chrome/browser/ash/login/enrollment/enrollment_screen_view.h"
 #include "chrome/browser/ash/login/lock/screen_locker_tester.h"
 #include "chrome/browser/ash/login/saml/fake_saml_idp_mixin.h"
 #include "chrome/browser/ash/login/saml/lockscreen_reauth_dialog_test_helper.h"
 #include "chrome/browser/ash/login/startup_utils.h"
+#include "chrome/browser/ash/login/test/cryptohome_mixin.h"
 #include "chrome/browser/ash/login/test/device_state_mixin.h"
 #include "chrome/browser/ash/login/test/enrollment_ui_mixin.h"
-#include "chrome/browser/ash/login/test/feature_parameter_interface.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
 #include "chrome/browser/ash/login/test/oobe_base_test.h"
 #include "chrome/browser/ash/login/test/oobe_screen_waiter.h"
+#include "chrome/browser/ash/login/test/scoped_policy_update.h"
 #include "chrome/browser/ash/login/test/session_manager_state_waiter.h"
 #include "chrome/browser/ash/login/test/test_predicate_waiter.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
+#include "chrome/browser/ash/login/test/user_auth_config.h"
 #include "chrome/browser/ash/login/users/test_users.h"
 #include "chrome/browser/ash/login/wizard_context.h"
+#include "chrome/browser/ash/net/delay_network_call.h"
 #include "chrome/browser/ash/policy/affiliation/affiliation_test_helper.h"
 #include "chrome/browser/ash/policy/core/device_policy_cros_test_helper.h"
 #include "chrome/browser/ash/policy/test_support/embedded_policy_test_server_mixin.h"
 #include "chrome/browser/ash/profiles/profile_helper.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
 #include "chrome/browser/ash/settings/scoped_testing_cros_settings.h"
 #include "chrome/browser/ash/settings/stub_cros_settings_provider.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/enterprise/connectors/device_trust/common/metrics_utils.h"
-#include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/webui/ash/login/gaia_screen_handler.h"
 #include "chrome/browser/ui/webui/ash/login/saml_challenge_key_handler.h"
@@ -67,24 +80,32 @@
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/fake_gaia_mixin.h"
 #include "chrome/test/base/in_process_browser_test.h"
+#include "chromeos/ash/components/attestation/attestation_flow.h"
 #include "chromeos/ash/components/attestation/mock_attestation_flow.h"
 #include "chromeos/ash/components/browser_context_helper/browser_context_helper.h"
 #include "chromeos/ash/components/cryptohome/system_salt_getter.h"
 #include "chromeos/ash/components/dbus/attestation/interface.pb.h"
 #include "chromeos/ash/components/dbus/constants/attestation_constants.h"
+#include "chromeos/ash/components/dbus/cryptohome/UserDataAuth.pb.h"
+#include "chromeos/ash/components/dbus/cryptohome/auth_factor.pb.h"
+#include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
 #include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "chromeos/ash/components/dbus/shill/shill_manager_client.h"
 #include "chromeos/ash/components/dbus/userdataauth/fake_cryptohome_misc_client.h"
 #include "chromeos/ash/components/dbus/userdataauth/fake_userdataauth_client.h"
+#include "chromeos/ash/components/http_auth_dialog/http_auth_dialog.h"
 #include "chromeos/ash/components/install_attributes/stub_install_attributes.h"
 #include "chromeos/ash/components/login/auth/public/key.h"
 #include "chromeos/ash/components/login/auth/public/saml_password_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #include "chromeos/ash/components/settings/cros_settings_names.h"
 #include "components/account_id/account_id.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
+#include "components/policy/core/common/cloud/test/policy_builder.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/core/common/policy_pref_names.h"
@@ -94,6 +115,8 @@
 #include "components/policy/proto/chrome_device_policy.pb.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/sync/model/entity_change.h"
+#include "components/sync/protocol/cookie_specifics.pb.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -105,10 +128,13 @@
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "google_apis/gaia/fake_gaia.h"
 #include "google_apis/gaia/gaia_constants.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 
@@ -155,11 +181,11 @@ constexpr char kTestAuthLSIDCookie2[] = "fake-auth-LSID-cookie-2";
 
 constexpr char kNonSAMLUserEmail[] = "frank@corp.example.com";
 
-constexpr char kFirstSAMLUserGaiaId[] = "alice-gaia";
-constexpr char kSecondSAMLUserGaiaId[] = "bob-gaia";
-constexpr char kThirdSAMLUserGaiaId[] = "carol-gaia";
-constexpr char kFifthSAMLUserGaiaId[] = "eve-gaia";
-constexpr char kNonSAMLUserGaiaId[] = "frank-gaia";
+constexpr GaiaId::Literal kFirstSAMLUserGaiaId("alice-gaia");
+constexpr GaiaId::Literal kSecondSAMLUserGaiaId("bob-gaia");
+constexpr GaiaId::Literal kThirdSAMLUserGaiaId("carol-gaia");
+constexpr GaiaId::Literal kFifthSAMLUserGaiaId("eve-gaia");
+constexpr GaiaId::Literal kNonSAMLUserGaiaId("frank-gaia");
 
 constexpr char kAdditionalIdPHost[] = "login2.corp.example.com";
 
@@ -248,6 +274,13 @@ class SamlTestBase : public OobeBaseTest {
 
     // TODO(crbug.com/1177416) - Fix this with a proper SSL solution.
     command_line->AppendSwitch(::switches::kIgnoreCertificateErrors);
+
+    // This will change the verification key to be used by the
+    // CloudPolicyValidator. It will allow for the policy provided by the
+    // PolicyBuilder to pass the signature validation.
+    command_line->AppendSwitchASCII(
+        policy::switches::kPolicyVerificationKey,
+        policy::PolicyBuilder::GetEncodedPolicyVerificationKey());
   }
 
   void SetUpInProcessBrowserTestFixture() override {
@@ -259,6 +292,9 @@ class SamlTestBase : public OobeBaseTest {
   }
 
   void SetUpOnMainThread() override {
+    // Without this tests are flaky. TODO(b/333450354): Determine why and fix.
+    SetDelayNetworkCallsForTesting(true);
+
     // Allowlist the default EMK to sign enterprise challenge.
     ::attestation::SignEnterpriseChallengeRequest
         sign_enterprise_challenge_request;
@@ -358,7 +394,7 @@ class SamlTestBase : public OobeBaseTest {
       cryptohome_client_;
 
   FakeGaiaMixin fake_gaia_{&mixin_host_};
-
+  CryptohomeMixin cryptohome_mixin_{&mixin_host_};
   DeviceStateMixin device_state_{
       &mixin_host_, DeviceStateMixin::State::OOBE_COMPLETED_UNOWNED};
 
@@ -769,7 +805,7 @@ IN_PROC_BROWSER_TEST_F(SamlTestWithoutImprovedScraping, ScrapedMultiple) {
 }
 
 // Tests the multiple password scraped flow.
-// TODO(crbug.com/1295294): This feature was deprioritized in mid-2022.
+// TODO(crbug.com/40214270): This feature was deprioritized in mid-2022.
 // Restore test once work resumes, or feel free to clean it up if you
 // step on it past mid-2024.
 IN_PROC_BROWSER_TEST_F(SamlTestWithImprovedScraping, DISABLED_ScrapedMultiple) {
@@ -1156,6 +1192,7 @@ void SAMLEnrollmentTest::StartSamlAndWaitForIdpPageLoad(
 }
 
 IN_PROC_BROWSER_TEST_F(SAMLEnrollmentTest, WithoutCredentialsPassingAPI) {
+  base::ScopedAllowBlockingForTesting allow_io;
   fake_saml_idp()->SetLoginHTMLTemplate("saml_login.html");
   StartSamlAndWaitForIdpPageLoad(
       saml_test_users::kFirstUserCorpExampleComEmail);
@@ -1169,6 +1206,7 @@ IN_PROC_BROWSER_TEST_F(SAMLEnrollmentTest, WithoutCredentialsPassingAPI) {
 }
 
 IN_PROC_BROWSER_TEST_F(SAMLEnrollmentTest, WithCredentialsPassingAPI) {
+  base::ScopedAllowBlockingForTesting allow_io;
   fake_saml_idp()->SetLoginHTMLTemplate("saml_api_login.html");
   fake_saml_idp()->SetLoginAuthHTMLTemplate("saml_api_login_auth.html");
   StartSamlAndWaitForIdpPageLoad(
@@ -1210,13 +1248,14 @@ class SAMLPolicyTest : public SamlTestBase {
   void MaybeWaitForSAMLToLoad();
   void ClickBackOnSAMLPage();
   void LogInWithSAML(const std::string& user_id,
+                     const GaiaId& gaia_id,
                      const std::string& auth_sid_cookie,
                      const std::string& auth_lsid_cookie);
   void AddSamlUserWithZeroOfflineTimeLimit();
 
   std::string GetCookieValue(const std::string& name);
 
-  void GetCookies();
+  void GetCookies(Profile* profile = nullptr);
 
  protected:
   NiceMock<policy::MockConfigurationPolicyProvider> provider_;
@@ -1228,7 +1267,7 @@ class SAMLPolicyTest : public SamlTestBase {
   LoginManagerMixin login_manager_{
       &mixin_host_,
       {LoginManagerMixin::TestUserInfo(
-          AccountId::FromUserEmailGaiaId("user@gmail.com", "1111"))}};
+          AccountId::FromUserEmailGaiaId("user@gmail.com", GaiaId("1111")))}};
 };
 
 SAMLPolicyTest::SAMLPolicyTest() {
@@ -1257,40 +1296,58 @@ void SAMLPolicyTest::SetUpInProcessBrowserTestFixture() {
 }
 
 void SAMLPolicyTest::SetUpOnMainThread() {
+  auto test_helper = policy::AffiliationTestHelper::CreateForCloud(
+      ash::FakeSessionManagerClient::Get());
+  {
+    policy::UserPolicyBuilder policy_builder;
+    test_helper.SetUserAffiliationIDs(
+        &policy_builder,
+        AccountId::FromUserEmailGaiaId(
+            saml_test_users::kFirstUserCorpExampleComEmail,
+            kFirstSAMLUserGaiaId),
+        {kAffiliationID});
+  }
+  {
+    policy::UserPolicyBuilder policy_builder;
+    test_helper.SetUserAffiliationIDs(
+        &policy_builder,
+        AccountId::FromUserEmailGaiaId(
+            saml_test_users::kSecondUserCorpExampleComEmail,
+            kSecondSAMLUserGaiaId),
+        {kAffiliationID});
+  }
+  {
+    policy::UserPolicyBuilder policy_builder;
+    test_helper.SetUserAffiliationIDs(
+        &policy_builder,
+        AccountId::FromUserEmailGaiaId(
+            saml_test_users::kThirdUserCorpExampleComEmail,
+            kThirdSAMLUserGaiaId),
+        {kAffiliationID});
+  }
+  {
+    policy::UserPolicyBuilder policy_builder;
+    test_helper.SetUserAffiliationIDs(
+        &policy_builder,
+        AccountId::FromUserEmailGaiaId(kNonSAMLUserEmail, kNonSAMLUserGaiaId),
+        {kAffiliationID});
+  }
+
   SamlTestBase::SetUpOnMainThread();
 
   // Pretend that the test users' OAuth tokens are valid.
-  user_manager::UserManager::Get()->SaveUserOAuthStatus(
+  auto* user_manager = user_manager::UserManager::Get();
+  user_manager->SaveUserOAuthStatus(
       AccountId::FromUserEmailGaiaId(
           saml_test_users::kFirstUserCorpExampleComEmail, kFirstSAMLUserGaiaId),
       user_manager::User::OAUTH2_TOKEN_STATUS_VALID);
-  user_manager::UserManager::Get()->SaveUserOAuthStatus(
+  user_manager->SaveUserOAuthStatus(
       AccountId::FromUserEmailGaiaId(kNonSAMLUserEmail, kNonSAMLUserGaiaId),
       user_manager::User::OAUTH2_TOKEN_STATUS_VALID);
-  user_manager::UserManager::Get()->SaveUserOAuthStatus(
+  user_manager->SaveUserOAuthStatus(
       AccountId::FromUserEmailGaiaId(
           saml_test_users::kFifthUserExampleTestEmail, kFifthSAMLUserGaiaId),
       user_manager::User::OAUTH2_TOKEN_STATUS_VALID);
-
-  // Give affiliated users appropriate affiliation IDs.
-  const base::flat_set<std::string> user_affiliation_ids = {kAffiliationID};
-  auto* user_manager = user_manager::UserManager::Get();
-  user_manager->SetUserAffiliation(
-      AccountId::FromUserEmailGaiaId(
-          saml_test_users::kFirstUserCorpExampleComEmail, kFirstSAMLUserGaiaId),
-      user_affiliation_ids);
-  user_manager->SetUserAffiliation(
-      AccountId::FromUserEmailGaiaId(
-          saml_test_users::kSecondUserCorpExampleComEmail,
-          kSecondSAMLUserGaiaId),
-      user_affiliation_ids);
-  user_manager->SetUserAffiliation(
-      AccountId::FromUserEmailGaiaId(
-          saml_test_users::kThirdUserCorpExampleComEmail, kThirdSAMLUserGaiaId),
-      user_affiliation_ids);
-  user_manager->SetUserAffiliation(
-      AccountId::FromUserEmailGaiaId(kNonSAMLUserEmail, kNonSAMLUserGaiaId),
-      user_affiliation_ids);
 
   // Set up fake networks.
   ShillManagerClient::Get()->GetTestInterface()->SetupDefaultEnvironment();
@@ -1421,6 +1478,7 @@ void SAMLPolicyTest::ClickBackOnSAMLPage() {
 }
 
 void SAMLPolicyTest::LogInWithSAML(const std::string& user_id,
+                                   const GaiaId& gaia_id,
                                    const std::string& auth_sid_cookie,
                                    const std::string& auth_lsid_cookie) {
   fake_saml_idp()->SetLoginHTMLTemplate("saml_login.html");
@@ -1428,7 +1486,7 @@ void SAMLPolicyTest::LogInWithSAML(const std::string& user_id,
 
   fake_gaia_.fake_gaia()->SetConfigurationHelper(user_id, auth_sid_cookie,
                                                  auth_lsid_cookie);
-  fake_gaia_.SetupFakeGaiaForLogin(user_id, "", kTestRefreshToken);
+  fake_gaia_.SetupFakeGaiaForLogin(user_id, gaia_id, kTestRefreshToken);
 
   SigninFrameJS().TypeIntoPath("fake_user", {"Email"});
   SigninFrameJS().TypeIntoPath("fake_password", {"Password"});
@@ -1446,7 +1504,8 @@ void SAMLPolicyTest::AddSamlUserWithZeroOfflineTimeLimit() {
   // user.
   EXPECT_EQ(GaiaPath(), WizardContext::GaiaPath::kDefault);
   LogInWithSAML(saml_test_users::kFirstUserCorpExampleComEmail,
-                kTestAuthSIDCookie1, kTestAuthLSIDCookie1);
+                kFirstSAMLUserGaiaId, kTestAuthSIDCookie1,
+                kTestAuthLSIDCookie1);
 }
 
 std::string SAMLPolicyTest::GetCookieValue(const std::string& name) {
@@ -1458,10 +1517,11 @@ std::string SAMLPolicyTest::GetCookieValue(const std::string& name) {
   return std::string();
 }
 
-void SAMLPolicyTest::GetCookies() {
-  Profile* profile = ProfileHelper::Get()->GetProfileByUser(
-      user_manager::UserManager::Get()->GetActiveUser());
-  ASSERT_TRUE(profile);
+void SAMLPolicyTest::GetCookies(Profile* profile) {
+  if (!profile) {
+    profile = ProfileManager::GetActiveUserProfile();
+    ASSERT_TRUE(profile);
+  }
   base::RunLoop run_loop;
   profile->GetDefaultStoragePartition()
       ->GetCookieManagerForBrowserProcess()
@@ -1482,7 +1542,8 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, PRE_NoSAML) {
   fake_gaia_.fake_gaia()->SetConfigurationHelper(
       kNonSAMLUserEmail, FakeGaiaMixin::kFakeSIDCookie,
       FakeGaiaMixin::kFakeLSIDCookie);
-  fake_gaia_.SetupFakeGaiaForLogin(kNonSAMLUserEmail, "", kTestRefreshToken);
+  fake_gaia_.SetupFakeGaiaForLogin(kNonSAMLUserEmail, kNonSAMLUserGaiaId,
+                                   kTestRefreshToken);
 
   // Log in without SAML.
   LoginDisplayHost::default_host()->StartWizard(GaiaView::kScreenId);
@@ -1501,10 +1562,13 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, PRE_NoSAML) {
 // Verifies that the offline login time limit does not affect a user who
 // authenticated without SAML.
 IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, NoSAML) {
+  const auto account_id = AccountId::FromUserEmail(kNonSAMLUserEmail);
+  cryptohome_mixin_.ApplyAuthConfig(
+      account_id, test::UserAuthConfig::Create(test::kDefaultAuthSetup));
+
   // Verify that offline login is allowed.
-  LoginScreenTestApi::SubmitPassword(
-      AccountId::FromUserEmail(kNonSAMLUserEmail), "password",
-      true /* check_if_submittable */);
+  LoginScreenTestApi::SubmitPassword(account_id, "password",
+                                     true /* check_if_submittable */);
   test::WaitForPrimaryUserSessionStart();
 }
 
@@ -1514,16 +1578,21 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, PRE_SAMLNoLimit) {
 
   ShowGAIALoginForm();
   LogInWithSAML(saml_test_users::kFirstUserCorpExampleComEmail,
-                kTestAuthSIDCookie1, kTestAuthLSIDCookie1);
+                kFirstSAMLUserGaiaId, kTestAuthSIDCookie1,
+                kTestAuthLSIDCookie1);
 }
 
 // Verifies that when no offline login time limit is set, a user who
 // authenticated with SAML is allowed to log in offline.
 IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, SAMLNoLimit) {
+  const auto account_id =
+      AccountId::FromUserEmail(saml_test_users::kFirstUserCorpExampleComEmail);
+  cryptohome_mixin_.ApplyAuthConfig(
+      account_id, test::UserAuthConfig::Create(test::kDefaultAuthSetup));
+
   // Verify that offline login is allowed.
-  LoginScreenTestApi::SubmitPassword(
-      AccountId::FromUserEmail(saml_test_users::kFirstUserCorpExampleComEmail),
-      "password", true /* check_if_submittable */);
+  LoginScreenTestApi::SubmitPassword(account_id, "password",
+                                     true /* check_if_submittable */);
   test::WaitForPrimaryUserSessionStart();
 }
 
@@ -1578,16 +1647,15 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, SamlReauthWithSamlRedirect) {
 
   // Since this is a reauth of existing user, we expect them to use reauth
   // endpoint regardless of LoginAuthenticationBehavior policy.
-  EXPECT_EQ(GaiaPath(), features::IsGaiaReauthEndpointEnabled()
-                            ? WizardContext::GaiaPath::kReauth
-                            : WizardContext::GaiaPath::kSamlRedirect);
+  EXPECT_EQ(GaiaPath(), WizardContext::GaiaPath::kReauth);
 }
 
 IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, PRE_PRE_TransferCookiesAffiliated) {
   fake_saml_idp()->SetCookieValue(kSAMLIdPCookieValue1);
   ShowGAIALoginForm();
   LogInWithSAML(saml_test_users::kFirstUserCorpExampleComEmail,
-                kTestAuthSIDCookie1, kTestAuthLSIDCookie1);
+                kFirstSAMLUserGaiaId, kTestAuthSIDCookie1,
+                kTestAuthLSIDCookie1);
 
   GetCookies();
   EXPECT_EQ(kTestAuthSIDCookie1, GetCookieValue(kGAIASIDCookieName));
@@ -1600,11 +1668,16 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, PRE_PRE_TransferCookiesAffiliated) {
 // if the user belongs to the domain that the device is enrolled into. Also
 // verifies that GAIA cookies are not transferred.
 IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, PRE_TransferCookiesAffiliated) {
+  cryptohome_mixin_.ApplyAuthConfig(
+      AccountId::FromUserEmail(saml_test_users::kFirstUserCorpExampleComEmail),
+      test::UserAuthConfig::Create(test::kDefaultAuthSetup));
+
   fake_saml_idp()->SetCookieValue(kSAMLIdPCookieValue2);
   fake_saml_idp()->SetLoginHTMLTemplate("saml_login.html");
   ShowGAIALoginForm();
   LogInWithSAML(saml_test_users::kFirstUserCorpExampleComEmail,
-                kTestAuthSIDCookie2, kTestAuthLSIDCookie2);
+                kFirstSAMLUserGaiaId, kTestAuthSIDCookie2,
+                kTestAuthLSIDCookie2);
 
   GetCookies();
   EXPECT_EQ(kTestAuthSIDCookie1, GetCookieValue(kGAIASIDCookieName));
@@ -1617,13 +1690,18 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, PRE_TransferCookiesAffiliated) {
 // belongs to the domain that the device is enrolled into. Also verifies that
 // GAIA cookies are not transferred.
 IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, TransferCookiesAffiliated) {
+  cryptohome_mixin_.ApplyAuthConfig(
+      AccountId::FromUserEmail(saml_test_users::kFirstUserCorpExampleComEmail),
+      test::UserAuthConfig::Create(test::kDefaultAuthSetup));
+
   fake_saml_idp()->SetCookieValue(kSAMLIdPCookieValue2);
   fake_saml_idp()->SetLoginHTMLTemplate("saml_login.html");
   ShowGAIALoginForm();
 
   EnableTransferSAMLCookiesPolicy();
   LogInWithSAML(saml_test_users::kFirstUserCorpExampleComEmail,
-                kTestAuthSIDCookie2, kTestAuthLSIDCookie2);
+                kFirstSAMLUserGaiaId, kTestAuthSIDCookie2,
+                kTestAuthLSIDCookie2);
 
   GetCookies();
   EXPECT_EQ(kTestAuthSIDCookie1, GetCookieValue(kGAIASIDCookieName));
@@ -1635,7 +1713,8 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, PRE_TransferCookiesUnaffiliated) {
   fake_saml_idp()->SetCookieValue(kSAMLIdPCookieValue1);
   ShowGAIALoginForm();
   LogInWithSAML(saml_test_users::kFifthUserExampleTestEmail,
-                kTestAuthSIDCookie1, kTestAuthLSIDCookie1);
+                kFifthSAMLUserGaiaId, kTestAuthSIDCookie1,
+                kTestAuthLSIDCookie1);
 
   GetCookies();
   EXPECT_EQ(kTestAuthSIDCookie1, GetCookieValue(kGAIASIDCookieName));
@@ -1648,13 +1727,18 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, PRE_TransferCookiesUnaffiliated) {
 // does not belong to the domain that the device is enrolled into. Also verifies
 // that GAIA cookies are not transferred.
 IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, TransferCookiesUnaffiliated) {
+  cryptohome_mixin_.ApplyAuthConfig(
+      AccountId::FromUserEmail(saml_test_users::kFifthUserExampleTestEmail),
+      test::UserAuthConfig::Create(test::kDefaultAuthSetup));
+
   fake_saml_idp()->SetCookieValue(kSAMLIdPCookieValue2);
   fake_saml_idp()->SetLoginHTMLTemplate("saml_login.html");
   ShowGAIALoginForm();
 
   EnableTransferSAMLCookiesPolicy();
   LogInWithSAML(saml_test_users::kFifthUserExampleTestEmail,
-                kTestAuthSIDCookie1, kTestAuthLSIDCookie1);
+                kFifthSAMLUserGaiaId, kTestAuthSIDCookie1,
+                kTestAuthLSIDCookie1);
 
   GetCookies();
   EXPECT_EQ(kTestAuthSIDCookie1, GetCookieValue(kGAIASIDCookieName));
@@ -1675,6 +1759,27 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, SAMLChangeAccount) {
   // Verify Gaia path used by the Gaia screen.
   EXPECT_EQ(GaiaPath(), WizardContext::GaiaPath::kSamlRedirect);
 
+  // Adding a cookie to the signin profile.
+  // After the "Enter Google Account info" button is pressed, all the
+  // cookies must be deleted.
+  net::CookieOptions options;
+  options.set_include_httponly();
+  auto* profile = ProfileHelper::Get()->GetSigninProfile();
+  ASSERT_TRUE(profile);
+  profile->GetDefaultStoragePartition()
+      ->GetCookieManagerForBrowserProcess()
+      ->SetCanonicalCookie(
+          *net::CanonicalCookie::CreateSanitizedCookie(
+              fake_saml_idp()->GetSamlPageUrl(), kSAMLIdPCookieName,
+              kSAMLIdPCookieValue1, ".example.com", /*path=*/std::string(),
+              /*creation_time=*/base::Time(),
+              /*expiration_time=*/base::Time(),
+              /*last_access_time=*/base::Time(), /*secure=*/true,
+              /*http_only=*/false, net::CookieSameSite::NO_RESTRICTION,
+              net::COOKIE_PRIORITY_DEFAULT,
+              /*partition_key=*/std::nullopt, /*status=*/nullptr),
+          fake_saml_idp()->GetSamlPageUrl(), options, base::DoNothing());
+
   // Click the "Enter Google Account info" button on the SAML page.
   test::OobeJS().TapOnPath(kChangeIdPButton);
 
@@ -1685,11 +1790,10 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, SAMLChangeAccount) {
   test::OobeJS().ExpectAttributeEQ("isSamlAuthFlowForTesting()",
                                    {"gaia-signin"}, false);
 
-  // TODO(b/259181755): change this to expect
-  // `WizardContext::GaiaPath::kDefault` once we change the implementation of
-  // the "Enter Google Account info" button to fully reload the flow through cpp
-  // code.
-  EXPECT_EQ(GaiaPath(), WizardContext::GaiaPath::kSamlRedirect);
+  EXPECT_EQ(GaiaPath(), WizardContext::GaiaPath::kDefault);
+
+  GetCookies(profile);
+  EXPECT_EQ("", GetCookieValue(kSAMLIdPCookieName));
 }
 
 // Tests that clicking back on the SAML page successfully closes the oobe
@@ -1724,7 +1828,8 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, SAMLClosaAndReopen) {
 IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, PRE_SamlToGaiaChange) {
   ShowGAIALoginForm();
   LogInWithSAML(saml_test_users::kFirstUserCorpExampleComEmail,
-                kTestAuthSIDCookie1, kTestAuthLSIDCookie1);
+                kFirstSAMLUserGaiaId, kTestAuthSIDCookie1,
+                kTestAuthLSIDCookie1);
 
   user_manager::KnownUser known_user(g_browser_process->local_state());
   EXPECT_TRUE(known_user.IsUsingSAML(AccountId::FromUserEmailGaiaId(
@@ -1738,6 +1843,11 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, PRE_SamlToGaiaChange) {
 // Verifies that when SAML user changes IdP to GAIA we detect it correctly and
 // update corresponding flags in the local state and in user session.
 IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, SamlToGaiaChange) {
+  const auto account_id = AccountId::FromUserEmailGaiaId(
+      saml_test_users::kFirstUserCorpExampleComEmail, kFirstSAMLUserGaiaId);
+  cryptohome_mixin_.ApplyAuthConfig(
+      account_id, test::UserAuthConfig::Create(test::kDefaultAuthSetup));
+
   // Change user IdP to GAIA.
   fake_gaia_.fake_gaia()->RemoveSamlIdpForUser(
       saml_test_users::kFirstUserCorpExampleComEmail);
@@ -1752,8 +1862,7 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, SamlToGaiaChange) {
   test::WaitForPrimaryUserSessionStart();
 
   user_manager::KnownUser known_user(g_browser_process->local_state());
-  EXPECT_FALSE(known_user.IsUsingSAML(AccountId::FromUserEmailGaiaId(
-      saml_test_users::kFirstUserCorpExampleComEmail, kFirstSAMLUserGaiaId)));
+  EXPECT_FALSE(known_user.IsUsingSAML(account_id));
   const user_manager::User* user =
       user_manager::UserManager::Get()->GetActiveUser();
   ASSERT_TRUE(user);
@@ -1840,7 +1949,8 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, TestLockMediaPermission) {
   SetLoginVideoCaptureAllowedUrls({url0, url1, url2});
   ShowGAIALoginForm();
   LogInWithSAML(saml_test_users::kFirstUserCorpExampleComEmail,
-                kTestAuthSIDCookie1, kTestAuthLSIDCookie1);
+                kFirstSAMLUserGaiaId, kTestAuthSIDCookie1,
+                kTestAuthLSIDCookie1);
   ScreenLockerTester().Lock();
 
   std::optional<LockScreenReauthDialogTestHelper> reauth_dialog_helper =
@@ -1994,6 +2104,89 @@ IN_PROC_BROWSER_TEST_F(SAMLPolicyTest, SAMLBlocklistNavigationDisallowed) {
   })).Wait();
 }
 
+class SAMLCookiesAndFloatingSsoTest : public SAMLPolicyTest {
+ public:
+  SAMLCookiesAndFloatingSsoTest() {
+    feature_list_.InitAndEnableFeature(ash::features::kFloatingSso);
+  }
+
+  void SetUpOnMainThread() override {
+    policy::PolicyMap user_policy;
+    user_policy.Set(policy::key::kFloatingSsoEnabled,
+                    policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+                    policy::POLICY_SOURCE_CLOUD, base::Value(true), nullptr);
+    // We enable Floating Workspace here because otherwise Floating SSO
+    // wouldn't sync session cookies, and fake SAML IdP only sets
+    // session cookies.
+    user_policy.Set(policy::key::kFloatingWorkspaceEnabled,
+                    policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_USER,
+                    policy::POLICY_SOURCE_CLOUD, base::Value(true), nullptr);
+    provider_.UpdateChromePolicy(user_policy);
+
+    SAMLPolicyTest::SetUpOnMainThread();
+  }
+
+ protected:
+  // TODO(crbug.com/379092376): remove this once Floating SSO is out of beta.
+  base::test::ScopedChromeOSVersionInfo scoped_channel_override_{
+      "CHROMEOS_RELEASE_TRACK=beta-channel", base::Time::Now()};
+
+  base::test::ScopedFeatureList feature_list_;
+};
+
+// Verify that Floating SSO doesn't override SAML cookies which can be acquired
+// during online sign-in on the login screen.
+IN_PROC_BROWSER_TEST_F(SAMLCookiesAndFloatingSsoTest,
+                       SAMLCookiesNotOverridenByFloatingSso) {
+  fake_saml_idp()->SetCookieValue(kSAMLIdPCookieValue1);
+  ShowGAIALoginForm();
+  LogInWithSAML(saml_test_users::kFirstUserCorpExampleComEmail,
+                kFirstSAMLUserGaiaId, kTestAuthSIDCookie1,
+                kTestAuthLSIDCookie1);
+
+  // This call caches cookies from user's profile to `cookie_list_`.
+  GetCookies();
+
+  // Find a cookie with the name `kSAMLIdPCookieName` - we expect it to be
+  // transferred from sign-in screen profile to user's profile during login.
+  auto saml_cookie_iter =
+      std::find_if(cookie_list_.begin(), cookie_list_.end(),
+                   [](const net::CanonicalCookie& cookie) {
+                     return cookie.Name() == kSAMLIdPCookieName;
+                   });
+  ASSERT_NE(saml_cookie_iter, cookie_list_.end());
+  EXPECT_EQ(kSAMLIdPCookieValue1, saml_cookie_iter->Value());
+
+  // Create a Sync proto representing our SAML cookie with a new value, and feed
+  // it to `FloatingSsoSyncBridge` as if it came from Sync server on the first
+  // data fetch.
+  std::optional<sync_pb::CookieSpecifics> cookie_proto =
+      ash::floating_sso::ToSyncProto(*saml_cookie_iter);
+  ASSERT_TRUE(cookie_proto.has_value());
+  cookie_proto->set_value("new-value");
+  syncer::EntityChangeList remote_entities;
+  remote_entities.push_back(syncer::EntityChange::CreateAdd(
+      cookie_proto->unique_key(),
+      ash::floating_sso::CreateEntityDataForTest(cookie_proto.value())));
+  ash::floating_sso::FloatingSsoService& service =
+      CHECK_DEREF(ash::floating_sso::FloatingSsoServiceFactory::GetForProfile(
+          ProfileManager::GetActiveUserProfile()));
+  ash::floating_sso::FloatingSsoSyncBridge* bridge =
+      service.GetBridgeForTesting();
+  bridge->MergeFullSyncData(bridge->CreateMetadataChangeList(),
+                            std::move(remote_entities));
+
+  const auto& synced_entries = bridge->CookieSpecificsInStore();
+  // Floating SSO doesn't sync Gaia cookies, and this test generates
+  // only one non-Gaia cookie.
+  EXPECT_EQ(synced_entries.size(), 1u);
+  const auto& [key, synced_proto] = *synced_entries.begin();
+  // Check the value of synced SAML cookie: this verifies that during conflict
+  // resolution in `MergeFullSyncData` call we've chosen our local version of
+  // the cookies instead of the one which came from the server.
+  EXPECT_EQ(synced_proto.value(), kSAMLIdPCookieValue1);
+}
+
 // Pushes DeviceLoginScreenLocales into the device policy.
 class SAMLLocalesTest : public SamlTestBase {
  public:
@@ -2085,7 +2278,8 @@ IN_PROC_BROWSER_TEST_P(SAMLPasswordAttributesTest, LoginSucceeded) {
 }
 
 // Verify that no password attributes are stored when login fails.
-IN_PROC_BROWSER_TEST_P(SAMLPasswordAttributesTest, LoginFailed) {
+// TODO(crbug.com/325657256): Test is flaky.
+IN_PROC_BROWSER_TEST_P(SAMLPasswordAttributesTest, DISABLED_LoginFailed) {
   fake_saml_idp()->SetLoginHTMLTemplate("saml_login.html");
   fake_saml_idp()->SetSamlResponseFile("saml_with_password_attributes.xml");
   ShowGAIALoginForm();

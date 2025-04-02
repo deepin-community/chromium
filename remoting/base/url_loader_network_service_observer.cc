@@ -18,6 +18,7 @@
 #include "remoting/base/logging.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/shared_storage.mojom.h"
 #include "url/gurl.h"
 
 namespace remoting {
@@ -102,7 +103,7 @@ void UrlLoaderNetworkServiceObserver::OnCertificateRequested(
   // is the caller's responsibility to keep them alive until the callback has
   // been run by ClientCertStore.
   temp_client_cert_store->GetClientCerts(
-      *cert_info,
+      cert_info,
       base::BindOnce(&UrlLoaderNetworkServiceObserver::OnCertificatesSelected,
                      weak_factory_.GetWeakPtr(),
                      std::move(client_cert_responder),
@@ -111,7 +112,7 @@ void UrlLoaderNetworkServiceObserver::OnCertificateRequested(
 
 void UrlLoaderNetworkServiceObserver::OnAuthRequired(
     const std::optional<base::UnguessableToken>& window_id,
-    uint32_t request_id,
+    int32_t request_id,
     const GURL& url,
     bool first_auth_attempt,
     const net::AuthChallengeInfo& auth_info,
@@ -149,7 +150,9 @@ void UrlLoaderNetworkServiceObserver::OnDataUseUpdate(
 
 void UrlLoaderNetworkServiceObserver::OnSharedStorageHeaderReceived(
     const url::Origin& request_origin,
-    std::vector<network::mojom::SharedStorageOperationPtr> operations,
+    std::vector<network::mojom::SharedStorageModifierMethodWithOptionsPtr>
+        methods_with_options,
+    const std::optional<std::string>& with_lock,
     OnSharedStorageHeaderReceivedCallback callback) {
   std::move(callback).Run();
 }
@@ -159,6 +162,15 @@ void UrlLoaderNetworkServiceObserver::Clone(
         observer) {
   receivers_.Add(this, std::move(observer));
 }
+
+void UrlLoaderNetworkServiceObserver::OnWebSocketConnectedToPrivateNetwork(
+    network::mojom::IPAddressSpace ip_address_space) {}
+
+void UrlLoaderNetworkServiceObserver::OnUrlLoaderConnectedToPrivateNetwork(
+    const GURL& request_url,
+    network::mojom::IPAddressSpace response_address_space,
+    network::mojom::IPAddressSpace client_address_space,
+    network::mojom::IPAddressSpace target_address_space) {}
 
 void UrlLoaderNetworkServiceObserver::OnCertificatesSelected(
     mojo::PendingRemote<network::mojom::ClientCertificateResponder>
@@ -200,6 +212,11 @@ void UrlLoaderNetworkServiceObserver::ContinueWithCertificate(
 
   mojo::Remote<network::mojom::ClientCertificateResponder> responder(
       std::move(client_cert_responder));
+
+  if (!client_cert || !private_key) {
+    responder->ContinueWithoutCertificate();
+    return;
+  }
 
   mojo::PendingRemote<network::mojom::SSLPrivateKey> ssl_private_key;
   mojo::MakeSelfOwnedReceiver(

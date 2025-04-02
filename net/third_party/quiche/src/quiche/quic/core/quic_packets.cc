@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <memory>
+#include <ostream>
+#include <string>
 #include <utility>
 
 #include "absl/strings/escaping.h"
@@ -353,13 +355,24 @@ QuicReceivedPacket::QuicReceivedPacket(
     const char* buffer, size_t length, QuicTime receipt_time, bool owns_buffer,
     int ttl, bool ttl_valid, char* packet_headers, size_t headers_length,
     bool owns_header_buffer, QuicEcnCodepoint ecn_codepoint)
+    : quic::QuicReceivedPacket(buffer, length, receipt_time, owns_buffer, ttl,
+                               ttl_valid, packet_headers, headers_length,
+                               owns_header_buffer, ecn_codepoint,
+                               /*ipv6_flow_label=*/0) {}
+
+QuicReceivedPacket::QuicReceivedPacket(
+    const char* buffer, size_t length, QuicTime receipt_time, bool owns_buffer,
+    int ttl, bool ttl_valid, char* packet_headers, size_t headers_length,
+    bool owns_header_buffer, QuicEcnCodepoint ecn_codepoint,
+    uint32_t ipv6_flow_label)
     : QuicEncryptedPacket(buffer, length, owns_buffer),
       receipt_time_(receipt_time),
       ttl_(ttl_valid ? ttl : -1),
       packet_headers_(packet_headers),
       headers_length_(headers_length),
       owns_header_buffer_(owns_header_buffer),
-      ecn_codepoint_(ecn_codepoint) {}
+      ecn_codepoint_(ecn_codepoint),
+      ipv6_flow_label_(ipv6_flow_label) {}
 
 QuicReceivedPacket::~QuicReceivedPacket() {
   if (owns_header_buffer_) {
@@ -373,27 +386,14 @@ std::unique_ptr<QuicReceivedPacket> QuicReceivedPacket::Clone() const {
   if (this->packet_headers()) {
     char* headers_buffer = new char[this->headers_length()];
     memcpy(headers_buffer, this->packet_headers(), this->headers_length());
-    if (GetQuicReloadableFlag(quic_clone_ecn)) {
-      QUIC_RELOADABLE_FLAG_COUNT_N(quic_clone_ecn, 1, 2);
-      return std::make_unique<QuicReceivedPacket>(
-          buffer, this->length(), receipt_time(), true, ttl(), ttl() >= 0,
-          headers_buffer, this->headers_length(), true, this->ecn_codepoint());
-    } else {
-      return std::make_unique<QuicReceivedPacket>(
-          buffer, this->length(), receipt_time(), true, ttl(), ttl() >= 0,
-          headers_buffer, this->headers_length(), true);
-    }
-  }
-
-  if (GetQuicReloadableFlag(quic_clone_ecn)) {
-    QUIC_RELOADABLE_FLAG_COUNT_N(quic_clone_ecn, 2, 2);
     return std::make_unique<QuicReceivedPacket>(
         buffer, this->length(), receipt_time(), true, ttl(), ttl() >= 0,
-        nullptr, 0, false, this->ecn_codepoint());
-  } else {
-    return std::make_unique<QuicReceivedPacket>(
-        buffer, this->length(), receipt_time(), true, ttl(), ttl() >= 0);
+        headers_buffer, this->headers_length(), true, this->ecn_codepoint());
   }
+
+  return std::make_unique<QuicReceivedPacket>(
+      buffer, this->length(), receipt_time(), true, ttl(), ttl() >= 0, nullptr,
+      0, false, this->ecn_codepoint());
 }
 
 std::ostream& operator<<(std::ostream& os, const QuicReceivedPacket& s) {

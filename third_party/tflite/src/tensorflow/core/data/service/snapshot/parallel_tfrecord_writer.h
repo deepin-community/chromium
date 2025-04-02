@@ -27,11 +27,11 @@ limitations under the License.
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
+#include "xla/tsl/platform/env.h"
+#include "xla/tsl/platform/threadpool.h"
 #include "tensorflow/core/data/service/byte_size.h"
 #include "tensorflow/core/data/snapshot_utils.h"
 #include "tensorflow/core/framework/tensor.h"
-#include "tsl/platform/env.h"
-#include "tsl/platform/threadpool.h"
 
 namespace tensorflow {
 namespace data {
@@ -60,7 +60,7 @@ class ParallelTFRecordWriter {
                                   const std::string& compression, tsl::Env* env,
                                   ByteSize max_file_size = ByteSize::GB(6),
                                   int64_t num_write_threads = 2,
-                                  int64_t buffer_size_per_thread = 1);
+                                  int64_t buffer_size = 1);
   virtual ~ParallelTFRecordWriter();
   ParallelTFRecordWriter(const ParallelTFRecordWriter&) = delete;
   ParallelTFRecordWriter& operator=(const ParallelTFRecordWriter&) = delete;

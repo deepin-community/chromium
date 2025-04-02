@@ -42,7 +42,7 @@ struct SkPoint;
 struct SkRSXform;
 
 ///////////////////////////////////////////////////////////////////////////////
-class SkBitmapDevice : public SkDevice {
+class SkBitmapDevice final : public SkDevice {
 public:
     /**
      *  Construct a new device with the specified bitmap as its backend. It is
@@ -116,7 +116,6 @@ public:
     void* getRasterHandle() const override { return fRasterHandle; }
 
 private:
-    // friend class SkCanvas;
     friend class SkDraw;
     friend class SkDrawBase;
     friend class SkDrawTiler;
@@ -130,10 +129,7 @@ private:
 
     void onClipShader(sk_sp<SkShader>) override;
 
-    void onDrawGlyphRunList(SkCanvas*,
-                            const sktext::GlyphRunList&,
-                            const SkPaint& initialPaint,
-                            const SkPaint& drawingPaint) override;
+    void onDrawGlyphRunList(SkCanvas*, const sktext::GlyphRunList&, const SkPaint& paint) override;
 
     bool onReadPixels(const SkPixmap&, int x, int y) override;
     bool onWritePixels(const SkPixmap&, int, int) override;

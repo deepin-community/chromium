@@ -98,7 +98,6 @@ inline bool ShapeValue::operator==(const ShapeValue& other) const {
   }
 
   NOTREACHED();
-  return false;
 }
 
 }  // namespace blink

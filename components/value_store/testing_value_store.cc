@@ -34,19 +34,29 @@ void TestingValueStore::set_status_code(StatusCode status_code) {
 size_t TestingValueStore::GetBytesInUse(const std::string& key) {
   // Let SettingsStorageQuotaEnforcer implement this.
   NOTREACHED() << "Not implemented";
-  return 0;
 }
 
 size_t TestingValueStore::GetBytesInUse(const std::vector<std::string>& keys) {
   // Let SettingsStorageQuotaEnforcer implement this.
   NOTREACHED() << "Not implemented";
-  return 0;
 }
 
 size_t TestingValueStore::GetBytesInUse() {
   // Let SettingsStorageQuotaEnforcer implement this.
   NOTREACHED() << "Not implemented";
-  return 0;
+}
+
+ValueStore::ReadResult TestingValueStore::GetKeys() {
+  read_count_++;
+  if (!status_.ok()) {
+    return ReadResult(CreateStatusCopy(status_));
+  }
+
+  base::Value::Dict settings;
+  for (auto entry : storage_) {
+    settings.Set(entry.first, base::Value());
+  }
+  return ReadResult(std::move(settings), CreateStatusCopy(status_));
 }
 
 ValueStore::ReadResult TestingValueStore::Get(const std::string& key) {

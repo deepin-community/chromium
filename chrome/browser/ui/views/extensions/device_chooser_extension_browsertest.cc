@@ -2,13 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <string>
 
+#include "base/containers/to_vector.h"
 #include "base/memory/raw_ptr.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/test_future.h"
-#include "base/test/to_vector.h"
 #include "build/buildflag.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/ui/chooser_bubble_testapi.h"
@@ -20,6 +20,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/browser_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "extensions/test/test_extension_dir.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/views/layout/animating_layout_manager_test_util.h"
@@ -76,9 +77,7 @@ class DeviceChooserExtensionBrowserTest
   }
 
   ExtensionsToolbarContainer* extensions_container() {
-    return BrowserView::GetBrowserViewForBrowser(browser())
-        ->toolbar()
-        ->extensions_container();
+    return browser()->GetBrowserView().toolbar()->extensions_container();
   }
 
   bool ShowChooser() {
@@ -97,7 +96,7 @@ class DeviceChooserExtensionBrowserTest
   std::vector<ToolbarActionView*> GetPinnedExtensionViews() {
     auto is_visible = [&](ToolbarActionView* const action) -> bool {
 #if BUILDFLAG(IS_MAC)
-      // TODO(crbug.com/1045212): Use IsActionVisibleOnToolbar() because it
+      // TODO(crbug.com/40670141): Use IsActionVisibleOnToolbar() because it
       // queries the underlying model and not GetVisible(), as that relies on an
       // animation running, which is not reliable in unit tests on Mac.
       return extensions_container()->IsActionVisibleOnToolbar(
@@ -121,15 +120,15 @@ class DeviceChooserExtensionBrowserTest
   }
 
   std::vector<std::string> GetPinnedExtensionNames() {
-    return base::test::ToVector(GetPinnedExtensionViews(), [](auto* view) {
+    return base::ToVector(GetPinnedExtensionViews(), [](auto* view) {
       return base::UTF16ToUTF8(view->view_controller()->GetActionName());
     });
   }
 
   void WaitForAnimation() {
 #if BUILDFLAG(IS_MAC)
-    // TODO(crbug.com/1045212): we avoid using animations on Mac due to the lack
-    // of support in unit tests. Therefore this is a no-op.
+    // TODO(crbug.com/40670141): we avoid using animations on Mac due to the
+    // lack of support in unit tests. Therefore this is a no-op.
 #else
     views::test::WaitForAnimatingLayoutManager(extensions_container());
 #endif

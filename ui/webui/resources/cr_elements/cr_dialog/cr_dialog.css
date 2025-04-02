@@ -12,7 +12,7 @@
  * #css_wrapper_metadata_end */
 
 dialog {
-  --scroll-border-color: var(--paper-grey-300);
+  --scroll-border-color: var(--google-grey-300);
   --scroll-border: 1px solid var(--scroll-border-color);
   background-color: var(--cr-dialog-background-color, white);
   border: 0;
@@ -21,6 +21,7 @@ dialog {
   box-shadow: 0 0 16px rgba(0, 0, 0, 0.12),
               0 16px 16px rgba(0, 0, 0, 0.24);
   color: inherit;
+  line-height: 20px;
   max-height: initial;
   max-width: initial;
   overflow-y: hidden;
@@ -143,8 +144,9 @@ dialog::backdrop {
       var(--transparent-border));
 }
 
-#cr-container-shadow-top.has-shadow,
-#cr-container-shadow-bottom.has-shadow {
+#cr-container-shadow-top:has(+ #container.can-scroll:not(.scrolled-to-top)),
+#container.can-scroll:not(.scrolled-to-bottom) +
+    #cr-container-shadow-bottom {
   border-bottom: var(--scroll-border);
 }
 

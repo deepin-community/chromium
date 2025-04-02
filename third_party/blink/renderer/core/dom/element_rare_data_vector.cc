@@ -5,7 +5,6 @@
 #include "third_party/blink/renderer/core/dom/element_rare_data_vector.h"
 
 #include "third_party/blink/renderer/core/animation/element_animations.h"
-#include "third_party/blink/renderer/core/aom/accessible_node.h"
 #include "third_party/blink/renderer/core/css/container_query_data.h"
 #include "third_party/blink/renderer/core/css/cssom/inline_style_property_map.h"
 #include "third_party/blink/renderer/core/css/inline_css_style_declaration.h"
@@ -16,6 +15,8 @@
 #include "third_party/blink/renderer/core/dom/dataset_dom_string_map.h"
 #include "third_party/blink/renderer/core/dom/dom_token_list.h"
 #include "third_party/blink/renderer/core/dom/has_invalidation_flags.h"
+#include "third_party/blink/renderer/core/dom/interest_invoker_data.h"
+#include "third_party/blink/renderer/core/dom/interest_invoker_target_data.h"
 #include "third_party/blink/renderer/core/dom/named_node_map.h"
 #include "third_party/blink/renderer/core/dom/names_map.h"
 #include "third_party/blink/renderer/core/dom/node_rare_data.h"
@@ -36,42 +37,25 @@
 
 namespace blink {
 
-ElementRareDataVector::ElementRareDataVector(NodeData* node_layout_data)
-    : NodeRareData(ClassType::kElementRareData, std::move(*node_layout_data)) {}
+ElementRareDataVector::ElementRareDataVector() = default;
 
 ElementRareDataVector::~ElementRareDataVector() {
   DCHECK(!GetField(FieldId::kPseudoElementData));
 }
 
-unsigned ElementRareDataVector::GetFieldIndex(FieldId field_id) const {
-  unsigned field_id_int = static_cast<unsigned>(field_id);
-  DCHECK(fields_bitfield_ & (static_cast<BitfieldType>(1) << field_id_int));
-  return __builtin_popcount(fields_bitfield_ &
-                            ~(~static_cast<BitfieldType>(0) << field_id_int));
-}
-
 ElementRareDataField* ElementRareDataVector::GetField(FieldId field_id) const {
-  if (fields_bitfield_ &
-      (static_cast<BitfieldType>(1) << static_cast<unsigned>(field_id)))
-    return fields_[GetFieldIndex(field_id)].Get();
+  if (fields_.HasField(field_id)) {
+    return fields_.GetField(field_id).Get();
+  }
   return nullptr;
 }
 
 void ElementRareDataVector::SetField(FieldId field_id,
                                      ElementRareDataField* field) {
-  unsigned field_id_int = static_cast<unsigned>(field_id);
-  if (fields_bitfield_ & (static_cast<BitfieldType>(1) << field_id_int)) {
-    if (field) {
-      fields_[GetFieldIndex(field_id)] = field;
-    } else {
-      fields_.EraseAt(GetFieldIndex(field_id));
-      fields_bitfield_ =
-          fields_bitfield_ & ~(static_cast<BitfieldType>(1) << field_id_int);
-    }
-  } else if (field) {
-    fields_bitfield_ =
-        fields_bitfield_ | (static_cast<BitfieldType>(1) << field_id_int);
-    fields_.insert(GetFieldIndex(field_id), field);
+  if (field) {
+    fields_.SetField(field_id, field);
+  } else {
+    fields_.EraseField(field_id);
   }
 }
 
@@ -120,6 +104,45 @@ ElementRareDataVector::GetPseudoElements() const {
   if (!data)
     return {};
   return data->GetPseudoElements();
+}
+void ElementRareDataVector::AddColumnPseudoElement(
+    ColumnPseudoElement& column_pseudo_element) {
+  PseudoElementData* data =
+      static_cast<PseudoElementData*>(GetField(FieldId::kPseudoElementData));
+  if (!data) {
+    data = MakeGarbageCollected<PseudoElementData>();
+    SetField(FieldId::kPseudoElementData, data);
+  }
+  data->AddColumnPseudoElement(column_pseudo_element);
+}
+
+const ColumnPseudoElementsVector*
+ElementRareDataVector::GetColumnPseudoElements() const {
+  PseudoElementData* data =
+      static_cast<PseudoElementData*>(GetField(FieldId::kPseudoElementData));
+  if (!data) {
+    return nullptr;
+  }
+  return data->GetColumnPseudoElements();
+}
+
+ColumnPseudoElement* ElementRareDataVector::GetColumnPseudoElement(
+    wtf_size_t idx) const {
+  PseudoElementData* data =
+      static_cast<PseudoElementData*>(GetField(FieldId::kPseudoElementData));
+  if (!data) {
+    return nullptr;
+  }
+  return data->GetColumnPseudoElement(idx);
+}
+
+void ElementRareDataVector::ClearColumnPseudoElements(wtf_size_t to_keep) {
+  PseudoElementData* data =
+      static_cast<PseudoElementData*>(GetField(FieldId::kPseudoElementData));
+  if (!data) {
+    return;
+  }
+  data->ClearColumnPseudoElements(to_keep);
 }
 
 CSSStyleDeclaration& ElementRareDataVector::EnsureInlineCSSStyleDeclaration(
@@ -248,10 +271,10 @@ DOMTokenList* ElementRareDataVector::GetPart() const {
 }
 
 void ElementRareDataVector::SetPartNamesMap(const AtomicString part_names) {
-  EnsureWrappedField<NamesMap>(FieldId::kPartNamesMap).Set(part_names);
+  EnsureField<NamesMap>(FieldId::kPartNamesMap).Set(part_names);
 }
 const NamesMap* ElementRareDataVector::PartNamesMap() const {
-  return GetWrappedField<NamesMap>(FieldId::kPartNamesMap);
+  return static_cast<NamesMap*>(GetField(FieldId::kPartNamesMap));
 }
 
 InlineStylePropertyMap& ElementRareDataVector::EnsureInlineStylePropertyMap(
@@ -270,17 +293,6 @@ const ElementInternals* ElementRareDataVector::GetElementInternals() const {
 ElementInternals& ElementRareDataVector::EnsureElementInternals(
     HTMLElement& target) {
   return EnsureField<ElementInternals>(FieldId::kElementInternals, target);
-}
-
-AccessibleNode* ElementRareDataVector::GetAccessibleNode() const {
-  return static_cast<AccessibleNode*>(GetField(FieldId::kAccessibleNode));
-}
-AccessibleNode* ElementRareDataVector::EnsureAccessibleNode(
-    Element* owner_element) {
-  return &EnsureField<AccessibleNode>(FieldId::kAccessibleNode, owner_element);
-}
-void ElementRareDataVector::ClearAccessibleNode() {
-  SetField(FieldId::kAccessibleNode, nullptr);
 }
 
 DisplayLockContext* ElementRareDataVector::EnsureDisplayLockContext(
@@ -317,6 +329,10 @@ OutOfFlowData& ElementRareDataVector::EnsureOutOfFlowData() {
 
 OutOfFlowData* ElementRareDataVector::GetOutOfFlowData() const {
   return static_cast<OutOfFlowData*>(GetField(FieldId::kOutOfFlowData));
+}
+
+void ElementRareDataVector::ClearOutOfFlowData() {
+  SetField(FieldId::kOutOfFlowData, nullptr);
 }
 
 const RegionCaptureCropId* ElementRareDataVector::GetRegionCaptureCropId()
@@ -398,6 +414,31 @@ void ElementRareDataVector::RemovePopoverData() {
   SetField(FieldId::kPopoverData, nullptr);
 }
 
+InterestInvokerData* ElementRareDataVector::GetInterestInvokerData() const {
+  return static_cast<InterestInvokerData*>(
+      GetField(FieldId::kInterestInvokerData));
+}
+InterestInvokerData& ElementRareDataVector::EnsureInterestInvokerData() {
+  return EnsureField<InterestInvokerData>(FieldId::kInterestInvokerData);
+}
+void ElementRareDataVector::RemoveInterestInvokerData() {
+  SetField(FieldId::kInterestInvokerData, nullptr);
+}
+
+InterestInvokerTargetData* ElementRareDataVector::GetInterestInvokerTargetData()
+    const {
+  return static_cast<InterestInvokerTargetData*>(
+      GetField(FieldId::kInterestInvokerTargetData));
+}
+InterestInvokerTargetData&
+ElementRareDataVector::EnsureInterestInvokerTargetData() {
+  return EnsureField<InterestInvokerTargetData>(
+      FieldId::kInterestInvokerTargetData);
+}
+void ElementRareDataVector::RemoveInterestInvokerTargetData() {
+  SetField(FieldId::kInterestInvokerTargetData, nullptr);
+}
+
 AnchorPositionScrollData* ElementRareDataVector::GetAnchorPositionScrollData()
     const {
   return static_cast<AnchorPositionScrollData*>(
@@ -407,19 +448,20 @@ void ElementRareDataVector::RemoveAnchorPositionScrollData() {
   SetField(FieldId::kAnchorPositionScrollData, nullptr);
 }
 AnchorPositionScrollData& ElementRareDataVector::EnsureAnchorPositionScrollData(
-    Element* owner_element) {
+    Element* anchored_element) {
   DCHECK(!GetAnchorPositionScrollData() ||
-         GetAnchorPositionScrollData()->OwnerElement() == owner_element);
+         GetAnchorPositionScrollData()->AnchoredElement() == anchored_element);
   return EnsureField<AnchorPositionScrollData>(
-      FieldId::kAnchorPositionScrollData, owner_element);
+      FieldId::kAnchorPositionScrollData, anchored_element);
 }
 
 AnchorElementObserver& ElementRareDataVector::EnsureAnchorElementObserver(
-    HTMLElement* element) {
+    Element* new_source_element) {
   DCHECK(!GetAnchorElementObserver() ||
-         GetAnchorElementObserver()->GetElement() == element);
+         GetAnchorElementObserver()->GetSourceElement() == new_source_element);
+  CHECK(RuntimeEnabledFeatures::HTMLAnchorAttributeEnabled());
   return EnsureField<AnchorElementObserver>(FieldId::kAnchorElementObserver,
-                                            element);
+                                            new_source_element);
 }
 
 AnchorElementObserver* ElementRareDataVector::GetAnchorElementObserver() const {

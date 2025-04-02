@@ -1,6 +1,16 @@
 // Copyright 2015 The Chromium Authors
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "test_helpers.h"
 
@@ -12,9 +22,12 @@
 #include <string_view>
 
 #include <gtest/gtest.h>
+
 #include <openssl/bytestring.h>
 #include <openssl/mem.h>
 #include <openssl/pool.h>
+
+#include "../crypto/test/test_data.h"
 #include "cert_error_params.h"
 #include "cert_errors.h"
 #include "parser.h"
@@ -23,7 +36,7 @@
 #include "string_util.h"
 #include "trust_store.h"
 
-namespace bssl {
+BSSL_NAMESPACE_BEGIN
 
 namespace {
 
@@ -88,41 +101,6 @@ std::vector<std::string> SplitString(std::string_view str) {
     out.push_back(StripString(s));
   }
   return out;
-}
-
-bool ReadFileToString(const std::string &path, std::string *out) {
-  std::ifstream file(path, std::ios::binary);
-  file.unsetf(std::ios::skipws);
-
-  file.seekg(0, std::ios::end);
-  if (file.tellg() == -1) {
-    return false;
-  }
-  out->reserve(file.tellg());
-  file.seekg(0, std::ios::beg);
-
-  out->assign(std::istreambuf_iterator<char>(file),
-              std::istreambuf_iterator<char>());
-
-  return true;
-}
-
-std::string AppendComponent(const std::string &path,
-                            const std::string &component) {
-  // Append a path component to a path. Use the \ separator if this appears to
-  // be a Windows path, otherwise the Unix one.
-  if (path.find(":\\") != std::string::npos) {
-    return path + "\\" + component;
-  }
-  return path + "/" + component;
-}
-
-std::string GetTestRoot(void) {
-  // We expect our test data to live in "pki" underneath a
-  // test root directory, or in the current directry.
-  char *root_from_env = getenv("BORINGSSL_TEST_DATA_ROOT");
-  std::string root = root_from_env ? root_from_env : ".";
-  return AppendComponent(root, "pki");
 }
 
 }  // namespace
@@ -337,6 +315,10 @@ bool ReadVerifyCertChainTestFromFile(const std::string &file_path_ascii,
         test->key_purpose = KeyPurpose::SERVER_AUTH_STRICT;
       } else if (value == "CLIENT_AUTH_STRICT") {
         test->key_purpose = KeyPurpose::CLIENT_AUTH_STRICT;
+      } else if (value == "SERVER_AUTH_STRICT_LEAF") {
+        test->key_purpose = KeyPurpose::SERVER_AUTH_STRICT_LEAF;
+      } else if (value == "CLIENT_AUTH_STRICT_LEAF") {
+        test->key_purpose = KeyPurpose::CLIENT_AUTH_STRICT_LEAF;
       } else {
         ADD_FAILURE() << "Unrecognized key_purpose: " << value;
         return false;
@@ -450,18 +432,7 @@ bool ReadVerifyCertChainTestFromFile(const std::string &file_path_ascii,
 }
 
 std::string ReadTestFileToString(const std::string &file_path_ascii) {
-  // Compute the full path, relative to the src/ directory.
-  std::string src_root = GetTestRoot();
-  std::string filepath = AppendComponent(src_root, file_path_ascii);
-
-  // Read the full contents of the file.
-  std::string file_data;
-  if (!ReadFileToString(filepath, &file_data)) {
-    ADD_FAILURE() << "Couldn't read file: " << filepath;
-    return std::string();
-  }
-
-  return file_data;
+  return GetTestData(("pki/" + file_path_ascii).c_str());
 }
 
 void VerifyCertPathErrors(const std::string &expected_errors_str,
@@ -522,4 +493,4 @@ void VerifyUserConstrainedPolicySet(
   }
 }
 
-}  // namespace bssl
+BSSL_NAMESPACE_END

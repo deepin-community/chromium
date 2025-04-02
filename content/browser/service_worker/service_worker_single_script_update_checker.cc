@@ -2,8 +2,15 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/377326291): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "content/browser/service_worker/service_worker_single_script_update_checker.h"
 
+#include <optional>
+#include <string_view>
 #include <utility>
 
 #include "base/containers/span.h"
@@ -95,7 +102,7 @@ class ServiceWorkerSingleScriptUpdateChecker::WrappedIOBuffer
     : public net::WrappedIOBuffer {
  public:
   WrappedIOBuffer(const char* data, size_t size)
-      : net::WrappedIOBuffer(base::make_span(data, size)) {}
+      : net::WrappedIOBuffer(base::span(data, size)) {}
 
  private:
   ~WrappedIOBuffer() override = default;
@@ -159,7 +166,7 @@ ServiceWorkerSingleScriptUpdateChecker::ServiceWorkerSingleScriptUpdateChecker(
 
   // Upgrade the request to an a priori authenticated URL, if appropriate.
   // https://w3c.github.io/webappsec-upgrade-insecure-requests/#upgrade-request
-  // TODO(https://crbug.com/987491): Set |ResourceRequest::upgrade_if_insecure_|
+  // TODO(crbug.com/40637521): Set |ResourceRequest::upgrade_if_insecure_|
   // appropriately.
 
   if (service_worker_loader_helpers::ShouldValidateBrowserCacheForScript(
@@ -187,14 +194,14 @@ ServiceWorkerSingleScriptUpdateChecker::ServiceWorkerSingleScriptUpdateChecker(
 
   // Service worker update checking doesn't have a relevant frame and tab, so
   // that `web_contents_getter` returns nullptr and the frame id is set to
-  // kNoFrameTreeNodeId.
+  // an invalid FrameTreeNodeId.
   base::RepeatingCallback<WebContents*()> web_contents_getter =
       base::BindRepeating([]() -> WebContents* { return nullptr; });
   std::vector<std::unique_ptr<blink::URLLoaderThrottle>> throttles =
       CreateContentBrowserURLLoaderThrottles(
           resource_request, browser_context, std::move(web_contents_getter),
-          /*navigation_ui_data=*/nullptr, RenderFrameHost::kNoFrameTreeNodeId,
-          /*navigation_id=*/absl::nullopt);
+          /*navigation_ui_data=*/nullptr, FrameTreeNodeId(),
+          /*navigation_id=*/std::nullopt);
 
   network_client_remote_.Bind(
       network_client_receiver_.BindNewPipeAndPassRemote());
@@ -244,13 +251,11 @@ void ServiceWorkerSingleScriptUpdateChecker::OnReceiveResponse(
   // https://w3c.github.io/ServiceWorker/#service-worker-script-response
   // Only main script needs the following check.
   if (is_main_script_) {
-    std::string service_worker_allowed;
-    bool has_header = response_head->headers->EnumerateHeader(
-        nullptr, ServiceWorkerConsts::kServiceWorkerAllowed,
-        &service_worker_allowed);
+    std::optional<std::string_view> service_worker_allowed =
+        response_head->headers->EnumerateHeader(
+            nullptr, ServiceWorkerConsts::kServiceWorkerAllowed);
     if (!service_worker_loader_helpers::IsPathRestrictionSatisfied(
-            scope_, script_url_, has_header ? &service_worker_allowed : nullptr,
-            &error_message)) {
+            scope_, script_url_, service_worker_allowed, &error_message)) {
       Fail(blink::ServiceWorkerStatusCode::kErrorSecurity, error_message,
            network::URLLoaderCompletionStatus(net::ERR_INSECURE_RESPONSE));
       return;
@@ -261,7 +266,7 @@ void ServiceWorkerSingleScriptUpdateChecker::OnReceiveResponse(
              ->ShouldServiceWorkerInheritPolicyContainerFromCreator(
                  script_url_)) {
       policy_container_host_ = base::MakeRefCounted<PolicyContainerHost>(
-          // TODO(https://crbug.com/1366920): Ensure parsed headers are
+          // TODO(crbug.com/40867256): Ensure parsed headers are
           // available
           response_head->parsed_headers
               // This does not parse the referrer policy, which will be
@@ -298,7 +303,7 @@ void ServiceWorkerSingleScriptUpdateChecker::OnReceiveRedirect(
   // Step 9.5: "Set request's redirect mode to "error"."
   // https://w3c.github.io/ServiceWorker/#update-algorithm
   //
-  // TODO(https://crbug.com/889798): Follow redirects for imported scripts.
+  // TODO(crbug.com/40595655): Follow redirects for imported scripts.
   Fail(blink::ServiceWorkerStatusCode::kErrorNetwork,
        ServiceWorkerConsts::kServiceWorkerRedirectError,
        network::URLLoaderCompletionStatus(net::ERR_INVALID_REDIRECT));
@@ -352,7 +357,6 @@ void ServiceWorkerSingleScriptUpdateChecker::OnComplete(
       case ServiceWorkerUpdatedScriptLoader::WriterState::kNotStarted:
         NOTREACHED()
             << "Response header should be received before OnComplete()";
-        break;
       case ServiceWorkerUpdatedScriptLoader::WriterState::kWriting:
         // Wait until it's written. OnWriteHeadersComplete() will call
         // Finish().

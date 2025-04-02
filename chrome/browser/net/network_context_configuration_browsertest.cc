@@ -21,7 +21,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/test/bind.h"
-#include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/uuid.h"
 #include "build/build_config.h"
@@ -40,7 +39,7 @@
 #include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
-#include "components/content_settings/core/common/features.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/pref_names.h"
 #include "components/embedder_support/switches.h"
 #include "components/embedder_support/user_agent_utils.h"
@@ -51,7 +50,6 @@
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
-#include "components/privacy_sandbox/tracking_protection_prefs.h"
 #include "components/proxy_config/proxy_config_dictionary.h"
 #include "components/proxy_config/proxy_config_pref_names.h"
 #include "content/public/browser/browser_context.h"
@@ -92,6 +90,7 @@
 #include "net/url_request/referrer_policy.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/network_connection_tracker.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
 #include "services/network/public/mojom/host_resolver.mojom.h"
@@ -116,6 +115,7 @@
 namespace {
 
 constexpr char kHostname[] = "foo.test";
+constexpr char kHstsHostname[] = "hsts.test";
 constexpr char kAddress[] = "5.8.13.21";
 
 const char kCacheRandomPath[] = "/cacherandom";
@@ -219,16 +219,16 @@ class NetworkContextConfigurationBrowserTest
 
   NetworkContextConfigurationBrowserTest()
       : https_server_(net::EmbeddedTestServer::TYPE_HTTPS) {
+    // TODO(crbug.com/334954143) Fix the tests when turning on the reduce
+    // accept-language feature.
+    scoped_feature_list_.InitWithFeatures(
+        {}, {network::features::kReduceAcceptLanguage});
+
     // Have to get a port before setting up the command line, but can only set
     // up the connection listener after there's a main thread, so can't start
     // the test server here.
     EXPECT_TRUE(embedded_test_server()->InitializeAndListen());
     EXPECT_TRUE(https_server()->InitializeAndListen());
-  }
-
-  void SetUp() override {
-    InitializeFeatureList();
-    InProcessBrowserTest::SetUp();
   }
 
   // Returns a cacheable response (10 hours) that is some random text.
@@ -250,7 +250,7 @@ class NetworkContextConfigurationBrowserTest
   NetworkContextConfigurationBrowserTest& operator=(
       const NetworkContextConfigurationBrowserTest&) = delete;
 
-  ~NetworkContextConfigurationBrowserTest() override {}
+  ~NetworkContextConfigurationBrowserTest() override = default;
 
   void SetUpInProcessBrowserTestFixture() override {
     provider_.SetDefaultReturns(
@@ -264,6 +264,7 @@ class NetworkContextConfigurationBrowserTest
     host_resolver()->AddSimulatedFailure("does.not.resolve.test");
 
     host_resolver()->AddRule(kHostname, kAddress);
+    host_resolver()->AddRule(kHstsHostname, "127.0.0.1");
 
     controllable_http_response_ =
         std::make_unique<net::test_server::ControllableHttpResponse>(
@@ -278,7 +279,7 @@ class NetworkContextConfigurationBrowserTest
       incognito_ = CreateIncognitoBrowser();
     SimulateNetworkServiceCrashIfNecessary();
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
     // On ChromeOS the connection type comes from a fake Shill service, which
     // is configured with a fake ethernet connection asynchronously. Wait for
     // the connection type to be available to avoid getting notified of the
@@ -333,7 +334,6 @@ class NetworkContextConfigurationBrowserTest
       case NetworkContextType::kSystem:
       case NetworkContextType::kSafeBrowsing:
         NOTREACHED() << "Network context has no storage partition";
-        return nullptr;
       case NetworkContextType::kProfile:
         return browser()->profile()->GetDefaultStoragePartition();
       case NetworkContextType::kIncognitoProfile:
@@ -357,7 +357,6 @@ class NetworkContextConfigurationBrowserTest
       }
     }
     NOTREACHED();
-    return nullptr;
   }
 
   network::mojom::URLLoaderFactory* loader_factory() {
@@ -384,7 +383,6 @@ class NetworkContextConfigurationBrowserTest
             .get();
     }
     NOTREACHED();
-    return nullptr;
   }
 
   network::mojom::NetworkContext* network_context() {
@@ -409,7 +407,6 @@ class NetworkContextConfigurationBrowserTest
             ->GetNetworkContext();
     }
     NOTREACHED();
-    return nullptr;
   }
 
   StorageType GetHttpCacheType() const {
@@ -426,7 +423,6 @@ class NetworkContextConfigurationBrowserTest
         return StorageType::kMemory;
     }
     NOTREACHED();
-    return StorageType::kNone;
   }
 
   StorageType GetCookieStorageType() const {
@@ -442,7 +438,6 @@ class NetworkContextConfigurationBrowserTest
         return StorageType::kDisk;
     }
     NOTREACHED();
-    return StorageType::kNone;
   }
 
   // Returns the pref service with most prefs related to the NetworkContext
@@ -706,10 +701,6 @@ class NetworkContextConfigurationBrowserTest
     provider_.UpdateChromePolicy(policy_map);
   }
 
-  base::test::ScopedFeatureList* feature_list() { return &feature_list_; }
-
-  virtual void InitializeFeatureList() {}
-
  private:
   void SimulateNetworkServiceCrashIfNecessary() {
     if (GetParam().network_service_state != NetworkServiceState::kRestarted ||
@@ -738,12 +729,12 @@ class NetworkContextConfigurationBrowserTest
   std::unique_ptr<net::test_server::ControllableHttpResponse>
       controllable_http_response_;
 
-  base::test::ScopedFeatureList feature_list_;
   testing::NiceMock<policy::MockConfigurationPolicyProvider> provider_;
   // Used in tests that need a live request during browser shutdown.
   std::unique_ptr<network::SimpleURLLoader> live_during_shutdown_simple_loader_;
   std::unique_ptr<content::SimpleURLLoaderTestHelper>
       live_during_shutdown_simple_loader_helper_;
+  base::test::ScopedFeatureList scoped_feature_list_;
 };
 
 IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
@@ -1044,7 +1035,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest, PRE_DiskCache) {
 
 // Check if the URL loaded in PRE_DiskCache is still in the cache, across a
 // browser restart.
-// TODO(https://crbug.com/1464367): Fix test flake and re-enable
+// TODO(crbug.com/40922934): Fix test flake and re-enable
 #if BUILDFLAG(IS_MAC)
 #define MAYBE_DiskCache DISABLED_DiskCache
 #else
@@ -1168,8 +1159,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest, PRE_Hsts) {
     return;
   net::test_server::EmbeddedTestServer ssl_server(
       net::test_server::EmbeddedTestServer::TYPE_HTTPS);
-  ssl_server.SetSSLConfig(
-      net::test_server::EmbeddedTestServer::CERT_COMMON_NAME_IS_DOMAIN);
+  ssl_server.SetCertHostnames({kHstsHostname});
   ssl_server.AddDefaultHandlers(GetChromeTestDataDir());
   ASSERT_TRUE(ssl_server.Start());
 
@@ -1177,7 +1167,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest, PRE_Hsts) {
   std::unique_ptr<network::ResourceRequest> request =
       std::make_unique<network::ResourceRequest>();
   request->url = ssl_server.GetURL(
-      "/set-header?Strict-Transport-Security: max-age%3D600000");
+      kHstsHostname, "/set-header?Strict-Transport-Security: max-age%3D600000");
 
   content::SimpleURLLoaderTestHelper simple_loader_helper;
   std::unique_ptr<network::SimpleURLLoader> simple_loader =
@@ -1196,14 +1186,23 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest, PRE_Hsts) {
   // cache-only request both prevents the result from being cached, and makes
   // the check identical to the one in the next test, which is run after the
   // test server has been shut down.
-  GURL exected_ssl_url = ssl_server.base_url();
+  GURL exected_ssl_url = ssl_server.GetURL(kHstsHostname, "/");
   GURL::Replacements replacements;
   replacements.SetSchemeStr("http");
   GURL start_url = exected_ssl_url.ReplaceComponents(replacements);
+  url::Origin origin = url::Origin::Create(start_url);
 
   request = std::make_unique<network::ResourceRequest>();
   request->url = start_url;
   request->load_flags = net::LOAD_ONLY_FROM_CACHE;
+  // Have this request simulate a main frame request. This is necessary when
+  // kHstsTopLevelNavigationsOnly is enabled.
+  request->site_for_cookies = net::SiteForCookies::FromOrigin(origin);
+  request->update_first_party_url_on_redirect = true;
+  request->trusted_params.emplace();
+  request->trusted_params->isolation_info = net::IsolationInfo::Create(
+      net::IsolationInfo::RequestType::kMainFrame, origin, origin,
+      net::SiteForCookies::FromOrigin(origin));
 
   content::SimpleURLLoaderTestHelper simple_loader_helper2;
   simple_loader = network::SimpleURLLoader::Create(
@@ -1240,6 +1239,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest, Hsts) {
   std::string file_data;
   ASSERT_TRUE(ReadFileToString(save_url_file_path, &file_data));
   GURL start_url = GURL(file_data);
+  url::Origin origin = url::Origin::Create(start_url);
 
   // Unfortunately, loading HSTS information is loaded asynchronously from
   // disk, so there's no way to guarantee it has loaded by the time a
@@ -1250,6 +1250,14 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest, Hsts) {
         std::make_unique<network::ResourceRequest>();
     request->url = start_url;
     request->load_flags = net::LOAD_ONLY_FROM_CACHE;
+    // Have this request simulate a main frame request. This is necessary when
+    // kHstsTopLevelNavigationsOnly is enabled.
+    request->site_for_cookies = net::SiteForCookies::FromOrigin(origin);
+    request->update_first_party_url_on_redirect = true;
+    request->trusted_params.emplace();
+    request->trusted_params->isolation_info = net::IsolationInfo::Create(
+        net::IsolationInfo::RequestType::kMainFrame, origin, origin,
+        net::SiteForCookies::FromOrigin(origin));
 
     content::SimpleURLLoaderTestHelper simple_loader_helper;
     std::unique_ptr<network::SimpleURLLoader> simple_loader =
@@ -1497,14 +1505,6 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
       }));
 }
 
-class NetworkContextConfigurationBrowserPre3pcdTest
-    : public NetworkContextConfigurationBrowserTest {
-  void InitializeFeatureList() override {
-    feature_list()->InitAndDisableFeature(
-        content_settings::features::kTrackingProtection3pcd);
-  }
-};
-
 // Disabled due to flakiness. See https://crbug.com/1126755.
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
 #define MAYBE_PRE_ThirdPartyCookiesBlocked DISABLED_PRE_ThirdPartyCookiesBlocked
@@ -1513,7 +1513,7 @@ class NetworkContextConfigurationBrowserPre3pcdTest
 #define MAYBE_PRE_ThirdPartyCookiesBlocked PRE_ThirdPartyCookiesBlocked
 #define MAYBE_ThirdPartyCookiesBlocked ThirdPartyCookiesBlocked
 #endif
-IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserPre3pcdTest,
+IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
                        MAYBE_PRE_ThirdPartyCookiesBlocked) {
   if (IsRestartStateWithInProcessNetworkService())
     return;
@@ -1535,7 +1535,7 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserPre3pcdTest,
 }
 
 // Disabled due to flakiness. See https://crbug.com/1126755.
-IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserPre3pcdTest,
+IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
                        MAYBE_ThirdPartyCookiesBlocked) {
   if (IsRestartStateWithInProcessNetworkService())
     return;
@@ -1556,35 +1556,14 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserPre3pcdTest,
 
   EXPECT_TRUE(GetCookies(https_server()->base_url()).empty());
 
-  // Set pref to false, third party cookies should be allowed now.
-  GetPrefService()->SetInteger(
-      prefs::kCookieControlsMode,
-      static_cast<int>(content_settings::CookieControlsMode::kOff));
+  // Add exception, third party cookies should be allowed now.
+  CookieSettingsFactory::GetForProfile(browser()->profile())
+      ->SetCookieSetting(https_server()->base_url(), CONTENT_SETTING_ALLOW);
   // Set a third-party cookie. It should actually get set this time.
   SetCookie(CookieType::kThirdParty, CookiePersistenceType::kSession,
             https_server());
 
   EXPECT_FALSE(GetCookies(https_server()->base_url()).empty());
-}
-
-IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
-                       ThirdPartyCookiesBlocked) {
-  if (IsRestartStateWithInProcessNetworkService()) {
-    return;
-  }
-  // The system and SafeBrowsing network contexts don't support the third party
-  // cookie blocking options, since they have no notion of third parties.
-  bool system =
-      GetParam().network_context_type == NetworkContextType::kSystem ||
-      GetParam().network_context_type == NetworkContextType::kSafeBrowsing;
-  if (system) {
-    return;
-  }
-
-  GetPrefService()->SetBoolean(prefs::kTrackingProtection3pcdEnabled, true);
-  SetCookie(CookieType::kThirdParty, CookiePersistenceType::kSession,
-            https_server());
-  EXPECT_TRUE(GetCookies(https_server()->base_url()).empty());
 }
 
 IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest,
@@ -1670,8 +1649,8 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationBrowserTest, UploadFile) {
 class NetworkContextConfigurationFixedPortBrowserTest
     : public NetworkContextConfigurationBrowserTest {
  public:
-  NetworkContextConfigurationFixedPortBrowserTest() {}
-  ~NetworkContextConfigurationFixedPortBrowserTest() override {}
+  NetworkContextConfigurationFixedPortBrowserTest() = default;
+  ~NetworkContextConfigurationFixedPortBrowserTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitchASCII(
@@ -1710,14 +1689,14 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationFixedPortBrowserTest,
 class NetworkContextConfigurationProxyOnStartBrowserTest
     : public NetworkContextConfigurationBrowserTest {
  public:
-  NetworkContextConfigurationProxyOnStartBrowserTest() {}
+  NetworkContextConfigurationProxyOnStartBrowserTest() = default;
 
   NetworkContextConfigurationProxyOnStartBrowserTest(
       const NetworkContextConfigurationProxyOnStartBrowserTest&) = delete;
   NetworkContextConfigurationProxyOnStartBrowserTest& operator=(
       const NetworkContextConfigurationProxyOnStartBrowserTest&) = delete;
 
-  ~NetworkContextConfigurationProxyOnStartBrowserTest() override {}
+  ~NetworkContextConfigurationProxyOnStartBrowserTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     command_line->AppendSwitchASCII(
@@ -1748,7 +1727,7 @@ class NetworkContextConfigurationHttpPacBrowserTest
   NetworkContextConfigurationHttpPacBrowserTest& operator=(
       const NetworkContextConfigurationHttpPacBrowserTest&) = delete;
 
-  ~NetworkContextConfigurationHttpPacBrowserTest() override {}
+  ~NetworkContextConfigurationHttpPacBrowserTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     pac_test_server_.RegisterRequestHandler(base::BindRepeating(
@@ -1784,14 +1763,14 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationHttpPacBrowserTest, HttpPac) {
 class NetworkContextConfigurationFilePacBrowserTest
     : public NetworkContextConfigurationBrowserTest {
  public:
-  NetworkContextConfigurationFilePacBrowserTest() {}
+  NetworkContextConfigurationFilePacBrowserTest() = default;
 
   NetworkContextConfigurationFilePacBrowserTest(
       const NetworkContextConfigurationFilePacBrowserTest&) = delete;
   NetworkContextConfigurationFilePacBrowserTest& operator=(
       const NetworkContextConfigurationFilePacBrowserTest&) = delete;
 
-  ~NetworkContextConfigurationFilePacBrowserTest() override {}
+  ~NetworkContextConfigurationFilePacBrowserTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     const char kPacFileName[] = "foo.pac";
@@ -1822,14 +1801,14 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationFilePacBrowserTest, FilePac) {
 class NetworkContextConfigurationDataPacBrowserTest
     : public NetworkContextConfigurationBrowserTest {
  public:
-  NetworkContextConfigurationDataPacBrowserTest() {}
+  NetworkContextConfigurationDataPacBrowserTest() = default;
 
   NetworkContextConfigurationDataPacBrowserTest(
       const NetworkContextConfigurationDataPacBrowserTest&) = delete;
   NetworkContextConfigurationDataPacBrowserTest& operator=(
       const NetworkContextConfigurationDataPacBrowserTest&) = delete;
 
-  ~NetworkContextConfigurationDataPacBrowserTest() override {}
+  ~NetworkContextConfigurationDataPacBrowserTest() override = default;
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
     std::string contents;
@@ -2257,8 +2236,6 @@ IN_PROC_BROWSER_TEST_P(NetworkContextConfigurationReportingAndNelBrowserTest,
       ::testing::Values(TEST_CASES(NetworkContextType::kIncognitoProfile)))
 
 INSTANTIATE_TEST_CASES_FOR_TEST_FIXTURE(NetworkContextConfigurationBrowserTest);
-INSTANTIATE_TEST_CASES_FOR_TEST_FIXTURE(
-    NetworkContextConfigurationBrowserPre3pcdTest);
 INSTANTIATE_TEST_CASES_FOR_TEST_FIXTURE(
     NetworkContextConfigurationFixedPortBrowserTest);
 INSTANTIATE_TEST_CASES_FOR_TEST_FIXTURE(

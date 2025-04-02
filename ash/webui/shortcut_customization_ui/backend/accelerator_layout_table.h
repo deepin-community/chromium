@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 
+#include "ash/public/cpp/accelerator_actions.h"
 #include "ash/public/cpp/accelerators.h"
 #include "ash/public/mojom/accelerator_info.mojom.h"
 #include "ash/strings/grit/ash_strings.h"
@@ -25,7 +26,7 @@
 // Key Shortcuts app, please follow the instructions below:
 //    1.    Determine the correct category and subcategory the accelerator
 //          belongs to. You can view the categories at `accelerator_info.mojom`.
-//          Reach out to cros-peripherals@ if you are unsure about which
+//          Reach out to cros-device-enablement@ if you are unsure about which
 //          category to use.
 //    2.    If you are adding a browser/ambient [1] accelerator, add a new
 //          enum to `NonConfigurableActions`. Then add an entry to
@@ -263,6 +264,7 @@ constexpr auto kAshAcceleratorsWithoutLayout =
         AcceleratorAction::kPrintUiHierarchies,
         AcceleratorAction::kRestoreTab,
         AcceleratorAction::kRotateWindow,
+        AcceleratorAction::kToggleGameDashboard,
         AcceleratorAction::kToggleProjectorMarker,
         AcceleratorAction::kToggleWifi,
         AcceleratorAction::kTouchHudClear,
@@ -292,8 +294,9 @@ inline constexpr uint32_t kAcceleratorLayouts[] = {
     AcceleratorAction::kExit,
     AcceleratorAction::kSwitchToNextUser,
     AcceleratorAction::kSwitchToPreviousUser,
-    AcceleratorAction::kEnableOrToggleDictation,
     AcceleratorAction::kStartAssistant,
+    AcceleratorAction::kToggleDoNotDisturb,
+    AcceleratorAction::kToggleCameraAllowed,
 
     // General > Apps
     AcceleratorAction::kOpenFileManager,
@@ -309,6 +312,7 @@ inline constexpr uint32_t kAcceleratorLayouts[] = {
     AcceleratorAction::kToggleResizeLockMenu,
     AcceleratorAction::kShowTaskManager,
     AcceleratorAction::kOpenCrosh,
+    AcceleratorAction::kToggleGeminiApp,
 
     // Device
     // Device > Media
@@ -323,6 +327,7 @@ inline constexpr uint32_t kAcceleratorLayouts[] = {
     AcceleratorAction::kMediaPrevTrack,
     AcceleratorAction::kMediaFastForward,
     AcceleratorAction::kFocusPip,
+    AcceleratorAction::kResizePipWindow,
 
     // Device > Input
     AcceleratorAction::kKeyboardBacklightToggle,
@@ -424,6 +429,7 @@ inline constexpr uint32_t kAcceleratorLayouts[] = {
     // Text > Text editing
     AcceleratorAction::kToggleCapsLock,
     AcceleratorAction::kShowEmojiPicker,
+    AcceleratorAction::kTogglePicker,
     NonConfigurableActions::kAmbientCopy,
     NonConfigurableActions::kAmbientCut,
     NonConfigurableActions::kAmbientPaste,
@@ -452,9 +458,14 @@ inline constexpr uint32_t kAcceleratorLayouts[] = {
     AcceleratorAction::kWindowCycleSnapRight,
     AcceleratorAction::kMoveActiveWindowBetweenDisplays,
     AcceleratorAction::kMinimizeTopWindowOnBack,
-    AcceleratorAction::kToggleSnapGroupWindowsGroupAndUngroup,
+    AcceleratorAction::kCreateSnapGroup,
     AcceleratorAction::kToggleSnapGroupWindowsMinimizeAndRestore,
     AcceleratorAction::kToggleFloating,
+    // TODO(b/343559364): Temporary location pending UI review.
+    AcceleratorAction::kTilingWindowResizeLeft,
+    AcceleratorAction::kTilingWindowResizeRight,
+    AcceleratorAction::kTilingWindowResizeUp,
+    AcceleratorAction::kTilingWindowResizeDown,
 
     // Windows and desks > Desks
     AcceleratorAction::kDesksNewDesk,
@@ -472,7 +483,12 @@ inline constexpr uint32_t kAcceleratorLayouts[] = {
     // notification that hardcodes ctrl + alt + z into the notification message.
     AcceleratorAction::kToggleSpokenFeedback,
 
+    // Accessibility > Mouse Keys
+    AcceleratorAction::kToggleMouseKeys,
+
     // Accessibility > Visibility
+    AcceleratorAction::kEnableOrToggleDictation,
+    AcceleratorAction::kEnableSelectToSpeak,
     AcceleratorAction::kToggleHighContrast,
     AcceleratorAction::kToggleDockedMagnifier,
     AcceleratorAction::kToggleFullscreenMagnifier,
@@ -480,6 +496,7 @@ inline constexpr uint32_t kAcceleratorLayouts[] = {
     AcceleratorAction::kMagnifierZoomOut,
 
     // Accessibility > Accessbility navigation
+    AcceleratorAction::kAccessibilityAction,
     NonConfigurableActions::kAmbientSwitchFocusForwards,
     NonConfigurableActions::kAmbientSwitchFocusBackwards,
     NonConfigurableActions::kAmbientCaretBrowsing,

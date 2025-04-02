@@ -76,8 +76,12 @@ google::internal::identity::passwords::leak::check::v1::
       return google::internal::identity::passwords::leak::check::v1::
           LookupSingleLeakRequest::ClientUseCase::
               LookupSingleLeakRequest_ClientUseCase_CHROME_IOS_SIGNED_IN_ON_DEVICE_PROACTIVE_PASSWORD_CHECKUP;
+    case LeakDetectionInitiator::kIOSWebViewSignInCheck:
+      return google::internal::identity::passwords::leak::check::v1::
+          LookupSingleLeakRequest::ClientUseCase::
+              LookupSingleLeakRequest_ClientUseCase_IOS_WEB_VIEW_SIGN_IN_CHECK;
   }
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 google::internal::identity::passwords::leak::check::v1::LookupSingleLeakRequest

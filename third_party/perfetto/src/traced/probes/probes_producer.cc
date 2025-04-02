@@ -18,8 +18,6 @@
 #include <stdio.h>
 #include <sys/stat.h>
 
-#include <algorithm>
-#include <queue>
 #include <string>
 
 #include "perfetto/base/logging.h"
@@ -36,6 +34,7 @@
 #include "perfetto/tracing/core/trace_config.h"
 #include "src/android_stats/statsd_logging_helper.h"
 #include "src/traced/probes/android_game_intervention_list/android_game_intervention_list_data_source.h"
+#include "src/traced/probes/android_kernel_wakelocks/android_kernel_wakelocks_data_source.h"
 #include "src/traced/probes/android_log/android_log_data_source.h"
 #include "src/traced/probes/android_system_property/android_system_property_data_source.h"
 #include "src/traced/probes/filesystem/inode_file_data_source.h"
@@ -50,12 +49,6 @@
 #include "src/traced/probes/statsd_client/statsd_binder_data_source.h"
 #include "src/traced/probes/sys_stats/sys_stats_data_source.h"
 #include "src/traced/probes/system_info/system_info_data_source.h"
-
-#include "protos/perfetto/config/ftrace/ftrace_config.gen.h"
-#include "protos/perfetto/trace/filesystem/inode_file_map.pbzero.h"
-#include "protos/perfetto/trace/ftrace/ftrace_event_bundle.pbzero.h"
-#include "protos/perfetto/trace/ftrace/ftrace_stats.pbzero.h"
-#include "protos/perfetto/trace/trace_packet.pbzero.h"
 
 namespace perfetto {
 namespace {
@@ -210,6 +203,17 @@ ProbesProducer::CreateDSInstance<LinuxPowerSysfsDataSource>(
 
 template <>
 std::unique_ptr<ProbesDataSource>
+ProbesProducer::CreateDSInstance<AndroidKernelWakelocksDataSource>(
+    TracingSessionID session_id,
+    const DataSourceConfig& config) {
+  auto buffer_id = static_cast<BufferID>(config.target_buffer());
+  return std::unique_ptr<ProbesDataSource>(new AndroidKernelWakelocksDataSource(
+      config, task_runner_, session_id,
+      endpoint_->CreateTraceWriter(buffer_id)));
+}
+
+template <>
+std::unique_ptr<ProbesDataSource>
 ProbesProducer::CreateDSInstance<AndroidLogDataSource>(
     TracingSessionID session_id,
     const DataSourceConfig& config) {
@@ -314,6 +318,7 @@ constexpr DataSourceTraits Ds() {
 
 constexpr const DataSourceTraits kAllDataSources[] = {
     Ds<AndroidGameInterventionListDataSource>(),
+    Ds<AndroidKernelWakelocksDataSource>(),
     Ds<AndroidLogDataSource>(),
     Ds<AndroidPowerDataSource>(),
     Ds<AndroidSystemPropertyDataSource>(),
@@ -669,17 +674,8 @@ void ProbesProducer::ResetConnectionBackoff() {
 }
 
 void ProbesProducer::ActivateTrigger(std::string trigger) {
-  android_stats::MaybeLogTriggerEvent(
-      PerfettoTriggerAtom::kProbesProducerTrigger, trigger);
-
-  task_runner_->PostTask([this, trigger]() {
-    if (!endpoint_) {
-      android_stats::MaybeLogTriggerEvent(
-          PerfettoTriggerAtom::kProbesProducerTriggerFail, trigger);
-      return;
-    }
-    endpoint_->ActivateTriggers({trigger});
-  });
+  task_runner_->PostTask(
+      [this, trigger]() { endpoint_->ActivateTriggers({trigger}); });
 }
 
 }  // namespace perfetto

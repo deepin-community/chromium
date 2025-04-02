@@ -91,6 +91,7 @@ class SharedDictionaryManagerOnDisk : public SharedDictionaryManager {
   scoped_refptr<SharedDictionaryWriter> CreateWriter(
       const net::SharedDictionaryIsolationKey& isolation_key,
       const GURL& url,
+      base::Time last_fetch_time,
       base::Time response_time,
       base::TimeDelta expiration,
       const std::string& match,
@@ -98,6 +99,8 @@ class SharedDictionaryManagerOnDisk : public SharedDictionaryManager {
       const std::string& id,
       base::OnceCallback<void(net::SharedDictionaryInfo)> callback);
 
+  void UpdateDictionaryLastFetchTime(net::SharedDictionaryInfo& info,
+                                     base::Time last_fetch_time);
   void UpdateDictionaryLastUsedTime(net::SharedDictionaryInfo& info);
 
   // Posts a MismatchingEntryDeletionTask if this method is called for the first
@@ -136,6 +139,7 @@ class SharedDictionaryManagerOnDisk : public SharedDictionaryManager {
   void OnDictionaryWrittenInDiskCache(
       const net::SharedDictionaryIsolationKey& isolation_key,
       const GURL& url,
+      base::Time last_fetch_time,
       base::Time response_time,
       base::TimeDelta expiration,
       const std::string& match,
@@ -184,6 +188,8 @@ class SharedDictionaryManagerOnDisk : public SharedDictionaryManager {
   bool mismatching_entry_deletion_task_posted_ = false;
   bool cache_eviction_task_queued_ = false;
   bool expired_entry_deletion_task_queued_ = false;
+
+  bool cleanup_task_disabled_for_testing_ = false;
 
   base::WeakPtrFactory<SharedDictionaryManagerOnDisk> weak_factory_{this};
 };

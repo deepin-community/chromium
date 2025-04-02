@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "base/notreached.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "content/public/common/main_function_params.h"
@@ -39,10 +40,7 @@ class CONTENT_EXPORT ContentMainDelegate {
 
   // Indicates the delegate is being invoked in a child process. The
   // `kProcessType` switch will hold the precise child process type.
-  struct InvokedInChildProcess {
-    // True if the child process was forked from one of the browser's zygotes.
-    bool is_zygote_child = false;
-  };
+  struct InvokedInChildProcess {};
 
   // The context in which a delegate method is invoked, including the process
   // type and whether it is in a test harness. Can distinguish between
@@ -96,7 +94,7 @@ class CONTENT_EXPORT ContentMainDelegate {
 
   // Fatal errors during initialization are reported by this function, so that
   // the embedder can implement graceful exit by displaying some message and
-  // returning initialization error code. Default behavior is CHECK(false).
+  // returning initialization error code. Default behavior is NOTREACHED().
   virtual int TerminateForFatalInitializationError();
 
   // Allows the embedder to prevent locking the scheme registry. The scheme
@@ -138,6 +136,14 @@ class CONTENT_EXPORT ContentMainDelegate {
   // a VariationsIdsProvider is created with a mode of `kUseSignedInState`.
   // VariationsIdsProvider is a singleton.
   virtual variations::VariationsIdsProvider* CreateVariationsIdsProvider();
+
+  // Called when it's time to create a base::ThreadPoolInstance for the
+  // browser process. This is not exposed in ContentBrowserClient
+  // because it needs to happen before ContentBrowserClient is created.
+  //
+  // Note: The embedder must *not* start the created ThreadPoolInstance. That
+  // will be done by //content when appropriate.
+  virtual void CreateThreadPool(std::string_view name);
 
   // Allows the embedder to perform its own initialization after early content
   // initialization.

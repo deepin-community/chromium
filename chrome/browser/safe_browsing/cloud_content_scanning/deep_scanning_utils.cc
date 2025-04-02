@@ -4,17 +4,16 @@
 
 #include "chrome/browser/safe_browsing/cloud_content_scanning/deep_scanning_utils.h"
 
+#include <algorithm>
+
 #include "base/metrics/histogram_functions.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "chrome/browser/enterprise/connectors/common.h"
 #include "chrome/browser/extensions/api/safe_browsing_private/safe_browsing_private_event_router.h"
 #include "chrome/browser/extensions/api/safe_browsing_private/safe_browsing_private_event_router_factory.h"
 #include "chrome/browser/safe_browsing/cloud_content_scanning/binary_upload_service.h"
-#include "chrome/browser/signin/identity_manager_factory.h"
 #include "components/crash/core/common/crash_key.h"
-#include "components/signin/public/identity_manager/identity_manager.h"
 
 namespace safe_browsing {
 
@@ -39,6 +38,7 @@ std::string MaybeGetUnscannedReason(BinaryUploadService::Result result) {
     case BinaryUploadService::Result::UNKNOWN:
     case BinaryUploadService::Result::UPLOAD_FAILURE:
     case BinaryUploadService::Result::FAILED_TO_GET_TOKEN:
+    case BinaryUploadService::Result::INCOMPLETE_RESPONSE:
       return "SERVICE_UNAVAILABLE";
     case BinaryUploadService::Result::FILE_ENCRYPTED:
       return "FILE_PASSWORD_PROTECTED";
@@ -158,8 +158,8 @@ void MaybeReportDeepScanningVerdict(
     const int64_t content_size,
     BinaryUploadService::Result result,
     const enterprise_connectors::ContentAnalysisResponse& response,
-    EventResult event_result) {
-  DCHECK(base::ranges::all_of(download_digest_sha256, base::IsHexDigit<char>));
+    enterprise_connectors::EventResult event_result) {
+  DCHECK(std::ranges::all_of(download_digest_sha256, base::IsHexDigit<char>));
   auto* router =
       extensions::SafeBrowsingPrivateEventRouterFactory::GetForProfile(profile);
   if (!router)
@@ -213,7 +213,7 @@ void ReportAnalysisConnectorWarningBypass(
     const int64_t content_size,
     const enterprise_connectors::ContentAnalysisResponse& response,
     std::optional<std::u16string> user_justification) {
-  DCHECK(base::ranges::all_of(download_digest_sha256, base::IsHexDigit<char>));
+  DCHECK(std::ranges::all_of(download_digest_sha256, base::IsHexDigit<char>));
   auto* router =
       extensions::SafeBrowsingPrivateEventRouterFactory::GetForProfile(profile);
   if (!router)
@@ -229,23 +229,6 @@ void ReportAnalysisConnectorWarningBypass(
         mime_type, trigger, response.request_token(), content_transfer_method,
         access_point, result, content_size, user_justification);
   }
-}
-
-std::string EventResultToString(EventResult result) {
-  switch (result) {
-    case EventResult::UNKNOWN:
-      return "EVENT_RESULT_UNKNOWN";
-    case EventResult::ALLOWED:
-      return "EVENT_RESULT_ALLOWED";
-    case EventResult::WARNED:
-      return "EVENT_RESULT_WARNED";
-    case EventResult::BLOCKED:
-      return "EVENT_RESULT_BLOCKED";
-    case EventResult::BYPASSED:
-      return "EVENT_RESULT_BYPASSED";
-  }
-  NOTREACHED();
-  return "";
 }
 
 std::string DeepScanAccessPointToString(DeepScanAccessPoint access_point) {
@@ -264,7 +247,6 @@ std::string DeepScanAccessPointToString(DeepScanAccessPoint access_point) {
       return "FileTransfer";
   }
   NOTREACHED();
-  return "";
 }
 
 void RecordDeepScanMetrics(
@@ -400,23 +382,9 @@ std::string BinaryUploadServiceResultToString(
       return "FileEncrypted";
     case BinaryUploadService::Result::TOO_MANY_REQUESTS:
       return "TooManyRequests";
+    case BinaryUploadService::Result::INCOMPLETE_RESPONSE:
+      return "IncompleteResponse";
   }
-}
-
-std::string GetProfileEmail(Profile* profile) {
-  return profile
-             ? GetProfileEmail(IdentityManagerFactory::GetForProfile(profile))
-             : std::string();
-}
-
-std::string GetProfileEmail(signin::IdentityManager* identity_manager) {
-  // If the profile is not signed in, GetPrimaryAccountInfo() returns an
-  // empty account info.
-  return identity_manager
-             ? identity_manager
-                   ->GetPrimaryAccountInfo(signin::ConsentLevel::kSignin)
-                   .email
-             : std::string();
 }
 
 void IncrementCrashKey(ScanningCrashKey key, int delta) {
@@ -427,6 +395,19 @@ void IncrementCrashKey(ScanningCrashKey key, int delta) {
 void DecrementCrashKey(ScanningCrashKey key, int delta) {
   DCHECK_GE(delta, 0);
   ModifyKey(key, -delta);
+}
+
+bool IsConsumerScanRequest(const BinaryUploadService::Request& request) {
+  if (request.cloud_or_local_settings().is_local_analysis()) {
+    return false;
+  }
+
+  for (const std::string& tag : request.content_analysis_request().tags()) {
+    if (tag == "dlp") {
+      return false;
+    }
+  }
+  return request.device_token().empty();
 }
 
 }  // namespace safe_browsing

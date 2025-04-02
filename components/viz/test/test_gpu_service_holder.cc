@@ -46,6 +46,10 @@
 #include <dawn/native/DawnNative.h>
 #endif
 
+#if BUILDFLAG(SKIA_USE_DAWN)
+#include "gpu/command_buffer/service/dawn_context_provider.h"
+#endif
+
 namespace viz {
 
 namespace {
@@ -134,8 +138,7 @@ TestGpuServiceHolder* TestGpuServiceHolder::GetInstance() {
   }
 
   if (!g_holder) {
-    g_holder = new TestGpuServiceHolder(gpu::gles2::ParseGpuPreferences(
-        base::CommandLine::ForCurrentProcess()));
+    g_holder = new TestGpuServiceHolder();
   }
   return g_holder;
 }
@@ -176,6 +179,10 @@ TestGpuServiceHolder::ScopedAllowRacyFeatureListOverrides::
   g_disallow_feature_list_overrides = true;
 }
 
+TestGpuServiceHolder::TestGpuServiceHolder()
+    : TestGpuServiceHolder(gpu::gles2::ParseGpuPreferences(
+          base::CommandLine::ForCurrentProcess())) {}
+
 TestGpuServiceHolder::TestGpuServiceHolder(
     const gpu::GpuPreferences& gpu_preferences)
     : gpu_main_thread_("GPUMainThread"), io_thread_("GPUIOThread") {
@@ -200,6 +207,8 @@ TestGpuServiceHolder::TestGpuServiceHolder(
   gpu_thread_options.message_pump_type = ui::OzonePlatform::GetInstance()
                                              ->GetPlatformProperties()
                                              .message_pump_type_for_gpu;
+#elif BUILDFLAG(IS_MAC)
+  gpu_thread_options.message_pump_type = base::MessagePumpType::UI;
 #endif
 
     CHECK(gpu_main_thread_.StartWithOptions(std::move(gpu_thread_options)));
@@ -259,13 +268,15 @@ scoped_refptr<gl::GLShareGroup> TestGpuServiceHolder::GetShareGroup() {
 
 void TestGpuServiceHolder::ScheduleGpuMainTask(base::OnceClosure callback) {
   DCHECK(gpu_main_task_sequence_);
-  gpu_main_task_sequence_->ScheduleTask(std::move(callback), {});
+  gpu_main_task_sequence_->ScheduleTask(
+      std::move(callback), /*sync_token_fences=*/{}, gpu::SyncToken());
 }
 
 void TestGpuServiceHolder::ScheduleCompositorGpuTask(
     base::OnceClosure callback) {
   if (compositor_gpu_task_sequence_)
-    compositor_gpu_task_sequence_->ScheduleTask(std::move(callback), {});
+    compositor_gpu_task_sequence_->ScheduleTask(
+        std::move(callback), /*sync_token_fences=*/{}, gpu::SyncToken());
   else
     ScheduleGpuMainTask(std::move(callback));
 }
@@ -304,25 +315,32 @@ void TestGpuServiceHolder::InitializeOnGpuThread(
   gpu_feature_info.status_values[gpu::GPU_FEATURE_TYPE_GPU_TILE_RASTERIZATION] =
       gpu::kGpuFeatureStatusEnabled;
 
-#if BUILDFLAG(IS_MAC)
-  gpu::SetMacOSSpecificTextureTargetFromCurrentGLImplementation();
-#endif  // BUILDFLAG(IS_MAC)
+  GpuServiceImpl::InitParams init_params;
+  init_params.io_runner = io_thread_.task_runner();
+#if BUILDFLAG(ENABLE_VULKAN)
+  init_params.vulkan_implementation = vulkan_implementation_.get();
+#endif
+
+  if (gpu_preferences.gr_context_type == gpu::GrContextType::kGraphiteDawn) {
+#if BUILDFLAG(SKIA_USE_DAWN)
+    init_params.dawn_context_provider = gpu::DawnContextProvider::Create(
+        gpu_preferences, gpu::DawnContextProvider::DefaultValidateAdapterFn,
+        gpu::GpuDriverBugWorkarounds(
+            gpu_feature_info.enabled_gpu_driver_bug_workarounds));
+    CHECK(init_params.dawn_context_provider);
+#else
+    NOTREACHED();
+#endif
+  }
 
   // TODO(rivr): Investigate why creating a GPUInfo and GpuFeatureInfo from
   // the command line causes the test SkiaOutputSurfaceImplTest.SubmitPaint to
   // fail on Android.
   gpu_service_ = std::make_unique<GpuServiceImpl>(
-      gpu::GPUInfo(), /*watchdog_thread=*/nullptr, io_thread_.task_runner(),
-      gpu_feature_info, gpu_preferences,
+      gpu_preferences, gpu_info, gpu_feature_info,
       /*gpu_info_for_hardware_gpu=*/gpu::GPUInfo(),
       /*gpu_feature_info_for_hardware_gpu=*/gpu::GpuFeatureInfo(),
-      /*gpu_extra_info=*/gfx::GpuExtraInfo(),
-#if BUILDFLAG(ENABLE_VULKAN)
-      vulkan_implementation_.get(),
-#else
-      /*vulkan_implementation=*/nullptr,
-#endif
-      /*exit_callback=*/base::DoNothing());
+      /*gpu_extra_info=*/gfx::GpuExtraInfo(), std::move(init_params));
 
   // Use a disconnected mojo remote for GpuHost, we don't need to receive any
   // messages.
@@ -331,12 +349,11 @@ void TestGpuServiceHolder::InitializeOnGpuThread(
   gpu_service_->InitializeWithHost(
       std::move(gpu_host_proxy), gpu::GpuProcessShmCount(),
       gl::init::CreateOffscreenGLSurface(gl::GetDefaultDisplay(), gfx::Size()),
-      /*sync_point_manager=*/nullptr, /*shared_image_manager=*/nullptr,
-      /*scheduler=*/nullptr, /*shutdown_event=*/nullptr);
+      mojom::GpuServiceCreationParams::New());
 
   main_task_executor_ = std::make_unique<gpu::GpuInProcessThreadService>(
       this, gpu_main_thread_.task_runner(), gpu_service_->GetGpuScheduler(),
-      gpu_service_->sync_point_manager(), gpu_service_->mailbox_manager(),
+      gpu_service_->sync_point_manager(),
       gpu_service_->gpu_channel_manager()
           ->default_offscreen_surface()
           ->GetFormat(),

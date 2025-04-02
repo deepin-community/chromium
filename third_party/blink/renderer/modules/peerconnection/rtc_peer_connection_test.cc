@@ -100,7 +100,7 @@ class RTCPeerConnectionTest : public testing::Test {
   }
 
   std::string GetExceptionMessage(V8TestingScope& scope) {
-    ExceptionState& exception_state = scope.GetExceptionState();
+    DummyExceptionStateForTesting& exception_state = scope.GetExceptionState();
     return exception_state.HadException() ? exception_state.Message().Utf8()
                                           : "";
   }
@@ -371,6 +371,14 @@ TEST_F(RTCPeerConnectionTest, MediaStreamTrackStopsThrottling) {
   // Stopping the track disables the opt-out.
   track->stopTrack(scope.GetExecutionContext());
   EXPECT_FALSE(scheduler->OptedOutFromAggressiveThrottlingForTest());
+}
+
+TEST_F(RTCPeerConnectionTest, GettingRtpTransportEarlySucceeds) {
+  V8TestingScope scope;
+
+  RTCPeerConnection* pc = CreatePC(scope);
+  EXPECT_NE(pc->rtpTransport(), nullptr);
+  EXPECT_EQ("", GetExceptionMessage(scope));
 }
 
 }  // namespace blink

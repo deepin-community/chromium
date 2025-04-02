@@ -28,7 +28,7 @@ namespace content {
 
 bool IsFeatureEnabled(RenderFrameHost* rfh,
                       bool tests_use_fake_render_frame_hosts,
-                      blink::mojom::PermissionsPolicyFeature feature) {
+                      network::mojom::PermissionsPolicyFeature feature) {
   // Some tests don't (or can't) set up the RenderFrameHost. In these cases we
   // just ignore permissions policy checks (there is no permissions policy to
   // test).
@@ -52,6 +52,11 @@ class MediaStreamUIProxy::Core {
   ~Core();
 
   void RequestAccess(std::unique_ptr<MediaStreamRequest> request);
+
+  void RequestSelectAudioOutput(
+      std::unique_ptr<SelectAudioOutputRequest> request,
+      SelectAudioOutputCallback callback);
+
   void OnStarted(gfx::NativeViewId* window_id,
                  bool has_source_callback,
                  const std::string& label,
@@ -60,7 +65,8 @@ class MediaStreamUIProxy::Core {
                        const DesktopMediaID& media_id);
   void OnDeviceStoppedForSourceChange(const std::string& label,
                                       const DesktopMediaID& old_media_id,
-                                      const DesktopMediaID& new_media_id);
+                                      const DesktopMediaID& new_media_id,
+                                      bool captured_surface_control_active);
 
   void OnRegionCaptureRectChanged(
       const std::optional<gfx::Rect>& region_capture_rect);
@@ -101,7 +107,8 @@ class MediaStreamUIProxy::Core {
  private:
   friend class FakeMediaStreamUIProxy;
   void ProcessStopRequestFromUI();
-  void ProcessChangeSourceRequestFromUI(const DesktopMediaID& media_id);
+  void ProcessChangeSourceRequestFromUI(const DesktopMediaID& media_id,
+                                        bool captured_surface_control_active);
   void ProcessStateChangeFromUI(const DesktopMediaID& media,
                                 blink::mojom::MediaStreamStateChange);
   RenderFrameHostDelegate* GetRenderFrameHostDelegate(int render_process_id,
@@ -152,10 +159,32 @@ void MediaStreamUIProxy::Core::RequestAccess(
     return;
   }
 
+  RenderFrameHostImpl* host = RenderFrameHostImpl::FromID(
+      request->render_process_id, request->render_frame_id);
+
   render_delegate->RequestMediaAccessPermission(
-      *request,
+      host, *request,
       base::BindOnce(&Core::ProcessAccessRequestResponse, weak_this_,
                      request->render_process_id, request->render_frame_id));
+}
+
+void MediaStreamUIProxy::Core::RequestSelectAudioOutput(
+    std::unique_ptr<SelectAudioOutputRequest> request,
+    SelectAudioOutputCallback callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+
+  RenderFrameHostDelegate* render_delegate = GetRenderFrameHostDelegate(
+      request->render_frame_host_id().child_id,
+      request->render_frame_host_id().frame_routing_id);
+  if (!render_delegate) {
+    content::GetIOThreadTaskRunner({})->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback),
+                                  base::unexpected(
+                                      SelectAudioOutputError::kNotSupported)));
+    return;
+  }
+
+  render_delegate->ProcessSelectAudioOutput(*request, std::move(callback));
 }
 
 void MediaStreamUIProxy::Core::OnStarted(
@@ -194,10 +223,12 @@ void MediaStreamUIProxy::Core::OnDeviceStopped(const std::string& label,
 void MediaStreamUIProxy::Core::OnDeviceStoppedForSourceChange(
     const std::string& label,
     const DesktopMediaID& old_media_id,
-    const DesktopMediaID& new_media_id) {
+    const DesktopMediaID& new_media_id,
+    bool captured_surface_control_active) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   if (ui_) {
-    ui_->OnDeviceStoppedForSourceChange(label, old_media_id, new_media_id);
+    ui_->OnDeviceStoppedForSourceChange(label, old_media_id, new_media_id,
+                                        captured_surface_control_active);
     ui_->OnDeviceStopped(label, old_media_id);
   }
 }
@@ -261,8 +292,9 @@ void MediaStreamUIProxy::Core::ProcessAccessRequestResponse(
     const blink::MediaStreamDevice& audio_device = devices.audio_device.value();
     if (audio_device.type !=
             blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE ||
-        IsFeatureEnabled(host, tests_use_fake_render_frame_hosts_,
-                         blink::mojom::PermissionsPolicyFeature::kMicrophone)) {
+        IsFeatureEnabled(
+            host, tests_use_fake_render_frame_hosts_,
+            network::mojom::PermissionsPolicyFeature::kMicrophone)) {
       filtered_devices_set->stream_devices[0]->audio_device = audio_device;
     }
   }
@@ -272,7 +304,7 @@ void MediaStreamUIProxy::Core::ProcessAccessRequestResponse(
     if (video_device.type !=
             blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE ||
         IsFeatureEnabled(host, tests_use_fake_render_frame_hosts_,
-                         blink::mojom::PermissionsPolicyFeature::kCamera)) {
+                         network::mojom::PermissionsPolicyFeature::kCamera)) {
       filtered_devices_set->stream_devices[0]->video_device = video_device;
     }
   }
@@ -295,9 +327,6 @@ void MediaStreamUIProxy::Core::ProcessAccessRequestResponse(
     ui_ = std::move(stream_ui);
   }
 
-  if (host && result == blink::mojom::MediaStreamRequestResult::OK)
-    host->OnGrantedMediaStreamAccess();
-
   GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(&MediaStreamUIProxy::ProcessAccessRequestResponse, proxy_,
@@ -313,13 +342,14 @@ void MediaStreamUIProxy::Core::ProcessStopRequestFromUI() {
 }
 
 void MediaStreamUIProxy::Core::ProcessChangeSourceRequestFromUI(
-    const DesktopMediaID& media_id) {
+    const DesktopMediaID& media_id,
+    bool captured_surface_control_active) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
       base::BindOnce(&MediaStreamUIProxy::ProcessChangeSourceRequestFromUI,
-                     proxy_, media_id));
+                     proxy_, media_id, captured_surface_control_active));
 }
 
 void MediaStreamUIProxy::Core::ProcessStateChangeFromUI(
@@ -375,6 +405,17 @@ void MediaStreamUIProxy::RequestAccess(
                                 std::move(request)));
 }
 
+void MediaStreamUIProxy::RequestSelectAudioOutput(
+    std::unique_ptr<SelectAudioOutputRequest> request,
+    SelectAudioOutputCallback callback) {
+  DCHECK_CURRENTLY_ON(BrowserThread::IO);
+
+  GetUIThreadTaskRunner({})->PostTask(
+      FROM_HERE,
+      base::BindOnce(&Core::RequestSelectAudioOutput, core_->GetWeakPtr(),
+                     std::move(request), std::move(callback)));
+}
+
 void MediaStreamUIProxy::OnStarted(
     base::OnceClosure stop_callback,
     MediaStreamUI::SourceCallback source_callback,
@@ -412,13 +453,14 @@ void MediaStreamUIProxy::OnDeviceStopped(const std::string& label,
 void MediaStreamUIProxy::OnDeviceStoppedForSourceChange(
     const std::string& label,
     const DesktopMediaID& old_media_id,
-    const DesktopMediaID& new_media_id) {
+    const DesktopMediaID& new_media_id,
+    bool captured_surface_control_active) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   GetUIThreadTaskRunner({})->PostTask(
-      FROM_HERE,
-      base::BindOnce(&Core::OnDeviceStoppedForSourceChange, core_->GetWeakPtr(),
-                     label, old_media_id, new_media_id));
+      FROM_HERE, base::BindOnce(&Core::OnDeviceStoppedForSourceChange,
+                                core_->GetWeakPtr(), label, old_media_id,
+                                new_media_id, captured_surface_control_active));
 }
 
 void MediaStreamUIProxy::OnRegionCaptureRectChanged(
@@ -462,11 +504,12 @@ void MediaStreamUIProxy::ProcessStopRequestFromUI() {
 }
 
 void MediaStreamUIProxy::ProcessChangeSourceRequestFromUI(
-    const DesktopMediaID& media_id) {
+    const DesktopMediaID& media_id,
+    bool captured_surface_control_active) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
 
   if (source_callback_)
-    source_callback_.Run(media_id);
+    source_callback_.Run(media_id, captured_surface_control_active);
 }
 
 void MediaStreamUIProxy::ProcessStateChangeFromUI(
@@ -584,6 +627,13 @@ void FakeMediaStreamUIProxy::RequestAccess(
           std::unique_ptr<MediaStreamUI>()));
 }
 
+void FakeMediaStreamUIProxy::RequestSelectAudioOutput(
+    std::unique_ptr<SelectAudioOutputRequest> request,
+    SelectAudioOutputCallback callback) {
+  std::move(callback).Run(
+      base::unexpected(content::SelectAudioOutputError::kNoPermission));
+}
+
 void FakeMediaStreamUIProxy::OnStarted(
     base::OnceClosure stop_callback,
     MediaStreamUI::SourceCallback source_callback,
@@ -598,6 +648,7 @@ void FakeMediaStreamUIProxy::OnDeviceStopped(const std::string& label,
 void FakeMediaStreamUIProxy::OnDeviceStoppedForSourceChange(
     const std::string& label,
     const DesktopMediaID& old_media_id,
-    const DesktopMediaID& new_media_id) {}
+    const DesktopMediaID& new_media_id,
+    bool captured_surface_control_active) {}
 
 }  // namespace content

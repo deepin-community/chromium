@@ -337,9 +337,20 @@ mojo.internal.interfaceSupport.Endpoint = class {
 };
 
 /**
+ * @param {!mojo.internal.interfaceSupport.Endpoint} endpoint
+ * @param {!ArrayBuffer} buffer
+ * @export
+ */
+mojo.internal.interfaceSupport.acceptBufferForTesting = function(
+    endpoint, buffer) {
+  endpoint.router_.onMessageReceived_(buffer, []);
+};
+
+/**
  * Creates a new Endpoint wrapping a given pipe handle.
  *
- * @param {!MojoHandle|!mojo.internal.interfaceSupport.Endpoint} pipeOrEndpoint
+ * @param {!MojoHandle|!mojo.internal.interfaceSupport.Endpoint}
+ *     pipeOrEndpoint
  * @param {boolean=} setNamespaceBit
  * @return {!mojo.internal.interfaceSupport.Endpoint}
  */
@@ -575,7 +586,7 @@ mojo.internal.interfaceSupport.PendingReceiver = class {
  * serialize requests and deserialize their replies, both according to
  * declarative message structure specs.
  *
- * TODO(crbug.com/1012109): Use a bounded generic type instead of
+ * TODO(crbug.com/40102194): Use a bounded generic type instead of
  * mojo.internal.interfaceSupport.PendingReceiver.
  * @implements {mojo.internal.interfaceSupport.EndpointClient}
  * @export

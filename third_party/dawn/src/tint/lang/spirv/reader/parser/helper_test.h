@@ -44,12 +44,12 @@ namespace tint::spirv::reader {
 
 // Helper macro to run the parser and compare the disassembled IR to a string.
 // Automatically prefixes the IR disassembly with a newline to improve formatting of tests.
-#define EXPECT_IR(asm, ir)                                           \
-    do {                                                             \
-        auto result = Run(asm);                                      \
-        ASSERT_EQ(result, Success) << result.Failure().reason.Str(); \
-        auto got = "\n" + result.Get();                              \
-        ASSERT_THAT(got, testing::HasSubstr(ir)) << got;             \
+#define EXPECT_IR(asm, ir)                                                                  \
+    do {                                                                                    \
+        auto result = Run(asm);                                                             \
+        ASSERT_EQ(result, Success) << result.Failure().reason.Str();                        \
+        auto got = "\n" + result.Get();                                                     \
+        ASSERT_THAT(got, testing::HasSubstr(ir)) << "GOT:\n" << got << "EXPECTED:\n" << ir; \
     } while (false)
 
 /// Base helper class for testing the SPIR-V parser implementation.
@@ -74,7 +74,7 @@ class SpirvParserTestHelperBase : public BASE {
 
         // Validate the IR module against the capabilities supported by the SPIR-V dialect.
         auto validated =
-            core::ir::Validate(parsed.Get(), EnumSet<core::ir::Capability>{
+            core::ir::Validate(parsed.Get(), core::ir::Capabilities{
                                                  core::ir::Capability::kAllowVectorElementPointer,
                                              });
         if (validated != Success) {
@@ -82,11 +82,12 @@ class SpirvParserTestHelperBase : public BASE {
         }
 
         // Return the disassembled IR module.
-        return core::ir::Disassemble(parsed.Get());
+        return core::ir::Disassembler(parsed.Get()).Plain();
     }
 };
 
 using SpirvParserTest = SpirvParserTestHelperBase<testing::Test>;
+using SpirvParserDeathTest = SpirvParserTest;
 
 template <typename T>
 using SpirvParserTestWithParam = SpirvParserTestHelperBase<testing::TestWithParam<T>>;

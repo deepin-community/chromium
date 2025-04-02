@@ -35,6 +35,18 @@ const char* RootsTable::root_names_[RootsTable::kEntriesCount] = {
 #undef ROOT_NAME
 };
 
+IndirectHandle<HeapNumber> RootsTable::FindHeapNumber(double value) {
+  auto bits = base::bit_cast<uint64_t>(value);
+  for (auto pos = RootIndex::kFirstHeapNumberRoot;
+       pos <= RootIndex::kLastHeapNumberRoot; ++pos) {
+    auto root = Cast<HeapNumber>(Tagged<Object>((*this)[pos]));
+    if (base::bit_cast<uint64_t>(root->value()) == bits) {
+      return IndirectHandle<HeapNumber>(&(*this)[pos]);
+    }
+  }
+  return {};
+}
+
 MapWord ReadOnlyRoots::one_pointer_filler_map_word() {
   return MapWord::FromMap(one_pointer_filler_map());
 }
@@ -52,7 +64,7 @@ void ReadOnlyRoots::VerifyNameForProtectors() {
   Tagged<Name> prev;
   for (RootIndex root_index = RootIndex::kFirstNameForProtector;
        root_index <= RootIndex::kLastNameForProtector; ++root_index) {
-    Tagged<Name> current = Name::cast(object_at(root_index));
+    Tagged<Name> current = Cast<Name>(object_at(root_index));
     DCHECK(IsNameForProtector(current));
     if (root_index != RootIndex::kFirstNameForProtector) {
       // Make sure the objects are adjacent in memory.
@@ -73,17 +85,14 @@ void ReadOnlyRoots::VerifyNameForProtectors() {
      * oddball kind instead. Do the casts via Tagged<Object> to satisfy cast  \
      * compatibility static_asserts in the Tagged class. */                   \
     if (std::is_same_v<Type, Undefined>) {                                    \
-      return Tagged<Oddball>::cast(Tagged<Object>(value))->kind() ==          \
+      return Cast<Oddball>(Tagged<Object>(value))->kind() ==                  \
              Oddball::kUndefined;                                             \
     } else if (std::is_same_v<Type, Null>) {                                  \
-      return Tagged<Oddball>::cast(Tagged<Object>(value))->kind() ==          \
-             Oddball::kNull;                                                  \
+      return Cast<Oddball>(Tagged<Object>(value))->kind() == Oddball::kNull;  \
     } else if (std::is_same_v<Type, True>) {                                  \
-      return Tagged<Oddball>::cast(Tagged<Object>(value))->kind() ==          \
-             Oddball::kTrue;                                                  \
+      return Cast<Oddball>(Tagged<Object>(value))->kind() == Oddball::kTrue;  \
     } else if (std::is_same_v<Type, False>) {                                 \
-      return Tagged<Oddball>::cast(Tagged<Object>(value))->kind() ==          \
-             Oddball::kFalse;                                                 \
+      return Cast<Oddball>(Tagged<Object>(value))->kind() == Oddball::kFalse; \
     } else {                                                                  \
       return Is##Type(value);                                                 \
     }                                                                         \
@@ -92,18 +101,6 @@ void ReadOnlyRoots::VerifyNameForProtectors() {
 READ_ONLY_ROOT_LIST(ROOT_TYPE_CHECK)
 #undef ROOT_TYPE_CHECK
 #endif
-
-Handle<HeapNumber> ReadOnlyRoots::FindHeapNumber(double value) {
-  auto bits = base::bit_cast<uint64_t>(value);
-  for (auto pos = RootIndex::kFirstHeapNumberRoot;
-       pos <= RootIndex::kLastHeapNumberRoot; ++pos) {
-    auto root = HeapNumber::cast(object_at(pos));
-    if (base::bit_cast<uint64_t>(root->value()) == bits) {
-      return Handle<HeapNumber>(GetLocation(pos));
-    }
-  }
-  return Handle<HeapNumber>();
-}
 
 void ReadOnlyRoots::InitFromStaticRootsTable(Address cage_base) {
   CHECK(V8_STATIC_ROOTS_BOOL);

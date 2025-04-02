@@ -4,6 +4,7 @@
 
 #include "ui/accessibility/platform/ax_platform_node.h"
 
+#include "base/check_deref.h"
 #include "base/debug/crash_logging.h"
 #include "base/lazy_instance.h"
 #include "build/build_config.h"
@@ -19,7 +20,7 @@ base::LazyInstance<AXPlatformNode::NativeWindowHandlerCallback>::Leaky
     AXPlatformNode::native_window_handler_ = LAZY_INSTANCE_INITIALIZER;
 
 // static
-bool AXPlatformNode::disallow_ax_mode_changes_;
+bool AXPlatformNode::allow_ax_mode_changes_ = true;
 
 // static
 gfx::NativeViewAccessible AXPlatformNode::popup_focus_override_ = nullptr;
@@ -32,13 +33,13 @@ AXPlatformNode* AXPlatformNode::FromNativeWindow(
   return nullptr;
 }
 
-#if !BUILDFLAG_INTERNAL_HAS_NATIVE_ACCESSIBILITY()
+#if !BUILDFLAG(HAS_NATIVE_ACCESSIBILITY)
 // static
 AXPlatformNode* AXPlatformNode::FromNativeViewAccessible(
     gfx::NativeViewAccessible accessible) {
   return nullptr;
 }
-#endif  // !BUILDFLAG_INTERNAL_HAS_NATIVE_ACCESSIBILITY()
+#endif  // !BUILDFLAG(HAS_NATIVE_ACCESSIBILITY)
 
 // static
 void AXPlatformNode::RegisterNativeWindowHandler(
@@ -47,8 +48,8 @@ void AXPlatformNode::RegisterNativeWindowHandler(
 }
 
 // static
-void AXPlatformNode::DisallowAXModeChanges() {
-  disallow_ax_mode_changes_ = true;
+void AXPlatformNode::SetAXModeChangeAllowed(bool allow) {
+  allow_ax_mode_changes_ = allow;
 }
 
 AXPlatformNode::AXPlatformNode() = default;
@@ -58,17 +59,16 @@ AXPlatformNode::~AXPlatformNode() = default;
 void AXPlatformNode::Destroy() {
 }
 
-int32_t AXPlatformNode::GetUniqueId() const {
-  DCHECK(GetDelegate()) << "|GetUniqueId| must be called after |Init|.";
-  return GetDelegate() ? GetDelegate()->GetUniqueId().Get()
-                       : kInvalidAXUniqueId;
+AXPlatformNodeId AXPlatformNode::GetUniqueId() const {
+  // Must not be called before `Init()`.
+  return CHECK_DEREF(GetDelegate()).GetUniqueId();
 }
 
-std::string AXPlatformNode::ToString() {
+std::string AXPlatformNode::ToString() const {
   return GetDelegate() ? GetDelegate()->ToString() : "No delegate";
 }
 
-std::string AXPlatformNode::SubtreeToString() {
+std::string AXPlatformNode::SubtreeToString() const {
   return GetDelegate() ? GetDelegate()->SubtreeToString() : "No delegate";
 }
 
@@ -78,7 +78,7 @@ std::ostream& operator<<(std::ostream& stream, AXPlatformNode& node) {
 
 // static
 void AXPlatformNode::NotifyAddAXModeFlags(AXMode mode_flags) {
-  if (disallow_ax_mode_changes_) {
+  if (!allow_ax_mode_changes_) {
     return;
   }
 

@@ -7,9 +7,13 @@
 #include <utility>
 
 #include "base/containers/adapters.h"
+#include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/not_fatal_until.h"
 #include "base/trace_event/trace_event.h"
+#include "chrome/browser/predictors/predictors_features.h"
+#include "chrome/browser/predictors/predictors_traffic_annotations.h"
 #include "chrome/browser/predictors/resource_prefetch_predictor.h"
 #include "chrome/browser/preloading/preloading_prefs.h"
 #include "chrome/browser/profiles/profile.h"
@@ -49,11 +53,13 @@ PreresolveJob::PreresolveJob(
     int num_sockets,
     bool allow_credentials,
     net::NetworkAnonymizationKey network_anonymization_key,
+    net::NetworkTrafficAnnotationTag traffic_annotation_tag,
     PreresolveInfo* info)
     : url(url),
       num_sockets(num_sockets),
       allow_credentials(allow_credentials),
       network_anonymization_key(std::move(network_anonymization_key)),
+      traffic_annotation_tag(std::move(traffic_annotation_tag)),
       info(info),
       creation_time(base::TimeTicks::Now()) {
   DCHECK_GE(num_sockets, 0);
@@ -66,6 +72,7 @@ PreresolveJob::PreresolveJob(PreconnectRequest preconnect_request,
                     preconnect_request.num_sockets,
                     preconnect_request.allow_credentials,
                     std::move(preconnect_request.network_anonymization_key),
+                    kLoadingPredictorPreconnectTrafficAnnotation,
                     info) {}
 
 PreresolveJob::PreresolveJob(PreresolveJob&& other) = default;
@@ -120,7 +127,8 @@ void PreconnectManager::Start(const GURL& url,
 
 void PreconnectManager::StartPreresolveHost(
     const GURL& url,
-    const net::NetworkAnonymizationKey& network_anonymization_key) {
+    const net::NetworkAnonymizationKey& network_anonymization_key,
+    net::NetworkTrafficAnnotationTag traffic_annotation) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!IsEnabled())
     return;
@@ -128,7 +136,7 @@ void PreconnectManager::StartPreresolveHost(
     return;
   PreresolveJobId job_id = preresolve_jobs_.Add(std::make_unique<PreresolveJob>(
       url.DeprecatedGetOriginAsURL(), 0, kAllowCredentialsOnPreconnectByDefault,
-      network_anonymization_key, nullptr));
+      network_anonymization_key, traffic_annotation, nullptr));
   queued_jobs_.push_front(job_id);
 
   TryToLaunchPreresolveJobs();
@@ -136,7 +144,8 @@ void PreconnectManager::StartPreresolveHost(
 
 void PreconnectManager::StartPreresolveHosts(
     const std::vector<GURL>& urls,
-    const net::NetworkAnonymizationKey& network_anonymization_key) {
+    const net::NetworkAnonymizationKey& network_anonymization_key,
+    net::NetworkTrafficAnnotationTag traffic_annotation) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!IsEnabled())
     return;
@@ -145,10 +154,11 @@ void PreconnectManager::StartPreresolveHosts(
     if (!url.SchemeIsHTTPOrHTTPS()) {
       continue;
     }
-    PreresolveJobId job_id = preresolve_jobs_.Add(
-        std::make_unique<PreresolveJob>(url.DeprecatedGetOriginAsURL(), 0,
-                                        kAllowCredentialsOnPreconnectByDefault,
-                                        network_anonymization_key, nullptr));
+    PreresolveJobId job_id =
+        preresolve_jobs_.Add(std::make_unique<PreresolveJob>(
+            url.DeprecatedGetOriginAsURL(), 0,
+            kAllowCredentialsOnPreconnectByDefault, network_anonymization_key,
+            traffic_annotation, nullptr));
     queued_jobs_.push_front(job_id);
   }
 
@@ -158,7 +168,8 @@ void PreconnectManager::StartPreresolveHosts(
 void PreconnectManager::StartPreconnectUrl(
     const GURL& url,
     bool allow_credentials,
-    net::NetworkAnonymizationKey network_anonymization_key) {
+    net::NetworkAnonymizationKey network_anonymization_key,
+    net::NetworkTrafficAnnotationTag traffic_annotation) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!IsEnabled())
     return;
@@ -166,7 +177,7 @@ void PreconnectManager::StartPreconnectUrl(
     return;
   PreresolveJobId job_id = preresolve_jobs_.Add(std::make_unique<PreresolveJob>(
       url.DeprecatedGetOriginAsURL(), 1, allow_credentials,
-      std::move(network_anonymization_key), nullptr));
+      std::move(network_anonymization_key), traffic_annotation, nullptr));
   queued_jobs_.push_front(job_id);
 
   TryToLaunchPreresolveJobs();
@@ -186,7 +197,8 @@ void PreconnectManager::PreconnectUrl(
     const GURL& url,
     int num_sockets,
     bool allow_credentials,
-    const net::NetworkAnonymizationKey& network_anonymization_key) const {
+    const net::NetworkAnonymizationKey& network_anonymization_key,
+    const net::NetworkTrafficAnnotationTag& traffic_annotation) const {
   DCHECK(url.DeprecatedGetOriginAsURL() == url);
   DCHECK(url.SchemeIsHTTPOrHTTPS());
   if (observer_)
@@ -194,11 +206,20 @@ void PreconnectManager::PreconnectUrl(
 
   auto* network_context = GetNetworkContext();
 
+  if (num_sockets > 1 &&
+      base::FeatureList::IsEnabled(
+          features::kLoadingPredictorLimitPreconnectSocketCount)) {
+    // Adjust the number of socket here because LoadingPredictor is the only
+    // call site that sets `num_sockets` to a non-one value.
+    num_sockets = 1;
+  }
+
   network_context->PreconnectSockets(
       num_sockets, url,
       allow_credentials ? network::mojom::CredentialsMode::kInclude
                         : network::mojom::CredentialsMode::kOmit,
-      network_anonymization_key);
+      network_anonymization_key,
+      net::MutableNetworkTrafficAnnotationTag(traffic_annotation));
 }
 
 std::unique_ptr<ResolveHostClientImpl> PreconnectManager::PreresolveUrl(
@@ -322,7 +343,7 @@ void PreconnectManager::FinishPreresolveJob(PreresolveJobId job_id,
   bool need_preconnect = success && job->need_preconnect();
   if (need_preconnect) {
     PreconnectUrl(job->url, job->num_sockets, job->allow_credentials,
-                  job->network_anonymization_key);
+                  job->network_anonymization_key, job->traffic_annotation_tag);
   }
 
   PreresolveInfo* info = job->info;
@@ -345,7 +366,7 @@ void PreconnectManager::AllPreresolvesForUrlFinished(PreresolveInfo* info) {
   DCHECK(info);
   DCHECK(info->is_done());
   auto it = preresolve_info_.find(info->url);
-  DCHECK(it != preresolve_info_.end());
+  CHECK(it != preresolve_info_.end(), base::NotFatalUntil::M130);
   DCHECK(info == it->second.get());
   if (delegate_)
     delegate_->PreconnectFinished(std::move(info->stats));

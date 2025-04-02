@@ -5,9 +5,11 @@
 #ifndef COMPONENTS_AUTOFILL_CORE_COMMON_AUTOFILL_PREFS_H_
 #define COMPONENTS_AUTOFILL_CORE_COMMON_AUTOFILL_PREFS_H_
 
-#include "build/build_config.h"
-#include "google_apis/gaia/core_account_id.h"
+#include <string_view>
 
+#include "build/build_config.h"
+
+class PrefRegistrySimple;
 class PrefService;
 
 namespace user_prefs {
@@ -20,6 +22,15 @@ namespace autofill::prefs {
 // component. Keep alphabetized, and document each in the .cc file.
 // Do not get/set the value of this pref directly. Use provided getter/setter.
 
+// String serving as a seed for ablation studies.
+inline constexpr std::string_view kAutofillAblationSeedPref =
+    "autofill.ablation_seed";
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+// Boolean that is true if BNPL on Autofill is enabled.
+inline constexpr char kAutofillBnplEnabled[] = "autofill.bnpl_enabled";
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
 // Boolean that is true if Autofill is enabled and allowed to save credit card
 // data.
 inline constexpr char kAutofillCreditCardEnabled[] =
@@ -45,6 +56,12 @@ inline constexpr char kAutofillIbanEnabled[] = "autofill.iban_enabled";
 // was run. This routine will be run once per version.
 inline constexpr char kAutofillLastVersionDeduped[] =
     "autofill.last_version_deduped";
+// To simplify the rollout of AutofillSilentlyRemoveQuasiDuplicates,
+// deduplication can be run a second time per milestone for users enrolled in
+// the experiment. This pref tracks whether deduplication was run a second time.
+// TODO(crbug.com/325450676): Remove after the rollout finished.
+inline constexpr char kAutofillRanQuasiDuplicateExtraDeduplication[] =
+    "autofill.ran_quasi_duplicate_extra_deduplication";
 // Integer that is set to the last version where disused addresses were
 // deleted. This deletion will be run once per version.
 inline constexpr char kAutofillLastVersionDisusedAddressesDeleted[] =
@@ -62,6 +79,16 @@ inline constexpr char kAutofillPaymentCvcStorage[] =
 // Boolean that is true when users can see the card benefits with the card.
 inline constexpr char kAutofillPaymentCardBenefits[] =
     "autofill.payment_card_benefits";
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+// Boolean that controls improved autofill filling predictions. When enabled,
+// the autofill functionality is enhanced with adopting user data to
+// the form being filled in, which is triggered by the user via an extra
+// autofill suggestion.
+inline constexpr char kAutofillPredictionImprovementsEnabled[] =
+    "autofill.prediction_improvements.enabled";
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
 // Boolean that is true if Autofill is enabled and allowed to save profile data.
 // Do not get/set the value of this pref directly. Use provided getter/setter.
 inline constexpr char kAutofillProfileEnabled[] = "autofill.profile_enabled";
@@ -74,13 +101,20 @@ inline constexpr char kAutofillStatesDataDir[] = "autofill.states_data_dir";
 // metadata for randomized uploads. The value of this pref is a string.
 inline constexpr char kAutofillUploadEncodingSeed[] =
     "autofill.upload_encoding_seed";
-// Dictionary pref used to track which form signature uploads have been
+// Dictionary pref used to track which form signature vote uploads have been
 // performed. Each entry in the dictionary maps a form signature (reduced
-// via a 10-bit modulus) to a integer bit-field where each bit denotes whether
-// or not a given upload event has occurred.
-inline constexpr char kAutofillUploadEvents[] = "autofill.upload_events";
+// via a 10-bit modulus) to an integer bit-field where each bit denotes whether
+// or not a given vote upload event has occurred.
+inline constexpr char kAutofillVoteUploadEvents[] = "autofill.upload_events";
+// Dictionary pref used to track which form signature metadata uploads have been
+// performed. Each entry in the dictionary maps a form signature (reduced
+// via a 10-bit modulus) to an integer flag that denotes whether or not a given
+// metadata upload event has occurred.
+// Throttling is done for both Autofill and Password Manager metadata uploads.
+inline constexpr char kAutofillMetadataUploadEvents[] =
+    "autofill.metadata_upload_events";
 // The timestamp (seconds since the Epoch UTC) for when the the upload event
-// pref was last reset.
+// prefs was last reset.
 inline constexpr char kAutofillUploadEventsLastResetTimestamp[] =
     "autofill.upload_events_last_reset_timestamp";
 // Integer that is set to the last major version where the Autocomplete
@@ -113,6 +147,14 @@ inline constexpr char
 // filling.
 inline constexpr char kAutofillUsingVirtualViewStructure[] =
     "autofill.using_virtual_view_structure";
+// Boolean set by the `ThirdPartyPasswordManagersAllowed` policy. Defaults to
+// true which allows users to set the `kAutofillUsingVirtualViewStructure` pref.
+// If set to false, user can only use the built-in password manager.
+inline constexpr char kAutofillThirdPartyPasswordManagersAllowed[] =
+    "autofill.third_party_password_managers_allowed";
+inline constexpr char kFacilitatedPaymentsPix[] = "facilitated_payments.pix";
+inline constexpr char kFacilitatedPaymentsEwallet[] =
+    "facilitated_payments.ewallet";
 #endif  // BUILDFLAG(IS_ANDROID)
 
 // The maximum value for the
@@ -128,6 +170,7 @@ enum Flags {
 
 // Registers Autofill prefs.
 void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
+void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 
 // Migrates deprecated Autofill prefs values.
 void MigrateDeprecatedAutofillPrefs(PrefService* prefs);
@@ -145,10 +188,6 @@ void SetAutofillPaymentMethodsEnabled(PrefService* prefs, bool enabled);
 bool HasSeenIban(const PrefService* prefs);
 
 void SetAutofillHasSeenIban(PrefService* prefs);
-
-bool IsAutofillIbanEnabled(const PrefService* prefs);
-
-void SetAutofillIbanEnabled(PrefService* prefs, bool enabled);
 
 bool IsAutofillManaged(const PrefService* prefs);
 
@@ -183,16 +222,25 @@ bool IsPaymentCardBenefitsEnabled(const PrefService* prefs);
 
 void SetPaymentCardBenefits(PrefService* prefs, bool value);
 
-void SetUserOptedInWalletSyncTransport(PrefService* prefs,
-                                       const CoreAccountId& account_id,
-                                       bool opted_in);
-
-bool IsUserOptedInWalletSyncTransport(const PrefService* prefs,
-                                      const CoreAccountId& account_id);
-
 void ClearSyncTransportOptIns(PrefService* prefs);
 
 bool UsesVirtualViewStructureForAutofill(const PrefService* prefs);
+
+void SetFacilitatedPaymentsPix(PrefService* prefs, bool value);
+
+bool IsFacilitatedPaymentsPixEnabled(const PrefService* prefs);
+
+void SetFacilitatedPaymentsEwallet(PrefService* prefs, bool value);
+
+bool IsFacilitatedPaymentsEwalletEnabled(const PrefService* prefs);
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+void SetAutofillBnplEnabled(PrefService* prefs, bool value);
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
+
+bool IsAutofillBnplEnabled(const PrefService* prefs);
 
 }  // namespace autofill::prefs
 

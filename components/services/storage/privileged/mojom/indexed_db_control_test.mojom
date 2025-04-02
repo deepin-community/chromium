@@ -5,6 +5,7 @@
 module storage.mojom;
 
 import "components/services/storage/public/mojom/buckets/bucket_locator.mojom";
+import "mojo/public/mojom/base/byte_string.mojom";
 import "mojo/public/mojom/base/file_path.mojom";
 
 enum FailClass {
@@ -46,7 +47,8 @@ interface IndexedDBControlTest {
 
   // Does a direct write to a database with a given key/value pair.
   WriteToIndexedDBForTesting(storage.mojom.BucketLocator bucket_locator,
-                             string key, string value) => ();
+                             mojo_base.mojom.ByteString key,
+                             mojo_base.mojom.ByteString value) => ();
 
   // Returns the path for a given key/database/blob.
   GetPathForBlobForTesting(storage.mojom.BucketLocator bucket_locator,
@@ -56,6 +58,10 @@ interface IndexedDBControlTest {
   // Compacts the backing store for a given `bucket_locator`.
   CompactBackingStoreForTesting(storage.mojom.BucketLocator bucket_locator) =>
       ();
+
+  // Computes the scheduling priority for the first bucket in the map. Returns
+  // null if there is no bucket or it doesn't have any open connections.
+  GetSchedulingPriorityForTesting() => (int32? priority);
 
   // Gets the total usage in bytes across all buckets.
   GetUsageForTesting() => (int64 total_usage);

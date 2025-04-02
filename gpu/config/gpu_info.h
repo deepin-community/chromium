@@ -10,17 +10,16 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include <optional>
 #include "base/clang_profiling_buildflags.h"
 #include "base/containers/flat_map.h"
 #include "base/containers/span.h"
 #include "base/time/time.h"
 #include "base/version.h"
 #include "build/build_config.h"
-#include "gpu/config/dx_diag_node.h"
 #include "gpu/gpu_export.h"
 #include "gpu/vulkan/buildflags.h"
 #include "ui/gfx/geometry/size.h"
@@ -42,7 +41,7 @@ namespace gpu {
 // These values are persistent to logs. Entries should not be renumbered and
 // numeric values should never be reused.
 // This should match enum IntelGpuSeriesType in
-//  \tools\metrics\histograms\enums.xml
+//  \tools\metrics\histograms\metadata\gpu\enums.xml
 enum class IntelGpuSeriesType {
   kUnknown = 0,
   // Intel 4th gen
@@ -82,8 +81,14 @@ enum class IntelGpuSeriesType {
   kAlchemist = 26,
   kRaptorlake = 27,
   kMeteorlake = 28,
+  kArrowlake = 30,
+  // Intel 13th gen
+  kLunarlake = 29,
+  kBattlemage = 31,
+  // Intel 14th gen
+  kPantherlake = 32,
   // Please also update |gpu_series_map| in process_json.py.
-  kMaxValue = kMeteorlake,
+  kMaxValue = kPantherlake,
 };
 
 // Video profile.  This *must* match media::VideoCodecProfile.
@@ -238,7 +243,8 @@ struct GPU_EXPORT OverlayInfo {
            yuy2_overlay_support == other.yuy2_overlay_support &&
            nv12_overlay_support == other.nv12_overlay_support &&
            bgra8_overlay_support == other.bgra8_overlay_support &&
-           rgb10a2_overlay_support == other.rgb10a2_overlay_support;
+           rgb10a2_overlay_support == other.rgb10a2_overlay_support &&
+           p010_overlay_support == other.p010_overlay_support;
   }
   bool operator!=(const OverlayInfo& other) const { return !(*this == other); }
 
@@ -251,6 +257,7 @@ struct GPU_EXPORT OverlayInfo {
   OverlaySupport nv12_overlay_support = OverlaySupport::kNone;
   OverlaySupport bgra8_overlay_support = OverlaySupport::kNone;
   OverlaySupport rgb10a2_overlay_support = OverlaySupport::kNone;
+  OverlaySupport p010_overlay_support = OverlaySupport::kNone;
 };
 
 #endif
@@ -293,7 +300,7 @@ struct GPU_EXPORT GPUInfo {
     // unique relative its vendor, not to each other. If there are more than one
     // of the same exact graphics card, they all have the same vendor id and
     // device id but different LUIDs.
-    CHROME_LUID luid;
+    CHROME_LUID luid = {};
 #endif  // BUILDFLAG(IS_WIN)
 
     // The 64-bit ID used for GPU selection by ANGLE_platform_angle_device_id.
@@ -316,10 +323,6 @@ struct GPU_EXPORT GPUInfo {
 
     std::string driver_vendor;
     std::string driver_version;
-
-    // NVIDIA CUDA compute capability, major version. 0 if undetermined. Can be
-    // used to determine the hardware generation that the GPU belongs to.
-    int cuda_compute_capability_major = 0;
 
     // If this device is identified as high performance or low power GPU.
     gl::GpuPreference gpu_preference = gl::GpuPreference::kNone;
@@ -360,6 +363,9 @@ struct GPU_EXPORT GPUInfo {
 
   // Secondary GPUs, for example, the integrated GPU in a dual GPU machine.
   std::vector<GPUDevice> secondary_gpus;
+
+  // NPU adapters.
+  std::vector<GPUDevice> npus;
 
   // The version of the pixel/fragment shader used by the gpu.
   std::string pixel_shader_version;
@@ -456,15 +462,9 @@ struct GPU_EXPORT GPUInfo {
   uint32_t target_cpu_bits = 31;
 #endif
 
-#if BUILDFLAG(IS_MAC)
-  // Enum describing which texture target is used for native GpuMemoryBuffers on
-  // MacOS. Valid values are GL_TEXTURE_2D and GL_TEXTURE_RECTANGLE_ARB.
-  uint32_t macos_specific_texture_target;
-#endif  // BUILDFLAG(IS_MAC)
-
 #if BUILDFLAG(IS_WIN)
-  // The information returned by the DirectX Diagnostics Tool.
-  DxDiagNode dx_diagnostics;
+  // The supported DirectML feature level in the gpu driver;
+  uint32_t directml_feature_level = 0;
 
   // The supported d3d feature level in the gpu driver;
   uint32_t d3d12_feature_level = 0;
@@ -495,6 +495,8 @@ struct GPU_EXPORT GPUInfo {
   uint32_t visibility_callback_call_count = 0;
 
 #if BUILDFLAG(ENABLE_VULKAN)
+  bool hardware_supports_vulkan = false;
+
   std::optional<VulkanInfo> vulkan_info;
 #endif
 

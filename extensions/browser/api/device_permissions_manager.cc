@@ -8,6 +8,7 @@
 
 #include <optional>
 #include <utility>
+
 #include "base/containers/contains.h"
 #include "base/functional/bind.h"
 #include "base/memory/scoped_refptr.h"
@@ -83,7 +84,6 @@ const char* TypeToString(DevicePermissionEntry::Type type) {
       return kDeviceTypeHid;
   }
   NOTREACHED();
-  return "";
 }
 
 // Persists a DevicePermissionEntry in ExtensionPrefs.
@@ -689,9 +689,8 @@ BrowserContext* DevicePermissionsManagerFactory::GetBrowserContextToUse(
     BrowserContext* context) const {
   // Return the original (possibly off-the-record) browser context so that a
   // separate instance of the DevicePermissionsManager is used in incognito
-  // mode. The parent class's implemenation returns NULL.
-  return ExtensionsBrowserClient::Get()->GetContextOwnInstance(
-      context, /*force_guest_profile=*/true);
+  // mode. The parent class's implementation returns null.
+  return ExtensionsBrowserClient::Get()->GetContextOwnInstance(context);
 }
 
 }  // namespace extensions

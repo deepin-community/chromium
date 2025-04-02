@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/40285824): Remove this and convert code to safer constructs.
+#pragma allow_unsafe_buffers
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -10,6 +15,7 @@
 #include "ash/constants/ash_features.h"
 #include "base/base64.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
@@ -34,6 +40,7 @@
 #include "chrome/browser/ash/file_system_provider/icon_set.h"
 #include "chrome/browser/ash/file_system_provider/provided_file_system_info.h"
 #include "chrome/browser/ash/fileapi/file_system_backend.h"
+#include "chrome/browser/ash/guest_os/guest_os_share_path_factory.h"
 #include "chrome/browser/ash/policy/dlp/dialogs/files_policy_dialog.h"
 #include "chrome/browser/ash/policy/dlp/dlp_files_controller_ash.h"
 #include "chrome/browser/ash/policy/dlp/files_policy_notification_manager.h"
@@ -46,8 +53,9 @@
 #include "chrome/browser/chromeos/policy/dlp/test/mock_dlp_rules_manager.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/signin/identity_manager_factory.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_features.h"
+#include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/api/file_system_provider_capabilities/file_system_provider_capabilities_handler.h"
 #include "chromeos/ash/components/dbus/cros_disks/cros_disks_client.h"
 #include "chromeos/ash/components/dbus/vm_concierge/concierge_service.pb.h"
@@ -59,7 +67,6 @@
 #include "components/prefs/pref_service.h"
 #include "components/signin/public/identity_manager/identity_test_utils.h"
 #include "content/public/test/browser_test.h"
-#include "content/public/test/test_navigation_observer.h"
 #include "extensions/browser/api_test_utils.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/install_warning.h"
@@ -495,13 +502,6 @@ IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, AddFileWatch) {
                                {.load_as_component = true}));
 }
 
-IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, ContentChecksum) {
-  AddLocalFileSystem(browser()->profile(), temp_dir_.GetPath());
-
-  ASSERT_TRUE(RunExtensionTest("file_browser/content_checksum_test", {},
-                               {.load_as_component = true}));
-}
-
 IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, Recent) {
   const base::FilePath downloads_dir = temp_dir_.GetPath();
 
@@ -622,7 +622,7 @@ IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, Crostini) {
     ASSERT_TRUE(base::CreateDirectory(shared2));
   }
   guest_os::GuestOsSharePath* guest_os_share_path =
-      guest_os::GuestOsSharePath::GetForProfile(browser()->profile());
+      guest_os::GuestOsSharePathFactory::GetForProfile(browser()->profile());
   guest_os_share_path->RegisterPersistedPaths(crostini::kCrostiniDefaultVmName,
                                               {shared1});
   guest_os_share_path->RegisterPersistedPaths(crostini::kCrostiniDefaultVmName,
@@ -691,24 +691,6 @@ IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, GetVolumeRoot) {
                                {.load_as_component = true}));
 }
 
-IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, OpenURL) {
-  const char* target_url = "https://www.google.com/";
-  content::TestNavigationObserver navigation_observer(GURL{target_url});
-  navigation_observer.StartWatchingNewWebContents();
-  ASSERT_TRUE(RunExtensionTest("file_browser/open_url",
-                               {.custom_arg = target_url},
-                               {.load_as_component = true}));
-  // Wait for navigation to finish.
-  navigation_observer.Wait();
-
-  // Check that the current active web contents points to the expected URL.
-  BrowserList* browser_list = BrowserList::GetInstance();
-  Browser* browser = browser_list->GetLastActive();
-  content::WebContents* active_web_contents =
-      browser->tab_strip_model()->GetActiveWebContents();
-  EXPECT_STREQ(target_url, active_web_contents->GetVisibleURL().spec().c_str());
-}
-
 IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, SearchFiles) {
   const base::FilePath downloads_dir = temp_dir_.GetPath();
   ASSERT_TRUE(file_manager::VolumeManager::Get(browser()->profile())
@@ -756,6 +738,29 @@ IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, SearchFiles) {
 
   ASSERT_TRUE(RunExtensionTest("file_browser/search_files", {},
                                {.load_as_component = true}));
+}
+
+IN_PROC_BROWSER_TEST_F(FileManagerPrivateApiTest, GetPdfThumbnail) {
+  AddLocalFileSystem(browser()->profile(), temp_dir_.GetPath());
+  base::FilePath downloads;
+  ASSERT_TRUE(
+      storage::ExternalMountPoints::GetSystemInstance()->GetRegisteredPath(
+          file_manager::util::GetDownloadsMountPointName(browser()->profile()),
+          &downloads));
+
+  {
+    base::ScopedAllowBlockingForTesting allow_io;
+    base::FilePath source_dir =
+        base::PathService::CheckedGet(chrome::DIR_TEST_DATA).AppendASCII("pdf");
+    ASSERT_TRUE(base::CopyFile(source_dir.AppendASCII("test.pdf"),
+                               downloads.AppendASCII("test.pdf")));
+    ASSERT_TRUE(base::CopyFile(source_dir.AppendASCII("combobox_form.pdf"),
+                               downloads.AppendASCII("combobox_form.pdf")));
+  }
+
+  EXPECT_TRUE(RunExtensionTest("image_loader_private/get_pdf_thumbnail",
+                               /*run_options=*/{},
+                               /*load_options=*/{.load_as_component = true}));
 }
 
 class FileManagerPrivateApiDlpTest : public FileManagerPrivateApiTest {

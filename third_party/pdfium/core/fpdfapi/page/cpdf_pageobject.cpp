@@ -90,21 +90,19 @@ void CPDF_PageObject::CopyData(const CPDF_PageObject* pSrc) {
   m_bDirty = true;
 }
 
+void CPDF_PageObject::SetIsActive(bool value) {
+  if (m_bIsActive != value) {
+    m_bIsActive = value;
+    m_bDirty = true;
+  }
+}
+
 void CPDF_PageObject::TransformClipPath(const CFX_Matrix& matrix) {
   CPDF_ClipPath& clip_path = mutable_clip_path();
   if (!clip_path.HasRef()) {
     return;
   }
   clip_path.Transform(matrix);
-  SetDirty(true);
-}
-
-void CPDF_PageObject::TransformGeneralState(const CFX_Matrix& matrix) {
-  CPDF_GeneralState& general_state = mutable_general_state();
-  if (!general_state.HasRef()) {
-    return;
-  }
-  general_state.GetMutableMatrix()->Concat(matrix);
   SetDirty(true);
 }
 

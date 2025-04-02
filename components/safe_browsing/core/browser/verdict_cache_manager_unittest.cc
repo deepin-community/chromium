@@ -12,13 +12,13 @@
 #include "base/values.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/safe_browsing/core/browser/db/v4_protocol_manager_util.h"
-#include "components/safe_browsing/core/browser/hashprefix_realtime/hash_realtime_utils.h"
 #include "components/safe_browsing/core/browser/safe_browsing_sync_observer.h"
+#include "components/safe_browsing/core/common/hashprefix_realtime/hash_realtime_utils.h"
 #include "components/safe_browsing/core/common/proto/csd.pb.h"
 #include "components/safe_browsing/core/common/proto/realtimeapi.pb.h"
 #include "components/safe_browsing/core/common/proto/safebrowsingv5.pb.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/safe_browsing/core/common/safebrowsing_constants.h"
+#include "components/safe_browsing/core/common/safebrowsing_switches.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -51,7 +51,7 @@ class MockSafeBrowsingSyncObserver : public SafeBrowsingSyncObserver {
 
 class VerdictCacheManagerTest : public ::testing::Test {
  public:
-  VerdictCacheManagerTest() {}
+  VerdictCacheManagerTest() = default;
 
   void SetUp() override {
     test_pref_service_.registry()->RegisterBooleanPref(
@@ -154,7 +154,7 @@ class ArtificialHashRealTimeVerdictCacheManagerTest
   ArtificialHashRealTimeVerdictCacheManagerTest() {
     auto* command_line = base::CommandLine::ForCurrentProcess();
     command_line->AppendSwitchASCII(
-        safe_browsing::kArtificialCachedHashPrefixRealTimeVerdictFlag,
+        safe_browsing::switches::kArtificialCachedHashPrefixRealTimeVerdictFlag,
         kArtificialHashRealTimeUnsafeUrl);
   }
   void TearDown() override {
@@ -373,7 +373,7 @@ TEST_F(VerdictCacheManagerTest, TestRemoveCachedVerdictOnURLsDeleted) {
                     LoginReputationClientRequest::UNFAMILIAR_LOGIN_PAGE));
 }
 
-// TODO(crbug.com/1264925): This test is flaky on device.
+// TODO(crbug.com/40203584): This test is flaky on device.
 #if TARGET_OS_IOS && !TARGET_IPHONE_SIMULATOR
 #define MAYBE_TestCleanUpExpiredVerdict DISABLED_TestCleanUpExpiredVerdict
 #else

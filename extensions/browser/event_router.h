@@ -29,6 +29,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/browser/lazy_context_task_queue.h"
+#include "extensions/browser/process_manager_observer.h"
 #include "extensions/browser/service_worker/worker_id.h"
 #include "extensions/common/constants.h"
 #include "extensions/common/extension_id.h"
@@ -73,9 +74,9 @@ enum class EventDispatchSource : int {
 };
 
 // The upper bound of time allowed for event dispatch histograms. Also used in
-// histograms for determining when an event is "stale" (it has not been acked by
+// histograms for determining when an event is "late" (it has not been acked by
 // the renderer to the browser by this time).
-inline constexpr base::TimeDelta kEventAckMetricTimeLimit = base::Minutes(5);
+inline base::TimeDelta kEventAckMetricTimeLimit = base::Minutes(5);
 
 // TODO(lazyboy): Document how extension events work, including how listeners
 // are registered and how listeners are tracked in renderer and browser process.
@@ -83,6 +84,7 @@ class EventRouter : public KeyedService,
                     public ExtensionRegistryObserver,
                     public EventListenerMap::Delegate,
                     public content::RenderProcessHostObserver,
+                    public ProcessManagerObserver,
                     public mojom::EventRouter {
  public:
   // These constants convey the state of our knowledge of whether we're in
@@ -122,6 +124,7 @@ class EventRouter : public KeyedService,
     virtual void OnWillDispatchEvent(const Event& event) = 0;
     virtual void OnDidDispatchEventToProcess(const Event& event,
                                              int process_id) = 0;
+    virtual void OnNonExtensionEventDispatched(const std::string& event_name) {}
   };
 
   // Gets the EventRouter for |browser_context|.
@@ -159,6 +162,9 @@ class EventRouter : public KeyedService,
   static void BindForRenderer(
       int process_id,
       mojo::PendingAssociatedReceiver<mojom::EventRouter> receiver);
+
+  void SwapReceiverForTesting(int render_process_id,
+                              mojom::EventRouter* new_impl);
 
   // An EventRouter is shared between |browser_context| and its associated
   // incognito context. |extension_prefs| may be NULL in tests.
@@ -342,6 +348,10 @@ class EventRouter : public KeyedService,
       int worker_thread_id,
       mojo::PendingAssociatedRemote<mojom::EventDispatcher> event_dispatcher);
 
+  void SetEventAckMetricTimeLimitForTesting(base::TimeDelta time_limit) {
+    kEventAckMetricTimeLimit = time_limit;
+  }
+
  private:
   friend class EventRouterFilterTest;
   friend class EventRouterTest;
@@ -438,6 +448,10 @@ class EventRouter : public KeyedService,
                            const Extension* extension,
                            UnloadedExtensionReason reason) override;
 
+  // ProcessManagerObserver:
+  void OnStoppedTrackingServiceWorkerInstance(
+      const WorkerId& worker_id) override;
+
   void AddLazyEventListenerImpl(std::unique_ptr<EventListener> listener,
                                 RegisteredEventType type);
   void RemoveLazyEventListenerImpl(std::unique_ptr<EventListener> listener,
@@ -488,7 +502,8 @@ class EventRouter : public KeyedService,
                                base::TimeTicks dispatch_start_time,
                                int64_t service_worker_version_id,
                                EventDispatchSource dispatch_source,
-                               bool lazy_background_active_on_dispatch);
+                               bool lazy_background_active_on_dispatch,
+                               events::HistogramValue histogram_value);
   void DecrementInFlightEventsForServiceWorker(
       const WorkerId& worker_id,
       int event_id,
@@ -531,6 +546,8 @@ class EventRouter : public KeyedService,
 
   base::ScopedObservation<ExtensionRegistry, ExtensionRegistryObserver>
       extension_registry_observation_{this};
+  base::ScopedObservation<ProcessManager, ProcessManagerObserver>
+      process_manager_observation_{this};
 
   EventListenerMap listeners_{this};
 
@@ -601,7 +618,7 @@ struct Event {
   const raw_ptr<content::BrowserContext> restrict_to_browser_context;
 
   // If present, then the event will only be sent to this context type.
-  const absl::optional<mojom::ContextType> restrict_to_context_type;
+  const std::optional<mojom::ContextType> restrict_to_context_type;
 
   // If not empty, the event is only sent to extensions with host permissions
   // for this url.
@@ -656,14 +673,14 @@ struct Event {
         std::string_view event_name,
         base::Value::List event_args,
         content::BrowserContext* restrict_to_browser_context,
-        absl::optional<mojom::ContextType> restrict_to_context_type =
-            absl::nullopt);
+        std::optional<mojom::ContextType> restrict_to_context_type =
+            std::nullopt);
 
   Event(events::HistogramValue histogram_value,
         std::string_view event_name,
         base::Value::List event_args,
         content::BrowserContext* restrict_to_browser_context,
-        absl::optional<mojom::ContextType> restrict_to_context_type,
+        std::optional<mojom::ContextType> restrict_to_context_type,
         const GURL& event_url,
         EventRouter::UserGestureState user_gesture,
         mojom::EventFilteringInfoPtr info,
@@ -704,5 +721,22 @@ struct EventListenerInfo {
 };
 
 }  // namespace extensions
+
+namespace base {
+
+template <>
+struct ScopedObservationTraits<extensions::EventRouter,
+                               extensions::EventRouter::TestObserver> {
+  static void AddObserver(extensions::EventRouter* source,
+                          extensions::EventRouter::TestObserver* observer) {
+    source->AddObserverForTesting(observer);
+  }
+  static void RemoveObserver(extensions::EventRouter* source,
+                             extensions::EventRouter::TestObserver* observer) {
+    source->RemoveObserverForTesting(observer);
+  }
+};
+
+}  // namespace base
 
 #endif  // EXTENSIONS_BROWSER_EVENT_ROUTER_H_

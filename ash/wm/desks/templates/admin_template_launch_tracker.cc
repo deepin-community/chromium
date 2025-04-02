@@ -4,6 +4,8 @@
 
 #include "ash/wm/desks/templates/admin_template_launch_tracker.h"
 
+#include <vector>
+
 #include "ash/public/cpp/saved_desk_delegate.h"
 #include "ash/root_window_settings.h"
 #include "ash/shell.h"
@@ -120,7 +122,7 @@ class AdminTemplateWindowObserver : public aura::WindowObserver {
 
       // ignore windows not being tracked.
       if (const auto it =
-              base::ranges::find(all_rwids_, rwid, &WindowIdPair::unique_rwid);
+              std::ranges::find(all_rwids_, rwid, &WindowIdPair::unique_rwid);
           it != all_rwids_.end()) {
         update_cb_.Run({.template_rwid = it->template_rwid,
                         .activation_index = activation_index});
@@ -164,7 +166,7 @@ class AdminTemplateDeskObserver : public aura::WindowObserver {
   // aura::WindowObserver:
   void OnWindowAdded(aura::Window* new_window) override {
     int32_t rwid = new_window->GetProperty(app_restore::kRestoreWindowIdKey);
-    if (auto it = base::ranges::find(rwids_, rwid, &WindowIdPair::unique_rwid);
+    if (auto it = std::ranges::find(rwids_, rwid, &WindowIdPair::unique_rwid);
         it != rwids_.end()) {
       auto window_observer = std::make_unique<AdminTemplateWindowObserver>(
           update_cb_, done_cb_, new_window, it->template_rwid,
@@ -493,7 +495,7 @@ void AdminTemplateLaunchTracker::OnObserverCreated(
 
 void AdminTemplateLaunchTracker::OnObserverDone(
     base::CheckedObserver* observer) {
-  base::EraseIf(window_observers_,
+  std::erase_if(window_observers_,
                 [&](const auto& ptr) { return ptr.get() == observer; });
 }
 

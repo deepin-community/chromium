@@ -13,6 +13,9 @@
 #include <wctype.h>
 
 #include "build/build_config.h"
+#include "core/fxcrt/compiler_specific.h"
+#include "core/fxcrt/span.h"
+#include "core/fxcrt/widestring.h"
 
 #if defined(USE_SYSTEM_ICUUC)
 #include <unicode/uchar.h>
@@ -24,9 +27,11 @@
 
 #define FX_IsOdd(a) ((a)&1)
 
-float FXSYS_wcstof(const wchar_t* pwsStr, size_t nLength, size_t* pUsedLen);
-wchar_t* FXSYS_wcsncpy(wchar_t* dstStr, const wchar_t* srcStr, size_t count);
-int32_t FXSYS_wcsnicmp(const wchar_t* s1, const wchar_t* s2, size_t count);
+float FXSYS_wcstof(WideStringView pwsStr, size_t* pUsedLen);
+
+UNSAFE_BUFFER_USAGE wchar_t* FXSYS_wcsncpy(wchar_t* dstStr,
+                                           const wchar_t* srcStr,
+                                           size_t count);
 
 inline bool FXSYS_iswlower(int32_t c) {
   return u_islower(c);
@@ -110,10 +115,14 @@ inline int FXSYS_DecimalCharToInt(wchar_t c) {
   return FXSYS_IsDecimalDigit(c) ? c - L'0' : 0;
 }
 
-void FXSYS_IntToTwoHexChars(uint8_t n, char* buf);
-void FXSYS_IntToFourHexChars(uint16_t n, char* buf);
+void FXSYS_IntToTwoHexChars(uint8_t n, pdfium::span<char, 2u> buf);
+void FXSYS_IntToFourHexChars(uint16_t n, pdfium::span<char, 4u> buf);
 
-size_t FXSYS_ToUTF16BE(uint32_t unicode, char* buf);
+// Converts `unicode` to a UTF16-BE hex string. Writes the string into `buf` and
+// returns the portion of `buf` used to store the string. The returned span is
+// never empty.
+pdfium::span<const char> FXSYS_ToUTF16BE(uint32_t unicode,
+                                         pdfium::span<char, 8u> buf);
 
 // Strict order over floating types where NaNs may be present.
 // All NaNs are treated as equal to each other and greater than infinity.

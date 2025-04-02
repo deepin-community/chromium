@@ -13,13 +13,14 @@ Rules-Requires-Root: no
 Build-Depends:
  debhelper (>= 11),
  devscripts,
- lld-16,
- clang-16,
- clang-format-16,
- libclang-rt-16-dev,
- rustc (>= 1.70.0+dfsg1-5),
+ lld-19,
+ clang-19,
+ clang-format-19,
+ libclang-rt-19-dev,
+ rustc (>= 1.74),
+ bindgen,
  python3,
- pkg-config,
+ pkgconf,
  ninja-build,
  python3-jinja2,
  python3-pkg-resources,
@@ -33,12 +34,14 @@ Build-Depends:
  gperf,
  bison,
  nodejs,
+ node-rollup-plugin-terser,
  rollup,
  valgrind,
  xz-utils,
  x11-apps,
  xcb-proto,
  xfonts-base,
+ libdav1d-dev,
  libx11-xcb-dev,
  libxshmfence-dev,
  libgl-dev,
@@ -57,7 +60,6 @@ Build-Depends:
  libelf-dev,
  libpci-dev,
  libcap-dev,
- libdrm-dev,
  libffi-dev,
  libkrb5-dev,
  libexif-dev,
@@ -65,10 +67,9 @@ Build-Depends:
  libudev-dev,
  libpipewire-0.3-dev,
  libopus-dev,
- libwebp-dev,
  libxtst-dev,
  libjpeg-dev,
- libxml2-dev,
+ libxml2-dev (<< 2.10),
  libgtk-3-dev,
  libxslt1-dev,
  liblcms2-dev,
@@ -76,15 +77,13 @@ Build-Depends:
  libpam0g-dev,
  libdouble-conversion-dev,
  libxnvctrl-dev,
- libwoff-dev,
- libsnappy-dev,
  libglib2.0-dev,
  libasound2-dev,
- libjsoncpp-dev,
  libsecret-1-dev,
  libspeechd-dev,
  libminizip-dev,
  libhunspell-dev,
+ libharfbuzz-dev,
  libxcb-dri3-dev,
  libusb-1.0-0-dev,
  libopenjp2-7-dev,
@@ -96,6 +95,7 @@ Build-Depends:
  libevdev-dev,
  libgcrypt20-dev,
  libcurl4-openssl-dev,
+ libzstd-dev,
  fonts-ipafont-gothic,
  fonts-ipafont-mincho,
 
@@ -161,6 +161,20 @@ Description: web browser - minimal shell
  This package provides a minimal version of the chromium user interface
  (the content shell).
 
+Package: chromium-headless-shell
+Architecture: i386 amd64 arm64 armhf ppc64el
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends},
+ chromium-common (= ${binary:Version}),
+Description: web browser - old headless shell
+ Web browser that aims to build a safer, faster, and more stable internet
+ browsing experience.
+ .
+ This package provides a headless (no GUI) version of the chromium browser,
+ which can be useful for doing things like generating PDFs. It is
+ equivalent to the 'chromium --headless=old' option that was removed.
+
 Package: chromium-driver
 Architecture: i386 amd64 arm64 armhf ppc64el
 Depends:
@@ -183,7 +197,7 @@ Depends:
  xdg-utils,
 Recommends:
  upower,
- libu2f-udev,
+ udev,
  libgl1-mesa-dri,
  chromium-sandbox,
  fonts-liberation,

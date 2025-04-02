@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+#pragma allow_unsafe_libc_calls
+#endif
+
 #include <string>
 #include <unordered_map>
 
@@ -135,7 +140,8 @@ gboolean MockLibsecretLoader::mock_secret_password_store_sync(
     GCancellable* cancellable,
     GError** error,
     ...) {
-  // TODO(crbug.com/660005) We don't read the dummy we store to unlock keyring.
+  // TODO(crbug.com/40490926) We don't read the dummy we store to unlock
+  // keyring.
   if (strcmp("_chrome_dummy_schema_for_unlocking", schema->name) == 0) {
     return true;
   }

@@ -17,7 +17,7 @@ namespace content {
 
 class PressureServiceBase;
 
-// PressureServiceImpl owns instances of this class for different
+// PressureServiceBase owns instances of this class for different
 // PressureSources.
 //
 // This class implements the "device::mojom::PressureClient" interface to
@@ -33,33 +33,39 @@ class CONTENT_EXPORT PressureClientImpl : public device::mojom::PressureClient {
   PressureClientImpl(const PressureClientImpl&) = delete;
   PressureClientImpl& operator=(const PressureClientImpl&) = delete;
 
+  enum class PressureSourceType { kUnknown = 0, kNonVirtual = 1, kVirtual = 2 };
+
   // device::mojom::PressureClient implementation.
   void OnPressureUpdated(device::mojom::PressureUpdatePtr update) override;
 
-  void AddClient(
-      device::mojom::PressureManager* pressure_manager,
-      mojo::PendingRemote<device::mojom::PressureClient> pending_client,
-      device::mojom::PressureSource source,
-      device::mojom::PressureManager::AddClientCallback callback);
-
   void Reset();
 
-  bool has_remote() const {
+  // Binds the Blink-side PressureClient mojo::Remote and returns its
+  // corresponding mojo::PendingReceiver.
+  mojo::PendingReceiver<device::mojom::PressureClient>
+  BindNewPipeAndPassReceiver();
+
+  // Binds a mojo::PendingReceiver to the services-side mojo::Receiver owned by
+  // this class.
+  void BindReceiver(mojo::PendingReceiver<device::mojom::PressureClient>,
+                    bool is_virtual_source);
+
+  bool is_client_remote_bound() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
     return client_remote_.is_bound();
   }
 
-  bool IsClientReceiverBoundForTesting() const {
+  PressureSourceType pressure_source_type() const {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+    return pressure_source_type_;
+  }
+
+  bool is_client_receiver_bound() const {
     DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
     return client_receiver_.is_bound();
-  }
-
-  bool IsClientRemoteBoundForTesting() const {
-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-    return client_remote_.is_bound();
   }
 
  private:
@@ -67,6 +73,10 @@ class CONTENT_EXPORT PressureClientImpl : public device::mojom::PressureClient {
 
   // This is safe because PressureServiceBase owns this class.
   raw_ptr<PressureServiceBase> GUARDED_BY_CONTEXT(sequence_checker_) service_;
+
+  // Tracks if the source is virtual.
+  PressureSourceType pressure_source_type_
+      GUARDED_BY_CONTEXT(sequence_checker_) = PressureSourceType::kUnknown;
 
   // Services side.
   mojo::Receiver<device::mojom::PressureClient> GUARDED_BY_CONTEXT(

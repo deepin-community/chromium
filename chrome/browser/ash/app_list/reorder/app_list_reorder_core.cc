@@ -31,7 +31,6 @@ bool IsIncreasingOrder(ash::AppListSortOrder order) {
   switch (order) {
     case ash::AppListSortOrder::kCustom:
       NOTREACHED();
-      return false;
     case ash::AppListSortOrder::kNameAlphabetical:
       return true;
     case ash::AppListSortOrder::kNameReverseAlphabetical:
@@ -507,7 +506,6 @@ std::vector<reorder::ReorderParam> GenerateReorderParamsForSyncItems(
     }
     case ash::AppListSortOrder::kCustom:
       NOTREACHED();
-      return std::vector<reorder::ReorderParam>();
   }
 }
 
@@ -537,7 +535,6 @@ std::vector<reorder::ReorderParam> GenerateReorderParamsForAppListItems(
     }
     case ash::AppListSortOrder::kCustom:
       NOTREACHED();
-      return std::vector<reorder::ReorderParam>();
   }
 }
 
@@ -616,7 +613,6 @@ float CalculateEntropyForTest(ash::AppListSortOrder order,
     case ash::AppListSortOrder::kColor:
     case ash::AppListSortOrder::kAlphabeticalEphemeralAppFirst:
       NOTREACHED();
-      return 0.f;
     case ash::AppListSortOrder::kNameAlphabetical:
     case ash::AppListSortOrder::kNameReverseAlphabetical:
       std::vector<reorder::SyncItemWrapper<std::u16string>>
